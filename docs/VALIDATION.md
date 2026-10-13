@@ -1,5 +1,14 @@
 # Prototype validation
 
+## Comparison work (2026-10-13)
+
+The [evaluation in PLAN.md](PLAN.md#evaluation-decisions-2026-10-13) adds real
+laya-ts/ONNX and LibLayaX/RLaya checks, measured footprint/responsiveness and a
+scoped feature plan. Reproducible developer probes are under tests/; upstream
+checkouts and downloaded/exported weights remain ignored research artifacts.
+The library implementation has not changed. These comparisons do not establish
+production accuracy, cross-platform support or a stable latency ranking.
+
 Tested on 2026-10-13, Linux x86-64 (Pop!_OS 24.04), Intel i7-1165G7,
 Clang 22.1.8, Node 26.7.0, Cargo 1.98.0, CPU only. The runtime/model commits and checksum are recorded in
 `models/manifest.json`. The actual cached GGUF checksum was verified.

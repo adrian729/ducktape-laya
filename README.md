@@ -11,6 +11,16 @@ model. It does not generate chat. Windows/macOS builds, Electron installers,
 prebuilt packages and GPU support remain release work. See the
 [reviewed plan](docs/PLAN.md) and [validation report](docs/VALIDATION.md).
 
+**Scope after comparing existing libraries:** focus on compact Q8 GGUF deployment
+and a shared native engine with a managed Node worker. General C/Rust embedding
+already exists in [LibLayaX](https://github.com/DaragonTech/LibLayaX) and
+[RLaya](https://github.com/DaragonTech/RLaya); rich TypeScript/browser workflows
+already exist in [laya-ts](https://github.com/NandhaKishorM/laya/tree/main/laya-ts).
+Our measured footprint is smaller than the tested FP32 alternatives, but this
+prototype has fewer features and platforms. The [comparison and feature plan](docs/PLAN.md#evaluation-decisions-2026-10-13)
+records the tradeoffs, real-model checks and remaining gaps. No ONNX switch or
+binding removal was warranted by this evaluation.
+
 ## Build and try
 
 Requires CMake 3.22+, a C/C++17 compiler and Git. The default Linux x86-64 CPU
