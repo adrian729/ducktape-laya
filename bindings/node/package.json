@@ -1,0 +1,10 @@
+{
+  "name": "ducktape-laya",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test test.cjs" },
+  "license": "MIT"
+}

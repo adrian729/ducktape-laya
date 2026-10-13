@@ -1,0 +1,13 @@
+{
+  "id": "laya-english-q8_0",
+  "repository": "ggml-org/Laya-GGUF",
+  "revision": "22265007700297ba9e128297e82540cf28c5d7d4",
+  "filename": "Laya-Q8_0.gguf",
+  "size_bytes": 449397600,
+  "sha256": "c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2",
+  "url": "https://huggingface.co/ggml-org/Laya-GGUF/resolve/22265007700297ba9e128297e82540cf28c5d7d4/Laya-Q8_0.gguf",
+  "source_model": "https://huggingface.co/convaiinnovations/laya",
+  "model_license": "Apache-2.0",
+  "llama_cpp_commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+  "max_tokens_per_question": 512
+}

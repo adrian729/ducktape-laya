@@ -1,0 +1,4 @@
+DUCKTAPE_LAYA_1 {
+    global: dtl_abi_version; dtl_default_options; dtl_open; dtl_decide; dtl_close; dtl_free;
+    local: *;
+};

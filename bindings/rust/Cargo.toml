@@ -1,0 +1,3 @@
+[workspace]
+members = ["ducktape-laya-sys", "ducktape-laya"]
+resolver = "2"
