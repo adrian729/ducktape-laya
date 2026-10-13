@@ -13,10 +13,13 @@ import urllib.request
 parser = argparse.ArgumentParser()
 parser.add_argument('model')
 parser.add_argument('--server-url')
+parser.add_argument('--request', type=pathlib.Path, help='Primitive, structured or batch JSON fixture')
 parser.add_argument('--tolerance', type=float, default=0.000001)
 args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parents[1]
-request = (root / 'examples/request.json').read_bytes()
+request = (args.request or root / 'examples/request.json').read_bytes()
+if args.server_url and args.request:
+    parser.error('--server-url only supports the default primitive fixture')
 env = dict(os.environ)
 env['LD_LIBRARY_PATH'] = str(root / 'build') + ':' + env.get('LD_LIBRARY_PATH', '')
 commands = {

@@ -3,7 +3,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-struct holder { dtl_engine *engine = nullptr; ~holder() { dtl_close(engine); } };
+struct holder { dtl_engine *engine = nullptr; dtl_router *router = nullptr;
+    ~holder() { dtl_close(engine); dtl_router_close(router); } };
 struct native_error : std::runtime_error {
     int32_t status;
     native_error(int32_t s, const char *m) : std::runtime_error(m), status(s) {}
@@ -38,12 +39,15 @@ template<class F> napi_value guarded(napi_env env, F f) {
 }
 static napi_value open_engine(napi_env env, napi_callback_info info) {
     return guarded(env, [&] {
-        size_t argc = 2; napi_value args[2]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
-        if (argc != 2) throw std::runtime_error("Expected path and threads");
+        size_t argc = 3; napi_value args[3]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
+        if (argc != 3) throw std::runtime_error("Expected path/config, threads and router flag");
+        bool router; ok(napi_get_value_bool(env, args[2], &router));
         auto path = string_arg(env, args[0]); auto options = dtl_default_options();
         ok(napi_get_value_uint32(env, args[1], &options.threads));
         auto h = std::make_unique<holder>(); char *error = nullptr;
-        auto s = dtl_open(path.c_str(), &options, &h->engine, &error); check(s, error);
+        auto s = router ? dtl_router_open(path.c_str(), &options, &h->router, &error)
+                        : dtl_open(path.c_str(), &options, &h->engine, &error);
+        check(s, error);
         napi_value value;
         ok(napi_create_external(env, h.get(), [](napi_env, void *p, void *) { delete static_cast<holder *>(p); }, nullptr, &value));
         h.release(); return value;
@@ -51,12 +55,25 @@ static napi_value open_engine(napi_env env, napi_callback_info info) {
 }
 static napi_value decide(napi_env env, napi_callback_info info) {
     return guarded(env, [&] {
-        size_t argc = 2; napi_value args[2]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
-        if (argc != 2) throw std::runtime_error("Expected engine and request");
+        size_t argc = 4; napi_value args[4]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
+        if (argc != 4) throw std::runtime_error("Expected engine, request, request ID and callback");
         void *p; ok(napi_get_value_external(env, args[0], &p)); auto *h = static_cast<holder *>(p);
-        if (!h->engine) throw std::runtime_error("Engine is closed");
+        if (!h->engine && !h->router) throw std::runtime_error("Engine is closed");
         auto request = string_arg(env, args[1]); char *result = nullptr, *error = nullptr;
-        auto s = dtl_decide(h->engine, request.c_str(), &result, &error);
+        struct callback_data { napi_env env; napi_value fn; } data{env, args[3]};
+        int64_t id; ok(napi_get_value_int64(env, args[2], &id));
+        napi_valuetype type; ok(napi_typeof(env, args[3], &type));
+        dtl_observer observer{static_cast<uint64_t>(id), nullptr, &data};
+        if (type == napi_function) observer.callback = [](const char *text, void *user) {
+            auto &d = *static_cast<callback_data *>(user);
+            napi_value arg, receiver, ignored;
+            if (napi_create_string_utf8(d.env, text, NAPI_AUTO_LENGTH, &arg) != napi_ok ||
+                napi_get_undefined(d.env, &receiver) != napi_ok) return;
+            auto status = napi_call_function(d.env, receiver, d.fn, 1, &arg, &ignored);
+            if (status == napi_pending_exception) napi_get_and_clear_last_exception(d.env, &ignored);
+        };
+        auto s = h->router ? dtl_router_execute(h->router, request.c_str(), &observer, &result, &error)
+                           : dtl_execute(h->engine, request.c_str(), &observer, &result, &error);
         std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free); check(s, error);
         napi_value value; ok(napi_create_string_utf8(env, result, NAPI_AUTO_LENGTH, &value)); return value;
     });
@@ -67,6 +84,7 @@ static napi_value close_engine(napi_env env, napi_callback_info info) {
         if (argc != 1) throw std::runtime_error("Expected engine");
         void *p; ok(napi_get_value_external(env, arg, &p)); auto *h = static_cast<holder *>(p);
         dtl_close(h->engine); h->engine = nullptr;
+        dtl_router_close(h->router); h->router = nullptr;
         napi_value value; ok(napi_get_undefined(env, &value)); return value;
     });
 }

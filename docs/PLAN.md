@@ -140,19 +140,20 @@ laya.cpp `e632da0428236be56978e53ddc92cdcd565fb493`,
 Candle laya-rust `8c50e61b1507638c4c1c7630633f4ce776d127db`,
 receptron/laya `6478649e723122ca24bbf5fb69ed1010023c9750`.
 
-**Recommendation:** do not position this as a new general Laya SDK. For broad
-native platform/GPU support, LibLayaX/RLaya is ahead and should be the first option
-to evaluate. For browser and rich TypeScript workflows, start with laya-ts. Our
-remaining value is the combined compact Q8 GGUF package, relatively low resident
-memory, shared engine across the requested languages, and managed Node worker.
-The common C/Rust wrappers and basic typed decisions alone do not justify the
-project. If compact deployment is not useful to an application, prefer an existing
-library rather than maintaining this one for API aesthetics.
+**Decision (updated 2026-10-14):** continue this project and retain every current
+language interface, including TS. Compact Q8 GGUF deployment, a shared backend,
+and a managed Node worker form a useful combination. Add the missing common
+features in that backend rather than maintaining a separate inference/planning
+implementation per language. Other repositories are alternatives and design
+references, not a reason by themselves to remove working code.
 
-No core or binding removal is justified by a clearly superior replacement across
-that narrower target in the tested set. This is not an exhaustive uniqueness
-claim. Preserve the small adapter against unmodified llama.cpp; do not grow a
-second generic inference engine or a fork of someone else's high-level SDK.
+LibLayaX/RLaya expose broader platform/GPU options, and laya-ts has more existing
+high-level workflows. Those are concrete feature differences, not proof of
+production maturity or overall superiority. Our actual validation is narrower
+than their advertised platform lists. The comparisons above distinguish measured
+behavior from source review; star counts do not settle engineering quality.
+Keep the adapter against pinned, unmodified llama.cpp and evaluate optimizations
+with parity and footprint measurements.
 
 Sources: [LibLayaX C API](https://github.com/DaragonTech/LibLayaX/blob/9eead4f1d9278b13af7662663092bda6168eb2e2/laya.cpp/capi/laya_c.h),
 [releases](https://github.com/DaragonTech/LibLayaX/releases/tag/v1.0.15),
@@ -164,9 +165,38 @@ Sources: [LibLayaX C API](https://github.com/DaragonTech/LibLayaX/blob/9eead4f1d
 
 ### 4. Missing features: extend only the compact shared engine's useful scope
 
-These are proposed additions, not implemented capabilities. Keep the existing
-ABI working; use additive entry points or a versioned extension rather than
-changing the layout/meaning of dtl_options or existing confidence fields.
+Implementation update (2026-10-14): the first four rows now have a shared native
+implementation and C/C++/Rust/Node/TS interfaces. The original ABI/options layout
+and confidence formulas remain intact. [API.md](API.md) is the precise contract.
+The table below preserves the reviewed design and broader acceptance targets.
+
+- Batching: additive `dtl_execute`, arrays bounded to 32 requests/128 questions,
+  sequential forward passes, exact individual-call parity, no partial results.
+- Structured decisions: one native flat-schema planner and projection; raw
+  distributions retained; optional fields also populated; unsupported constraints
+  rejected. Bounded integers use ordinal argmax, not expected-score rounding.
+- Hooks: per-call start/end/error observer outside locks, request IDs, native
+  exception containment, Rust panic containment, Node worker event forwarding.
+- Routing: explicit IDs/local paths, lazy Laya metadata validation, canonical-path
+  load deduplication, LRU eviction before loading at capacity. `max_loaded` is a
+  count limit (1–4), not a byte-level memory quota. Packaging checksum verification
+  stays in the existing manifest/script. Only the pinned English artifact is
+  validated; automatic language routing requires separately tested checkpoints.
+
+The isolated multi-sequence encoder probe was run with six pinned tokenized
+questions, independent sequence IDs and positions, a 512-token total cap, and
+reversed input order. All six winners matched, but maximum probability drift was
+0.007069 versus individual encoding and 0.003427 on reversal. One exploratory
+run took 6.23 s sequentially versus 7.51 s simultaneously (not a stable benchmark).
+We therefore retain sequential forward passes and exact output parity in the
+public batch API. [Probe evidence](evidence/encoder-batch.json) and the optional
+`laya-encoder-probe` target preserve this experiment for future runtime updates.
+
+Decision: retain and develop our own TS interface over the shared GGUF backend.
+The reference SDKs inform the design; these additions do not copy their code.
+Browser execution remains a separate research target, not a feature of this
+native addon. A browser runtime will require real WebGPU/WASM validation before
+we can decide whether a shared GGUF build adds value there.
 
 | Feature | How to add it / what is shared | Acceptance before shipping |
 |---|---|---|
@@ -176,7 +206,7 @@ changing the layout/meaning of dtl_options or existing confidence fields.
 | Routing | Start with explicit application-supplied model IDs and a small bounded model registry. Add automatic language routing only after additional GGUF checkpoints and their tokenizers/templates/calibration pass validation. English-only weights cannot provide multilingual coverage through routing code. | Validated model manifest per route; predictable unknown-language/fallback policy; load deduplication; memory-aware eviction and deterministic cleanup; no implicit network access. |
 | Browser / WebGPU / WASM | Use laya-ts directly for browser applications; do not add a wrapper to this repo solely for a uniform API. Its browser path exists, but real browser/device validation is still required. A separate GGUF WASM experiment is worthwhile only if reusing the compact artifact delivers a measured benefit. | Real WebGPU and forced-WASM runs, offline assets, cross-origin isolation/thread settings, worker loading, model memory and fallback accuracy. Current Agent.load checks for window, so loading inside a Web Worker needs explicit provider integration or an upstream environment-detection fix. Q8 MatMulNBits cannot be assumed to work with WebGPU. |
 
-Before feature expansion, improve distribution and evidence: portable CPU build
+Next, improve distribution and evidence: portable CPU build
 selection, clean Electron packaging, broader decision fixtures and lifecycle
 stress checks. These strengthen the part of this project that remains useful.
 Do not reimplement language detection, shortlist/tournament, or a separate TS

@@ -6,7 +6,7 @@ int main(int argc, char **argv) {
     try {
         std::string request(std::istreambuf_iterator<char>(std::cin), {});
         ducktape::laya engine(argv[1]);
-        std::cout << engine.decide(request) << '\n';
+        std::cout << engine.execute(request) << '\n';
         return 0;
     } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }
 }

@@ -1,0 +1,26 @@
+{
+  "state": "I was charged twice. Please refund me.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "department": {
+        "type": "string",
+        "enum": ["billing", "technical", "sales"],
+        "description": "Which department should handle this message?"
+      },
+      "refund_requested": {
+        "type": "boolean",
+        "description": "Does the customer request a refund?"
+      },
+      "priority": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3,
+        "description": "How urgent is the request, from 1 (low) to 3 (high)?"
+      }
+    },
+    "required": ["department", "refund_requested"],
+    "additionalProperties": false
+  },
+  "boolean_threshold": 0.5
+}

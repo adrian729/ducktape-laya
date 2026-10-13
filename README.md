@@ -11,15 +11,28 @@ model. It does not generate chat. Windows/macOS builds, Electron installers,
 prebuilt packages and GPU support remain release work. See the
 [reviewed plan](docs/PLAN.md) and [validation report](docs/VALIDATION.md).
 
-**Scope after comparing existing libraries:** focus on compact Q8 GGUF deployment
-and a shared native engine with a managed Node worker. General C/Rust embedding
-already exists in [LibLayaX](https://github.com/DaragonTech/LibLayaX) and
-[RLaya](https://github.com/DaragonTech/RLaya); rich TypeScript/browser workflows
-already exist in [laya-ts](https://github.com/NandhaKishorM/laya/tree/main/laya-ts).
-Our measured footprint is smaller than the tested FP32 alternatives, but this
-prototype has fewer features and platforms. The [comparison and feature plan](docs/PLAN.md#evaluation-decisions-2026-10-13)
-records the tradeoffs, real-model checks and remaining gaps. No ONNX switch or
-binding removal was warranted by this evaluation.
+The shared backend now also implements bounded batching, flat structured
+decisions, passive per-call hooks, and explicit local model routing with a
+bounded cache. These features are exposed in every language interface, including
+TypeScript. GGUF remains the inference backend. See the [shared API](docs/API.md)
+for contracts and the [comparison and feature plan](docs/PLAN.md) for evidence.
+
+## Alternatives
+
+Different deployment needs may be better served by:
+
+- [Official Laya / laya-ts](https://github.com/NandhaKishorM/laya/tree/main/laya-ts):
+  richer TypeScript workflows and an ONNX browser path.
+- [LibLayaX](https://github.com/DaragonTech/LibLayaX) and
+  [RLaya](https://github.com/DaragonTech/RLaya): native C and Rust embedding.
+- [laya.cpp](https://github.com/lkarlslund/laya.cpp): a dedicated native C++ Laya runtime.
+- [Candle-based laya-rust](https://github.com/aovestdipaperino/laya-rust) and
+  [GGUF laya-rust](https://github.com/zerodegress/laya-rust): Rust inference implementations.
+- [receptron/laya](https://github.com/receptron/laya): another Node/ONNX integration.
+
+Our focus is compact GGUF deployment and one implementation shared across language
+interfaces. The comparison documents which alternatives we ran and which we only
+reviewed; feature lists and star counts alone do not establish maturity.
 
 ## Build and try
 
@@ -49,14 +62,14 @@ ship it as an ordinary resource in the same installer as the native library.
 ## C and C++
 
 The public ABI is [ducktape_laya.h](include/ducktape_laya.h): `dtl_open`,
-`dtl_decide`, `dtl_close`, `dtl_free`. See [the plain-C example](examples/decide.c).
+`dtl_decide`, `dtl_execute`, `dtl_close`, `dtl_free`, plus registry functions. See [the plain-C example](examples/decide.c).
 All errors cross the ABI as integer statuses with optional owned messages.
 Release every returned string with `dtl_free`, including error messages.
 
 ```cpp
 #include <ducktape_laya.hpp>
 ducktape::laya engine("resources/Laya-Q8_0.gguf");
-std::string result = engine.decide(request_json);
+std::string result = engine.execute(request_json); // primitive, schema, or batch
 ```
 
 The RAII wrapper releases the engine automatically. Link `ducktape_laya` and
@@ -70,7 +83,7 @@ library, with a raw sys crate underneath. It does not rebuild/download llama.cpp
 
 ```rust
 let engine = ducktape_laya::Engine::open("resources/Laya-Q8_0.gguf", 2)?;
-let result_json = engine.decide(&request_json)?;
+let result_json = engine.execute(&request_json)?;
 ```
 
 ```sh
@@ -111,6 +124,23 @@ try {
 }
 ```
 
+For structured values or multiple inputs, use the same worker:
+
+```js
+const structured = await engine.decideStructured({
+  state: 'Please refund the duplicate charge.',
+  schema: { type: 'object', properties: {
+    refund: { type: 'boolean', description: 'Does the customer request a refund?' }
+  }}
+}, { onEvent: event => console.log(event.event) });
+console.log(structured.values.refund);
+const results = await engine.decideBatch([requestA, requestB]);
+```
+
+Use `Laya.openRouter({ models: { english: modelPath }, max_loaded: 1 })` and
+`model: 'english'` on each request for explicit local model selection. It returns
+the same API and requires the same `close()`. See [routing and hooks](docs/API.md).
+
 The public API is asynchronous. A dedicated worker thread owns the native handle;
 there is no child process. Accepted requests run FIFO, excess work is rejected,
 and `close()` drains accepted work. Always close the engine so the worker can
@@ -126,7 +156,8 @@ milestone; no ready-made Electron package is claimed here.
 
 The shape matches the text-only `/v1/systemone` request in
 [examples/request.json](examples/request.json). Results contain `answers` and
-`usage`; filesystem paths and server routing fields are intentionally omitted.
+`usage`. Structured requests additionally return `values`; registry results
+include their explicit `model` ID. Raw filesystem paths never appear in results.
 `score` is the expected zero-based criterion index, not a probability.
 
 - Non-null `state` and `instructions` can be text or structured JSON.
@@ -136,7 +167,9 @@ The shape matches the text-only `/v1/systemone` request in
 - JSON nesting is limited to 64 levels.
 - Model-specific instruction/option budgets are also enforced. Where the server
   truncates, this library returns an error so the application can shorten input.
-- Questions run separately, one forward pass each. No model text is generated.
+- Questions run separately, one forward pass each. Batches accept 1–32 requests
+  and up to 128 total questions within 1 MiB. This does not promise a throughput
+  improvement. No model text is generated.
 - JSON insertion order affects answers. The core preserves it. JavaScript
   reorders integer-like object keys; pass a raw JSON string to preserve their
   literal order. Avoid duplicate keys in requests.
@@ -154,12 +187,14 @@ are model estimates; evaluate them on your application's own data.
 cmake -S . -B build -DDUCKTAPE_TEST_MODEL="$LAYA_MODEL"
 cmake --build build -j 3
 ctest --test-dir build --output-on-failure
-cargo test --manifest-path bindings/rust/Cargo.toml
+LAYA_MODEL="$LAYA_MODEL" cargo test --manifest-path bindings/rust/Cargo.toml
 LAYA_MODEL="$LAYA_MODEL" node --test bindings/node/test.cjs
 ```
 
 Without a model path, CTest runs ABI/error tests only and Node skips its inference
-test. Rust tests use the native library loader path shown above.
+test. Rust real-model checks also require `LAYA_MODEL`, plus the native library
+loader path shown above. Run cross-language primitive/structured batch parity with
+`python3 tests/parity.py "$LAYA_MODEL" --request examples/batch.json`.
 
 Code is MIT. See [third-party notices](THIRD_PARTY_NOTICES.md) for runtime and
 model licenses. This repository is independent of the upstream Laya project.

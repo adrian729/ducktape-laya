@@ -38,6 +38,35 @@ DTL_API dtl_status dtl_open(const char *model_path, const dtl_options *options,
  * Question/option overflow is rejected, never silently truncated. */
 DTL_API dtl_status dtl_decide(dtl_engine *engine, const char *request_json,
                             char **result_json, char **error);
+/* Additive ABI v1 APIs. execute accepts one questions/schema request or an array
+ * of 1..32 requests (at most 128 questions total, 1 MiB total). Arrays return
+ * arrays in input order. All requests are validated/prepared before inference
+ * on an engine; errors return no partial result. Execution is sequential.
+ * Schema, routing and observer contracts: docs/API.md. */
+typedef void (*dtl_event_callback)(const char *event_json, void *user_data);
+typedef struct dtl_observer {
+    uint64_t request_id;
+    dtl_event_callback callback;
+    void *user_data;
+} dtl_observer;
+/* Observer is borrowed for the call. Events: start then end OR error. Callback
+ * runs synchronously on the calling thread, outside inference/cache locks.
+ * event_json is borrowed only during callback. Reentry is allowed; do not close
+ * the active handle. C callbacks must not unwind; C++ exceptions are contained.
+ * Observer failures never change inference results. NULL disables events. */
+DTL_API dtl_status dtl_execute(dtl_engine *engine, const char *request_json,
+                             const dtl_observer *observer, char **result_json, char **error);
+typedef struct dtl_router dtl_router;
+/* Config: {"models":{"id":"local/path.gguf"},"max_loaded":1}.
+ * 1..16 routes, max_loaded 1..4. Paths checked at open; Laya metadata checked
+ * on lazy load. Requests require model: "id". No downloads or guessed routing.
+ * Cache deduplicates canonical paths and evicts LRU before loading at capacity.
+ * Router calls serialize. Close must not race an active call. */
+DTL_API dtl_status dtl_router_open(const char *config_json, const dtl_options *options,
+                                 dtl_router **out, char **error);
+DTL_API dtl_status dtl_router_execute(dtl_router *router, const char *request_json,
+                                    const dtl_observer *observer, char **result_json, char **error);
+DTL_API void dtl_router_close(dtl_router *router);
 /* NULL is accepted. Caller must ensure no pending/running calls use engine. */
 DTL_API void dtl_close(dtl_engine *engine);
 DTL_API void dtl_free(void *buffer);

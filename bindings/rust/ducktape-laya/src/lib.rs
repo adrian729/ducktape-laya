@@ -40,7 +40,11 @@ fn check(status: i32, message: *mut c_char) -> Result<(), Error> {
     };
     Err(Error { status, message })
 }
-pub struct Engine(NonNull<ffi::Engine>);
+enum Handle {
+    Model(NonNull<ffi::Engine>),
+    Router(NonNull<ffi::Router>),
+}
+pub struct Engine(Handle);
 // SAFETY: the native ABI serializes inference on each handle. Rust borrows
 // prevent Drop racing with decide; the pointer is never exposed publicly.
 unsafe impl Send for Engine {}
@@ -54,17 +58,85 @@ impl Engine {
         let mut error = std::ptr::null_mut();
         let status = unsafe { ffi::dtl_open(path.as_ptr(), &options, &mut raw, &mut error) };
         check(status, error)?;
-        NonNull::new(raw).map(Self).ok_or_else(|| Error {
-            status: 2,
-            message: "Native engine returned null".into(),
-        })
+        NonNull::new(raw)
+            .map(|p| Self(Handle::Model(p)))
+            .ok_or_else(|| Error {
+                status: 2,
+                message: "Native engine returned null".into(),
+            })
     }
-    pub fn decide(&self, request_json: &str) -> Result<String, Error> {
-        let request = cstring(request_json)?;
-        let mut result = std::ptr::null_mut();
+    /// Open a bounded, lazy local model registry. See docs/API.md for config.
+    pub fn open_router(config_json: &str, threads: u32) -> Result<Self, Error> {
+        let config = cstring(config_json)?;
+        let mut options = unsafe { ffi::dtl_default_options() };
+        options.threads = threads;
+        let mut raw = std::ptr::null_mut();
         let mut error = std::ptr::null_mut();
         let status =
-            unsafe { ffi::dtl_decide(self.0.as_ptr(), request.as_ptr(), &mut result, &mut error) };
+            unsafe { ffi::dtl_router_open(config.as_ptr(), &options, &mut raw, &mut error) };
+        check(status, error)?;
+        NonNull::new(raw)
+            .map(|p| Self(Handle::Router(p)))
+            .ok_or_else(|| Error {
+                status: 2,
+                message: "Native router returned null".into(),
+            })
+    }
+    pub fn decide(&self, request_json: &str) -> Result<String, Error> {
+        self.execute(request_json)
+    }
+    /// Execute one primitive/structured request or a bounded JSON array.
+    pub fn execute(&self, request_json: &str) -> Result<String, Error> {
+        self.execute_observed(request_json, 0, None)
+    }
+    /// Passive events run synchronously on this thread, outside native locks.
+    /// Callback panics are contained (with panic=unwind); abort panics cannot be.
+    /// Callbacks may reenter; do not wait for another call that waits on yours.
+    pub fn execute_observed(
+        &self,
+        request_json: &str,
+        request_id: u64,
+        callback: Option<&mut dyn FnMut(&str)>,
+    ) -> Result<String, Error> {
+        struct Hook<'a> {
+            callback: &'a mut dyn FnMut(&str),
+        }
+        unsafe extern "C" fn notify(text: *const c_char, user: *mut std::ffi::c_void) {
+            let hook = unsafe { &mut *user.cast::<Hook<'_>>() };
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let event = unsafe { CStr::from_ptr(text) }.to_string_lossy();
+                (hook.callback)(&event);
+            }));
+        }
+        let request = cstring(request_json)?;
+        let mut hook = callback.map(|callback| Hook { callback });
+        let observer = ffi::Observer {
+            request_id,
+            callback: hook.as_ref().map(|_| notify as unsafe extern "C" fn(_, _)),
+            user_data: hook
+                .as_mut()
+                .map_or(std::ptr::null_mut(), |h| (h as *mut Hook<'_>).cast()),
+        };
+        let mut result = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            match self.0 {
+                Handle::Model(p) => ffi::dtl_execute(
+                    p.as_ptr(),
+                    request.as_ptr(),
+                    &observer,
+                    &mut result,
+                    &mut error,
+                ),
+                Handle::Router(p) => ffi::dtl_router_execute(
+                    p.as_ptr(),
+                    request.as_ptr(),
+                    &observer,
+                    &mut result,
+                    &mut error,
+                ),
+            }
+        };
         let output = Buffer(result);
         check(status, error)?;
         if output.0.is_null() {
@@ -80,12 +152,61 @@ impl Engine {
 }
 impl Drop for Engine {
     fn drop(&mut self) {
-        unsafe { ffi::dtl_close(self.0.as_ptr()) }
+        unsafe {
+            match self.0 {
+                Handle::Model(p) => ffi::dtl_close(p.as_ptr()),
+                Handle::Router(p) => ffi::dtl_router_close(p.as_ptr()),
+            }
+        }
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn real_features() {
+        let Ok(path) = std::env::var("LAYA_MODEL") else {
+            return;
+        };
+        let engine = Engine::open(&path, 2).unwrap();
+        let request = r#"{"state":"Please refund me.","schema":{"type":"object","properties":{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}"#;
+        let single = engine.execute(request).unwrap();
+        assert!(single.contains("\"values\":{\"refund\":true}"));
+        let batch = format!("[{request},{request}]");
+        let mut events = Vec::new();
+        let result = engine
+            .execute_observed(&batch, 21, Some(&mut |e| events.push(e.to_owned())))
+            .unwrap();
+        assert_eq!(result, format!("[{single},{single}]"));
+        assert_eq!(events.len(), 2);
+        assert!(events[0].contains("\"event\":\"start\""));
+        assert!(events[1].contains("\"request_id\":21"));
+        assert!(engine
+            .execute_observed("{}", 22, Some(&mut |_| panic!("contained observer")))
+            .is_err());
+        // Reentry uses a distinct borrowed callback and the same native engine.
+        engine
+            .execute_observed(
+                request,
+                23,
+                Some(&mut |_| {
+                    engine.execute(request).unwrap();
+                }),
+            )
+            .unwrap();
+        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+        let router = Engine::open_router(
+            &format!(r#"{{"models":{{"english":"{escaped}"}},"max_loaded":1}}"#),
+            2,
+        )
+        .unwrap();
+        let routed = request.replacen('{', "{\"model\":\"english\",", 1);
+        assert!(router
+            .execute(&routed)
+            .unwrap()
+            .contains("\"model\":\"english\""));
+        assert_eq!(router.execute(request).unwrap_err().status, 1);
+    }
     #[test]
     fn rejects_bad_path() {
         assert!(Engine::open("missing.gguf", 2).is_err());

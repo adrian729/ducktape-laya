@@ -11,7 +11,7 @@ int main(int argc, char **argv) {
     dtl_engine *engine = NULL;
     char *error = NULL, *result = NULL;
     dtl_status status = dtl_open(argv[1], NULL, &engine, &error);
-    if (!status) status = dtl_decide(engine, input, &result, &error);
+    if (!status) status = dtl_execute(engine, input, NULL, &result, &error);
     if (status) fprintf(stderr, "%s\n", error ? error : "Laya failed");
     else puts(result);
     dtl_free(error); dtl_free(result); dtl_close(engine); free(input);

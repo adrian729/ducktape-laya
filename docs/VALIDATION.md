@@ -1,12 +1,74 @@
 # Prototype validation
 
+## Shared features (2026-10-14)
+
+Implemented and tested on the same Linux CPU machine and pinned Q8_0 artifact.
+The original C ABI remains intact; four additive entry points provide execution
+and local routing. Algorithms remain native; bindings provide ownership, worker
+transport and callback adaptation. See [API.md](API.md) for exact contracts.
+
+Passing checks for this change:
+
+- Release shared library, C/C++ examples, Node addon and native feature tests.
+- CTest **4/4**: existing ABI/concurrent inference checks plus batch bounds,
+  exact parity across varied/reversed/repeated requests, mixed structured batches,
+  enum/boolean/negative ordinal projection, optional/required schema fields,
+  unsupported schema rejection, hook order/errors/reentry/exception containment.
+- Router real-model tests: explicit IDs and result parity, missing/unknown IDs,
+  canonical-path alias reuse after unlinking a test hard link, eviction at a
+  one-model cap, reload failure after eviction, invalid GGUF rejection, recovery,
+  and ordered batches. The original model resource is never modified.
+- Node **5/5**, including queue bounds, drain-on-close, mixed batches, hooks,
+  observer promise rejection/reentry, local routing and host event-loop progress.
+- Rust **3/3** with `LAYA_MODEL` set: structured/batch parity, observer events,
+  panic containment/reentry, router use and input errors; formatting and Clippy
+  with warnings denied pass.
+- TypeScript strict type check of `bindings/node/types.test.ts`, including a
+  rejected unsupported free-string schema.
+- `tests/parity.py --request examples/batch.json`: **exact agreement across C,
+  C++, Rust and Node**, including primitive distributions, structured values and
+  token usage. This supplements the existing single-request reference check;
+  the reference server was not rerun because inference itself is unchanged.
+- Linux exports remain restricted to the ten public `dtl_*` entry points.
+  No vendored llama.cpp changes or new runtime dependencies.
+
+The isolated multi-sequence experiment is preserved in
+[evidence/encoder-batch.json](evidence/encoder-batch.json). Six questions from two
+existing test states were encoded individually and together using independent
+sequence IDs/reset positions, then together in reverse order. Winners matched
+6/6, but probabilities drifted by up to 0.007069 versus individual calls and
+0.003427 with reversed order. Sequential took 6.23 seconds; simultaneous took
+7.51 seconds in one exploratory run. Peak process RSS was 535,764 KiB across
+both modes. These are diagnostic observations, not a stable benchmark or an
+accuracy evaluation. Simultaneous encoding is **not enabled** in the library.
+
+Reproduce that optional experiment:
+
+```sh
+cmake --build build --target laya-encoder-probe -j 3
+./build/laya-encoder-probe "$LAYA_MODEL" tests/encoder-inputs.json
+```
+
+The token fixture was exported from the already-used decision fixtures through
+the official tokenizer during the ONNX comparison; it is specific to the pinned
+English model. The public batch path keeps one forward pass per question and
+exact individual-call output parity. It does not promise better throughput.
+
+Remaining limitations: model-count cache limit rather than exact RAM accounting;
+only the pinned English model validated; no automatic language routing; no
+browser build, GPU validation, Windows/macOS distribution or clean Electron
+installer test. Existing staged installation artifacts were not refreshed by
+this feature validation; rebuild/install them when packaging the new library.
+
+## Historical baseline
+
 ## Comparison work (2026-10-13)
 
 The [evaluation in PLAN.md](PLAN.md#evaluation-decisions-2026-10-13) adds real
 laya-ts/ONNX and LibLayaX/RLaya checks, measured footprint/responsiveness and a
 scoped feature plan. Reproducible developer probes are under tests/; upstream
 checkouts and downloaded/exported weights remain ignored research artifacts.
-The library implementation has not changed. These comparisons do not establish
+The library implementation had not changed during that comparison phase. These comparisons do not establish
 production accuracy, cross-platform support or a stable latency ranking.
 
 Tested on 2026-10-13, Linux x86-64 (Pop!_OS 24.04), Intel i7-1165G7,
