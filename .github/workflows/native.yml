@@ -1,0 +1,96 @@
+name: Linux native checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      real_model:
+        description: Download the pinned test model and run native artifact checks
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  parser-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: clang
+      CXX: clang++
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Build instrumented shared library and model-free contracts
+        run: |
+          cmake -S . -B build-sanitized -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer'
+          cmake --build build-sanitized --parallel 2
+          ctest --test-dir build-sanitized --output-on-failure
+      - name: Mutate request, schema and router inputs
+        run: |
+          clang++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/input-fuzz.cpp -Iinclude -Lbuild-sanitized -lducktape_laya -o build-sanitized/input-fuzz
+          LD_LIBRARY_PATH="$PWD/build-sanitized" build-sanitized/input-fuzz \
+            tests/fixtures/primitive.json tests/fixtures/structured.json tests/fixtures/batch.json
+  native:
+    name: ${{ matrix.compiler }} / Node ${{ matrix.node }} / ${{ inputs.real_model && 'real model' || 'model free' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+            node: 24.21.0
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+            node: 26.7.0
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install pinned Rust toolchain and fetch locked test dependencies
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
+          cargo fetch --locked --manifest-path bindings/rust/Cargo.toml
+          cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
+      - name: Download and verify explicitly requested test model
+        if: inputs.real_model
+        run: |
+          mkdir -p build-model
+          python3 - <<'PY'
+          import json, pathlib, urllib.request
+          model = json.loads(pathlib.Path('models/manifest.json').read_text())
+          urllib.request.urlretrieve(model['url'], 'build-model/laya.gguf')
+          PY
+          python3 scripts/verify-model.py build-model/laya.gguf
+      - name: Model-free checks
+        if: ${{ !inputs.real_model }}
+        run: python3 scripts/validate.py --output build-ci-report --jobs 2
+      - name: Real-model and installed artifact checks
+        if: inputs.real_model
+        run: python3 scripts/validate.py --model build-model/laya.gguf --packages --output build-ci-report --jobs 2
+      - name: Retain logs and explicit gate report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-${{ matrix.compiler }}-node-${{ matrix.node }}
+          path: build-ci-report/
+          if-no-files-found: warn
+          retention-days: 14

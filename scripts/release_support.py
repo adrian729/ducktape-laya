@@ -14,6 +14,12 @@ def sha256(path):
     with pathlib.Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
+def source_files():
+    """Hash tracked working-file contents; deleted files map to null."""
+    names = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+    return {name: sha256(ROOT / name) if (ROOT / name).is_file() else None
+            for name in sorted(filter(None, names)) if not (ROOT / name).is_dir()}
+
 def verify_model(path, manifest):
     path = pathlib.Path(path)
     if path.stat().st_size != manifest['size_bytes'] or sha256(path) != manifest['sha256']:
