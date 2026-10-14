@@ -45,6 +45,6 @@ with tempfile.TemporaryDirectory(prefix='ducktape-browser-pack-') as directory:
         'packaging_source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'build_source': source,
         'runtime': record['runtime'], 'toolchain': read_json(ROOT / 'release/browser-toolchain.json'),
         'build_identities': identities, 'assets': assets, 'artifacts': {f.name: sha256(f) for f in out.iterdir()},
-        'status': 'experimental; cross-backend numeric gate remains failed; see docs/BROWSER.md'}
+        'status': 'experimental; distinct numerical profiles; full qualification pending; see docs/BROWSER.md'}
     (out / 'inventory.json').write_text(json.dumps(inventory, indent=2) + '\n')
 print(out)

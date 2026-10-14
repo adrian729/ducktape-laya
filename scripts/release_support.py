@@ -1,5 +1,6 @@
 """Shared maintainer checks. Standard library only; never used by consumers."""
 import hashlib
+import math
 import json
 import pathlib
 import subprocess
@@ -84,6 +85,15 @@ def check_qualification(record, root=ROOT):
         value = policy['budgets'][key]
         if type(value) is not int or value <= 0:
             raise ValueError('Invalid qualification budget: ' + key)
+    if policy.get('numerical_contract', {}).get('policy') != 'distinct_profiles':
+        raise ValueError('Unsupported numerical contract')
+    if policy['budgets'].get('native_binding_absolute_tolerance') != 0:
+        raise ValueError('Same-binary binding conformance must be exact')
+    upstream = policy['budgets'].get('native_upstream_absolute_tolerance')
+    if type(upstream) not in (int, float) or not math.isfinite(upstream) or upstream < 0:
+        raise ValueError('Invalid upstream tolerance')
+    if policy['budgets'].get('browser_absolute_tolerance_source') != 'release/browser-toolchain.json#upstream_absolute_tolerance':
+        raise ValueError('Browser tolerance must apply to same-backend upstream comparison')
     return policy
 
 def binary_info(build):

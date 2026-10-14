@@ -262,6 +262,17 @@ browser engines expose async `info()`. Routers in Rust/JS report common runtime
 capabilities, since models are loaded lazily. Inference and model identities are
 shared C ABI results, not independently maintained binding constants.
 
+`numerical_profile` contains an `id` derived from the backend and required CPU
+features, plus `cross_profile_equivalence: false`. The ID is a profile label, not
+a complete reproducibility fingerprint: also record runtime/patch and model
+hashes, artifact/compiler/flags, execution settings, and device/driver identity.
+Bindings using the same native binary, model and settings must return identical
+results. Each backend must match upstream processing at its declared tolerance.
+Different profiles can change probabilities, winning choices and threshold
+projections. Consumers should qualify thresholds for the profiles they deploy.
+Initialization fallback may select another profile; inspect `info()` afterward.
+Inference failures never silently switch profiles.
+
 On the Linux x86-64 build, CPU features selected by the supported GGML options
 are checked before calling the backend. Missing required features produce
 `DTL_UNSUPPORTED_PLATFORM` (7). This guard covers the declared configuration;

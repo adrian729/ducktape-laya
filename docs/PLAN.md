@@ -44,7 +44,7 @@ hash-checked runtime patches, SBOM generation, isolated upgrade tooling,
 reproducibility checks and Linux CI are implemented. Browser delivery uses the
 same core through experimental WASM/WebGPU packages and module workers.
 
-Remaining release work includes the unmet browser/native numeric gate, broader
+Remaining release work includes numerical-profile qualification and broader
 physical CPU/browser/GPU and resource-pressure coverage, controlled performance
 regression budgets, a declared distribution baseline and signed package delivery.
 The source repository is public; package publication and signing are separate
@@ -201,8 +201,10 @@ as feasible through WASM.
 4. Test app-supplied GGUF/worker/WASM URLs, bundler/base-path deployment, optional
    persistence/cache ownership, offline reuse, missing/corrupt assets, cancelled
    initialization, memory pressure and deterministic release of resources.
-5. Use identical fixtures and declared numeric tolerances across native CPU,
-   WASM and WebGPU. Require bounded event-loop impact, ordered results, lifecycle
+5. Use identical fixtures across native CPU, WASM and WebGPU numerical profiles.
+   Require strict same-backend upstream agreement and report cross-profile numeric
+   and discrete-decision drift without an equivalence promise. Require bounded
+   event-loop impact, ordered results, lifecycle
    correctness and usable diagnostics on the real supported browser matrix.
 
 If platform constraints require duplicate implementation, document the measured

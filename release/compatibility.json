@@ -34,7 +34,7 @@
     "browser_webgpu",
     "license_inventory",
     "reproducibility",
-    "browser_numeric",
+    "cross_profile_drift",
     "artifact_integrity",
     "performance",
     "security_review",

@@ -15,6 +15,7 @@ import urllib.request
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 from compare_results import compare_results
+from release_support import binary_info, sha256, source_identity
 
 parser = argparse.ArgumentParser()
 parser.add_argument('model', type=pathlib.Path)
@@ -49,7 +50,10 @@ commands = {
              str(build / 'conformance-rust'), '--', model],
     'Node': ['node', str(root / 'tests/consumers/node.cjs'), model],
 }
-report = {'fixtures': {}}
+report = {'fixtures': {}, 'model_sha256': sha256(args.model),
+          'fixture_hashes': {fixture.name: sha256(fixture) for fixture in fixtures},
+          'runtime': binary_info(build), 'library_sha256': sha256(build / 'libducktape_laya.so'),
+          'source_identity': source_identity(), 'settings': {'threads': 4}}
 for fixture in fixtures:
     request = fixture.read_bytes()
     results = {}

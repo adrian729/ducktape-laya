@@ -26,7 +26,12 @@ hours. Fuzz each selected target for at least one hour in qualification runs.
 Use at least three independent baseline runs, then freeze profile-specific
 performance/resource thresholds before candidate evaluation. An unfilled budget
 is an unmet gate. Fix correctness before tuning performance. Preserve exact
-same-native-binary binding results and the declared upstream/browser tolerances.
+same-native-binary binding results with identical model/settings and the declared
+same-backend upstream tolerances. Native ISA, WASM and WebGPU are distinct
+numerical profiles. Cross-profile comparisons must report numeric and discrete
+decision drift while retaining strict shapes, ordering and metadata; they do not
+assert probability equivalence. Record runtime/model/compiler/settings/device and
+artifact identities in addition to the diagnostic profile label.
 
 All qualification gates must pass for the full product. Publication additionally
 requires signed/attested artifact identity, verification through public consumer

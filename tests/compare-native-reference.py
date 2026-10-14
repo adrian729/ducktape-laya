@@ -25,7 +25,7 @@ policy = read_json(ROOT / 'release/qualification.json')
 tolerance = policy['budgets']['native_upstream_absolute_tolerance']
 report = {'schema_version': 1, 'status': 'not_run', 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'runtime': record['runtime'],
-          'model_sha256': manifest['sha256'], 'absolute_tolerance': tolerance,
+          'settings': {'threads': 4}, 'model_sha256': manifest['sha256'], 'absolute_tolerance': tolerance,
           'binaries': {name: sha256(build / name) for name in ['laya-reference', 'laya-conformance-c', 'libducktape_laya.so']},
           'reference_source_sha256': sha256(ROOT / 'tests/upstream-reference.cpp'), 'fixtures': {}}
 env = dict(os.environ, LD_LIBRARY_PATH=str(build))

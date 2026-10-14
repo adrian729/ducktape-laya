@@ -41,6 +41,7 @@ export interface RuntimeInfo {
   schema_version: 1; package_version: string; abi_version: number; llama_cpp_commit: string;
   runtime_patches: { path: string; sha256: string; purpose: string }[];
   backend: 'native-cpu' | 'wasm-cpu' | 'webgpu'; compiler: string;
+  numerical_profile: { id: string; cross_profile_equivalence: false };
   required_cpu_features: string[]; missing_cpu_features: string[]; cpu_supported: boolean;
   decision_types: string[]; features: string[]; limits: Record<string, number>;
   model?: { architecture: string; name: string; decision_type: string; max_head_tokens: number; max_tokens: number; temperatures: Record<string, number> };

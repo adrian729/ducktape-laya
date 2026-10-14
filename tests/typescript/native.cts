@@ -13,6 +13,8 @@ async function consumer() {
     onEvent: event => { const status: number = event.status; void status; } });
   const values: Record<string, string | number | boolean> = (await engine.decideStructured(structured)).values;
   const runtime: string = (await engine.info()).llama_cpp_commit;
+  const profile: { id: string; cross_profile_equivalence: false } = (await engine.info()).numerical_profile;
+  void profile;
   await engine.close({ cancelPending: true });
   const router = await Laya.openRouter({ models: { english: '/model.gguf' }, max_loaded: 1 });
   await router.decideBatch([{ ...request, model: 'english' }]);

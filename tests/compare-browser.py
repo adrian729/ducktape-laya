@@ -1,26 +1,54 @@
 #!/usr/bin/env python3
-"""Compare browser output against an explicitly supplied native parity run."""
+"""Measure cross-profile drift against an explicitly supplied native parity run."""
 import argparse
 import json
 import pathlib
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
-from compare_results import compare_results
+from compare_results import compare_results, measure_profile_drift
+from release_support import sha256
 p=argparse.ArgumentParser()
 p.add_argument('report',type=pathlib.Path)
 p.add_argument('--native', type=pathlib.Path, required=True,
                help='Native report produced by tests/parity.py --report with the same model and fixtures')
 a=p.parse_args()
-root=pathlib.Path(__file__).resolve().parents[1]
 report=json.loads(a.report.read_text())
 native=json.loads(a.native.read_text())
 reference={name: outputs['C'] for name, outputs in native['fixtures'].items()}
-tolerance=json.loads((root/'release/browser-toolchain.json').read_text())['native_wasm_absolute_tolerance']
-assert report['status']=='passed',report
-assert report['ticks']>0, 'No main-thread heartbeat during worker execution'
-assert [event['event'] for event in report['events']]==['start','end']*3
-assert set(reference) == set(report['results']), 'Fixture set changed'
-# Fixture file enumeration is not result-object ordering.
+def require(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+require(report['status'] == 'passed', 'Browser execution failed')
+require(report['model_sha256'] == native['model_sha256'], 'Model identity mismatch')
+require(report['fixture_hashes'] == native['fixture_hashes'], 'Fixture identity mismatch')
+for identity in ['llama_cpp_commit', 'runtime_patches']:
+    compare_results(native['runtime'][identity], report['info'][identity])
+for runtime in [native['runtime'], report['info']]:
+    require(runtime['numerical_profile']['cross_profile_equivalence'] is False, 'Unexpected profile policy')
+require(report['ticks'] > 0, 'No main-thread heartbeat during worker execution')
+require([event['event'] for event in report['events']] == ['start', 'end'] * len(reference),
+        'Unexpected lifecycle events')
+require(set(reference) == set(report['results']), 'Fixture set changed')
+# Fixture enumeration is not result-object ordering. Permit changed predictions
+# only at schema-defined decision fields; metadata and token usage remain exact.
 ordered = {name: report['results'][name] for name in reference}
-maximum = compare_results(reference, ordered, tolerance)
-print(f'Maximum absolute difference: {maximum[0]:.12g} at {maximum[1]}; tolerance {tolerance}')
+decisions = []
+for name, value in reference.items():
+    cases = enumerate(value) if isinstance(value, list) else [(None, value)]
+    for index, result in cases:
+        prefix = (name,) if index is None else (name, index)
+        for question, answer in result['answers'].items():
+            if answer['type'] == 'choice':
+                decisions.append(prefix + ('answers', question, 'choice'))
+        for field in result.get('values', {}):
+            decisions.append(prefix + ('values', field))
+drift = measure_profile_drift(reference, ordered, decisions)
+print(json.dumps({'comparison': 'cross_profile_drift', 'probability_equivalence': False,
+                  'browser_backend': report['backend'],
+                  'browser_runtime': report.get('info'),
+                  'native_runtime': native['runtime'],
+                  'native_library_sha256': native['library_sha256'],
+                  'model_sha256': native['model_sha256'], 'fixture_hashes': native['fixture_hashes'],
+                  'native_report_sha256': sha256(a.native), 'browser_report_sha256': sha256(a.report),
+                  **drift, 'status': 'passed'}, allow_nan=False))

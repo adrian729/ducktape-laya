@@ -20,8 +20,10 @@ validation and explicit adapter support, not just an unchanged file extension.
 A release identifies its architecture, CPU features, system-library floor, tested
 Linux userspaces, Node/Electron/browser versions and backend. The same model may
 have numeric differences between CPU/GPU/ISA profiles; bindings using the same
-native binary must agree. Browser/native interchangeability currently fails its
-original numeric gate and remains experimental. Unvalidated platforms must not be
+native binary and settings must agree exactly. Each backend must agree with
+upstream processing within its declared strict tolerance. Cross-profile probability
+and discrete-decision drift is reported, without an interchangeability guarantee.
+Browser delivery remains experimental pending full qualification. Unvalidated platforms must not be
 advertised as supported merely because the source can compile there.
 
 Release acceptance includes actual artifact installation, model integrity, ABI and

@@ -48,8 +48,17 @@ json runtime_info() {
 #else
     const char *backend = "native-cpu";
 #endif
+    std::string profile = backend;
+    if (!required.empty()) {
+        profile += ":";
+        for (size_t i = 0; i < required.size(); ++i) {
+            if (i) profile += "+";
+            profile += required[i].get<std::string>();
+        }
+    }
     return {{"schema_version", 1}, {"package_version", DTL_PACKAGE_VERSION}, {"abi_version", DTL_ABI_VERSION},
         {"runtime_patches", json::parse(DTL_RUNTIME_PATCHES)}, {"llama_cpp_commit", DTL_RUNTIME_COMMIT}, {"backend", backend}, {"compiler", DTL_COMPILER},
+        {"numerical_profile", {{"id", profile}, {"cross_profile_equivalence", false}}},
         {"required_cpu_features", required}, {"missing_cpu_features", missing}, {"cpu_supported", missing.empty()},
         {"decision_types", {"choice", "noul", "score"}},
         {"features", {"structured_decisions", "sequential_batches", "routing", "observers", "cooperative_cancellation", "deadlines"}},

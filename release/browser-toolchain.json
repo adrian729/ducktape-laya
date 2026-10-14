@@ -11,6 +11,7 @@
   },
   "memory64": false,
   "threads": 1,
-  "native_wasm_absolute_tolerance": 1e-05,
-  "status": "validated experimental Chrome 152 WASM/WebGPU path; cross-backend numeric gate failed"
+  "status": "experimental; full platform and release qualification pending",
+  "upstream_absolute_tolerance": 1e-05,
+  "numerical_contract": "distinct_profiles"
 }

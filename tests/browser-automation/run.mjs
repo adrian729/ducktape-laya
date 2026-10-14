@@ -107,13 +107,13 @@ try {
       }
       for (const [name, script, inputs] of [
         ['upstream_numeric', 'compare-browser-reference.py', args['skip-reference'] ? null : [join(out, backend + '-execution.json'), join(out, backend + '-reference.json')]],
-        ['native_numeric', 'compare-browser.py', args.native ? [join(out, backend + '-execution.json'), '--native', resolve(args.native)] : null],
+        ['cross_profile_drift', 'compare-browser.py', args.native ? [join(out, backend + '-execution.json'), '--native', resolve(args.native)] : null],
       ]) {
         gates[name] = { status: 'not_run' };
         if (inputs) {
           try {
             const output = execFileSync('python3', [join(root, 'tests', script), ...inputs], { encoding: 'utf8', stdio: 'pipe' });
-            gates[name] = { status: 'passed', output };
+            gates[name] = { status: 'passed', result: JSON.parse(output) };
           } catch (error) {
             gates[name] = { status: 'failed', error: String(error.stderr || error) }; failed = true;
           }

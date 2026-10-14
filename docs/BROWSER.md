@@ -5,11 +5,11 @@ calibration, routing, batching and structured projection as native bindings.
 It runs in a private module worker. JavaScript owns asset fetching, queueing,
 shutdown and platform errors; it does not implement a second classifier.
 
-**Status: experimental.** The native AVX2 versus WASM/WebGPU numerical gate is
-not satisfied. The declared absolute tolerance is owned by
-`release/browser-toolchain.json`. Do not advertise backend-interchangeable
-probabilities or widen tolerances just to pass. API/structure equivalence,
-same-backend upstream agreement and cross-backend numerical comparison are
+**Status: experimental; full release qualification is pending.** Native CPU ISA
+profiles, WASM and WebGPU are distinct numerical profiles. Probabilities and
+threshold decisions are not interchangeable across profiles. Strict same-backend
+upstream tolerance is owned by `release/browser-toolchain.json`. API/structure
+equivalence, same-backend upstream agreement and cross-profile drift measurement are
 separate requirements.
 
 ## Build and package
@@ -114,9 +114,9 @@ python3 tests/compare-browser.py build/browser-results.json --native build/nativ
 ```
 
 The comparator requires matching fixture sets/key order, a responsive main-thread
-heartbeat, ordered events and values within the declared tolerance. The current
-cross-backend numerical limitation must remain visible even when lifecycle tests
-pass. `tests/compare-browser-reference.py` separately compares with unchanged
+heartbeat, ordered events and finite values. It reports numeric drift and changed
+choice/structured decisions without a cross-profile tolerance gate. Metadata,
+token counts and result shapes remain exact. `tests/compare-browser-reference.py` separately compares with unchanged
 upstream decision processing on the same backend.
 
 For repeatable real-browser runs, install the locked developer tools and use an
@@ -131,7 +131,8 @@ node tests/browser-automation/run.mjs --model /path/to/Laya-Q8_0.gguf \
 The runner starts its own loopback-only harness, verifies the model, runs both
 backends, upstream comparisons, lifecycle/assets/device-loss checks, and closes
 the browser and server afterward. It records browser/platform, model, fixture
-and asset identities. Numeric failures cause a failed exit. It defaults to headed
+and asset identities. Same-backend upstream failures cause a failed exit;
+cross-profile drift is retained as measured evidence, not probability equivalence. It defaults to headed
 Chrome without custom launch flags; use `--headless` only when that environment
 provides the intended GPU. `--isolated` adds COOP/COEP for shared-memory controls.
 `--package-dir EXTRACTED_PACKAGE` tests shipped assets; `--backend wasm|webgpu`

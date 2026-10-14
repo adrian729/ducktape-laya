@@ -9,14 +9,17 @@ from compare_results import compare_results
 p = argparse.ArgumentParser()
 p.add_argument('adapter', type=pathlib.Path)
 p.add_argument('reference', type=pathlib.Path)
-p.add_argument('--tolerance', type=float, default=0.00001)
+p.add_argument('--tolerance', type=float, default=json.loads((pathlib.Path(__file__).resolve().parents[1] / 'release/browser-toolchain.json').read_text())['upstream_absolute_tolerance'])
 a = p.parse_args()
 adapter, reference = [json.loads(path.read_text()) for path in (a.adapter, a.reference)]
-assert adapter['status'] == reference['status'] == 'passed'
-assert adapter['backend'] == reference['backend'], 'Backend mismatch'
+if not adapter['status'] == reference['status'] == 'passed':
+    raise AssertionError('Execution or reference failed')
+if adapter['backend'] != reference['backend']:
+    raise AssertionError('Backend mismatch')
 results = adapter['results']
 results = {'primitive': results['primitive.json'], 'structured': results['structured.json'], **{f'batch{i}': v for i, v in enumerate(results['batch.json'])}}
-assert set(results) == set(reference['results'])
+if set(results) != set(reference['results']):
+    raise AssertionError('Reference fixture set changed')
 maximum = (0, '')
 for key, value in results.items():
     difference = compare_results(value['answers'], reference['results'][key]['answers'], a.tolerance, key + '.answers')

@@ -96,5 +96,6 @@ determinism is a separate check for identical prebuilt inputs.
 Before publication, require all applicable recorded gates, review current evidence
 and numeric-profile limits, verify the security contact and release hosting, and
 retain the prior artifacts for rollback. Publication and signing are explicit
-maintainer actions. Browser/native probability equivalence currently fails its
-original tolerance and must not be described as a passing gate.
+maintainer actions. Each numerical profile must pass strict same-backend upstream
+checks. Cross-profile comparisons report probability and decision drift and must
+not be described as probability equivalence.

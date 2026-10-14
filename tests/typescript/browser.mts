@@ -13,6 +13,8 @@ async function consumer() {
   } };
   await engine.decideStructured(structured);
   await engine.decideBatch([request, structured]);
+  const profile: { id: string; cross_profile_equivalence: false } = (await engine.info()).numerical_profile;
+  void profile;
   await engine.close();
   const router = await Laya.openRouter({ english: { url: '/model.gguf' } }, { backend: 'wasm' });
   await router.execute({ ...request, model: 'english' });

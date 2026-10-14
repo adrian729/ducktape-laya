@@ -34,6 +34,20 @@ class Qualification(unittest.TestCase):
             with patch('release_support.read_json', return_value=policy), self.assertRaises(ValueError):
                 check_qualification(self.record)
 
+    def test_numerical_policy(self):
+        for key, value in [('native_binding_absolute_tolerance', 0.001),
+                           ('native_upstream_absolute_tolerance', float('nan')),
+                           ('native_upstream_absolute_tolerance', True),
+                           ('browser_absolute_tolerance_source', 'native_wasm_absolute_tolerance')]:
+            policy = copy.deepcopy(self.policy)
+            policy['budgets'][key] = value
+            with patch('release_support.read_json', return_value=policy), self.assertRaises(ValueError):
+                check_qualification(self.record)
+        policy = copy.deepcopy(self.policy)
+        policy['numerical_contract']['policy'] = 'interchangeable'
+        with patch('release_support.read_json', return_value=policy), self.assertRaises(ValueError):
+            check_qualification(self.record)
+
     def test_invalid_budgets(self):
         for value in [0, -1, True, 1.5]:
             policy = copy.deepcopy(self.policy)

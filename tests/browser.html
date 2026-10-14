@@ -3,7 +3,8 @@
 import { Laya } from '/browser/index.mjs';
 window.state = { status: 'ready' };
 window.start = async (backend = 'wasm') => {
-  window.state = { status: 'running', backend, results: {}, events: [], ticks: 0, gpuGraphs: 0 };
+  window.state = { status: 'running', backend, results: {}, events: [], ticks: 0, gpuGraphs: 0,
+    model_sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2', fixture_hashes: {} };
   const timer = setInterval(() => window.state.ticks++, 20);
   let engine;
   try {
@@ -12,9 +13,13 @@ window.start = async (backend = 'wasm') => {
       sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2', initializationTimeoutMs: 240000 });
     window.state.capabilities = engine.capabilities;
     window.state.info = await engine.info();
+    if (window.state.info.numerical_profile.id !== (backend === 'wasm' ? 'wasm-cpu' : 'webgpu') ||
+        window.state.info.numerical_profile.cross_profile_equivalence !== false) throw new Error('Invalid numerical profile');
     if (window.state.info.model.decision_type !== 'laya') throw new Error('Missing model diagnostics');
     for (const name of ['primitive','structured','batch']) {
       const request = await (await fetch(`/fixtures/${name}.json`)).text();
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(request));
+      window.state.fixture_hashes[name + '.json'] = Array.from(new Uint8Array(digest), x => x.toString(16).padStart(2, '0')).join('');
       window.state.results[name + '.json'] = await engine.execute(request, { onEvent: event => window.state.events.push(event) });
     }
     try { await engine.execute('{}'); throw new Error('Invalid request accepted'); }

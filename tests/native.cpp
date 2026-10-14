@@ -12,6 +12,8 @@ int main(int argc, char **argv) {
         const auto runtime = ducktape::info();
         expect(runtime.find("\"abi_version\":1") != std::string::npos, "diagnostics ABI");
         expect(runtime.find("\"cpu_supported\":true") != std::string::npos, "host CPU supported");
+        expect(runtime.find("\"numerical_profile\":{\"id\":\"native-cpu") != std::string::npos, "native numerical profile");
+        expect(runtime.find("\"cross_profile_equivalence\":false") != std::string::npos, "profile equivalence contract");
         dtl_engine *raw = nullptr;
         char *error = nullptr, *result = nullptr;
         expect(dtl_open(nullptr, nullptr, &raw, &error) == DTL_INVALID_ARGUMENT, "null path");

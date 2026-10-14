@@ -90,16 +90,19 @@ inference failures never silently switch backends or recompute a result.
 
 Browser requests still pass through the C ABI and shared planner. Platform code
 may adapt memory, scheduling, cancellation transport and device-loss handling,
-but must preserve request/result semantics. Browser/native numeric equivalence
-remains an unmet release gate; browser delivery is experimental. Do not equate
-structural/API parity with interchangeable probabilities across execution backends.
+but must preserve request/result semantics. Native ISA profiles, WASM and WebGPU
+are distinct numerical profiles: probability differences can change choices and
+threshold projections. Browser delivery remains experimental pending full release
+qualification. Structural/API parity does not promise interchangeable predictions.
 
 ## Conformance and maintenance
 
 Keep regression inputs in `tests/fixtures` and automated public-API consumers in
 `tests/consumers`, independently of demos. Same-native-binary binding outputs must
-agree exactly. Compare each browser adapter with upstream processing on the same
-backend separately from native/browser comparisons at the declared tolerance.
+agree exactly with identical model bytes and settings. Compare each adapter with
+upstream processing on the same backend at its strict declared tolerance. Measure
+cross-profile numeric drift and changed decisions separately; never use that
+measurement to weaken same-backend checks.
 Changes to ownership, bounds, ordering, errors, calibration or lifecycle require
 corresponding contract updates and regression coverage.
 

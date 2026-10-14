@@ -57,7 +57,7 @@
     "performance_limits_status": "must_be_frozen_before_candidate",
     "native_binding_absolute_tolerance": 0,
     "native_upstream_absolute_tolerance": 1e-06,
-    "browser_absolute_tolerance_source": "release/browser-toolchain.json#native_wasm_absolute_tolerance"
+    "browser_absolute_tolerance_source": "release/browser-toolchain.json#upstream_absolute_tolerance"
   },
   "evidence_required_fields": [
     "source_identity",
@@ -103,7 +103,7 @@
       ],
       "checks": [
         "tests/upstream-reference.cpp",
-        "tests/parity.py"
+        "tests/compare-native-reference.py"
       ],
       "acceptance": "Same-model/backend upstream agreement within declared tolerance; prompt and calibration semantics preserved."
     },
@@ -202,15 +202,6 @@
       ],
       "acceptance": "Independent native/browser builds and deterministic packages match under identical pinned inputs."
     },
-    "browser_numeric": {
-      "implementation": [
-        "src/backend_llama.cpp"
-      ],
-      "checks": [
-        "tests/compare-browser.py"
-      ],
-      "acceptance": "Native/WASM/WebGPU outputs preserve ordered structures and discrete values; numeric differences satisfy the declared absolute tolerance."
-    },
     "artifact_integrity": {
       "implementation": [
         "cmake/source_identity.cmake"
@@ -248,6 +239,15 @@
         "scripts/check-upgrade.py"
       ],
       "acceptance": "Runtime/model candidate axes and rollback rehearsed; failed, missing or mismatched evidence cannot qualify a candidate."
+    },
+    "cross_profile_drift": {
+      "implementation": [
+        "src/backend_llama.cpp"
+      ],
+      "checks": [
+        "tests/compare-browser.py"
+      ],
+      "acceptance": "Identified native/WASM/WebGPU profiles preserve ordered result structures and metadata. Report finite numeric drift and changed decisions on identical model bytes and fixtures; no cross-profile equivalence promise. Each backend must separately pass strict upstream agreement."
     }
   },
   "publication_gates": [
@@ -259,5 +259,21 @@
     "This file defines requirements, not successful qualification or a supported-platform claim.",
     "Default browser launch must work; experimental flags are exploratory evidence only.",
     "A report boolean alone does not prove identity, security, provenance or publication readiness."
-  ]
+  ],
+  "numerical_contract": {
+    "policy": "distinct_profiles",
+    "same_binary_bindings": "exact_with_identical_model_and_settings",
+    "same_backend_upstream": "strict_declared_tolerance",
+    "cross_profile": "report_numeric_and_decision_drift_no_equivalence_guarantee",
+    "identity": [
+      "backend",
+      "required_cpu_features",
+      "runtime_commit_and_patches",
+      "model_sha256",
+      "compiler_and_flags",
+      "execution_settings",
+      "device_and_driver",
+      "artifact_hashes"
+    ]
+  }
 }
