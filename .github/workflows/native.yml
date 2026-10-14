@@ -82,7 +82,9 @@ jobs:
           python3 scripts/verify-model.py build-model/laya.gguf
       - name: Model-free checks
         if: ${{ !inputs.real_model }}
-        run: python3 scripts/validate.py --output build-ci-report --jobs 2
+        run: |
+          python3 tests/packaging-identity.py
+          python3 scripts/validate.py --output build-ci-report --jobs 2
       - name: Real-model and installed artifact checks
         if: inputs.real_model
         run: python3 scripts/validate.py --model build-model/laya.gguf --packages --output build-ci-report --jobs 2

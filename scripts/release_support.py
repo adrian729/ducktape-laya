@@ -77,3 +77,19 @@ def binary_info(build):
         return json.loads(ctypes.string_at(result).decode())
     finally:
         library.dtl_free(result); library.dtl_free(error)
+
+def browser_build_identity(build, backend, record, toolchain):
+    """Reject swapped, stale or modified browser assets before packaging."""
+    identity = read_json(build / 'laya.build.json')
+    if identity.get('backend') != backend:
+        raise ValueError(backend + ': built backend differs from package slot; rebuild with the correct backend')
+    if (identity.get('package_version') != record['package_version'] or
+        identity.get('llama_cpp_commit') != record['runtime']['commit'] or
+        identity.get('runtime_patches') != record['runtime']['patches'] or
+        toolchain['sdk_version'] not in identity.get('toolchain', '') or
+        toolchain['emscripten_commit'] not in identity.get('toolchain', '')):
+        raise ValueError(backend + ': built identity differs from release/toolchain record; rebuild first')
+    for name in ['laya.mjs', 'laya.wasm']:
+        if sha256(build / name) != identity.get('assets', {}).get(name):
+            raise ValueError(backend + ': asset hash differs from completed build record')
+    return identity

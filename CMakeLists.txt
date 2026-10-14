@@ -201,7 +201,14 @@ if(EMSCRIPTEN)
   string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" llama_cpp_commit "\"${DTL_RUNTIME_COMMIT}\"")
   string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" runtime_patches "${DTL_PATCHES_JSON}")
   string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" toolchain "\"${DTL_EMCC_VERSION}\"")
+  if(GGML_WEBGPU)
+    set(DTL_BROWSER_BACKEND webgpu)
+  else()
+    set(DTL_BROWSER_BACKEND wasm)
+  endif()
+  string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" backend "\"${DTL_BROWSER_BACKEND}\"")
   file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json" CONTENT "${DTL_BROWSER_IDENTITY}")
+  set_property(TARGET ducktape_laya_wasm APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json")
   add_custom_command(TARGET ducktape_laya_wasm POST_BUILD COMMAND ${CMAKE_COMMAND}
     "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json"
     "-DMODULE=$<TARGET_FILE:ducktape_laya_wasm>"

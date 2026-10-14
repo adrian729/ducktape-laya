@@ -7,7 +7,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
-from release_support import ROOT, check_record, read_json, sha256, git
+from release_support import ROOT, check_record, read_json, sha256, git, browser_build_identity
 p = argparse.ArgumentParser()
 p.add_argument('--wasm', type=pathlib.Path, required=True)
 p.add_argument('--webgpu', type=pathlib.Path, required=True)
@@ -27,13 +27,11 @@ with tempfile.TemporaryDirectory(prefix='ducktape-browser-pack-') as directory:
     shutil.copy(ROOT / 'release/browser-toolchain.json', package / 'toolchain.json')
     assets, identities = {}, {}
     for backend, build in [('wasm', a.wasm.resolve()), ('webgpu', a.webgpu.resolve())]:
-        identity = read_json(build / 'laya.build.json')
         toolchain = read_json(ROOT / 'release/browser-toolchain.json')
-        if (identity['package_version'] != record['package_version'] or identity['llama_cpp_commit'] != record['runtime']['commit'] or
-            identity['runtime_patches'] != record['runtime']['patches'] or toolchain['sdk_version'] not in identity['toolchain'] or toolchain['emscripten_commit'] not in identity['toolchain']):
-            p.error(backend + ': built identity differs from release/toolchain record; rebuild first')
-        for name in ['laya.mjs', 'laya.wasm']:
-            if sha256(build / name) != identity['assets'][name]: p.error(backend + ': asset hash differs from completed build record')
+        try:
+            identity = browser_build_identity(build, backend, record, toolchain)
+        except ValueError as error:
+            p.error(str(error))
         identities[backend] = identity
         destination = package / backend; destination.mkdir()
         shutil.copy(build / 'laya.build.json', destination / 'laya.build.json')

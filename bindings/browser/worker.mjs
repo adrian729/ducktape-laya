@@ -70,6 +70,9 @@ async function init(options) {
   runtime = await create({ onAbort: () => { if (!closing) postMessage({ fatal: 'Laya WASM runtime aborted' }); }, locateFile: name => name.endsWith('.wasm') ? options.wasmUrl : new URL(name, options.moduleUrl).href,
     print: options.diagnostics ? text => postMessage({ diagnostic: String(text) }) : () => {}, printErr: options.diagnostics ? text => postMessage({ diagnostic: String(text) }) : () => {} });
   if (runtime._dtl_abi_version() !== 1) throw new Error('Incompatible Laya WASM ABI');
+  const diagnostics = JSON.parse(await call('dtl_info', null, 0, false, {}));
+  const expectedBackend = options.backend === 'webgpu' ? 'webgpu' : 'wasm-cpu';
+  if (diagnostics.backend !== expectedBackend) throw new Error(`Laya backend mismatch: expected ${expectedBackend}, got ${diagnostics.backend}`);
   observer = runtime.addFunction(text => {
     try { const event = JSON.parse(runtime.UTF8ToString(text)); postMessage({ id: event.request_id, event }); } catch {}
   }, 'vii');
