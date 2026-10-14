@@ -1,11 +1,12 @@
 # Security and maintenance
 
-This library is currently a local development project, with no published release
-or public vulnerability-reporting endpoint. Before a public release, maintainers
-must configure a private reporting channel and identify who receives reports.
-For an application embedding this library, report vulnerabilities through that
-application's established private security channel. Avoid public reports that
-include private inputs, model assets, credentials or exploit payloads.
+This library is a public development project with no published package release.
+Report suspected library vulnerabilities privately through
+[GitHub's vulnerability reporting form](https://github.com/adrian729/ducktape-laya/security/advisories/new).
+Reports are delivered to the repository maintainer, @adrian729. For issues specific
+to an application embedding this library, use that application's established
+private security channel. Avoid public reports that include private inputs,
+model assets, credentials or exploit payloads.
 
 Treat GGUF files, embedded templates and native/WASM binaries as trusted code-like
 assets. The runtime parser is not a sandbox for attacker-supplied model files.

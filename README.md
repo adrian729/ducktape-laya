@@ -52,19 +52,21 @@ reviewed; feature lists and star counts alone do not establish maturity.
 
 Requires CMake 3.22+, a C/C++17 compiler and Git. The default Linux x86-64 CPU
 build requires AVX2, FMA, F16C, BMI2 and SSE4.2; it is not yet a universal binary
-for older CPUs. Only Linux x86-64 has been tested. Initialize the pinned source:
+for older CPUs. Only Linux x86-64 has been tested. Clone the repository and its
+pinned runtime:
 
 ```sh
-git submodule update --init --recursive
+git clone --recurse-submodules https://github.com/adrian729/ducktape-laya.git
+cd ducktape-laya
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j 3
 ```
 
-Supply a local model, using `models/manifest.json` for the exact tested artifact.
-For this machine, the existing cached file works:
+Supply a local model, using `models/manifest.json` for the exact tested artifact
+and download URL. Set the path to your downloaded file:
 
 ```sh
-export LAYA_MODEL="$HOME/.cache/huggingface/hub/models--ggml-org--Laya-GGUF/snapshots/22265007700297ba9e128297e82540cf28c5d7d4/Laya-Q8_0.gguf"
+export LAYA_MODEL="/path/to/Laya-Q8_0.gguf"
 python3 scripts/verify-model.py "$LAYA_MODEL"
 ```
 
