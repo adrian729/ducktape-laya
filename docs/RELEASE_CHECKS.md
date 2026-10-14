@@ -14,7 +14,7 @@ manifest before real inference; the runner never downloads one.
 npm ci --ignore-scripts --prefix tests/typescript
 python3 scripts/validate.py --output build-check-model-free
 python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf \
-  --packages --output build-check-native
+  --packages --upstream-reference --output build-check-native
 python3 scripts/check-reproducibility.py --output build-repro --jobs 2
 python3 tests/benchmark.py /path/to/Laya-Q8_0.gguf --report build/benchmark.json
 ```
@@ -36,7 +36,12 @@ independent builds; it is intentionally optional because it recompiles the runti
 Every run retains commands, logs, exit codes and source/runtime/model/fixture/binary
 identities. `report.json` distinguishes selected checks from release readiness.
 Without a model, native real-model and binding-conformance gates stay `not_run`.
-Sanitizer, stress, upstream-reference, browser and platform evidence remain separate;
+`--upstream-reference` builds a separate test executable using upstream primitive
+processing and compares primitive fixtures, including batch members, without an
+HTTP server. It never links that processor into the product library. Structured
+projection remains covered by the shared-core contracts. Without this option,
+the upstream-reference gate stays not run.
+Sanitizer, stress, browser and platform evidence remain separate;
 the runner does not silently transplant historical results to a different binary.
 `--require-release` exits unsuccessfully if any required gate is failed or unrun.
 This runner currently covers a subset of release gates and cannot approve a release

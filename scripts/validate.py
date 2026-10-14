@@ -21,11 +21,13 @@ p.add_argument('--output', type=pathlib.Path, required=True)
 p.add_argument('--jobs', type=int, default=2)
 p.add_argument('--node-include', type=pathlib.Path)
 p.add_argument('--packages', action='store_true', help='Build and exercise installed artifacts; requires --model')
+p.add_argument('--upstream-reference', action='store_true', help='Build an isolated test-only upstream processor and compare real-model primitive fixtures')
 p.add_argument('--reproducibility', action='store_true', help='Also compile two independent source snapshots')
 p.add_argument('--require-release', action='store_true', help='Fail if any required release gate is failed or not run')
 a = p.parse_args()
 if a.jobs < 1: p.error('--jobs must be positive')
 if a.packages and not a.model: p.error('--packages requires --model')
+if a.upstream_reference and not a.model: p.error('--upstream-reference requires --model')
 record = check_record()
 model = a.model.resolve() if a.model else None
 manifest = read_json(ROOT / record['models'][0])
@@ -80,6 +82,7 @@ try:
         # built a candidate runtime. Candidate evaluation has its own runner.
         f'-DDUCKTAPE_LLAMA_SOURCE={ROOT / record["runtime"]["path"]}', '-DDUCKTAPE_LLAMA_REVISION=',
         '-DDUCKTAPE_BUILD_TESTS=ON', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_NODE=ON',
+        '-DDUCKTAPE_BUILD_REFERENCE_PROBE=' + ('ON' if a.upstream_reference else 'OFF'),
         f'-DNODE_INCLUDE_DIR={headers}', f'-DDUCKTAPE_TEST_MODEL={model or ""}'])
     run('build', ['cmake', '--build', build, '--parallel', a.jobs])
     report['library_sha256'] = sha256(build / 'libducktape_laya.so')
@@ -103,6 +106,9 @@ try:
     if model:
         run('bindings', [sys.executable, ROOT / 'tests/parity.py', model, '--build-dir', build,
                          '--report', out / 'outputs.json'], 'binding_conformance')
+    if a.upstream_reference:
+        run('upstream-reference', [sys.executable, ROOT / 'tests/compare-native-reference.py', model,
+            '--build', build, '--report', out / 'upstream-reference.json'], 'upstream_reference')
     if a.packages:
         run('package', [sys.executable, ROOT / 'scripts/package-linux.py', '--build', build, '--output', out / 'packages'])
         run('installed', [sys.executable, ROOT / 'tests/installed-packages.py', out / 'packages', model], 'installed_packages')
