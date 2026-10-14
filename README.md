@@ -7,55 +7,21 @@ Python runtime, child inference process or automatic downloads.
 
 **Status: working Linux CPU prototype.** Real `choice`, `noul` (probability of
 true) and ordinal `score` inference is implemented for the pinned English Q8_0
-model. It does not generate chat. Windows/macOS builds, Electron installers,
-prebuilt packages and GPU support remain release work. See the
+model. It does not generate chat. Professional Linux packaging, reliability
+validation and the required WebGPU/WASM browser path remain release work.
+Other operating systems are deferred until we can test them. See the
 [reviewed plan](docs/PLAN.md) and [validation report](docs/VALIDATION.md).
 
 The shared backend now also implements bounded batching, flat structured
 decisions, passive per-call hooks, and explicit local model routing with a
 bounded cache. These features are exposed in every language interface, including
 TypeScript. GGUF remains the inference backend. See the [shared API](docs/API.md)
-for contracts and the [comparison and feature plan](docs/PLAN.md) for evidence.
+for contracts, the [product and release plan](docs/PLAN.md) for priorities, and
+[historical comparisons](docs/EVALUATION.md) for research evidence.
 
-## Try the interactive demos
-
-From this repository, run one of these:
-
-```sh
-./demo c
-./demo cpp
-./demo rust
-./demo js
-./demo ts
-```
-
-The launcher builds the selected demo and finds the pinned model in your local
-Hugging Face cache. To use another location: `./demo cpp /path/to/Laya-Q8_0.gguf`
-or set `LAYA_MODEL`. No server or model download is involved.
-
-Each program asks only three questions. Press Enter at every prompt for the
-example, or enter your own text:
-
-```text
-Text to classify: The app crashes whenever I open settings.
-Question: Which department should handle this message?
-Possible answers: billing | technical | sales
-```
-
-It prints the best answer and every answer's probability as a percentage.
-Use 2–8 distinct choices separated by `|`; `yes | no` also works. These are
-classification probabilities, not generated chat or model parameter weights.
-Input is one line per field; the existing model token limits still apply.
-
-Small programs: [C](examples/demo.c), [C++](examples/demo.cpp),
-[Rust](bindings/rust/ducktape-laya/examples/demo.rs),
-[JavaScript](examples/demo.cjs), [TypeScript](examples/demo.cts).
-C and C++ share an example-only form/JSON helper so the actual embedding code
-stays short; it uses the JSON library already in the checkout. Rust uses
-`serde_json` as a **dev dependency for examples only**. The TS demo uses Node's
-built-in type stripping (tested with Node 26); no TS compiler is needed to run it.
-Electron uses the same Node/TS binding; these demos exercise it from the terminal.
-Build tools listed below are required. The first run may take longer to compile.
+The product uses a shared implementation with thin native interfaces. Browser
+execution must reuse that core wherever feasible. Demos are optional test tools
+and do not drive product design, dependencies or release priorities.
 
 ## Alternatives
 
@@ -256,3 +222,45 @@ The reference server is a test tool only; the library never links it. Turn its
 build off again with `-DDUCKTAPE_BUILD_REFERENCE_SERVER=OFF` for normal builds.
 Run `tests/parity.py` without `--server-url` for exact agreement across the four
 language interfaces with no server or network access.
+
+## Optional developer demos
+
+These are manual testing tools, separate from the product and release plan.
+
+From this repository, run one of these:
+
+```sh
+./demo c
+./demo cpp
+./demo rust
+./demo js
+./demo ts
+```
+
+The launcher builds the selected demo and finds the pinned model in your local
+Hugging Face cache. To use another location: `./demo cpp /path/to/Laya-Q8_0.gguf`
+or set `LAYA_MODEL`. No server or model download is involved.
+
+Each program asks only three questions. Press Enter at every prompt for the
+example, or enter your own text:
+
+```text
+Text to classify: The app crashes whenever I open settings.
+Question: Which department should handle this message?
+Possible answers: billing | technical | sales
+```
+
+It prints the best answer and every answer's probability as a percentage.
+Use 2–8 distinct choices separated by `|`; `yes | no` also works. These are
+classification probabilities, not generated chat or model parameter weights.
+Input is one line per field; the existing model token limits still apply.
+
+Small programs: [C](examples/demo.c), [C++](examples/demo.cpp),
+[Rust](bindings/rust/ducktape-laya/examples/demo.rs),
+[JavaScript](examples/demo.cjs), [TypeScript](examples/demo.cts).
+C and C++ share an example-only form/JSON helper so the actual embedding code
+stays short; it uses the JSON library already in the checkout. Rust uses
+`serde_json` as a **dev dependency for examples only**. The TS demo uses Node's
+built-in type stripping (tested with Node 26); no TS compiler is needed to run it.
+Electron uses the same Node/TS binding; these demos exercise it from the terminal.
+Build tools listed below are required. The first run may take longer to compile.

@@ -1,304 +1,285 @@
-# Ducktape Laya implementation plan
+# Product and release plan
 
-## Evaluation decisions (2026-10-13)
+This is the current product contract. It supersedes the scope and priorities in
+[historical evaluations](EVALUATION.md). [API.md](API.md) describes implemented
+behavior; [VALIDATION.md](VALIDATION.md) records actual evidence. Requirements
+below are not claims that the prototype already satisfies them.
 
-Baseline commit: `69745a9`. Evaluate in this order: (1) laya-ts versus our
-Node interface, (2) ONNX versus the native GGUF backend, (3) competing embedded
-libraries, then (4) missing features only where this project retains value.
-Working end-to-end delivery, including model export and packaging effort, counts
-alongside features, correctness, latency, memory and maintenance. An export
-failure is a practical disadvantage even when its cause is outside the runtime.
+## Fixed product requirements
 
-### 1. laya-ts: retain our binding for now
+| Area | Requirement |
+|---|---|
+| Inference | llama.cpp |
+| Model format | GGUF |
+| Native interfaces | Shared C ABI, thin C++, Rust and Node/TypeScript bindings |
+| Browser execution | WebGPU/WASM path, reusing the shared implementation wherever feasible |
+| Higher-level features | Routing, batching, hooks and structured decisions |
+| Supported operating system for now | Linux; advertise only tested CPU architectures, distributions/runtime baselines and execution backends |
 
-Inspected and built upstream commit `c73908d96ff73c0062c340a11bf7c54ec7d8bc4d`.
-All 886 tests in 35 files, type checks and the external-package smoke test passed.
-These suites largely use fake providers. Separately, actual inference with an
-officially exported English checkpoint passed three-question requests and a
-two-state batch; batch answers equalled the corresponding individual answers.
-Across eight states / 24 questions, option winners matched our GGUF, with maximum
-probability difference 0.01330. This is agreement, not measured task accuracy.
+One shared implementation owns common behavior. Bindings adapt language types,
+ownership, errors, async scheduling and platform integration. Reuse upstream
+functionality before implementing it ourselves. Duplicate code only when a
+specific platform constraint or demonstrated benefit justifies it; record why,
+what is duplicated, how it stays equivalent, and when it can be removed.
 
-Upstream is substantially ahead on routing, true batching, hooks, structured
-decisions, shortlist/tournament and browser-provider code. It runs inference
-locally through ONNX, not an HTTP server. Nevertheless it does not clearly
-supersede our embedded Node interface:
+Demos are disposable, optional developer tools. They must never drive product
+architecture, APIs, dependencies, scope, priorities or release acceptance. Build
+and package the library independently; exclude demo-only dependencies and assets
+from consumer artifacts. Package integration tests are automated consumers of
+the public API, not demo applications or UI requirements.
 
-- We own inference in a Worker, bound accepted requests and drain them on close.
-  Its public provider has no release/close method; Router unload drops references.
-  The installed ORT Node 1.30.0 runs synchronous native work inside setImmediate;
-  an async predict method alone does not isolate work from the calling JS thread.
-  The measured timer-delay maximum was 7.3 ms for ours versus 1626 ms for direct
-  laya-ts. An application could supply a worker around upstream, but that is
-  additional integration work, not an existing upstream capability.
-- Our local GGUF load never downloads. Upstream supports local directories but
-  interprets missing paths as Hub identifiers. Its documented default Hub model
-  currently has no split ONNX artifacts; export/package steps are necessary.
-- Its numThreads option sets ort.env.numThreads. ORT Node uses session option
-  intraOpNumThreads; WASM uses env.wasm.numThreads. The inspected setting therefore
-  does not configure these runtimes as intended.
-- Our budgets reject overflow. Upstream truncates and reports dropped state and
-  collapsed options. These are different useful contracts, not interchangeable.
-- Confidence formulas differ: ours follows llama.cpp server formulas; upstream
-  uses entropy confidence, answer_confidence and an action head. Thresholds cannot
-  be copied between them. Our backend lacks the action head and newer calibration
-  features. Upstream also clamps temperatures; ours preserves GGUF metadata.
-- npm registry lookup returned 404 for laya-ts. A pinned checkout can build and
-  pack successfully; neither project yet offers a validated Electron installer.
+No Windows/macOS delivery commitment until suitable test environments exist.
+Linux browser testing is in scope now. Linux native GPU support is a separately
+validated capability, not implied by browser WebGPU support.
 
-Decision: no removal at this gate. Upstream wins on feature breadth; our current
-worker/lifecycle, strict-input and compact GGUF path have tangible value. Do not
-vendor upstream or create a compatibility wrapper just to preserve our API.
+## Present state and gaps
 
-### 2. ONNX: retain GGUF for the compact native target
+- Implemented: Linux CPU GGUF adapter, C/C++/Rust/Node interfaces, bounded
+  sequential batching, a flat structured-decision subset, passive hooks, and
+  explicit local routing with a model-count-bounded cache.
+- Checked: pinned English Q8_0 inference, interface parity, selected lifecycle
+  and error cases. Existing reviews and tests do not establish broad platform
+  support, application accuracy, or production reliability.
+- Missing: browser runtime, supported release packages, automated compatibility
+  and upgrade tooling, broad Linux coverage, sustained reliability validation,
+  and explicit cancellation/deadline behavior.
+- Architectural debt: model-specific preparation and result processing are
+  adapted into our core from upstream server code. Review that boundary before
+  extending it. Existing demos are also built by the default CMake configuration;
+  move them behind an explicit development option.
 
-Tested CPU ORT 1.31.0 with two threads on the same eight tokenized requests, plus
-the actual Node path on ORT 1.30.0. The official exporter ran with Torch 2.14.1+cpu
-and Transformers 5.19.0. Its verification passed at batch sizes 1 and 2 and lengths
-16 and 512. No upstream source changes were needed for this export.
+## Architecture and upstream boundary
 
-| Measured path | Model assets | Peak resident memory | Median 3-question time |
-|---|---:|---:|---:|
-| Our GGUF Node worker, 2 threads | 449 MB | 534 MiB | 3.05 s (earlier run 1.85 s) |
-| Official FP32 ONNX, native probe, 2 threads, questions batched | about 1.69 GB | 1553 MiB | 1.97 s |
-| Community weight-only Q8 ONNX, native probe, 2 threads, serial questions | about 528 MB | 594 MiB | 3.42 s |
-| laya-ts + official FP32, default runtime thread count | about 1.69 GB | 1691 MiB | 0.83 s |
+1. Inventory each responsibility against the pinned llama.cpp and Laya sources:
+   model loading, template rendering, tokenization, score extraction, calibration,
+   result construction, and our higher-level features. Distinguish model data,
+   upstream algorithms, necessary adapter code, and binding-only behavior.
+2. Prefer a reusable upstream decision-processing component if it can be linked
+   in-process without bringing in an HTTP server or changing GGUF inference.
+   Investigate extracting/reusing the existing upstream implementation rather
+   than growing a parallel implementation. Prove equivalence before replacing
+   working code; reuse alone does not justify extra runtime dependencies.
+3. Where upstream exposes no suitable library boundary, keep the smallest
+   necessary Laya adapter isolated behind an internal backend interface. Record
+   its source revision, source locations, intentional deviations and comparison
+   fixtures. Keep llama.cpp-specific types and headers out of the public ABI.
+4. Keep shared routing/planning/batch/result semantics above that boundary.
+   Native and browser adapters should select backends and manage resources, not
+   independently implement the same Laya protocol.
+5. Keep upstream source pins unchanged by default. Any necessary patch must be
+   small, separately recorded, reproducible and justified, with a removal plan
+   when upstream supports the requirement. No silent local vendor edits or
+   long-lived broad fork. Consider upstreaming reusable work as a separate task.
+6. Isolate model capabilities from public language APIs. Expose supported limits,
+   decision types and model/runtime identity so consumers can detect capabilities
+   without depending on a particular upstream revision.
 
-The laptop had live background work and changing thermals. These are observations,
-not stable performance rankings; the two GGUF runs demonstrate the variability.
-Native probes exclude tokenization and JSON overhead. Node defaults are not a
-thread-controlled comparison. See [raw measurements and artifact hashes](evidence/runtime-comparison.json).
+Acceptance: a responsibility map, documented reuse/extraction decision, a narrow
+internal backend boundary, and an upgrade experiment showing that an ordinary
+compatible runtime update does not require edits in every language binding.
+No claim that all future upstream changes can be absorbed without adapter work.
 
-The community Q8 export required I/O name/rank adaptation and failed multi-row
-inference with a broadcast error. Serial questions worked. The official FP32
-export removed that blocker, but required Python build tooling and produced a
-much larger artifact. These integration costs count in the decision.
+## Professional release requirements
 
-ONNX is viable and shows a latency advantage with FP32, with broader execution
-provider options. It does not justify replacing the present compact C/C++/Rust
-engine: higher model/memory cost, extra tokenizer/model-bundle integration, and
-no clear win from the smaller tested ONNX artifact. ORT is an inference runtime,
-not a replacement for tokenization, request validation, calibration, ownership or
-language bindings. A native replacement would need these plus cross-language
-parity/lifecycle tests. Browser support in ORT would not automatically make our
-native C ABI usable in browsers.
+### Packaging and installation
 
-Decision: retain GGUF and the existing Node interface; no backend rewrite or
-removal. Revisit ONNX for a latency-first deployment or a validated compact
-batched export. This is a decision for this embedded product, not a claim that
-GGUF or ONNX is universally superior.
+- Reproducible, pinned build recipes and toolchain/container definitions. Record
+  compiler, dependency revisions, architecture, CPU ISA and build flags in each
+  release. Verify reproducibility and document any remaining nondeterminism.
+- Linux C/C++ headers and shared library with exported CMake targets and pkg-config
+  metadata; versioned SONAME, intentional exported symbols and working installed
+  include/library paths. No checkout-specific absolute paths in shipped files.
+- Versioned Rust sys/safe crates that work outside this monorepo, with a documented
+  native-library discovery/build policy. Consumer installation must not depend on
+  an unpublished sibling path, our development machine or a research checkout.
+- Versioned npm package with declarations, worker and Node-API addon, selecting
+  supported Linux artifacts and producing useful errors on unsupported systems.
+  Test Node and Linux Electron loading/resource paths, including ASAR handling.
+  Do not impose an application architecture beyond necessary integration rules.
+- Browser package containing its loader, worker, WASM and any backend assets, with
+  an explicit asset-location contract usable in ordinary bundlers and offline
+  deployments. Keep native-only imports out of browser entry points.
+- Keep model weights separately versioned from library packages. Document how a
+  consuming app bundles the approved GGUF in its own installer/resources so end
+  users install only that app. No implicit runtime model download or update.
+- Publish artifact checksums, dependency/license inventory (SBOM), provenance and
+  release integrity verification. Include required notices for runtime, model
+  and any reused code. Public publication/signing is a separate release action.
+- Clean Linux environment tests must install the actual package artifacts and
+  call public APIs without this repository, global development dependencies,
+  Ollama, Python or a separately installed inference server. Build-time tools
+  must not accidentally become runtime requirements.
 
-Reproduction helpers (developer-only, dependencies stay outside the library):
-`tests/compare-node.mjs`, `tests/adapt-onnx-probe.py`,
-`tests/export-probe-inputs.mjs`, `tests/compare-onnx.py`. Upstream checkouts, models
-and export dependencies are under ignored `.research/`. Exact revisions and
-SHA-256 hashes are in the evidence file. The official export uses upstream
-`laya-ts/scripts/export_onnx.py --model-dir CHECKPOINT --out-dir OUTPUT`.
+### Reliability and resource management
 
-Sources: [laya-ts](https://github.com/NandhaKishorM/laya/tree/c73908d96ff73c0062c340a11bf7c54ec7d8bc4d/laya-ts),
-[provider implementation](https://github.com/NandhaKishorM/laya/blob/c73908d96ff73c0062c340a11bf7c54ec7d8bc4d/laya-ts/src/providers.ts),
-[ORT C API](https://onnxruntime.ai/docs/get-started/with-c.html),
-[Q8 artifact](https://huggingface.co/nvkudva/laya-onnx-q8/tree/cccc9a01e06189cbb1c153a51ea32642102e306d).
+- Specify handle/thread ownership, concurrent calls, shutdown, callback reentry,
+  partial-failure semantics and error categories consistently across interfaces.
+  Preserve the existing strict bounds and documented legacy API behavior.
+- Define queue, request, token, batch, loaded-model and memory budgets. Model-count
+  limits are not byte-level RAM guarantees; measure actual peaks and use an
+  explicit policy for admission, loading failures and cache eviction.
+- Add sustained open/use/close and mixed-workload tests, concurrent engines,
+  queue saturation, cancellation during shutdown, failed model loads, malformed
+  requests, corrupt/incompatible assets, allocation failures where testable,
+  and worker/backend failures. Include representative large valid inputs.
+- Run native sanitizer and parser/schema fuzz checks, leak checks, race checks
+  where supported, and memory/descriptor/thread measurements over long runs.
+  Define measurable acceptance thresholds before declaring a release stable.
+- Define cancellation and deadlines honestly: cancel queued work, check shared
+  cancellation at safe boundaries, and use backend interruption only where
+  verified. A timeout must not imply an unsafe thread kill or immediate GPU/CPU
+  interruption; document what happens to running work, results and resources.
+- Provide version/capability diagnostics and opt-in timing/resource events with
+  stable error codes. No state/prompt/result logging or telemetry by default;
+  hosts own telemetry destinations. Logging must not change inference behavior.
+- Benchmark startup, latency distribution, throughput, peak memory and shutdown
+  with recorded hardware/configuration. Establish regression budgets from repeatable
+  baselines, not laptop anecdotes. Simultaneous batching remains gated on output
+  isolation/parity and measured benefit; a sequential batch is still a valid API.
 
-### 3. Existing alternatives: the generic embedding layer is already available
+### Linux platform coverage
 
-The strongest direct alternative is **LibLayaX + RLaya**. Its pinned source has
-the same essential architecture as ours: an opaque C handle, JSON requests and
-owned responses, exception containment, serialized inference, explicit destroy,
-and a safe Send + Sync Rust owner. It adds real batching, diagnostics, model
-variants, GPU configuration and published native binaries. It also defaults to
-rejecting truncation; this is not an advantage unique to our native core.
+- Publish an explicit support matrix: architecture, minimum CPU ISA, glibc/libstdc++
+  baseline, compiler/runtime versions, Node/Electron versions and execution backend.
+  Current x86-64 AVX2-era flags are not a generic Linux compatibility guarantee.
+- Choose a portable baseline or explicit ISA-specific packages with safe selection.
+  Detect unsupported CPUs before execution; validate dispatch/fallback where used.
+- Test artifact installation on a chosen minimum Linux baseline and representative
+  newer distributions. Containers validate userspace compatibility, not different
+  physical CPUs, GPU drivers or a different host kernel.
+- Add hardware coverage when available. Linux ARM64, native GPU paths and other
+  untested combinations remain explicitly unsupported/experimental until tested;
+  a successful cross-compile is not sufficient evidence of support.
+- Run browser validation on Linux in the browser/backend combinations we advertise.
+  Keep tested, experimental and unsupported capabilities visibly separate.
 
-The Linux x86-64 AVX2 v1.0.15 release passed all 54 C API checks here with the
-real English checkpoint, including errors, batching, concurrency, reload and
-preserving caller floating-point settings. The release ZIP matched its published
-SHA-256. Setting LD_LIBRARY_PATH to its bundled library directory was necessary
-to launch the supplied test executable. Other platforms and GPUs were not tested
-here; the release explicitly says its Linux GPU path is not hardware-validated.
-RLaya also passed its four tests with LAYA_TEST_MODEL set, including actual
-inference/batching/concurrency, plus its compile-only documentation test.
-Our two-state / six-question C API probe matched all six GGUF option winners;
-its batched results equalled its individual results. Peak resident memory was
-1673 MiB versus our measured 534 MiB. The checkpoint bundle is approximately
-846 MB versus the 449 MB GGUF. Its native library itself is smaller (5.1 MB
-versus our 7.3 MB), so our advantage is the model/overall footprint, not the ABI
-library's file size. Full probe results, revisions and the release checksum are
-in [alternative-library evidence](evidence/alternatives.json).
+### Public API, security and maintenance
 
-| Alternative | Where it is ahead / overlap | What it does not replace in our tested target |
+- Define semantic versioning, ABI compatibility, JSON schema/result stability,
+  deprecation and migration policies. Add ABI/export checks and compilation tests
+  for existing consumers. Check Rust declarations/TS types against the C contract;
+  generate mechanical bindings where that reduces drift without obscuring safety.
+- Document ownership, blocking/async behavior, ordering, overflow, calibration and
+  probability conventions, packaging and supported models. Distinguish promises
+  from implementation details and known limitations.
+- Validate untrusted request sizes and formats. Define the trust boundary for
+  GGUF/template assets; verify distributed model identities before use and fail
+  clearly on incompatible metadata. Checksums identify expected bytes; release
+  provenance/signatures establish who supplied them.
+- Maintain vulnerability triage, dependency monitoring, a security reporting path,
+  release notes and reproducible bug-report guidance. Do not silently inherit a
+  newly changed dependency or require applications to update on every upstream
+  commit. Keep runtime network access opt-in to the host's asset policy.
+- Validate our integration against upstream/reference outputs. Model task quality,
+  application-specific decision thresholds and business fallback behavior belong
+  to Laya and consuming applications; they are not generic library release gates.
+
+## Browser delivery
+
+The browser is a required product path, not an instruction to redirect consumers
+to a different SDK. Preserve llama.cpp/GGUF and share as much native implementation
+as feasible through WASM.
+
+1. Establish actual support for the pinned Laya model's operations in the chosen
+   llama.cpp WASM/WebGPU build. Produce a capability report and identify missing
+   operations, memory limits or initialization constraints. Do not assume a
+   runtime's advertised WebGPU support covers this model.
+2. Run the same core in a Web Worker where feasible. Share schema planning,
+   calibration, routing policy and result construction; isolate browser-specific
+   memory, asset loading, scheduling and backend selection.
+3. Define WebGPU initialization, adapter/device limits and device-loss handling,
+   with an explicitly tested WASM fallback. Define WASM threading requirements,
+   cross-origin isolation headers and behavior without those capabilities.
+4. Test app-supplied GGUF/worker/WASM URLs, bundler/base-path deployment, optional
+   persistence/cache ownership, offline reuse, missing/corrupt assets, cancelled
+   initialization, memory pressure and deterministic release of resources.
+5. Use identical fixtures and declared numeric tolerances across native CPU,
+   WASM and WebGPU. Require bounded event-loop impact, ordered results, lifecycle
+   correctness and usable diagnostics on the real supported browser matrix.
+
+If platform constraints require duplicate implementation, document the measured
+reason and maintain shared conformance fixtures. Do not silently replace the
+agreed inference engine/model format or move shared logic into independent SDKs.
+A browser blocker must remain visible; it must not be relabeled as completed
+support merely because a loader builds or WASM instantiates.
+
+## Easy, controlled llama.cpp and Laya upgrades
+
+Updating these dependencies must be a repeatable maintenance operation. Build
+this workflow early, before adding more model-specific code or backends.
+
+### Separate identities and compatibility
+
+- Pin the llama.cpp source revision and any patches. Lock build/toolchain inputs
+  and language dependencies. Preserve the existing release while testing a candidate.
+- Give each supported model artifact its own immutable manifest: upstream Laya
+  source/checkpoint revision, GGUF repository/revision/hash, tokenizer/template and
+  calibration identity, format/capabilities/limits, and license/provenance. If we
+  convert a model, also record exporter revision, conversion/quantization settings,
+  source hashes and build tools. Prefer an approved upstream GGUF when suitable.
+- Maintain one machine-readable release/compatibility record linking runtime pins,
+  adapter revision, model manifests, package versions and validated backends.
+  Cross-check it against the submodule and artifacts; avoid independently edited
+  copies of pins scattered through bindings/build scripts. Audit current hardcoded
+  pins as part of this work. Historical evidence remains immutable.
+- Permit compatible model and runtime updates independently. Do not equate a new
+  upstream commit with a required model replacement or a binding API change.
+  Unknown combinations are unvalidated, not automatically compatible.
+
+### Candidate upgrade workflow to implement
+
+1. A maintainer selects a candidate runtime revision, model revision, or both.
+   Tooling creates an isolated checkout/build against immutable inputs and a
+   verified local/CI model cache. It never overwrites the known-good release.
+2. Inspect upstream change summaries and diffs affecting public runtime APIs,
+   Laya processing, tokenizer/template/calibration data and model conversion.
+   Check whether our adapter can shrink as upstream adds reusable functionality.
+   Surface compatibility risks and patch conflicts in the report.
+3. Build the old and candidate configurations with recorded flags. For a runtime
+   update, hold the model fixed; for a model update, hold the runtime fixed when
+   compatible. Test the combined pair separately when both must change. Retain
+   supported older combinations required by the published compatibility policy.
+4. Run shared contract fixtures: tokenization/prompt boundaries and output
+   interpretation where we own them; choice/noul/score probabilities; schema
+   projection; overflow/errors; routing and lifecycle; batch order/isolation;
+   hooks; and cross-binding results. Compare with the corresponding upstream
+   reference for the same artifact/configuration where available.
+5. Use predeclared numeric tolerances for each backend. Require exact equality
+   for paths promising it; justify numeric/backend changes rather than widening
+   thresholds merely to pass. An intentionally changed model can change answers:
+   report that drift and reference agreement rather than treating the old model's
+   answers as universal truth. Task-quality claims remain outside this library.
+6. Run ABI/API, installed-package, Linux/browser, reliability, license/security
+   and performance checks applicable to the release. No model-less green suite
+   may stand in for required real-model gates. Report skipped/unavailable checks.
+7. Produce a reviewable report with changed pins/artifacts, capabilities, result
+   differences, memory/performance, compatibility, migration needs and failures.
+   Promote an accepted candidate by updating the release record/lockfiles,
+   package versions and notes together. Never regenerate expected outputs silently.
+8. Preserve previous artifacts/manifests and a tested rollback/re-pin path.
+   Dependency monitoring may propose candidates; it never silently upgrades the
+   runtime or a model inside an installed consumer application.
+
+Acceptance: one documented automated entry point builds and compares a selected
+candidate and produces the report; a maintainer is not manually editing every
+binding or assembling a test checklist. A new incompatible capability may still
+require shared-core work and deliberate API evolution. This tooling is planned,
+not implemented yet.
+
+## Implementation sequence and release gates
+
+| Stage | Deliverable | Completion gate |
 |---|---|---|
-| LibLayaX + RLaya | Existing C/C++/Rust embedding; release binaries; CPU/GPU options; true batch; strict inputs; lifecycle | Uses safetensors, expands CPU weights to FP32; no corresponding managed Node binding found in these repos; no stock Q8 GGUF path |
-| lkarlslund/laya.cpp | Public C++ agent/runtime and CMake library target, full model inference, batching, GPU backends | Not just a server: C++ embedding already exists; stable C ABI/Rust layer is supplied by LibLayaX/RLaya; no tested compact GGUF path |
-| aovestdipaperino/laya-rust | Actual Rust library on Candle, typed questions/results, batched questions, CPU/Metal/CUDA options | Separate Rust engine, not the existing common C ABI plus Node worker; FP32 CPU footprint; source-inspected, not benchmarked here |
-| zerodegress/laya-rust | Rust library/CLI, single custom GGUF, CUDA/CPU/MLX backends | Its GGUF is a different architecture/format contract from ggml-org's; CPU widens to FP32 and is documented as a slow reference; source/README review only |
-| @receptron/laya | Published npm 0.1.2, local ONNX, typed outputs, batching, real session close, correct session-options surface | No built-in bounded Worker or drain-on-close contract; FP32 model bundle, Node-only provider; source-inspected, not real-model-tested here |
-| laya-goish / felipenmoura/laya-node | Useful server/CLI integrations | Their documented integration requires a process/server, unlike the requested embedded deployment |
+| 1. Architecture and maintenance foundation | Upstream responsibility/reuse audit, isolated backend boundary, release/model compatibility records, shared fixtures and candidate-upgrade tooling; demos isolated from product builds | A baseline replay and a real candidate update produce reviewable reports; runtime internals do not leak into bindings; library builds without demos |
+| 2. Linux native release | Installed C/C++/Rust/npm artifacts, API/ABI policy, portable/declared CPU targets, package metadata and provenance; reliability/cancellation/resource work | Real-model conformance, ABI and fault/stress checks pass; clean Linux consumers load the actual artifacts; advertised platform matrix and limits are documented |
+| 3. Browser release | Shared-core WASM/WebGPU implementation, worker/assets/package, tested fallback and browser lifecycle | Real Linux-browser WebGPU and WASM runs meet conformance, memory and responsiveness gates; unsupported combinations fail clearly |
+| 4. Ongoing maintenance | Candidate monitoring, regression/performance history, security triage, release notes and rollback | Every promoted runtime/model/package update has the required compatibility report and retained last-known-good artifacts |
 
-Source revisions: LibLayaX `9eead4f1d9278b13af7662663092bda6168eb2e2`,
-RLaya `263eb958784834d014f56db1c3a8ba5ff67fd736`,
-laya.cpp `e632da0428236be56978e53ddc92cdcd565fb493`,
-Candle laya-rust `8c50e61b1507638c4c1c7630633f4ce776d127db`,
-receptron/laya `6478649e723122ca24bbf5fb69ed1010023c9750`.
+Investigate browser backend feasibility during stage 1 so native architecture
+choices do not obstruct the required browser path. Linux-native packages can be
+released with their scope clearly labeled before the browser package is ready;
+the overall agreed feature set is not complete until both paths meet their gates.
 
-**Decision (updated 2026-10-14):** continue this project and retain every current
-language interface, including TS. Compact Q8 GGUF deployment, a shared backend,
-and a managed Node worker form a useful combination. Add the missing common
-features in that backend rather than maintaining a separate inference/planning
-implementation per language. Other repositories are alternatives and design
-references, not a reason by themselves to remove working code.
-
-LibLayaX/RLaya expose broader platform/GPU options, and laya-ts has more existing
-high-level workflows. Those are concrete feature differences, not proof of
-production maturity or overall superiority. Our actual validation is narrower
-than their advertised platform lists. The comparisons above distinguish measured
-behavior from source review; star counts do not settle engineering quality.
-Keep the adapter against pinned, unmodified llama.cpp and evaluate optimizations
-with parity and footprint measurements.
-
-Sources: [LibLayaX C API](https://github.com/DaragonTech/LibLayaX/blob/9eead4f1d9278b13af7662663092bda6168eb2e2/laya.cpp/capi/laya_c.h),
-[releases](https://github.com/DaragonTech/LibLayaX/releases/tag/v1.0.15),
-[RLaya](https://github.com/DaragonTech/RLaya),
-[laya.cpp C++ interface](https://github.com/lkarlslund/laya.cpp/blob/e632da0428236be56978e53ddc92cdcd565fb493/include/laya/runtime.hpp),
-[Candle library](https://github.com/aovestdipaperino/laya-rust),
-[custom GGUF library](https://github.com/zerodegress/laya-rust),
-[receptron Node library](https://github.com/receptron/laya).
-
-### 4. Missing features: extend only the compact shared engine's useful scope
-
-Implementation update (2026-10-14): the first four rows now have a shared native
-implementation and C/C++/Rust/Node/TS interfaces. The original ABI/options layout
-and confidence formulas remain intact. [API.md](API.md) is the precise contract.
-The table below preserves the reviewed design and broader acceptance targets.
-
-- Batching: additive `dtl_execute`, arrays bounded to 32 requests/128 questions,
-  sequential forward passes, exact individual-call parity, no partial results.
-- Structured decisions: one native flat-schema planner and projection; raw
-  distributions retained; optional fields also populated; unsupported constraints
-  rejected. Bounded integers use ordinal argmax, not expected-score rounding.
-- Hooks: per-call start/end/error observer outside locks, request IDs, native
-  exception containment, Rust panic containment, Node worker event forwarding.
-- Routing: explicit IDs/local paths, lazy Laya metadata validation, canonical-path
-  load deduplication, LRU eviction before loading at capacity. `max_loaded` is a
-  count limit (1–4), not a byte-level memory quota. Packaging checksum verification
-  stays in the existing manifest/script. Only the pinned English artifact is
-  validated; automatic language routing requires separately tested checkpoints.
-
-The isolated multi-sequence encoder probe was run with six pinned tokenized
-questions, independent sequence IDs and positions, a 512-token total cap, and
-reversed input order. All six winners matched, but maximum probability drift was
-0.007069 versus individual encoding and 0.003427 on reversal. One exploratory
-run took 6.23 s sequentially versus 7.51 s simultaneously (not a stable benchmark).
-We therefore retain sequential forward passes and exact output parity in the
-public batch API. [Probe evidence](evidence/encoder-batch.json) and the optional
-`laya-encoder-probe` target preserve this experiment for future runtime updates.
-
-Decision: retain and develop our own TS interface over the shared GGUF backend.
-The reference SDKs inform the design; these additions do not copy their code.
-Browser execution remains a separate research target, not a feature of this
-native addon. A browser runtime will require real WebGPU/WASM validation before
-we can decide whether a shared GGUF build adds value there.
-
-| Feature | How to add it / what is shared | Acceptance before shipping |
-|---|---|---|
-| Batching (first) | Add a native batch-request entry point and reuse it in C++, Rust and Node. Initially a bounded sequential batch provides an honest contract; separately prototype a real multi-sequence llama_encode pass with independent sequence IDs/positions, mapped output rows and a total-token cap. Do not call a loop a throughput optimization. | Batched vs individual probabilities on a varied corpus; padding/order isolation; overflow, partial-error policy, peak memory and measured throughput. Verify ModernBERT encoder support and context allocation before committing to true batching. |
-| Structured decisions | Shared native planner for flat enum, boolean and bounded ordinal-integer properties; project decisions back to typed values with probability metadata. Use deterministic argmax/explicit boolean threshold and preserve ordinal semantics. Reject unsupported strings, arrays, nested schemas and references. | Same schema/errors/results in C, C++, Rust, Node; required/optional fields, limits and numeric mapping covered. Keep primitive distributions available. |
-| Hooks | Start with passive start/end/error events and request IDs. Expose a C callback and thin language adapters, with documented callback thread, ownership and reentrancy rules. Host applications own telemetry sinks. | No callback while holding an inference lock that callbacks can re-enter; no exception/unwind across ABI; predictable order; close/error paths; bounded overhead. Avoid rebuilding upstream's full async hook-rewrite framework. |
-| Routing | Start with explicit application-supplied model IDs and a small bounded model registry. Add automatic language routing only after additional GGUF checkpoints and their tokenizers/templates/calibration pass validation. English-only weights cannot provide multilingual coverage through routing code. | Validated model manifest per route; predictable unknown-language/fallback policy; load deduplication; memory-aware eviction and deterministic cleanup; no implicit network access. |
-| Browser / WebGPU / WASM | Use laya-ts directly for browser applications; do not add a wrapper to this repo solely for a uniform API. Its browser path exists, but real browser/device validation is still required. A separate GGUF WASM experiment is worthwhile only if reusing the compact artifact delivers a measured benefit. | Real WebGPU and forced-WASM runs, offline assets, cross-origin isolation/thread settings, worker loading, model memory and fallback accuracy. Current Agent.load checks for window, so loading inside a Web Worker needs explicit provider integration or an upstream environment-detection fix. Q8 MatMulNBits cannot be assumed to work with WebGPU. |
-
-Next, improve distribution and evidence: portable CPU build
-selection, clean Electron packaging, broader decision fixtures and lifecycle
-stress checks. These strengthen the part of this project that remains useful.
-Do not reimplement language detection, shortlist/tournament, or a separate TS
-decision engine while existing libraries already cover them.
-
-## Reviewed architecture
-
-One C++ inference implementation, a versioned C ABI, a C++ ownership wrapper,
-a safe Rust crate over that ABI, and a Node-API addon with TypeScript declarations.
-Electron consumes the Node addon behind application-owned IPC. No HTTP or child
-inference process is part of the library. Model files are application resources.
-
-Review findings that change the original plan:
-
-1. libllama does not expose a complete typed-decision API. The template, marker,
-   temperature, and result code lives in tools/server/server-decision.cpp. Adapt
-   only Laya's path into a small adapter against a pinned upstream commit. Avoid
-   linking the HTTP server and unrelated model implementations.
-2. Start with the exact existing English Q8_0 GGUF. Its backbone context metadata
-   is not a promise of useful long-context decisions. Explicitly enforce a
-   conservative 512-token combined request budget in the first adapter and reject
-   overflow rather than silently truncating.
-3. Preserve question and option insertion order. JSON libraries that sort keys
-   can change model answers. Return ordered results across every binding.
-4. Define ownership, errors and concurrency before shipping bindings: opaque
-   handles, explicit buffer release, fixed-width/versioned options, per-call error
-   output, and exceptions caught inside the ABI. A handle serializes inference;
-   destruction must not race with active calls. Wrappers enforce that lifecycle.
-5. CPU is the first tested backend. GPU acceleration, new models and context
-   extensions each require their own validation and are later milestones.
-6. Node-API provides a stable addon ABI, not universal OS/CPU binary portability.
-   Publish separate builds and test Electron packaging outside ASAR archives.
-7. Parity against the pinned native server checks implementation correctness, not
-   task accuracy or probability calibration on an application's data.
-
-## Milestones and acceptance
-
-### M1: native proof and C ABI
-
-- Pin llama.cpp as a git submodule; record model revision, checksum, provenance.
-- Load a local model, evaluate choice/noul/score directly, unload safely.
-- No network calls, listening ports, executable launches or model downloads.
-- CMake build, plain-C example, RAII C++ wrapper.
-- Validate bad inputs and missing/corrupt/unsupported models.
-- Check all three question types against the same model/runtime server.
-
-### M2: language interfaces
-
-- Rust sys bindings and safe Engine with Result errors and deterministic cleanup.
-- Node-API addon; asynchronous load/decide/close; bounded outstanding work.
-- TypeScript request/result types; preserve order and consistent errors.
-- Demonstrate identical fixture results through C, C++, Rust and Node.
-
-### M3: distribution and Electron
-
-- Linux x86-64 CPU first; Windows x86-64 and macOS ARM64 build/test matrix next.
-- Electron example with context isolation and a narrow decision IPC interface.
-- CPU portable builds (avoid compiling only for the build machine's ISA).
-- Model packaged separately from library; checksum and upstream notices included.
-- Clean-machine installer test without Python, Ollama or llama.cpp installed.
-- Native dependencies, runtime search paths, signing and resource paths verified.
-
-### M4: robustness and performance
-
-- Sanitizer checks, repeated open/decide/close, concurrent requests and queue limits.
-- Token overflow, Unicode, malformed JSON, missing models and invalid schemas.
-- Startup, resident memory and latency measurements on representative hardware.
-- GPU variants and cancellation only after backend-specific correctness checks.
-
-## Non-goals for the first release
-
-Chat generation, HTTP serving, model training, implicit downloads, automatic model
-updates, mobile/web-browser binaries and a universal runtime for arbitrary models.
-
-## Initial implementation status (2026-10-13)
-
-The CPU core, versioned C ABI, C++ wrapper, Rust crates and asynchronous Node
-interface are implemented. Real inference covers all three question types.
-The four interfaces and a source-built upstream server agree exactly on the
-initial fixture. Error handling, concurrent native calls, Node queue bounds and
-draining on close are tested. Linux staging has been smoke-tested.
-
-This is the first implementation of M1/M2, not a completed distribution release.
-Broader compatibility, stress/sanitizer checks, other operating systems, prebuilt
-packages and Electron installer testing remain. The detailed evidence and limits
-are recorded in [VALIDATION.md](VALIDATION.md).
-
-## Sources
-
-- https://github.com/ggml-org/llama.cpp/pull/29818
-- https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-decision.cpp
-- https://huggingface.co/convaiinnovations/laya
-- https://huggingface.co/ggml-org/Laya-GGUF
-- https://nodejs.org/api/n-api.html
-- https://www.electronjs.org/docs/latest/tutorial/using-native-node-modules
+Chat generation, HTTP serving, model training, implicit downloads/updates and
+untested OS support are outside the current product scope. Demo enhancements
+have no priority in this sequence.

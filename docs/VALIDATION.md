@@ -112,7 +112,7 @@ this feature validation; rebuild/install them when packaging the new library.
 
 ## Comparison work (2026-10-13)
 
-The [evaluation in PLAN.md](PLAN.md#evaluation-decisions-2026-10-13) adds real
+The [historical evaluation](EVALUATION.md#evaluation-decisions-2026-10-13) adds real
 laya-ts/ONNX and LibLayaX/RLaya checks, measured footprint/responsiveness and a
 scoped feature plan. Reproducible developer probes are under tests/; upstream
 checkouts and downloaded/exported weights remain ignored research artifacts.
