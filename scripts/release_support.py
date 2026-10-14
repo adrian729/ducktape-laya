@@ -1,6 +1,7 @@
 """Shared maintainer checks. Standard library only; never used by consumers."""
 import hashlib
 import math
+import re
 import json
 import pathlib
 import subprocess
@@ -95,6 +96,12 @@ def check_qualification(record, root=ROOT):
     if policy['budgets'].get('browser_absolute_tolerance_source') != 'release/browser-toolchain.json#upstream_absolute_tolerance':
         raise ValueError('Browser tolerance must apply to same-backend upstream comparison')
     return policy
+
+def require_uninstrumented_binary(path):
+    """Reject diagnostic native runtimes before loading or packaging them."""
+    symbols = subprocess.check_output(['readelf', '--dyn-syms', '--wide', str(path)], text=True)
+    if re.search(r'\b__(?:asan|ubsan|tsan|msan|sanitizer_cov|llvm_profile)_\w+', symbols):
+        raise ValueError('Instrumented binary cannot be packaged: ' + str(path))
 
 def binary_info(build):
     """Inspect the built ABI without a model; detect stale/incompatible artifacts."""

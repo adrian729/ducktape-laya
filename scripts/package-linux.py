@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import re
 import tempfile
-from release_support import ROOT, check_record, sha256, git, binary_info, source_identity, native_build_identity, require_runtime_identity
+from release_support import ROOT, check_record, sha256, git, binary_info, source_identity, native_build_identity, require_runtime_identity, require_uninstrumented_binary
 from artifact_support import archive_tree
 
 p = argparse.ArgumentParser()
@@ -25,6 +25,11 @@ source = source_identity()
 try:
     identities = {target: native_build_identity(build, target, binary, source) for target, binary in [
         ('ducktape_laya', 'libducktape_laya.so'), ('ducktape_laya_node', 'ducktape_laya.node')]}
+except ValueError as error:
+    p.error(str(error))
+try:
+    for name in ['libducktape_laya.so', 'ducktape_laya.node']:
+        require_uninstrumented_binary(build / name)
 except ValueError as error:
     p.error(str(error))
 diagnostics = binary_info(build)

@@ -197,3 +197,7 @@ This check covers identical inputs and toolchains, not different compilers or
 architectures. Keep its reports in CI/PR artifacts or ignored build directories.
 A reproducible build is one release requirement, not a substitute for runtime,
 platform or installed-consumer checks.
+
+Native packaging rejects binaries exposing sanitizer, libFuzzer coverage or LLVM
+profile instrumentation symbols before loading them. Use separate diagnostic
+builds for testing and rebuild uninstrumented release artifacts for distribution.

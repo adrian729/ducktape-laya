@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from release_support import ROOT, browser_build_identity, sha256, source_identity, native_build_identity, require_runtime_identity
+from release_support import require_uninstrumented_binary, ROOT, browser_build_identity, sha256, source_identity, native_build_identity, require_runtime_identity
 
 
 class BrowserIdentityTests(unittest.TestCase):
@@ -67,6 +67,24 @@ class RuntimeIdentityTests(unittest.TestCase):
                 with self.subTest(key=key, value=replacement):
                     with self.assertRaisesRegex(ValueError, key + ' differs'):
                         require_runtime_identity({**identity, key: replacement}, record)
+
+
+class InstrumentationTests(unittest.TestCase):
+    def test_instrumented_library_is_rejected_before_loading(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            source = base / 'fixture.c'
+            source.write_text('int load(int *p, int n) { return *p / n; }\n')
+            for instrumentation in [None, 'address', 'undefined', 'fuzzer-no-link']:
+                library = base / 'library.so'
+                command = ['clang', '-shared', '-fPIC', str(source), '-o', str(library)]
+                if instrumentation: command += ['-fsanitize=' + instrumentation]
+                subprocess.run(command, check=True, capture_output=True)
+                if instrumentation:
+                    with self.assertRaisesRegex(ValueError, 'Instrumented binary'):
+                        require_uninstrumented_binary(library)
+                else:
+                    require_uninstrumented_binary(library)
 
 
 class NativeIdentityTests(unittest.TestCase):
