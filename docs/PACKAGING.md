@@ -70,3 +70,13 @@ perform real-model inference outside the checkout, with npm/Rust agreeing
 exactly. This is an installation test on the current host, not a clean-container
 or Electron/platform-matrix certification. Local artifacts remain unsigned and
 can include explicitly recorded dirty development sources.
+
+Native tarballs now normalize ownership, timestamps, ordering and gzip headers.
+`SOURCE_DATE_EPOCH` defaults to the source commit timestamp. Two packaging runs
+from identical build/source inputs produced byte-identical native, npm and Rust
+artifacts, and the resulting artifacts passed installed-consumer checks again.
+This establishes packaging reproducibility, not yet independent-compilation
+reproducibility. The inventory records actual CMake ISA options, compiler flags
+and required GLIBC/GLIBCXX/CXXABI symbol versions instead of assuming them.
+The current binary requires symbols through GLIBC 2.38 and GLIBCXX 3.4.29;
+that is a loader requirement, not evidence of testing every compatible distro.

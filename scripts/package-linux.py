@@ -6,9 +6,10 @@ import os
 import pathlib
 import shutil
 import subprocess
-import tarfile
+import re
 import tempfile
 from release_support import ROOT, check_record, sha256, git
+from artifact_support import archive_tree
 
 p = argparse.ArgumentParser()
 p.add_argument('--build', type=pathlib.Path, default=ROOT / 'build')
@@ -16,6 +17,8 @@ p.add_argument('--output', type=pathlib.Path, required=True)
 a = p.parse_args()
 record = check_record()
 version = record['package_version']
+epoch = int(os.environ.get('SOURCE_DATE_EPOCH', git(ROOT, 'show', '-s', '--format=%ct', 'HEAD')))
+if epoch < 0 or epoch > 4294967295: p.error('SOURCE_DATE_EPOCH outside gzip timestamp range')
 build, out = a.build.resolve(), a.output.resolve()
 out.mkdir(parents=True, exist_ok=False)
 if not (build / 'ducktape_laya.node').is_file():
@@ -24,8 +27,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     directory = pathlib.Path(directory)
     native = directory / f'ducktape-laya-{version}-linux-x64'
     subprocess.run(['cmake', '--install', str(build), '--prefix', str(native)], check=True, capture_output=True)
-    with tarfile.open(out / (native.name + '.tar.gz'), 'w:gz') as tar:
-        tar.add(native, arcname=native.name)
+    archive_tree(native, out / (native.name + '.tar.gz'), native.name, epoch)
     package = directory / 'npm'
     package.mkdir()
     for name in ['package.json', 'index.cjs', 'index.d.ts', 'worker.cjs', 'resolve-addon.cjs']:
@@ -51,9 +53,19 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         command += ['--config', f'patch.crates-io.ducktape-laya-sys.path="{ROOT / "bindings/rust/ducktape-laya-sys"}"']
         subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True)
         shutil.copy(ROOT / f'bindings/rust/target/package/{name}-{version}.crate', out)
+    cache = {}
+    for line in (build / 'CMakeCache.txt').read_text().splitlines():
+        match = re.match(r'([^:#]+):[^=]+=(.*)', line)
+        if match: cache[match[1]] = match[2]
+    isa = {key: value for key, value in cache.items() if key.startswith(('GGML_AVX', 'GGML_FMA', 'GGML_F16C', 'GGML_BMI', 'GGML_SSE', 'GGML_NATIVE'))}
+    symbols = subprocess.check_output(['readelf', '--version-info', str(build / 'libducktape_laya.so')], text=True)
+    requirements = sorted(set(re.findall(r'Name: ((?:GLIBC|GLIBCXX|CXXABI)_[0-9.]+)', symbols)))
+    compiler = subprocess.check_output([cache['CMAKE_CXX_COMPILER'], '--version'], text=True).splitlines()[0]
     inventory = {'schema_version': 1, 'package_version': version, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
         'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'runtime': record['runtime'],
-        'platform': 'linux-x64', 'cpu_requirement': 'AVX2 FMA F16C BMI2 SSE4.2',
+        'platform': 'linux-x64', 'source_date_epoch': epoch, 'cpu_build_options': isa,
+        'toolchain': {'compiler': compiler, 'build_type': cache.get('CMAKE_BUILD_TYPE'), 'cxx_flags': cache.get('CMAKE_CXX_FLAGS'), 'required_runtime_symbol_versions': requirements},
+        'reproducibility_scope': 'deterministic packaging of identical build inputs; independent compilation is a separate gate',
         'artifacts': {f.name: {'sha256': sha256(f), 'bytes': f.stat().st_size} for f in sorted(out.iterdir())},
         'components': [{'name': 'ducktape-laya', 'license': 'MIT'}, {'name': 'llama.cpp/ggml', 'license': 'MIT', 'revision': record['runtime']['commit']}, {'name': 'nlohmann-json', 'license': 'MIT'}],
         'status': 'local unsigned development artifacts; not release approval'}
