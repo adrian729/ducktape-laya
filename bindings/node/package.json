@@ -21,7 +21,8 @@
     "THIRD_PARTY_NOTICES.md",
     "licenses/",
     "compatibility.json",
-    "model-manifest.json"
+    "model-manifest.json",
+    "download-model.py"
   ],
   "os": [
     "linux"

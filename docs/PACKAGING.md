@@ -7,15 +7,37 @@ minimum distribution baseline. See [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ## Native installation
 
+For an interactive development install, use `python3 scripts/setup.py` from
+the source checkout. It prompts for a prefix and model directory, optionally
+stages a local Node.js package, and prints project integration commands when
+finished. Pass `--yes` for unattended defaults or `--yes --dry-run` to inspect
+the commands. The manual native installation steps are:
+
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_EXAMPLES=OFF
 cmake --build build --parallel 3
 cmake --install build --prefix "$PWD/build/staging"
-python3 tests/installed-native.py build/staging /path/to/approved.gguf
 ```
+
+After supplying the model, the optional installed-consumer check is
+`python3 tests/installed-native.py build/staging /path/to/Laya-Q8_0.gguf`.
 
 The installed tree includes versioned shared libraries, C/C++ headers, licenses,
 model/runtime identity records, relocatable CMake targets and pkg-config metadata.
+It also includes `share/ducktape-laya/download-model.py`. To provision a model
+for an application, explicitly run the helper with the application's resource
+directory, then pass the resulting file path to `dtl_open` or `ducktape::laya`:
+
+```sh
+python3 build/staging/share/ducktape-laya/download-model.py /path/to/app/resources
+```
+
+The helper reads the adjacent manifest and verifies the file before exposing it.
+The model remains application-owned; CMake installation and the native/npm/Rust
+packages do not include the weights or run a download during installation. The
+npm tarball also carries `download-model.py` beside `model-manifest.json` for an
+explicit setup step. Python is only needed to run this optional helper.
+
 Consumer CMake projects use:
 
 ```cmake
@@ -28,6 +50,16 @@ Set `CMAKE_PREFIX_PATH` to the installation prefix. Other build systems may use
 `PKG_CONFIG_PATH`. Applications must arrange the normal shared-library loader
 path or bundle the library beside their own executable with an appropriate
 relative RPATH. No inference server or Python is required at runtime.
+For the example prefix above, the manual shell setup is:
+
+```sh
+export CMAKE_PREFIX_PATH="$PWD/build/staging${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export PKG_CONFIG_PATH="$PWD/build/staging/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+export LD_LIBRARY_PATH="$PWD/build/staging/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+No `PATH` change is needed. Pass the application's absolute GGUF path when
+opening the engine; `LAYA_MODEL` is only a convenience for demos and tests.
 
 `release/compatibility.json` owns the package version and approved runtime pin.
 `python3 scripts/check-release.py` checks the runtime checkout/gitlink, model
@@ -51,6 +83,17 @@ The output contains a native installation tarball, an npm tarball with its own
 Node-API addon/shared library/worker/types, two normalized `.crate` files, and
 an inventory with SHA-256 checksums and source/runtime identity. Existing output
 directories are rejected. No script publishes anything or downloads a model.
+To use the local npm tarball in an application without the wizard:
+
+```sh
+npm install --save /path/to/ducktape-laya-0.1.0.tgz
+```
+
+Then `const { Laya } = require('ducktape-laya')` and
+`await Laya.open('/absolute/path/to/Laya-Q8_0.gguf')`. For Rust, install the
+native library first, add the path crate under `bindings/rust/ducktape-laya`
+to your `Cargo.toml`, and point `DUCKTAPE_LAYA_LIB_DIR` at the installed `lib`
+directory at build time. The Rust README documents the same library ownership.
 
 Both native and browser packaging require completed build records. CMake records
 a path-independent SHA-256 manifest of the project's native sources, headers,

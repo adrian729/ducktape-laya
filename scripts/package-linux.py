@@ -49,6 +49,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     shutil.copytree(ROOT / 'licenses', package / 'licenses')
     shutil.copy(ROOT / 'release/compatibility.json', package / 'compatibility.json')
     shutil.copy(ROOT / 'models/manifest.json', package / 'model-manifest.json')
+    shutil.copy(ROOT / 'scripts/download-model.py', package / 'download-model.py')
     addon = package / 'native/linux-x64'
     addon.mkdir(parents=True)
     installed_addon = next(native.glob('lib*/ducktape-laya/node/ducktape_laya.node'))

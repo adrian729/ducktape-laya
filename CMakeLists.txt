@@ -141,6 +141,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ducktape_laya-config.cmake
   ${CMAKE_CURRENT_BINARY_DIR}/ducktape_laya-config-version.cmake DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ducktape_laya)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ducktape-laya.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 install(FILES release/compatibility.json models/manifest.json DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya)
+install(PROGRAMS scripts/download-model.py DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya)
 install(FILES include/ducktape_laya.h include/ducktape_laya.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya)
 install(DIRECTORY licenses/ DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya/licenses)
