@@ -6,16 +6,33 @@
     "repository": "https://github.com/ggml-org/llama.cpp.git",
     "path": "third_party/llama.cpp",
     "commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
-    "patches": []
+    "patches": [
+      {
+        "path": "patches/llama.cpp/typed-cpu-callbacks.patch",
+        "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f",
+        "purpose": "Typed callback bridges for supported Q8/F16/BF16/F32 tensor paths; no arithmetic changes"
+      }
+    ]
   },
-  "models": ["models/manifest.json"],
+  "models": [
+    "models/manifest.json"
+  ],
   "adapter": "src/backend_llama.cpp",
   "status": "development",
   "tested_backend": "linux-x86_64-cpu-avx2",
-  "candidate_absolute_tolerance": 0.000001,
+  "candidate_absolute_tolerance": 1e-06,
   "required_release_gates": [
-    "native_contracts", "binding_conformance", "upstream_reference", "abi",
-    "installed_packages", "sanitizers", "stress", "linux_matrix",
-    "browser_wasm", "browser_webgpu", "license_inventory", "reproducibility"
+    "native_contracts",
+    "binding_conformance",
+    "upstream_reference",
+    "abi",
+    "installed_packages",
+    "sanitizers",
+    "stress",
+    "linux_matrix",
+    "browser_wasm",
+    "browser_webgpu",
+    "license_inventory",
+    "reproducibility"
   ]
 }

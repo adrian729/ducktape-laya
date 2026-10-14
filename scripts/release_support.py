@@ -35,6 +35,9 @@ def check_record(root=ROOT):
     entry = git(root, 'ls-files', '--stage', record['runtime']['path']).split()
     if len(entry) < 2 or entry[1] != expected:
         raise ValueError('Runtime gitlink does not match compatibility record')
+    for patch in record['runtime']['patches']:
+        if sha256(root / patch['path']) != patch['sha256']:
+            raise ValueError('Runtime patch checksum mismatch: ' + patch['path'])
     version = record['package_version']
     for package in ['ducktape-laya', 'ducktape-laya-sys']:
         info = tomllib.loads((root / 'bindings/rust' / package / 'Cargo.toml').read_text())
@@ -49,3 +52,19 @@ def check_record(root=ROOT):
         if len(model['sha256']) != 64 or len(model['revision']) != 40:
             raise ValueError(f'Model must identify immutable artifact: {name}')
     return record
+
+def binary_info(build):
+    """Inspect the built ABI without a model; detect stale/incompatible artifacts."""
+    import ctypes
+    library = ctypes.CDLL(str(pathlib.Path(build).resolve() / 'libducktape_laya.so'))
+    library.dtl_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)]
+    library.dtl_info.restype = ctypes.c_int32
+    library.dtl_free.argtypes = [ctypes.c_void_p]
+    library.dtl_free.restype = None
+    result, error = ctypes.c_void_p(), ctypes.c_void_p()
+    status = library.dtl_info(None, ctypes.byref(result), ctypes.byref(error))
+    try:
+        if status: raise ValueError('Built library diagnostics failed: ' + str(status))
+        return json.loads(ctypes.string_at(result).decode())
+    finally:
+        library.dtl_free(result); library.dtl_free(error)

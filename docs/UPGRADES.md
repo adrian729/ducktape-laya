@@ -45,3 +45,15 @@ or pin promotion were needed. See [retained report](evidence/upgrade-20261014.js
 The relevant upstream diff introduces score-bias metadata and other decision
 models. The existing GGUF is unchanged; this experiment does not approve future
 model artifacts or imply every future upstream revision is compatible.
+
+Runtime patches now have an explicit hash-checked record. CMake applies them to
+build-directory source copies with zero fuzz, and refuses patch/context/source
+layout mismatches. The submodule is never edited by configuration. Runtime
+introspection includes the applied patch list; isolated candidate archives get
+their actual revision through `DUCKTAPE_LLAMA_REVISION`. A custom source directory
+without an explicit identity reports `unverified-custom-source`.
+
+The current [callback-signature patch](../patches/README.md) addresses a strict
+UBSan finding in the pinned runtime. A future upstream fix should remove this
+patch after the same sanitizer and unchanged-output checks. The initial upgrade
+report predates it; that historical report is not approval of a patched candidate.

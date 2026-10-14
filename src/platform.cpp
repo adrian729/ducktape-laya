@@ -49,7 +49,7 @@ json runtime_info() {
     const char *backend = "native-cpu";
 #endif
     return {{"schema_version", 1}, {"package_version", DTL_PACKAGE_VERSION}, {"abi_version", DTL_ABI_VERSION},
-        {"llama_cpp_commit", DTL_RUNTIME_COMMIT}, {"backend", backend}, {"compiler", DTL_COMPILER},
+        {"runtime_patches", json::parse(DTL_RUNTIME_PATCHES)}, {"llama_cpp_commit", DTL_RUNTIME_COMMIT}, {"backend", backend}, {"compiler", DTL_COMPILER},
         {"required_cpu_features", required}, {"missing_cpu_features", missing}, {"cpu_supported", missing.empty()},
         {"decision_types", {"choice", "noul", "score"}},
         {"features", {"structured_decisions", "sequential_batches", "routing", "observers", "cooperative_cancellation", "deadlines"}},

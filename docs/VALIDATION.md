@@ -288,3 +288,15 @@ The full native (6), Rust (6) and Node (8) suites passed with runtime/model
 introspection. WASM and WebGPU engines returned the same diagnostic schema and
 model calibration metadata in real Chrome workers. The CPU guard succeeds on
 the current AVX2 host; rejection on an older physical CPU is not yet validated.
+
+## Strict sanitizer correction and validation (2026-10-14)
+
+Clang 22 AddressSanitizer/UndefinedBehaviorSanitizer initially failed in upstream
+GGML's incompatible Q8/F16/BF16 callback function-pointer casts. The hash-recorded
+[typed callback patch](../patches/README.md) adds correct callback bridges to
+build-directory copies; the submodule remains unchanged. No sanitizer check is
+disabled and no suppression is used. The strict real-model suite now passes all
+six tests with leak detection enabled (517 seconds for this instrumented run).
+All shared fixtures remain exactly equal to the pre-refactor baseline across
+C, C++, Rust and Node. [Evidence](evidence/sanitizers-20261014.json) records the
+compiler, flags, runtime/patch/model identities and tested library hash.

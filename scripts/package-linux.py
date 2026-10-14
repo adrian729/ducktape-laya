@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import re
 import tempfile
-from release_support import ROOT, check_record, sha256, git
+from release_support import ROOT, check_record, sha256, git, binary_info
 from artifact_support import archive_tree
 
 p = argparse.ArgumentParser()
@@ -20,6 +20,10 @@ version = record['package_version']
 epoch = int(os.environ.get('SOURCE_DATE_EPOCH', git(ROOT, 'show', '-s', '--format=%ct', 'HEAD')))
 if epoch < 0 or epoch > 4294967295: p.error('SOURCE_DATE_EPOCH outside gzip timestamp range')
 build, out = a.build.resolve(), a.output.resolve()
+diagnostics = binary_info(build)
+if (diagnostics['package_version'] != version or diagnostics['abi_version'] != record['abi_version'] or
+    diagnostics['llama_cpp_commit'] != record['runtime']['commit'] or diagnostics['runtime_patches'] != record['runtime']['patches']):
+    p.error('Built library identity differs from release record; rebuild before packaging')
 out.mkdir(parents=True, exist_ok=False)
 if not (build / 'ducktape_laya.node').is_file():
     p.error('Build the Node addon before packaging')
@@ -63,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     compiler = subprocess.check_output([cache['CMAKE_CXX_COMPILER'], '--version'], text=True).splitlines()[0]
     inventory = {'schema_version': 1, 'package_version': version, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
         'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'runtime': record['runtime'],
-        'platform': 'linux-x64', 'source_date_epoch': epoch, 'cpu_build_options': isa,
+        'diagnostics': diagnostics, 'platform': 'linux-x64', 'source_date_epoch': epoch, 'cpu_build_options': isa,
         'toolchain': {'compiler': compiler, 'build_type': cache.get('CMAKE_BUILD_TYPE'), 'cxx_flags': cache.get('CMAKE_CXX_FLAGS'), 'required_runtime_symbol_versions': requirements},
         'reproducibility_scope': 'deterministic packaging of identical build inputs; independent compilation is a separate gate',
         'artifacts': {f.name: {'sha256': sha256(f), 'bytes': f.stat().st_size} for f in sorted(out.iterdir())},

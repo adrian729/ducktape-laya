@@ -39,6 +39,7 @@ export interface RouterConfig { models: Record<string, string>; max_loaded?: num
 
 export interface RuntimeInfo {
   schema_version: 1; package_version: string; abi_version: number; llama_cpp_commit: string;
+  runtime_patches: { path: string; sha256: string; purpose: string }[];
   backend: 'native-cpu' | 'wasm-cpu' | 'webgpu'; compiler: string;
   required_cpu_features: string[]; missing_cpu_features: string[]; cpu_supported: boolean;
   decision_types: string[]; features: string[]; limits: Record<string, number>;

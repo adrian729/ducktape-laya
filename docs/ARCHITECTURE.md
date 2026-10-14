@@ -85,3 +85,8 @@ unimplemented; this audit is not its acceptance gate.
 
 The experiment above has now been implemented; see [BROWSER.md](BROWSER.md) for
 actual WASM/WebGPU runs, shared-core packaging and remaining numeric gates.
+
+The current runtime now carries a separately recorded callback-signature patch
+following strict UBSan findings. [Patch policy](../patches/README.md) explains its
+scope and removal conditions. This does not expand the model adapter or mutate
+the upstream source checkout; arithmetic and fixture outputs remain unchanged.
