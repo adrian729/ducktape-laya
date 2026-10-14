@@ -1,5 +1,9 @@
 # Validation and release checks
 
+The complete target matrix, gate mapping and measurement requirements are in
+[QUALIFICATION.md](QUALIFICATION.md) and `release/qualification.json`. Those are
+acceptance requirements; the runners below do not yet cover every required gate.
+
 Run the native checks with one command. Output directories must be new so earlier
 reports are not overwritten. Keep local outputs under ignored `build*/` paths
 and attach relevant results to the commit, PR or CI run; do not commit run reports.

@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "status": "qualification_target",
+  "scope": "linux-x86_64-native-and-browser",
+  "platforms": {
+    "native": {
+      "architecture": "x86_64",
+      "backend": "cpu",
+      "required_cpu_features": [
+        "avx",
+        "avx2",
+        "fma",
+        "f16c",
+        "bmi2",
+        "sse4_2"
+      ],
+      "minimum_userspace": "ubuntu-24.04",
+      "additional_userspaces": [
+        "ubuntu-26.04"
+      ],
+      "maximum_glibc": "2.39",
+      "maximum_glibcxx": "3.4.33",
+      "rust_msrv": "1.98.0",
+      "node_versions": [
+        "24.21.0",
+        "26.7.0"
+      ],
+      "electron_versions": [
+        "44.7.2"
+      ],
+      "compilers": [
+        "gcc-13.3.0",
+        "clang-22.1.8"
+      ]
+    },
+    "browser": {
+      "os": "linux-x86_64",
+      "browser_versions": [
+        "chrome-152.0.7977.64"
+      ],
+      "backends": [
+        "wasm",
+        "webgpu"
+      ],
+      "webgpu_hardware": [
+        "intel-gen-12lp"
+      ],
+      "default_launch_flags_required": true,
+      "isolated_and_nonisolated_pages": true
+    }
+  },
+  "budgets": {
+    "routine_stress_seconds": 3600,
+    "candidate_soak_seconds": 28800,
+    "fuzz_seconds_per_target": 3600,
+    "baseline_runs": 3,
+    "performance_limits_status": "must_be_frozen_before_candidate",
+    "native_binding_absolute_tolerance": 0,
+    "native_upstream_absolute_tolerance": 1e-06,
+    "browser_absolute_tolerance_source": "release/browser-toolchain.json#native_wasm_absolute_tolerance"
+  },
+  "evidence_required_fields": [
+    "source_identity",
+    "runtime_identity",
+    "model_sha256",
+    "fixture_hashes",
+    "toolchain",
+    "configuration",
+    "platform",
+    "artifact_hashes",
+    "command",
+    "exit_code",
+    "status"
+  ],
+  "qualification_gates": {
+    "native_contracts": {
+      "implementation": [
+        "src/laya.cpp",
+        "src/backend_llama.cpp"
+      ],
+      "checks": [
+        "tests/native.cpp",
+        "tests/features.cpp",
+        "tests/control.cpp"
+      ],
+      "acceptance": "All real-model contracts, bounds and failure semantics pass."
+    },
+    "binding_conformance": {
+      "implementation": [
+        "include/ducktape_laya.hpp",
+        "bindings/rust",
+        "bindings/node"
+      ],
+      "checks": [
+        "tests/parity.py",
+        "tests/consumers"
+      ],
+      "acceptance": "Exact ordered outputs across the same native binary; Rust layouts and TS consumer compilation agree with the public ABI/API."
+    },
+    "upstream_reference": {
+      "implementation": [
+        "src/backend_llama.cpp"
+      ],
+      "checks": [
+        "tests/upstream-reference.cpp",
+        "tests/parity.py"
+      ],
+      "acceptance": "Same-model/backend upstream agreement within declared tolerance; prompt and calibration semantics preserved."
+    },
+    "abi": {
+      "implementation": [
+        "include/ducktape_laya.h"
+      ],
+      "checks": [
+        "scripts/check-abi.py"
+      ],
+      "acceptance": "Exports, layouts, status constants and installed consumer compatibility match ABI 1."
+    },
+    "installed_packages": {
+      "implementation": [
+        "scripts/package-linux.py",
+        "scripts/package-browser.py"
+      ],
+      "checks": [
+        "tests/installed-native.py",
+        "tests/installed-packages.py",
+        "tests/electron/run.cjs"
+      ],
+      "acceptance": "Actual C/C++, Rust, npm/TS/Electron and browser artifacts work outside the checkout."
+    },
+    "sanitizers": {
+      "implementation": [
+        "src"
+      ],
+      "checks": [
+        "tests/input-fuzz.cpp",
+        "tests/native.cpp",
+        "tests/control.cpp"
+      ],
+      "acceptance": "Strict ASan/UBSan/leak checks cover real-model and model-free paths; concurrency tooling coverage explicitly recorded."
+    },
+    "stress": {
+      "implementation": [
+        "src/execution.hpp",
+        "bindings/node",
+        "bindings/browser"
+      ],
+      "checks": [
+        "tests/stress.cpp",
+        "tests/browser-lifecycle.mjs"
+      ],
+      "acceptance": "One-hour routine stress and eight-hour candidate soak meet frozen resource budgets without leaks, hangs or corrupted results."
+    },
+    "linux_matrix": {
+      "implementation": [
+        "src/platform.cpp"
+      ],
+      "checks": [
+        "tests/linux-userspace.py"
+      ],
+      "acceptance": "Every required userspace/ISA/compiler/runtime combination passes installed-artifact checks; physical CPU evidence is separate."
+    },
+    "browser_wasm": {
+      "implementation": [
+        "bindings/browser"
+      ],
+      "checks": [
+        "tests/browser.html",
+        "tests/browser-lifecycle.mjs",
+        "tests/compare-browser-reference.py"
+      ],
+      "acceptance": "Real-browser WASM semantics, lifecycle, asset deployment and same-backend upstream agreement pass."
+    },
+    "browser_webgpu": {
+      "implementation": [
+        "bindings/browser"
+      ],
+      "checks": [
+        "tests/browser.html",
+        "tests/browser-backend.mjs",
+        "tests/compare-browser-reference.py"
+      ],
+      "acceptance": "Real-hardware WebGPU semantics, device-loss behavior and same-backend upstream agreement pass."
+    },
+    "license_inventory": {
+      "implementation": [
+        "scripts/sbom.py",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "checks": [
+        "scripts/package-linux.py",
+        "scripts/package-browser.py"
+      ],
+      "acceptance": "Distributed component/model license obligations and exact artifact provenance reviewed; complete checksum-covered SBOM."
+    },
+    "reproducibility": {
+      "implementation": [
+        "scripts/check-reproducibility.py"
+      ],
+      "checks": [
+        "scripts/check-reproducibility.py"
+      ],
+      "acceptance": "Independent native/browser builds and deterministic packages match under identical pinned inputs."
+    },
+    "browser_numeric": {
+      "implementation": [
+        "src/backend_llama.cpp"
+      ],
+      "checks": [
+        "tests/compare-browser.py"
+      ],
+      "acceptance": "Native/WASM/WebGPU outputs preserve ordered structures and discrete values; numeric differences satisfy the declared absolute tolerance."
+    },
+    "artifact_integrity": {
+      "implementation": [
+        "cmake/source_identity.cmake"
+      ],
+      "checks": [
+        "tests/packaging-identity.py",
+        "tests/browser-backend.mjs"
+      ],
+      "acceptance": "Sources, binary/assets and runtime identity match; stale/swapped/modified artifacts rejected; final artifacts have verifiable provenance."
+    },
+    "performance": {
+      "implementation": [
+        "src",
+        "bindings/browser"
+      ],
+      "checks": [
+        "tests/benchmark.py"
+      ],
+      "acceptance": "Repeated baselines and candidate measurements meet predeclared per-profile latency, memory, throughput and responsiveness budgets."
+    },
+    "security_review": {
+      "implementation": [
+        "SECURITY.md"
+      ],
+      "checks": [
+        "docs/RELEASE_CHECKS.md"
+      ],
+      "acceptance": "Threat boundaries, pinned dependency advisories and release permissions reviewed; no unresolved release-blocking issue."
+    },
+    "upgrade_rollback": {
+      "implementation": [
+        "scripts/check-upgrade.py"
+      ],
+      "checks": [
+        "scripts/check-upgrade.py"
+      ],
+      "acceptance": "Runtime/model candidate axes and rollback rehearsed; failed, missing or mismatched evidence cannot qualify a candidate."
+    }
+  },
+  "publication_gates": [
+    "signed_artifact_identity",
+    "registry_installation",
+    "retained_rollback_artifacts"
+  ],
+  "notes": [
+    "This file defines requirements, not successful qualification or a supported-platform claim.",
+    "Default browser launch must work; experimental flags are exploratory evidence only.",
+    "A report boolean alone does not prove identity, security, provenance or publication readiness."
+  ]
+}

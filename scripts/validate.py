@@ -68,6 +68,7 @@ def run(label, command, gate=None):
     if code: raise RuntimeError(f'{label} failed; see {out / (label + ".log")}')
 save()
 try:
+    run('qualification-policy', [sys.executable, ROOT / 'tests/qualification.py'])
     run('packaging-identities', [sys.executable, ROOT / 'tests/packaging-identity.py'])
     run('browser-backend-identities', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-backend.mjs'])
     run('browser-lifecycle', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-lifecycle.mjs'])

@@ -33,6 +33,11 @@
     "browser_wasm",
     "browser_webgpu",
     "license_inventory",
-    "reproducibility"
+    "reproducibility",
+    "browser_numeric",
+    "artifact_integrity",
+    "performance",
+    "security_review",
+    "upgrade_rollback"
   ]
 }

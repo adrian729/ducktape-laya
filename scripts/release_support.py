@@ -33,6 +33,7 @@ def check_record(root=ROOT):
     record = read_json(root / 'release/compatibility.json')
     if record['schema_version'] != 1:
         raise ValueError('Unsupported compatibility record schema')
+    check_qualification(record, root)
     runtime = root / record['runtime']['path']
     expected = record['runtime']['commit']
     if git(runtime, 'rev-parse', 'HEAD') != expected:
@@ -62,6 +63,28 @@ def check_record(root=ROOT):
         if len(model['sha256']) != 64 or len(model['revision']) != 40:
             raise ValueError(f'Model must identify immutable artifact: {name}')
     return record
+
+def check_qualification(record, root=ROOT):
+    """Keep the executable required-gate list and product requirements in sync."""
+    policy = read_json(root / 'release/qualification.json')
+    if policy.get('schema_version') != 1 or policy.get('status') != 'qualification_target':
+        raise ValueError('Unsupported qualification policy')
+    required = record['required_release_gates']
+    gates = policy['qualification_gates']
+    if len(required) != len(set(required)) or set(required) != set(gates):
+        raise ValueError('Required release gates differ from qualification policy')
+    for name, gate in gates.items():
+        if not gate.get('acceptance') or not gate.get('implementation') or not gate.get('checks'):
+            raise ValueError('Incomplete qualification gate: ' + name)
+        for path in gate['implementation'] + gate['checks']:
+            resolved = (root / path).resolve()
+            if not resolved.is_relative_to(root.resolve()) or not resolved.exists():
+                raise ValueError('Missing/outside qualification reference: ' + path)
+    for key in ['routine_stress_seconds', 'candidate_soak_seconds', 'fuzz_seconds_per_target', 'baseline_runs']:
+        value = policy['budgets'][key]
+        if type(value) is not int or value <= 0:
+            raise ValueError('Invalid qualification budget: ' + key)
+    return policy
 
 def binary_info(build):
     """Inspect the built ABI without a model; detect stale/incompatible artifacts."""
