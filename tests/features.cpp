@@ -21,6 +21,11 @@ static json primitive(const std::string &state) {
 }
 int main(int argc, char **argv) {
     try {
+        const auto started = std::chrono::steady_clock::now();
+        auto checkpoint = [&](const char *phase) {
+            std::cerr << phase << ": " << std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count()
+                      << " seconds\n";
+        };
         char *result = reinterpret_cast<char *>(1), *error = nullptr;
         std::vector<json> events;
         dtl_observer observer{42, [](const char *event, void *user) {
@@ -59,8 +64,17 @@ int main(int argc, char **argv) {
         ducktape::laya engine(argv[1], options);
         json requests = json::array({primitive("Please refund the duplicate payment."),
             primitive("Settings crashes immediately! Fix this now."), primitive("What does the enterprise plan cost?")});
+        // Exercise all primitive types across the batch. Routing and observer
+        // assertions need one question per request, not three repeated forward
+        // passes; multi-question primitives have separate conformance fixtures.
+        const char *question_ids[] = {"refund", "department", "urgency"};
+        for (size_t i = 0; i < requests.size(); ++i) {
+            const auto question = requests[i]["questions"][question_ids[i]];
+            requests[i]["questions"] = {{question_ids[i], question}};
+        }
         json singles = json::array();
         for (auto &r : requests) singles.push_back(json::parse(engine.decide(r.dump())));
+        checkpoint("single requests");
         events.clear();
         expect(json::parse(engine.execute(requests.dump(), &observer)) == singles, "exact batch parity");
         expect(events.size() == 2 && events[1]["event"] == "end" && events[1]["elapsed_ms"] >= 0, "success hooks");
@@ -76,6 +90,7 @@ int main(int argc, char **argv) {
         invalid([&] { engine.execute(json(std::vector<json>(5, huge)).dump()); });
         invalid([&] { engine.execute(json::array({requests[0], json::object()}).dump()); });
         invalid([&] { engine.execute(std::string(1048577, 'x')); });
+        checkpoint("batches and bounds");
         auto schema = json::parse(R"({"state":"Please refund me.","schema":{"type":"object","properties":{
           "department":{"type":"string","enum":["billing","technical","sales"],"description":"Which department should handle this?"},
           "refund":{"type":"boolean","description":"Does the customer request a refund?"},
@@ -102,6 +117,7 @@ int main(int argc, char **argv) {
         auto bad = schema; bad["schema"]["required"] = {"missing"}; invalid([&] { engine.execute(bad.dump()); });
         bad = schema; bad["schema"]["oneOf"] = json::array(); invalid([&] { engine.execute(bad.dump()); });
         bad = schema; bad["questions"] = requests[0]["questions"]; invalid([&] { engine.execute(bad.dump()); });
+        checkpoint("structured decisions");
         // Reentry on both events would deadlock if callbacks held the native lock.
         int reentered = 0;
         struct reentry { ducktape::laya *engine; int *count; std::string request; } data{&engine, &reentered, requests[0].dump()};
@@ -113,6 +129,7 @@ int main(int argc, char **argv) {
         expect(reentered == 2, "reentrant hooks");
         dtl_observer throwing{0, [](const char *, void *) { throw std::runtime_error("observer failure"); }, nullptr};
         expect(json::parse(engine.execute(requests[0].dump(), &throwing)) == singles[0], "passive throwing callback");
+        checkpoint("observer reentry and exceptions");
         auto dir = std::filesystem::current_path() / ("router-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directory(dir);
         struct cleanup { std::filesystem::path dir; ~cleanup() { std::error_code ec; std::filesystem::remove_all(dir, ec); } } guard{dir};
@@ -136,6 +153,7 @@ int main(int argc, char **argv) {
         routed["model"] = "b";
         auto routed_results = json::parse(router.execute(json::array({routed,routed}).dump()));
         expect(routed_results.size() == 2 && routed_results[0] == routed_results[1], "router batch");
+        checkpoint("routing and eviction");
         std::cout << "feature tests passed\n";
         return 0;
     } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }
