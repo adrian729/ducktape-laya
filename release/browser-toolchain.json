@@ -4,7 +4,11 @@
   "sdk_version": "6.0.12",
   "emscripten_commit": "5488e0871d46d19a3209988190fa6a653126256f",
   "sdk_build": "6e9f6885cb17a3d6c8fd488a5cff730f50aba61d",
-  "webgpu_port": "emdawnwebgpu (version pinned by this Emscripten SDK)",
+  "webgpu_port": {
+    "version": "v20260423.175430",
+    "revision": "01940842b667a7812d0e4ca0ef4367fbec294241",
+    "sha512": "42784f70b67197c614322f9fabb0f1dc64228a0de10e88f99941fa9d29bee9ad6683f4651d4eefd5a7a9fbd1f976eb522b190b683219ed1793e9b531c602ffa6"
+  },
   "memory64": false,
   "threads": 1,
   "native_wasm_absolute_tolerance": 1e-05,

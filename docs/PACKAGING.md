@@ -116,3 +116,13 @@ checksums are retained in [the report](evidence/linux-userspace-20261014.json).
 Pop!_OS 24.04 on the current x86-64 AVX2 machine remains the full toolchain,
 Node/Electron and browser validation host. Other architectures/distributions are
 not advertised as tested.
+
+Each packager now emits a checksum-covered CycloneDX 1.6 component inventory
+(`sbom.cdx.json`). Native binaries are inspected through the C ABI before
+packaging, so a stale version/runtime/patch identity is rejected. Browser packages
+include Emscripten, musl, LLVM runtime and Dawn notices in addition to shared
+runtime notices. The inventory separates incorporated components from host system
+libraries, host browser/GPU drivers, excluded model weights and test-only tools.
+Checksums detect changes; these local artifacts are unsigned and do not establish
+a publisher identity. Public signing and the private security-reporting channel
+must be configured before publication.

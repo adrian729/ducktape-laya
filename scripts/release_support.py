@@ -45,6 +45,9 @@ def check_record(root=ROOT):
             raise ValueError(f'Rust package version mismatch: {package}')
     if read_json(root / 'bindings/node/package.json')['version'] != version:
         raise ValueError('npm package version mismatch')
+    browser = root / 'bindings/browser/package.json'
+    if browser.exists() and read_json(browser)['version'] != version:
+        raise ValueError('Browser package version mismatch')
     for name in record['models']:
         model = read_json(root / name)
         if model.get('llama_cpp_commit', expected) != expected:

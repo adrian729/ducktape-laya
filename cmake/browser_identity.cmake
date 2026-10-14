@@ -1,0 +1,8 @@
+file(READ "${INPUT}" identity)
+file(SHA256 "${MODULE}" module_hash)
+get_filename_component(directory "${MODULE}" DIRECTORY)
+file(SHA256 "${directory}/laya.wasm" wasm_hash)
+string(JSON identity SET "${identity}" assets "{}")
+string(JSON identity SET "${identity}" assets laya.mjs "\"${module_hash}\"")
+string(JSON identity SET "${identity}" assets laya.wasm "\"${wasm_hash}\"")
+file(WRITE "${directory}/laya.build.json" "${identity}\n")

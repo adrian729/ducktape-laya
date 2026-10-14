@@ -181,6 +181,18 @@ if(EMSCRIPTEN)
   add_executable(ducktape_laya_wasm bindings/browser/entry.cpp)
   target_link_libraries(ducktape_laya_wasm PRIVATE ducktape_laya)
   set_target_properties(ducktape_laya_wasm PROPERTIES OUTPUT_NAME laya SUFFIX .mjs)
+  execute_process(COMMAND "${CMAKE_CXX_COMPILER}" --version OUTPUT_VARIABLE DTL_EMCC_VERSION COMMAND_ERROR_IS_FATAL ANY)
+  string(REGEX MATCH "^[^\r\n]*" DTL_EMCC_VERSION "${DTL_EMCC_VERSION}")
+  set(DTL_BROWSER_IDENTITY "{}")
+  string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" package_version "\"${PROJECT_VERSION}\"")
+  string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" llama_cpp_commit "\"${DTL_RUNTIME_COMMIT}\"")
+  string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" runtime_patches "${DTL_PATCHES_JSON}")
+  string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" toolchain "\"${DTL_EMCC_VERSION}\"")
+  file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json" CONTENT "${DTL_BROWSER_IDENTITY}")
+  add_custom_command(TARGET ducktape_laya_wasm POST_BUILD COMMAND ${CMAKE_COMMAND}
+    "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json"
+    "-DMODULE=$<TARGET_FILE:ducktape_laya_wasm>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/browser_identity.cmake")
   if(GGML_WEBGPU)
     target_link_options(ducktape_laya_wasm PRIVATE "-sJSPI_EXPORTS=['dtl_open','dtl_execute','dtl_decide','dtl_decide_observed','dtl_router_open','dtl_router_execute','dtl_close','dtl_router_close','dtl_execute_with_options','dtl_decide_with_options','dtl_router_execute_with_options']")
   endif()

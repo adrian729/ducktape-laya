@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create local native/npm/Rust artifacts. Does not publish, sign or download."""
 import argparse
+import sbom
 import json
 import os
 import pathlib
@@ -65,6 +66,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     symbols = subprocess.check_output(['readelf', '--version-info', str(build / 'libducktape_laya.so')], text=True)
     requirements = sorted(set(re.findall(r'Name: ((?:GLIBC|GLIBCXX|CXXABI)_[0-9.]+)', symbols)))
     compiler = subprocess.check_output([cache['CMAKE_CXX_COMPILER'], '--version'], text=True).splitlines()[0]
+    sbom.write(out / 'sbom.cdx.json', record)
     inventory = {'schema_version': 1, 'package_version': version, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
         'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'runtime': record['runtime'],
         'diagnostics': diagnostics, 'platform': 'linux-x64', 'source_date_epoch': epoch, 'cpu_build_options': isa,

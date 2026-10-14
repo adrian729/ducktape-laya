@@ -8,6 +8,8 @@
   `tools/server/server-decision.cpp`. Jinja, Unicode and JSON support are compiled
   directly from the pinned source. Additional copyright notices remain in the
   vendored files; preserve them when redistributing source.
+- llamafile CPU kernels incorporated by ggml: MIT, Copyright 2024 Mozilla
+  Foundation. [Full notice](licenses/llamafile-MIT.txt).
 - nlohmann JSON: MIT, Niels Lohmann. Included through llama.cpp's vendor directory.
   [License](licenses/nlohmann-json-MIT.txt).
 - Laya model: the upstream model card declares Apache-2.0.
@@ -19,3 +21,13 @@
   app's model assets; finish this artifact audit before publishing installers.
 
 Ducktape Laya is an independent integration, not an upstream Laya release.
+
+Browser artifacts additionally incorporate code from the pinned Emscripten SDK
+(`release/browser-toolchain.json`): Emscripten runtime glue (MIT or NCSA), musl
+(MIT and the notices in its COPYRIGHT), libc++/libc++abi/compiler-rt (LLVM license
+texts including applicable exceptions), and Dawn WebGPU bindings (BSD notices).
+Their complete texts are included under `licenses/`. The browser's GPU driver
+and browser implementation are supplied by the host, not redistributed here.
+Test-only Electron, ASAR and upstream server-reference dependencies are excluded
+from consumer packages. Build/toolchain licenses do not replace the separate
+license obligations of an application's bundled model assets.
