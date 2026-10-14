@@ -53,10 +53,13 @@ directories are rejected. No script publishes anything or downloads a model.
 
 The npm package selects its bundled Linux x64 addon. Source-checkout users must
 supply `addonPath` or `DUCKTAPE_LAYA_ADDON`; installed users need neither. For
-Electron, unpack the worker/package and native directory as described in the
-application's packager configuration. The addon resolver recognizes a physical
-`.asar.unpacked` native directory. Electron behavior still requires its own
-integration validation; Node success alone does not establish Electron support.
+Electron, unpack `node_modules/ducktape-laya` in the application's packager
+configuration (for example `asarUnpack: ["**/node_modules/ducktape-laya/**"]`
+in electron-builder). This includes the worker and native dependencies. The addon
+resolver recognizes the physical `.asar.unpacked` native directory. Linux
+Electron 44.7.2 (Node 24.21.0) passed real-model inference both from an ordinary
+application directory and from ASAR with this unpacking policy. No window or
+renderer integration is required by the library.
 
 Rust packages contain library source, metadata and license, excluding demos.
 The sys crate locates an installed native library using `DUCKTAPE_LAYA_LIB_DIR`,
@@ -68,7 +71,7 @@ Cargo patch to the extracted sys crate, never a path into this repository.
 Validated locally: installed C/C++, pkg-config, npm and Rust artifact consumers
 perform real-model inference outside the checkout, with npm/Rust agreeing
 exactly. This is an installation test on the current host, not a clean-container
-or Electron/platform-matrix certification. Local artifacts remain unsigned and
+or broad platform-matrix certification. Local artifacts remain unsigned and
 can include explicitly recorded dirty development sources.
 
 Native tarballs now normalize ownership, timestamps, ordering and gzip headers.
@@ -80,3 +83,16 @@ reproducibility. The inventory records actual CMake ISA options, compiler flags
 and required GLIBC/GLIBCXX/CXXABI symbol versions instead of assuming them.
 The current binary requires symbols through GLIBC 2.38 and GLIBCXX 3.4.29;
 that is a loader requirement, not evidence of testing every compatible distro.
+
+The reproducible Electron integration consumer lives under `tests/electron`:
+
+```sh
+npm ci --prefix tests/electron
+node tests/electron/node_modules/electron/install.js
+node tests/electron/run.cjs build/packages-0.1.0/ducktape-laya-0.1.0.tgz /path/to/approved.gguf
+```
+
+Only the test setup downloads Electron; applications do not acquire this test
+dependency. The test installs the actual tarball into a temporary app, uses a
+pinned ASAR packager, and removes the app after both runs. Directory/ASAR outputs
+agreed exactly on the tested host. Other Electron versions remain unvalidated.

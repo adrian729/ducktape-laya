@@ -1,0 +1,8 @@
+{
+  "name": "ducktape-electron-integration-tests",
+  "private": true,
+  "devDependencies": {
+    "@electron/asar": "4.3.1",
+    "electron": "44.7.2"
+  }
+}
