@@ -247,3 +247,24 @@ recovery. Node verifies pre-cancellation, deadlines, bounded admission while
 cancelled work awaits acknowledgment, and cancelling shutdown/repeated close.
 These checks validate cooperative CPU interruption; they do not establish a
 hard real-time bound or interruption of model loading/GPU kernels.
+
+## Native resource stress (2026-10-14)
+
+`tests/stress.cpp` completed 40 model open/use/close cycles, each mixing valid
+inference, malformed JSON, a running deadline and exact post-interruption
+recovery; it then ran 12 calls from four concurrent callers on one handle.
+Results remained exact. File descriptors and threads returned to their warmed
+baseline (4 and 1); RSS increased from 25,772 to 40,068 KiB, within the predeclared
+128 MiB retention allowance. Peak process RSS was 1,449,536 KiB. Allocator
+retention is allowed by this gate; sanitizers separately check memory errors.
+This is a bounded resource regression, not proof of indefinite leak freedom or
+a performance baseline. Other builds were active during the run.
+
+```sh
+clang++ -std=c++17 -O2 tests/stress.cpp -Iinclude -Lbuild \
+  -Wl,-rpath,"$PWD/build" -lducktape_laya -pthread -o build/laya-stress
+build/laya-stress /path/to/approved.gguf 40
+```
+
+[Retained evidence](evidence/stress-20261014.json) includes the runtime/model,
+native source revision, harness hash and thresholds.
