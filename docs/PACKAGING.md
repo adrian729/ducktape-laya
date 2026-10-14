@@ -78,8 +78,8 @@ Native tarballs now normalize ownership, timestamps, ordering and gzip headers.
 `SOURCE_DATE_EPOCH` defaults to the source commit timestamp. Two packaging runs
 from identical build/source inputs produced byte-identical native, npm and Rust
 artifacts, and the resulting artifacts passed installed-consumer checks again.
-This establishes packaging reproducibility, not yet independent-compilation
-reproducibility. The inventory records actual CMake ISA options, compiler flags
+That check establishes packaging reproducibility. Independent compilation is
+now checked separately as described below. The inventory records actual CMake ISA options, compiler flags
 and required GLIBC/GLIBCXX/CXXABI symbol versions instead of assuming them.
 The current binary requires symbols through GLIBC 2.38 and GLIBCXX 3.4.29;
 that is a loader requirement, not evidence of testing every compatible distro.
@@ -126,3 +126,23 @@ libraries, host browser/GPU drivers, excluded model weights and test-only tools.
 Checksums detect changes; these local artifacts are unsigned and do not establish
 a publisher identity. Public signing and the private security-reporting channel
 must be configured before publication.
+
+## Independent compilation check
+
+Two separate source/build/install trees compiled the same captured inputs with
+the same toolchain. The first comparison isolated a difference in the Node
+addon: build-directory RPATH storage survived installation even after its visible
+path had been replaced. `BUILD_RPATH_USE_ORIGIN` removes that input at link time.
+After applying this one-line configuration correction and rebuilding/relinking
+each independent tree, all 26 installed file/symlink records agreed exactly.
+The current checkout's library and the packaged npm addon match those outputs.
+[Evidence](evidence/reproducibility-20261014.json) retains the original snapshot
+identity, precise correction, final hashes and scope. No objects were copied
+between the two builds.
+
+`scripts/check-reproducibility.py --output build-repro-new` repeats the test in
+new trees. Source/build paths are normalized by default; generated GGML identity
+uses the explicit runtime pin rather than accidentally finding the parent Git
+repository. This validates identical inputs/toolchains, not different compilers
+or untested targets. The native packager uses the installed addon, and installed
+consumer tests reject absolute library search paths.

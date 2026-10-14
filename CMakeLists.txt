@@ -49,8 +49,6 @@ set(GGML_METAL OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(DUCKTAPE_LLAMA_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp" CACHE PATH "Pinned or isolated candidate llama.cpp checkout")
 get_filename_component(UPSTREAM "${DUCKTAPE_LLAMA_SOURCE}" ABSOLUTE)
-add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
-include(cmake/runtime_patches.cmake)
 string(JSON DTL_APPROVED_RUNTIME_COMMIT GET "${DTL_RELEASE_RECORD}" runtime commit)
 set(DUCKTAPE_LLAMA_REVISION "" CACHE STRING "Identity of an isolated runtime archive (set by upgrade tooling)")
 if(DUCKTAPE_LLAMA_REVISION)
@@ -61,6 +59,21 @@ else()
   set(DTL_RUNTIME_COMMIT "unverified-custom-source")
 endif()
 string(JSON DTL_PATCHES_JSON GET "${DTL_RELEASE_RECORD}" runtime patches)
+# Normalize paths embedded by compiler diagnostics/debug metadata.
+option(DUCKTAPE_REPRODUCIBLE_PATHS "Normalize source/build paths in compiled artifacts" ON)
+if(DUCKTAPE_REPRODUCIBLE_PATHS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  add_compile_options("-ffile-prefix-map=${UPSTREAM}=./third_party/llama.cpp"
+    "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
+    "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=./build")
+endif()
+add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
+# Upstream Git discovery can find the parent project's repository in an archive.
+# Normalize its generated metadata to the explicit runtime identity instead.
+set(DTL_GGML_VERSION_HEADER "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp/ggml/src/ggml-version.h")
+file(READ "${DTL_GGML_VERSION_HEADER}" DTL_GGML_VERSION_TEXT)
+string(REGEX REPLACE "#define GGML_COMMIT[ \t]+\"[^\"]*\"" "#define GGML_COMMIT \"${DTL_RUNTIME_COMMIT}\"" DTL_GGML_VERSION_TEXT "${DTL_GGML_VERSION_TEXT}")
+file(WRITE "${DTL_GGML_VERSION_HEADER}" "${DTL_GGML_VERSION_TEXT}")
+include(cmake/runtime_patches.cmake)
 configure_file(cmake/build_config.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/build_config.hpp @ONLY)
 add_library(ducktape_laya ${DTL_LIBRARY_KIND} src/laya.cpp src/backend_llama.cpp src/platform.cpp
   ${UPSTREAM}/common/json.cpp ${UPSTREAM}/common/unicode.cpp
@@ -157,7 +170,7 @@ if(DUCKTAPE_BUILD_NODE)
   target_link_libraries(ducktape_laya_node PRIVATE ducktape_laya)
   target_compile_definitions(ducktape_laya_node PRIVATE NAPI_VERSION=8 NODE_GYP_MODULE_NAME=ducktape_laya)
   set_target_properties(ducktape_laya_node PROPERTIES PREFIX "" SUFFIX ".node" OUTPUT_NAME ducktape_laya
-    BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN;$ORIGIN/../..")
+    BUILD_RPATH_USE_ORIGIN TRUE BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN;$ORIGIN/../..")
   install(TARGETS ducktape_laya_node LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/ducktape-laya/node)
   if(APPLE)
     target_link_options(ducktape_laya_node PRIVATE "LINKER:-undefined,dynamic_lookup")
