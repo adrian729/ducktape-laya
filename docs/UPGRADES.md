@@ -57,3 +57,9 @@ The current [callback-signature patch](../patches/README.md) addresses a strict
 UBSan finding in the pinned runtime. A future upstream fix should remove this
 patch after the same sanitizer and unchanged-output checks. The initial upgrade
 report predates it; that historical report is not approval of a patched candidate.
+
+The typed-callback patch also applies with zero fuzz to the previously evaluated
+candidate `df18bee11e96557b07aa7b12db0976f3c7ac9165`; upstream line offsets are
+reported in [the patch probe](evidence/candidate-patch-20261014.json). This only
+checks patch context, not candidate compilation, arithmetic or sanitizer results.
+The earlier unpatched candidate report does not approve a patched release.
