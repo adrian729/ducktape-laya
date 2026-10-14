@@ -44,10 +44,12 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     shutil.copy(ROOT / 'models/manifest.json', package / 'model-manifest.json')
     addon = package / 'native/linux-x64'
     addon.mkdir(parents=True)
-    shutil.copy(build / 'ducktape_laya.node', addon / 'ducktape_laya.node')
+    installed_addon = next(native.glob('lib*/ducktape-laya/node/ducktape_laya.node'))
+    installed_libdir = installed_addon.parents[2]
+    shutil.copy(installed_addon, addon / 'ducktape_laya.node')
     # Copy real bytes under both loader names, avoiding symlink support differences in npm tarballs.
     for name in ['libducktape_laya.so', 'libducktape_laya.so.0']:
-        shutil.copy(build / 'libducktape_laya.so', addon / name)
+        shutil.copy(installed_libdir / 'libducktape_laya.so', addon / name)
     subprocess.run(['npm', 'pack', '--ignore-scripts', '--pack-destination', str(out)], cwd=package, check=True, capture_output=True)
     env = dict(os.environ, DUCKTAPE_LAYA_LIB_DIR=str(build))
     workspace = ROOT / 'bindings/rust/Cargo.toml'

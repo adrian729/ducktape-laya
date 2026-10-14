@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -27,6 +28,12 @@ with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
     app.mkdir()
     (app / 'package.json').write_text('{"private":true}')
     subprocess.run(['npm', 'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', str(artifacts / f'ducktape-laya-{version}.tgz')], cwd=app, check=True, capture_output=True)
+    addon = app / 'node_modules/ducktape-laya/native/linux-x64/ducktape_laya.node'
+    dynamic = subprocess.check_output(['readelf', '-d', str(addon)], text=True)
+    for line in dynamic.splitlines():
+        if 'RPATH' in line or 'RUNPATH' in line:
+            paths = re.search(r'\[(.*?)\]', line).group(1).split(':')
+            assert all(path.startswith('$ORIGIN') for path in paths), paths
     script = (root / 'tests/consumers/node.cjs').read_text().replace("require('../../bindings/node/index.cjs')", "require('ducktape-laya')")
     (app / 'test.cjs').write_text(script)
     env = dict(os.environ)
