@@ -11,6 +11,7 @@ Models are supplied explicitly and checked against the pinned
 manifest before real inference; the runner never downloads one.
 
 ```sh
+npm ci --ignore-scripts --prefix tests/typescript
 python3 scripts/validate.py --output build-check-model-free
 python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf \
   --packages --output build-check-native
@@ -20,7 +21,12 @@ python3 tests/benchmark.py /path/to/Laya-Q8_0.gguf --report build/benchmark.json
 
 The native runner configures/builds the library and addon, checks required CTest
 registration, runs native/Rust/Node suites, and checks public exports. It also
-runs artifact-identity and browser lifecycle/backend regressions. Reused candidate
+runs compiled C/C++/Rust ABI-layout checks, TypeScript consumers in CommonJS,
+ESM and bundler modes, artifact-identity and browser lifecycle/backend regressions.
+TypeScript test tools are development-only and installed explicitly with the
+locked command above. `tests/typescript/check.py --node-package NPM_TARBALL
+--browser-package BROWSER_TARBALL` additionally checks extracted package declarations.
+Reused candidate
 source/revision overrides are cleared, and built runtime diagnostics must match
 the approved compatibility record before any test gate is accepted. With a model,
 it also compares C/C++/Rust/Node fixture outputs. `--packages` builds actual artifacts

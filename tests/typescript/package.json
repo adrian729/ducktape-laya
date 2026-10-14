@@ -1,0 +1,5 @@
+{
+  "name": "ducktape-typescript-contract-tests",
+  "private": true,
+  "devDependencies": { "typescript": "5.9.3", "@types/node": "24.10.0" }
+}

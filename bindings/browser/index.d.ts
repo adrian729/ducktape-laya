@@ -1,5 +1,5 @@
-import type { Request, StructuredRequest, Result, StructuredResult, CallOptions, RuntimeInfo } from './protocol';
-export type { Json, Question, Answer, Request, Result, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, RuntimeInfo } from './protocol';
+import type { Request, StructuredRequest, Result, StructuredResult, CallOptions, RuntimeInfo } from './protocol.js';
+export type { Json, Question, Answer, Request, Result, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, RuntimeInfo } from './protocol.js';
 export interface ModelAsset { url: string; sha256?: string }
 export interface BrowserOptions {
   modelUrl: string; sha256?: string;
