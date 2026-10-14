@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
-from release_support import ROOT, check_record, git, read_json, sha256, verify_model, source_files, binary_info
+from release_support import ROOT, check_record, git, read_json, sha256, verify_model, source_files, binary_info, require_runtime_identity
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--model', type=pathlib.Path)
@@ -72,12 +72,16 @@ try:
     run('browser-backend-identities', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-backend.mjs'])
     run('browser-lifecycle', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-lifecycle.mjs'])
     run('configure', ['cmake', '-S', ROOT, '-B', build, '-DCMAKE_BUILD_TYPE=Release',
+        # Validation is for the approved checkout, even if this cache previously
+        # built a candidate runtime. Candidate evaluation has its own runner.
+        f'-DDUCKTAPE_LLAMA_SOURCE={ROOT / record["runtime"]["path"]}', '-DDUCKTAPE_LLAMA_REVISION=',
         '-DDUCKTAPE_BUILD_TESTS=ON', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_NODE=ON',
         f'-DNODE_INCLUDE_DIR={headers}', f'-DDUCKTAPE_TEST_MODEL={model or ""}'])
     run('build', ['cmake', '--build', build, '--parallel', a.jobs])
     report['library_sha256'] = sha256(build / 'libducktape_laya.so')
     report['cmake_cache_sha256'] = sha256(build / 'CMakeCache.txt')
     report['diagnostics'] = binary_info(build)
+    require_runtime_identity(report['diagnostics'], record)
     cache = (build / 'CMakeCache.txt').read_text().splitlines()
     report['build_options'] = {line.split(':', 1)[0]: line.split('=', 1)[1]
         for line in cache if '=' in line and ':' in line and

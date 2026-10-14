@@ -91,6 +91,13 @@ def require_build_source(identity, expected, label):
     if identity.get('source') != expected:
         raise ValueError(label + ': build sources differ from packaging sources; rebuild first')
 
+def require_runtime_identity(diagnostics, record):
+    expected = {'package_version': record['package_version'], 'abi_version': record['abi_version'],
+                'llama_cpp_commit': record['runtime']['commit'], 'runtime_patches': record['runtime']['patches']}
+    for key, value in expected.items():
+        if diagnostics.get(key) != value:
+            raise ValueError('Built library ' + key + ' differs from approved release record; rebuild first')
+
 def native_build_identity(build, target, binary, expected):
     path = build / (target + '.build.json')
     if not path.is_file():

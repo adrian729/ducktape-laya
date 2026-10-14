@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import re
 import tempfile
-from release_support import ROOT, check_record, sha256, git, binary_info, source_identity, native_build_identity
+from release_support import ROOT, check_record, sha256, git, binary_info, source_identity, native_build_identity, require_runtime_identity
 from artifact_support import archive_tree
 
 p = argparse.ArgumentParser()
@@ -28,9 +28,10 @@ try:
 except ValueError as error:
     p.error(str(error))
 diagnostics = binary_info(build)
-if (diagnostics['package_version'] != version or diagnostics['abi_version'] != record['abi_version'] or
-    diagnostics['llama_cpp_commit'] != record['runtime']['commit'] or diagnostics['runtime_patches'] != record['runtime']['patches']):
-    p.error('Built library identity differs from release record; rebuild before packaging')
+try:
+    require_runtime_identity(diagnostics, record)
+except ValueError as error:
+    p.error(str(error))
 out.mkdir(parents=True, exist_ok=False)
 if not (build / 'ducktape_laya.node').is_file():
     p.error('Build the Node addon before packaging')

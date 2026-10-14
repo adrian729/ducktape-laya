@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from release_support import ROOT, browser_build_identity, sha256, source_identity, native_build_identity
+from release_support import ROOT, browser_build_identity, sha256, source_identity, native_build_identity, require_runtime_identity
 
 
 class BrowserIdentityTests(unittest.TestCase):
@@ -55,6 +55,18 @@ class BrowserIdentityTests(unittest.TestCase):
         self.identity['source'] = {'sha256': 'previous-build'}
         with self.assertRaisesRegex(ValueError, 'build sources differ'):
             self.check('wasm')
+
+
+class RuntimeIdentityTests(unittest.TestCase):
+    def test_candidate_or_missing_runtime_identity_is_rejected(self):
+        record = {'package_version': '1', 'abi_version': 1, 'runtime': {'commit': 'approved', 'patches': []}}
+        identity = {'package_version': '1', 'abi_version': 1, 'llama_cpp_commit': 'approved', 'runtime_patches': []}
+        require_runtime_identity(identity, record)
+        for key in identity:
+            for replacement in [None, 'candidate']:
+                with self.subTest(key=key, value=replacement):
+                    with self.assertRaisesRegex(ValueError, key + ' differs'):
+                        require_runtime_identity({**identity, key: replacement}, record)
 
 
 class NativeIdentityTests(unittest.TestCase):
