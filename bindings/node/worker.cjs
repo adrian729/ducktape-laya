@@ -17,7 +17,7 @@ parentPort.on('message', ({ id, kind, request, observe }) => {
       parentPort.postMessage({ id });
       parentPort.close();
     } else {
-      parentPort.postMessage({ id, result: native.decide(handle, request, id, observe ? event => parentPort.postMessage({ id, event: JSON.parse(event) }) : undefined) });
+      parentPort.postMessage({ id, result: native.decide(handle, request, id, observe ? event => parentPort.postMessage({ id, event: JSON.parse(event) }) : undefined, kind === 'decide') });
     }
   } catch (error) { parentPort.postMessage({ id, error: error.message, status: error.status }); }
 });

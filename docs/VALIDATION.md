@@ -1,5 +1,38 @@
 # Prototype validation
 
+## Independent review and fixes (2026-10-14)
+
+Three independent `gpt-6-sol` reviewers at medium reasoning reviewed native
+implementation/ABI, language bindings, and end-to-end contracts/tests. Findings
+were checked against the code and targeted reproductions before changes.
+
+- Confirmed and fixed the binding compatibility regression: existing Node/Rust
+  `decide` rejected extra top-level metadata that C `dtl_decide` still accepted.
+  They now use the unchanged primitive path; the additive `dtl_decide_observed`
+  supplies passive events without duplicating validation/inference. Strict
+  `execute` behavior is unchanged. Command-line examples explicitly use `execute`
+  to support primitive, structured and batch fixtures.
+- Confirmed and fixed acceptance of non-string schema titles/root descriptions;
+  native validation tests reject these before a router loads any model.
+- Defensively fixed the sanitizer's search progress for a custom mask token
+  equal to a space. The original replacement would make no progress in that
+  case; no modified GGUF was loaded to reproduce it. Normal model tests cover
+  the retained sanitization behavior.
+- Parent verification additionally reproduced Node serialization reentry
+  bypassing queue limits; enqueue now rechecks queue/close state after user
+  getters or `toJSON` run. A no-model regression test covers both cases.
+- Parent verification reproduced a process abort when a Rust callback panic's
+  payload also panicked in `Drop`. Nested containment prevents that unwind from
+  crossing the ABI; a regression test exercises a recursively panicking payload.
+- Both C output pointers now reset before the first observer callback, as the
+  header promises. A callback-based regression test checks this directly.
+
+The binding reviewer rechecked the fixes and found no concrete remaining issue.
+Final validation: native CTest 4/4, Node 6/6, Rust 4/4 with the real model enabled,
+Clippy with warnings denied, Rust formatting, strict TypeScript checks, and exact
+C/C++/Rust/Node agreement for the mixed batch fixture. The public Linux C ABI now
+exports eleven `dtl_*` functions; all previous symbols and options remain intact.
+
 ## Shared features (2026-10-14)
 
 Implemented and tested on the same Linux CPU machine and pinned Q8_0 artifact.

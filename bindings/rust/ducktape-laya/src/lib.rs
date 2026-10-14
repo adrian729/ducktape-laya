@@ -83,7 +83,7 @@ impl Engine {
             })
     }
     pub fn decide(&self, request_json: &str) -> Result<String, Error> {
-        self.execute(request_json)
+        self.execute_impl(request_json, 0, None, true)
     }
     /// Execute one primitive/structured request or a bounded JSON array.
     pub fn execute(&self, request_json: &str) -> Result<String, Error> {
@@ -98,15 +98,33 @@ impl Engine {
         request_id: u64,
         callback: Option<&mut dyn FnMut(&str)>,
     ) -> Result<String, Error> {
+        self.execute_impl(request_json, request_id, callback, false)
+    }
+    fn execute_impl(
+        &self,
+        request_json: &str,
+        request_id: u64,
+        callback: Option<&mut dyn FnMut(&str)>,
+        legacy: bool,
+    ) -> Result<String, Error> {
         struct Hook<'a> {
             callback: &'a mut dyn FnMut(&str),
         }
         unsafe extern "C" fn notify(text: *const c_char, user: *mut std::ffi::c_void) {
             let hook = unsafe { &mut *user.cast::<Hook<'_>>() };
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let event = unsafe { CStr::from_ptr(text) }.to_string_lossy();
                 (hook.callback)(&event);
-            }));
+            })) {
+                // A custom panic payload can itself panic in Drop. Contain that
+                // too, and leak only the secondary payload rather than risk an
+                // unbounded chain of destructors unwinding across the C ABI.
+                if let Err(secondary) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+                {
+                    std::mem::forget(secondary);
+                }
+            }
         }
         let request = cstring(request_json)?;
         let mut hook = callback.map(|callback| Hook { callback });
@@ -121,6 +139,13 @@ impl Engine {
         let mut error = std::ptr::null_mut();
         let status = unsafe {
             match self.0 {
+                Handle::Model(p) if legacy => ffi::dtl_decide_observed(
+                    p.as_ptr(),
+                    request.as_ptr(),
+                    &observer,
+                    &mut result,
+                    &mut error,
+                ),
                 Handle::Model(p) => ffi::dtl_execute(
                     p.as_ptr(),
                     request.as_ptr(),
@@ -164,11 +189,36 @@ impl Drop for Engine {
 mod tests {
     use super::*;
     #[test]
+    fn contains_panicking_payload_destructors() {
+        struct Bomb;
+        impl Drop for Bomb {
+            fn drop(&mut self) {
+                std::panic::panic_any(Bomb);
+            }
+        }
+        let engine = Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#, 1).unwrap();
+        let mut calls = 0;
+        let mut callback = |_: &str| {
+            calls += 1;
+            std::panic::panic_any(Bomb);
+        };
+        let result = engine.execute_observed("{}", 1, Some(&mut callback));
+        assert_eq!(result.unwrap_err().status, 1);
+        assert_eq!(calls, 2);
+    }
+    #[test]
     fn real_features() {
         let Ok(path) = std::env::var("LAYA_MODEL") else {
             return;
         };
         let engine = Engine::open(&path, 2).unwrap();
+        let primitive = r#"{"state":"Refund me","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
+        let tagged = primitive.replacen('{', "{\"metadata\":\"caller tag\",", 1);
+        assert_eq!(
+            engine.decide(&tagged).unwrap(),
+            engine.decide(primitive).unwrap()
+        );
+        assert_eq!(engine.execute(&tagged).unwrap_err().status, 1);
         let request = r#"{"state":"Please refund me.","schema":{"type":"object","properties":{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}"#;
         let single = engine.execute(request).unwrap();
         assert!(single.contains("\"values\":{\"refund\":true}"));

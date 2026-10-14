@@ -56,6 +56,10 @@ typedef struct dtl_observer {
  * Observer failures never change inference results. NULL disables events. */
 DTL_API dtl_status dtl_execute(dtl_engine *engine, const char *request_json,
                              const dtl_observer *observer, char **result_json, char **error);
+/* Legacy primitive request semantics of dtl_decide, with passive observers.
+ * In particular, unrelated top-level metadata remains ignored. */
+DTL_API dtl_status dtl_decide_observed(dtl_engine *engine, const char *request_json,
+                                     const dtl_observer *observer, char **result_json, char **error);
 typedef struct dtl_router dtl_router;
 /* Config: {"models":{"id":"local/path.gguf"},"max_loaded":1}.
  * 1..16 routes, max_loaded 1..4. Paths checked at open; Laya metadata checked

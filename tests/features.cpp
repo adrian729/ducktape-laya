@@ -30,10 +30,30 @@ int main(int argc, char **argv) {
         expect(!result && error && events.size() == 2 && events[0]["event"] == "start" &&
                events[1]["event"] == "error" && events[1]["request_id"] == 42, "failure observer/output contract");
         dtl_free(error);
+        struct reset_check { char **result; char **error; bool reset = false; } reset{&result, &error};
+        result = error = reinterpret_cast<char *>(1);
+        dtl_observer reset_observer{0, [](const char *event, void *user) {
+            auto &check = *static_cast<reset_check *>(user);
+            if (json::parse(event)["event"] == "start") check.reset = !*check.result && !*check.error;
+        }, &reset};
+        expect(dtl_decide_observed(nullptr, "{}", &reset_observer, &result, &error) == DTL_INVALID_ARGUMENT,
+               "observed legacy error");
+        expect(reset.reset && !result && error, "outputs reset before start callback"); dtl_free(error);
         dtl_router *raw = reinterpret_cast<dtl_router *>(1);
         expect(dtl_router_open("{}", nullptr, &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "invalid router");
         dtl_free(error); dtl_router_close(nullptr);
         invalid([] { ducktape::router r(R"({"models":{"x":"missing.gguf"}})"); }, DTL_MODEL_ERROR);
+        {
+            // Metadata validation occurs before lazy loading, so no model is needed.
+            ducktape::router validator(json({{"models", {{"unused", std::filesystem::absolute(argv[0]).string()}}}}).dump());
+            auto valid = json::parse(R"({"model":"unused","state":"x","schema":{"type":"object","properties":{"q":{"type":"boolean"}}}})");
+            for (const char *key : {"title", "description"}) {
+                auto bad = valid; bad["schema"][key] = 3;
+                invalid([&] { validator.execute(bad.dump()); });
+                bad = valid; bad["schema"]["properties"]["q"][key] = json::object();
+                invalid([&] { validator.execute(bad.dump()); });
+            }
+        }
         if (argc < 2) return 0;
         auto options = dtl_default_options(); options.threads = 2;
         ducktape::laya engine(argv[1], options);

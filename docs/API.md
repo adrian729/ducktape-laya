@@ -9,6 +9,12 @@ The original ABI v1 functions and `dtl_options` layout remain available.
 and `dtl_router_close` add a local registry. The options still select CPU threads.
 All results/errors use `dtl_free`. No partial result is returned on failure.
 
+The existing single-model `decide()` methods retain `dtl_decide` semantics:
+primitive requests only, with unrelated top-level metadata ignored. Node's
+optional `decide` hooks use the additive `dtl_decide_observed` entry point so
+observation does not change validation. Use `execute` for strict validation,
+structured decisions or batches. Router methods always use the new strict API.
+
 | Interface | Single, structured or batch request | Registry |
 |---|---|---|
 | C | `dtl_execute(engine, json, observer_or_NULL, &result, &error)` | `dtl_router_open(config, options, &router, &error)`; `dtl_router_execute` |
@@ -60,7 +66,7 @@ The supported JSON Schema subset is deliberately small:
   property is populated, including optional properties. There is no automatic
   omission or confidence-based abstention.
 - `additionalProperties`, when present, must be false. Title/description metadata
-  is accepted. No additional values are generated.
+  is accepted as strings only. No additional values are generated.
 
 Free text, nested objects, arrays, references, unions, nullable/constant values,
 other constraints and unknown schema/request keywords are rejected. Enum values
@@ -89,6 +95,8 @@ are allowed, but callbacks must not destroy the active handle or create circular
 waits. Keep callbacks short. Observer errors cannot change decision results:
 C++ exceptions are contained; C callbacks must never unwind; Rust catches
 unwinding panics (not process-aborting panics).
+If a Rust panic payload itself panics during destruction, that secondary payload
+is retained to prevent further destructor panics from escaping across the C ABI.
 
 Node forwards native events from the inference worker to the host thread. Its
 request IDs are generated per instance. Event handlers run before the associated

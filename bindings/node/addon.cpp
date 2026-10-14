@@ -55,8 +55,9 @@ static napi_value open_engine(napi_env env, napi_callback_info info) {
 }
 static napi_value decide(napi_env env, napi_callback_info info) {
     return guarded(env, [&] {
-        size_t argc = 4; napi_value args[4]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
-        if (argc != 4) throw std::runtime_error("Expected engine, request, request ID and callback");
+        size_t argc = 5; napi_value args[5]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
+        if (argc != 5) throw std::runtime_error("Expected engine, request, request ID, callback and legacy flag");
+        bool legacy; ok(napi_get_value_bool(env, args[4], &legacy));
         void *p; ok(napi_get_value_external(env, args[0], &p)); auto *h = static_cast<holder *>(p);
         if (!h->engine && !h->router) throw std::runtime_error("Engine is closed");
         auto request = string_arg(env, args[1]); char *result = nullptr, *error = nullptr;
@@ -73,7 +74,8 @@ static napi_value decide(napi_env env, napi_callback_info info) {
             if (status == napi_pending_exception) napi_get_and_clear_last_exception(d.env, &ignored);
         };
         auto s = h->router ? dtl_router_execute(h->router, request.c_str(), &observer, &result, &error)
-                           : dtl_execute(h->engine, request.c_str(), &observer, &result, &error);
+                           : legacy ? dtl_decide_observed(h->engine, request.c_str(), &observer, &result, &error)
+                                    : dtl_execute(h->engine, request.c_str(), &observer, &result, &error);
         std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free); check(s, error);
         napi_value value; ok(napi_create_string_utf8(env, result, NAPI_AUTO_LENGTH, &value)); return value;
     });

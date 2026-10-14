@@ -1,4 +1,4 @@
 DUCKTAPE_LAYA_1 {
-    global: dtl_abi_version; dtl_default_options; dtl_open; dtl_decide; dtl_close; dtl_free; dtl_execute; dtl_router_open; dtl_router_execute; dtl_router_close;
+    global: dtl_abi_version; dtl_default_options; dtl_open; dtl_decide; dtl_close; dtl_free; dtl_execute; dtl_decide_observed; dtl_router_open; dtl_router_execute; dtl_router_close;
     local: *;
 };

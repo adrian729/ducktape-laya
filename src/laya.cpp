@@ -58,7 +58,10 @@ void sanitize(json &value, const std::string &marker) {
     if (value.is_string()) {
         auto s = value.get<std::string>();
         size_t at = 0;
-        while ((at = s.find(marker, at)) != std::string::npos) s.replace(at, marker.size(), " ");
+        while ((at = s.find(marker, at)) != std::string::npos) {
+            s.replace(at, marker.size(), " ");
+            ++at; // Progress even if a custom model's mask token is a space.
+        }
         value = s;
     } else if (value.is_structured()) {
         for (auto &child : value) sanitize(child, marker);
@@ -323,6 +326,10 @@ void keys(const json &value, std::initializer_list<const char *> allowed, const 
         require(found, where + ": unsupported key " + key);
     }
 }
+void schema_metadata(const json &value, const std::string &where) {
+    for (const char *name : {"title", "description"})
+        require(!value.contains(name) || value[name].is_string(), where + ": " + name + " must be text");
+}
 struct planned {
     json body;
     std::vector<question> questions;
@@ -337,6 +344,7 @@ planned plan(json body, bool routed) {
     if (body.contains("schema")) {
         const auto &schema = body["schema"];
         keys(schema, {"type", "properties", "required", "additionalProperties", "description", "title"}, "schema");
+        schema_metadata(schema, "schema");
         require(schema.contains("type") && schema["type"] == "object", "schema.type must be object");
         require(schema.contains("properties") && schema["properties"].is_object() &&
                 !schema["properties"].empty() && schema["properties"].size() <= 32, "schema needs 1..32 properties");
@@ -360,8 +368,8 @@ planned plan(json body, bool routed) {
         json questions = json::object();
         for (auto &[name, prop] : schema["properties"].items()) {
             keys(prop, {"type", "description", "title", "enum", "minimum", "maximum"}, "property " + name);
+            schema_metadata(prop, "property " + name);
             require(prop.contains("type") && prop["type"].is_string(), name + ": type is required");
-            require(!prop.contains("description") || prop["description"].is_string(), name + ": description must be text");
             json q = {{"instructions", prop.value("description", json(name))}};
             const auto type = prop["type"].get<std::string>();
             if (type == "string") {
@@ -447,19 +455,25 @@ void event(const dtl_observer *observer, const char *kind, dtl_status status,
         observer->callback(text.c_str(), observer->user_data);
     } catch (...) {} // Passive telemetry cannot fail an inference call.
 }
-template<class F> dtl_status observed(const dtl_observer *observer, char **result, char **error, F fn) {
+template<class F> dtl_status observed_call(const dtl_observer *observer, char **result, char **error, F fn) {
     // Copy before callbacks so reentry cannot replace the observer for this call.
     dtl_observer saved = observer ? *observer : dtl_observer{};
     const auto start = std::chrono::steady_clock::now();
     if (result) *result = nullptr;
+    if (error) *error = nullptr;
     event(&saved, "start", DTL_OK);
-    const auto status = boundary(error, [&] {
-        require(result, "result_json is required");
-        *result = copy(fn().dump());
-    });
+    const auto status = fn();
     const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     event(&saved, status == DTL_OK ? "end" : "error", status, elapsed);
     return status;
+}
+template<class F> dtl_status observed(const dtl_observer *observer, char **result, char **error, F fn) {
+    return observed_call(observer, result, error, [&] {
+        return boundary(error, [&] {
+            require(result, "result_json is required");
+            *result = copy(fn().dump());
+        });
+    });
 }
 dtl_options validate_options(const dtl_options *options) {
     require(!options || options->struct_size == sizeof(dtl_options), "Incompatible options size");
@@ -496,6 +510,10 @@ struct dtl_router {
     }
 };
 extern "C" {
+dtl_status dtl_decide_observed(dtl_engine *engine, const char *request, const dtl_observer *observer,
+                              char **result, char **error) {
+    return observed_call(observer, result, error, [&] { return dtl_decide(engine, request, result, error); });
+}
 dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_observer *observer,
                        char **result, char **error) {
     return observed(observer, result, error, [&] {

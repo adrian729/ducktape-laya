@@ -6,6 +6,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut request = String::new();
     std::io::stdin().read_to_string(&mut request)?;
     let engine = ducktape_laya::Engine::open(&path, 2)?;
-    println!("{}", engine.decide(&request)?);
+    println!("{}", engine.execute(&request)?);
     Ok(())
 }

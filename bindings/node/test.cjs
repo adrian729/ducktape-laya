@@ -13,6 +13,26 @@ test('invalid options reject', async () => {
   await assert.rejects(Laya.openRouter(circular), /circular/i);
   await assert.rejects(Laya.openRouter({ models: {} }), e => e.status === 1);
 });
+test('serialization reentry cannot bypass queue or close boundaries', async () => {
+  // Lazy routing permits validation tests without loading a model.
+  const config = { models: { unused: __filename } };
+  const engine = await Laya.openRouter(config, { maxPending: 1 });
+  try {
+    let nested;
+    await assert.rejects(engine.execute({ toJSON() {
+      nested = assert.rejects(engine.execute('{}'), e => e.status === 1);
+      return {};
+    }}), /queue is full/);
+    await nested;
+  } finally { await engine.close(); }
+  const closing = await Laya.openRouter(config);
+  try {
+    await assert.rejects(closing.execute({ toJSON() {
+      closing.close();
+      return {};
+    }}), /closing or closed/);
+  } finally { await closing.close(); }
+});
 test('inference, queue bound and drain on close', { skip: !process.env.LAYA_MODEL }, async () => {
   const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2, maxPending: 1 });
   const request = fs.readFileSync(path.join(__dirname, '../../examples/request.json'), 'utf8');
@@ -41,6 +61,11 @@ test('batch, structured projection, hooks and worker responsiveness', { skip: !p
   }, required: ['refund'], additionalProperties: false } };
   try {
     const single = await engine.decide(request);
+    const legacyEvents = [];
+    const tagged = { ...request, metadata: 'caller tag' };
+    assert.deepEqual(await engine.decide(tagged, { onEvent: e => { legacyEvents.push(e.event); } }), single);
+    assert.deepEqual(legacyEvents, ['start', 'end']);
+    await assert.rejects(engine.execute(tagged), e => e.status === 1);
     const projected = await engine.decideStructured(structured);
     assert.equal(projected.values.refund, projected.answers.refund.noul >= 0.5);
     assert.equal(projected.values.team, projected.answers.team.choice);

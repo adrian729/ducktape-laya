@@ -54,6 +54,12 @@ class Laya {
   }
   #send(kind, request, onEvent) {
     if (this.#dead) return Promise.reject(new Error('Engine worker has exited'));
+    // JSON.stringify can run application getters/toJSON methods that submit work
+    // or close this engine. Check again at the actual enqueue boundary.
+    if (kind !== 'close') {
+      if (this.#closing) return Promise.reject(new Error('Engine is closing or closed'));
+      if (this.#pending.size >= this.#maxPending) return Promise.reject(new Error('Laya queue is full'));
+    }
     const id = ++this.#next;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject, onEvent });
@@ -61,20 +67,21 @@ class Laya {
       catch (error) { this.#pending.delete(id); reject(error); }
     });
   }
-  decide(request, options) { return this.execute(request, options); }
+  decide(request, options) { return this.#execute('decide', request, options); }
   decideStructured(request, options) { return this.execute(request, options); }
   decideBatch(requests, options) {
     if (!Array.isArray(requests)) return Promise.reject(new TypeError('Batch must be an array'));
     return this.execute(requests, options);
   }
-  async execute(request, { onEvent } = {}) {
+  execute(request, options) { return this.#execute('execute', request, options); }
+  async #execute(kind, request, { onEvent } = {}) {
     if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('onEvent must be a function');
     if (this.#closing) throw new Error('Engine is closing or closed');
     if (this.#pending.size >= this.#maxPending) throw new Error('Laya queue is full');
     // A JSON string preserves the caller's literal key order, including numeric labels.
     const text = typeof request === 'string' ? request : JSON.stringify(request);
     if (typeof text !== 'string' || Buffer.byteLength(text) > 1048576 || text.includes('\0')) throw new TypeError('Invalid or oversized request');
-    return JSON.parse(await this.#send('decide', text, onEvent));
+    return JSON.parse(await this.#send(kind, text, onEvent));
   }
   close() {
     if (!this.#closePromise) {

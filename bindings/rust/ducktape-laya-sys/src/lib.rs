@@ -42,6 +42,13 @@ pub struct Observer {
     pub user_data: *mut c_void,
 }
 extern "C" {
+    pub fn dtl_decide_observed(
+        engine: *mut Engine,
+        request: *const c_char,
+        observer: *const Observer,
+        result: *mut *mut c_char,
+        error: *mut *mut c_char,
+    ) -> i32;
     pub fn dtl_execute(
         engine: *mut Engine,
         request: *const c_char,
