@@ -12,6 +12,7 @@ import sys
 import tarfile
 import time
 from release_support import ROOT, check_record, git, read_json, sha256, verify_model
+from compare_results import compare_results
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--runtime', required=True, help='Candidate commit already available in the runtime Git object database')
@@ -89,20 +90,6 @@ def run(label, command, cwd, env=None):
         raise RuntimeError(f'{label} failed; inspect {log}')
 
 
-def compare(left, right, path='$'):
-    if isinstance(left, dict):
-        if not isinstance(right, dict) or list(left) != list(right):
-            raise ValueError(f'Key/order change at {path}')
-        return max([compare(v, right[k], path + '.' + k) for k, v in left.items()] or [0])
-    if isinstance(left, list):
-        if not isinstance(right, list) or len(left) != len(right):
-            raise ValueError(f'Array change at {path}')
-        return max([compare(x, y, f'{path}[{i}]') for i, (x, y) in enumerate(zip(left, right))] or [0])
-    if isinstance(left, (int, float)) and not isinstance(left, bool) and isinstance(right, (int, float)) and not isinstance(right, bool):
-        return abs(left - right)
-    if left != right:
-        raise ValueError(f'Decision/value change at {path}: {left!r} -> {right!r}')
-    return 0
 
 try:
     core = output / 'source'
@@ -153,10 +140,9 @@ try:
         report['gates'][gate] = {'status': 'passed'}
     report['symbols'] = symbols
     try:
-        delta = compare(outcomes['baseline'], outcomes['candidate'])
-        report['comparison'] = {'maximum_absolute_delta': delta,
-            'status': 'passed' if delta <= record['candidate_absolute_tolerance'] else 'failed'}
-    except ValueError as error:
+        delta, path = compare_results(outcomes['baseline'], outcomes['candidate'], record['candidate_absolute_tolerance'])
+        report['comparison'] = {'maximum_absolute_delta': delta, 'path': path, 'status': 'passed'}
+    except (AssertionError, ValueError) as error:
         report['comparison'] = {'status': 'failed', 'detail': str(error)}
     if new_manifest['sha256'] != manifest['sha256']:
         report['comparison']['interpretation'] = 'Model changed; output drift requires reference evaluation, not blind baseline equality.'
