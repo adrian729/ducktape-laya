@@ -1,5 +1,5 @@
-import type { Request, StructuredRequest, Result, StructuredResult, CallOptions } from './protocol';
-export type { Json, Question, Answer, Request, Result, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions } from './protocol';
+import type { Request, StructuredRequest, Result, StructuredResult, CallOptions, RuntimeInfo } from './protocol';
+export type { Json, Question, Answer, Request, Result, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, RuntimeInfo } from './protocol';
 export interface ModelAsset { url: string; sha256?: string }
 export interface BrowserOptions {
   modelUrl: string; sha256?: string;
@@ -11,6 +11,7 @@ export interface BrowserOptions {
 }
 export class Laya {
   private constructor();
+  info(): Promise<RuntimeInfo>;
   readonly capabilities: { backend: 'wasm' | 'webgpu'; abi: number; threads: 1; runningCancellation: boolean; deadlines: true };
   static open(options: BrowserOptions): Promise<Laya>;
   static openRouter(models: Record<string, ModelAsset>, options: Omit<BrowserOptions, 'modelUrl' | 'sha256'>): Promise<Laya>;

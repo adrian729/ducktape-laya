@@ -12,7 +12,8 @@ if (handle) {
 parentPort.postMessage({ ready: true });
 parentPort.on('message', ({ id, kind, request, observe, cancellation, deadline }) => {
   try {
-    if (kind === 'close') {
+    if (kind === 'info') { parentPort.postMessage({ id, result: native.info(handle) }); }
+    else if (kind === 'close') {
       native.close(handle);
       parentPort.postMessage({ id });
       parentPort.close();

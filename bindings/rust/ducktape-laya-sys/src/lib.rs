@@ -13,6 +13,11 @@ pub struct Options {
     pub reserved: u32,
 }
 extern "C" {
+    pub fn dtl_info(
+        engine: *mut Engine,
+        result_json: *mut *mut c_char,
+        error: *mut *mut c_char,
+    ) -> i32;
     pub fn dtl_abi_version() -> u32;
     pub fn dtl_default_options() -> Options;
     pub fn dtl_open(

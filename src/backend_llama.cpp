@@ -3,6 +3,7 @@
 #include "backend.hpp"
 #include "errors.hpp"
 #include "execution.hpp"
+#include "platform.hpp"
 #include "llama.h"
 #include "jinja/parser.h"
 #include "json.h"
@@ -60,6 +61,7 @@ struct backend::impl {
 
     impl(const char *path, uint32_t threads) {
         static std::once_flag once;
+        ensure_cpu_supported();
         std::call_once(once, [] {
             // This build statically embeds a private libllama. Keep diagnostics
             // out of the host application's stdout/stderr; use per-call errors.
@@ -219,6 +221,12 @@ struct backend::impl {
 };
 backend::backend(const char *path, uint32_t threads) : impl_(std::make_unique<impl>(path, threads)) {}
 backend::~backend() = default;
+json backend::info() const {
+    return {{"architecture", meta(impl_->model.get(), "general.architecture")},
+            {"name", meta(impl_->model.get(), "general.name")}, {"decision_type", "laya"},
+            {"max_head_tokens", impl_->max_head}, {"max_tokens", 512},
+            {"temperatures", impl_->temperatures}};
+}
 void backend::prepare(question &q, const json &state) { impl_->prepare(q, state); }
 json backend::run(const question &q, const execution *control) { return impl_->run(q, control); }
 } // namespace dtl

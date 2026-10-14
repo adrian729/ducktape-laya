@@ -45,8 +45,9 @@ async function call(name, request, eventId, observe, job) {
     const remaining = job.deadline ? Math.max(0, Math.ceil(job.deadline - performance.timeOrigin - performance.now())) : 0;
     if (job.deadline && !remaining && !job.status) job.status = 6;
     runtime.HEAPU32.set([24, 0, remaining, 0, cancellation, 0], control >>> 2);
-    const status = await runtime.ccall(name, 'number', ['number','string','number','number','number','number'],
-      [handle, request, hook, control, out, error], { async: true });
+    const info = name === 'dtl_info';
+    const status = await runtime.ccall(name, 'number', info ? ['number','number','number'] : ['number','string','number','number','number','number'],
+      info ? [routed ? 0 : handle, out, error] : [handle, request, hook, control, out, error], { async: !info });
     const result = runtime.HEAPU32[out >>> 2], message = runtime.HEAPU32[error >>> 2];
     try {
       if (status) throw fail(message ? runtime.UTF8ToString(message) : 'Laya operation failed', status);
@@ -119,7 +120,7 @@ onmessage = ({ data }) => {
         files = [];
         postMessage({ id, result: null }); self.close(); return;
       }
-      const name = routed ? 'dtl_router_execute_with_options' : kind === 'decide' ? 'dtl_decide_with_options' : 'dtl_execute_with_options';
+      const name = kind === 'info' ? 'dtl_info' : routed ? 'dtl_router_execute_with_options' : kind === 'decide' ? 'dtl_decide_with_options' : 'dtl_execute_with_options';
       postMessage({ id, result: await call(name, request, id, observe, data) });
     } catch (error) { postMessage({ id, error: error.message, status: error.status }); }
     finally { jobs.delete(id); }

@@ -14,6 +14,13 @@ inline void check(dtl_status status, char *message) {
     std::unique_ptr<char, decltype(&dtl_free)> owned(message, dtl_free);
     if (status != DTL_OK) throw error(status, message ? message : "Laya operation failed");
 }
+inline std::string info(dtl_engine *engine = nullptr) {
+    char *result = nullptr, *message = nullptr;
+    auto status = dtl_info(engine, &result, &message);
+    std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
+    check(status, message);
+    return result;
+}
 class laya {
     std::unique_ptr<dtl_engine, decltype(&dtl_close)> engine_{nullptr, dtl_close};
 public:
@@ -25,6 +32,7 @@ public:
         check(status, message);
         engine_.reset(raw);
     }
+    std::string info() const { return ducktape::info(engine_.get()); }
     laya(laya &&) noexcept = default;
     laya &operator=(laya &&) noexcept = default;
     laya(const laya &) = delete;

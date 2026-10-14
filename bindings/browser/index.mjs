@@ -103,6 +103,7 @@ export class Laya {
     if (typeof text !== 'string' || bytes(text) > 1048576 || text.includes('\0')) throw new TypeError('Invalid or oversized request');
     return JSON.parse(await this.#send(kind, text, onEvent, undefined, { signal, timeoutMs }));
   }
+  info() { return this.#send('info').then(JSON.parse); }
   execute(request, options) { return this.#execute('execute', request, options); }
   decide(request, options) { return this.#execute('decide', request, options); }
   decideStructured(request, options) { return this.execute(request, options); }

@@ -49,16 +49,38 @@ set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(DUCKTAPE_LLAMA_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp" CACHE PATH "Pinned or isolated candidate llama.cpp checkout")
 get_filename_component(UPSTREAM "${DUCKTAPE_LLAMA_SOURCE}" ABSOLUTE)
 add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
-add_library(ducktape_laya ${DTL_LIBRARY_KIND} src/laya.cpp src/backend_llama.cpp
+string(JSON DTL_APPROVED_RUNTIME_COMMIT GET "${DTL_RELEASE_RECORD}" runtime commit)
+set(DUCKTAPE_LLAMA_REVISION "" CACHE STRING "Identity of an isolated runtime archive (set by upgrade tooling)")
+if(DUCKTAPE_LLAMA_REVISION)
+  set(DTL_RUNTIME_COMMIT "${DUCKTAPE_LLAMA_REVISION}")
+elseif(UPSTREAM STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp")
+  set(DTL_RUNTIME_COMMIT "${DTL_APPROVED_RUNTIME_COMMIT}")
+else()
+  set(DTL_RUNTIME_COMMIT "unverified-custom-source")
+endif()
+configure_file(cmake/build_config.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/build_config.hpp @ONLY)
+add_library(ducktape_laya ${DTL_LIBRARY_KIND} src/laya.cpp src/backend_llama.cpp src/platform.cpp
   ${UPSTREAM}/common/json.cpp ${UPSTREAM}/common/unicode.cpp
   ${UPSTREAM}/common/jinja/lexer.cpp ${UPSTREAM}/common/jinja/parser.cpp
   ${UPSTREAM}/common/jinja/runtime.cpp ${UPSTREAM}/common/jinja/value.cpp
   ${UPSTREAM}/common/jinja/string.cpp)
 target_include_directories(ducktape_laya PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>
-  PRIVATE ${UPSTREAM}/common ${UPSTREAM}/vendor)
+  PRIVATE ${UPSTREAM}/common ${UPSTREAM}/vendor ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(ducktape_laya PRIVATE llama)
 target_compile_definitions(ducktape_laya PRIVATE DUCKTAPE_LAYA_BUILD)
+if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  foreach(feature AVX AVX2 FMA F16C BMI2 SSE42)
+    if(GGML_${feature})
+      target_compile_definitions(ducktape_laya PRIVATE DTL_NEED_${feature})
+    endif()
+  endforeach()
+  foreach(feature AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AVX_VNNI)
+    if(GGML_${feature})
+      message(FATAL_ERROR "This package's CPU guard does not yet support GGML_${feature}; use the validated AVX2 or portable configuration")
+    endif()
+  endforeach()
+endif()
 set_target_properties(ducktape_laya PROPERTIES EXPORT_NAME laya VERSION ${PROJECT_VERSION} SOVERSION 0
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
@@ -168,7 +190,7 @@ if(EMSCRIPTEN)
     "-sALLOW_MEMORY_GROWTH=1" "-sMAXIMUM_MEMORY=4294967296" "-sINITIAL_MEMORY=67108864"
     "-sSTACK_SIZE=2097152" "-sFORCE_FILESYSTEM=1"
     "$<$<NOT:$<BOOL:${GGML_WEBGPU}>>:-sDISABLE_EXCEPTION_CATCHING=0>"
-    "-sEXPORTED_FUNCTIONS=['_malloc','_free','_dtl_abi_version','_dtl_open','_dtl_close','_dtl_free','_dtl_decide','_dtl_decide_observed','_dtl_execute','_dtl_router_open','_dtl_router_execute','_dtl_router_close','_dtl_execute_with_options','_dtl_decide_with_options','_dtl_router_execute_with_options']"
+    "-sEXPORTED_FUNCTIONS=['_malloc','_free','_dtl_abi_version','_dtl_open','_dtl_close','_dtl_free','_dtl_decide','_dtl_decide_observed','_dtl_execute','_dtl_router_open','_dtl_router_execute','_dtl_router_close','_dtl_execute_with_options','_dtl_decide_with_options','_dtl_router_execute_with_options','_dtl_info']"
     "-sALLOW_TABLE_GROWTH=1"
     "-sEXPORTED_RUNTIME_METHODS=['HEAPU32','addFunction','removeFunction','ccall','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']")
 endif()

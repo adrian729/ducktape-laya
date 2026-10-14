@@ -122,7 +122,7 @@ try:
         archive(runtime_repo, revision, upstream)
         build = output / (label + '-build')
         run(label + '-configure', ['cmake', '-S', str(core), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
-            f'-DDUCKTAPE_LLAMA_SOURCE={upstream}', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_TESTS=ON',
+            f'-DDUCKTAPE_LLAMA_SOURCE={upstream}', f'-DDUCKTAPE_LLAMA_REVISION={revision}', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_TESTS=ON',
             '-DDUCKTAPE_BUILD_NODE=ON', f'-DNODE_INCLUDE_DIR={node_headers}', f'-DDUCKTAPE_TEST_MODEL={weights}'], core)
         run(label + '-build', ['cmake', '--build', str(build), '--parallel', str(a.jobs)], core)
         env = dict(os.environ, LAYA_MODEL=str(weights), LD_LIBRARY_PATH=str(build),

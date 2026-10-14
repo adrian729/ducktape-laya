@@ -175,3 +175,28 @@ against the queue bound until acknowledged, preventing cancellation from
 bypassing admission limits. `await close({ cancelPending: true })` cancels
 accepted work and waits for cleanup; ordinary `close()` still drains it. Repeated
 close calls share one promise. Never race native handle destruction with calls.
+
+## Runtime and model diagnostics
+
+`dtl_info(NULL, &result, &error)` returns runtime/version/ABI identity, supported
+features and limits, and required/missing CPU features without loading a model.
+Supply an engine to include its model architecture, name, head/token budgets and
+calibration temperatures. The allocated JSON follows normal `dtl_free` ownership;
+unknown fields must be ignored for forward compatibility. It contains no model
+path, request, prediction or telemetry destination. Metadata is not proof of a
+model's hash/provenance; use the immutable manifest for that.
+
+C++ exposes `ducktape::info()` and `engine.info()`. Rust exposes `runtime_info()`
+and `Engine::info()`. Node exposes `Laya.runtimeInfo()` and async `engine.info()`;
+browser engines expose async `info()`. Routers in Rust/JS report common runtime
+capabilities, since models are loaded lazily. Inference and model identities are
+shared C ABI results, not independently maintained binding constants.
+
+On the Linux x86-64 build, CPU features selected by the supported GGML options
+are checked before calling the backend. Missing required features produce
+`DTL_UNSUPPORTED_PLATFORM` (7). This guard covers the declared configuration;
+custom compiler ISA flags can invalidate that guarantee. AVX512/VNNI variants
+are rejected by this package's CMake configuration until their guard/coverage is
+implemented. A portable build disables GGML_AVX, GGML_AVX2, GGML_FMA, GGML_F16C,
+GGML_BMI2 and GGML_SSE42. Different CPU profiles can change floating-point outputs
+and require their own conformance results. Older physical CPUs remain untested.

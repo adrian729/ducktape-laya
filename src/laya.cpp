@@ -2,6 +2,7 @@
 #include "backend.hpp"
 #include "errors.hpp"
 #include "execution.hpp"
+#include "platform.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -82,6 +83,15 @@ struct dtl_engine {
     dtl_engine(const char *path, uint32_t threads) : runtime(path, threads) {}
 };
 extern "C" {
+dtl_status dtl_info(dtl_engine *engine, char **result, char **error) {
+    if (result) *result = nullptr;
+    return boundary(error, [&] {
+        require(result, "result_json is required");
+        auto info = dtl::runtime_info();
+        if (engine) { std::lock_guard<std::mutex> lock(engine->mutex); info["model"] = engine->runtime.info(); }
+        *result = copy(info.dump());
+    });
+}
 uint32_t dtl_abi_version(void) { return DTL_ABI_VERSION; }
 dtl_options dtl_default_options(void) { return {sizeof(dtl_options), DTL_ABI_VERSION, 0, 0}; }
 dtl_status dtl_open(const char *path, const dtl_options *options, dtl_engine **out, char **error) {

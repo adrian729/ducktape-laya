@@ -11,6 +11,8 @@ export type Answer =
 export interface Result { answers: Record<string, Answer>; usage: { input_tokens: number; output_tokens: 0 }; model?: string }
 export class Laya {
   private constructor();
+  static runtimeInfo(options?: { addonPath?: string }): RuntimeInfo;
+  info(): Promise<RuntimeInfo>;
   static open(modelPath: string, options?: OpenOptions): Promise<Laya>;
   static openRouter(config: RouterConfig | string, options?: OpenOptions): Promise<Laya>;
   decide(request: Request | string, options?: CallOptions): Promise<Result>;
@@ -34,3 +36,11 @@ export interface ObserverEvent { event: 'start' | 'end' | 'error'; request_id: n
 export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; onEvent?: (event: ObserverEvent) => void | Promise<void> }
 export interface OpenOptions { threads?: number; maxPending?: number; addonPath?: string }
 export interface RouterConfig { models: Record<string, string>; max_loaded?: number }
+
+export interface RuntimeInfo {
+  schema_version: 1; package_version: string; abi_version: number; llama_cpp_commit: string;
+  backend: 'native-cpu' | 'wasm-cpu' | 'webgpu'; compiler: string;
+  required_cpu_features: string[]; missing_cpu_features: string[]; cpu_supported: boolean;
+  decision_types: string[]; features: string[]; limits: Record<string, number>;
+  model?: { architecture: string; name: string; decision_type: string; max_head_tokens: number; max_tokens: number; temperatures: Record<string, number> };
+}

@@ -281,3 +281,10 @@ initialization fallback were also exercised. See [browser integration](BROWSER.m
 and [complete retained results](evidence/browser-20261014.json), including source
 hashes, binary hashes, browser flags and tested hardware. This is experimental
 support on that configuration, not a universal cross-backend parity claim.
+
+## Diagnostics and CPU preflight
+
+The full native (6), Rust (6) and Node (8) suites passed with runtime/model
+introspection. WASM and WebGPU engines returned the same diagnostic schema and
+model calibration metadata in real Chrome workers. The CPU guard succeeds on
+the current AVX2 host; rejection on an older physical CPU is not yet validated.

@@ -9,6 +9,9 @@ static void expect(bool ok, const char *message) {
 int main(int argc, char **argv) {
     try {
         expect(dtl_abi_version() == 1, "ABI version");
+        const auto runtime = ducktape::info();
+        expect(runtime.find("\"abi_version\":1") != std::string::npos, "diagnostics ABI");
+        expect(runtime.find("\"cpu_supported\":true") != std::string::npos, "host CPU supported");
         dtl_engine *raw = nullptr;
         char *error = nullptr, *result = nullptr;
         expect(dtl_open(nullptr, nullptr, &raw, &error) == DTL_INVALID_ARGUMENT, "null path");
@@ -21,6 +24,9 @@ int main(int argc, char **argv) {
         if (argc > 1) {
             options = dtl_default_options(); options.threads = 2;
             ducktape::laya engine(argv[1], options);
+            const auto info = engine.info();
+            expect(info.find("\"decision_type\":\"laya\"") != std::string::npos, "model diagnostics");
+            expect(info.find("\"temperatures\":") != std::string::npos, "calibration diagnostics");
             auto invalid = [&](const std::string &request) {
                 bool failed = false;
                 try { engine.decide(request); }

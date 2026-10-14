@@ -18,7 +18,7 @@ typedef struct dtl_engine dtl_engine;
 typedef int32_t dtl_status;
 enum { DTL_OK = 0, DTL_INVALID_ARGUMENT = 1, DTL_MODEL_ERROR = 2,
        DTL_INFERENCE_ERROR = 3, DTL_OUT_OF_MEMORY = 4,
-       DTL_CANCELLED = 5, DTL_DEADLINE_EXCEEDED = 6 };
+       DTL_CANCELLED = 5, DTL_DEADLINE_EXCEEDED = 6, DTL_UNSUPPORTED_PLATFORM = 7 };
 typedef struct dtl_options {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -27,6 +27,12 @@ typedef struct dtl_options {
 } dtl_options;
 DTL_API uint32_t dtl_abi_version(void);
 DTL_API dtl_options dtl_default_options(void);
+/* Allocated diagnostics JSON, freed with dtl_free. NULL engine returns runtime
+ * identity, limits and CPU compatibility without loading a model. An engine
+ * additionally reports its model metadata/calibration. No paths, input or result
+ * data are included. Added JSON fields are backward compatible; ignore unknown
+ * fields. This describes capabilities, not model hash/provenance verification. */
+DTL_API dtl_status dtl_info(dtl_engine *engine, char **result_json, char **error);
 /* UTF-8, NUL-terminated inputs. All output pointers are reset on entry.
  * error may be NULL; otherwise free its non-NULL value with dtl_free().
  * On OOM the status is authoritative: an error string may be unavailable.

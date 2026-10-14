@@ -40,6 +40,20 @@ fn check(status: i32, message: *mut c_char) -> Result<(), Error> {
     };
     Err(Error { status, message })
 }
+fn read_info(engine: *mut ffi::Engine) -> Result<String, Error> {
+    let mut result = std::ptr::null_mut();
+    let mut error = std::ptr::null_mut();
+    let status = unsafe { ffi::dtl_info(engine, &mut result, &mut error) };
+    let owned = Buffer(result);
+    check(status, error)?;
+    Ok(unsafe { CStr::from_ptr(owned.0) }
+        .to_string_lossy()
+        .into_owned())
+}
+/// Runtime identity/capabilities without loading a model. No telemetry or input data.
+pub fn runtime_info() -> Result<String, Error> {
+    read_info(std::ptr::null_mut())
+}
 enum Handle {
     Model(NonNull<ffi::Engine>),
     Router(NonNull<ffi::Router>),
@@ -57,6 +71,13 @@ pub struct CallOptions<'a> {
 unsafe impl Send for Engine {}
 unsafe impl Sync for Engine {}
 impl Engine {
+    /// Model metadata for a single engine; routers report common runtime capabilities.
+    pub fn info(&self) -> Result<String, Error> {
+        read_info(match &self.0 {
+            Handle::Model(p) => p.as_ptr(),
+            Handle::Router(_) => std::ptr::null_mut(),
+        })
+    }
     pub fn open(model_path: &str, threads: u32) -> Result<Self, Error> {
         let path = cstring(model_path)?;
         let mut options = unsafe { ffi::dtl_default_options() };
@@ -353,6 +374,18 @@ mod tests {
             engine.execute_with_options(request, &options).unwrap(),
             baseline
         );
+    }
+    #[test]
+    fn diagnostics() {
+        let runtime = runtime_info().unwrap();
+        assert!(runtime.contains("\"abi_version\":1"));
+        if let Ok(model) = std::env::var("LAYA_MODEL") {
+            let engine = Engine::open(&model, 2).unwrap();
+            assert!(engine
+                .info()
+                .unwrap()
+                .contains("\"decision_type\":\"laya\""));
+        }
     }
     #[test]
     fn rejects_bad_path() {

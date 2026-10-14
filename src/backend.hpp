@@ -27,6 +27,7 @@ class backend {
 public:
     backend(const char *path, uint32_t threads);
     ~backend();
+    json info() const;
     void prepare(question &q, const json &state);
     json run(const question &q, const execution *control = nullptr);
 private:

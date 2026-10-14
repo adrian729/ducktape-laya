@@ -137,3 +137,17 @@ test('cooperative cancellation, deadline, bounded cancelled queue and shutdown',
   assert.equal(closing.close({ cancelPending: true }), close);
   await Promise.all([stopped, close]);
 });
+
+test('runtime and model diagnostics share native identity', { skip: !process.env.LAYA_MODEL }, async () => {
+  const runtime = Laya.runtimeInfo();
+  assert.equal(runtime.abi_version, 1); assert.equal(runtime.cpu_supported, true);
+  assert.equal(runtime.limits.questions_per_batch, 128);
+  const engine = await Laya.open(process.env.LAYA_MODEL);
+  try {
+    const info = await engine.info();
+    assert.equal(info.model.decision_type, 'laya');
+    assert.ok(info.model.temperatures.noul > 0);
+    delete info.model; assert.deepEqual(info, runtime);
+  } finally { await engine.close(); }
+  await assert.rejects(engine.info());
+});

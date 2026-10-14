@@ -9,6 +9,8 @@ class Laya {
     if (token !== internal) throw new TypeError('Use Laya.open()');
     this.#worker = worker; this.#maxPending = maxPending;
   }
+  static runtimeInfo({ addonPath } = {}) { return JSON.parse(require(resolveAddon(addonPath)).info()); }
+  info() { return this.#send('info').then(JSON.parse); }
   static open(modelPath, options) { return Laya.#open(modelPath, options, false); }
   static async openRouter(config, options) {
     return Laya.#open(typeof config === 'string' ? config : JSON.stringify(config), options, true);

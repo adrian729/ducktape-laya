@@ -103,11 +103,27 @@ static napi_value close_engine(napi_env env, napi_callback_info info) {
         napi_value value; ok(napi_get_undefined(env, &value)); return value;
     });
 }
+static napi_value info_engine(napi_env env, napi_callback_info info) {
+    return guarded(env, [&] {
+        size_t argc = 1; napi_value arg; ok(napi_get_cb_info(env, info, &argc, &arg, nullptr, nullptr));
+        dtl_engine *engine = nullptr;
+        if (argc) {
+            void *p; ok(napi_get_value_external(env, arg, &p)); auto *h = static_cast<holder *>(p);
+            if (!h->engine && !h->router) throw std::runtime_error("Engine is closed");
+            engine = h->engine;
+        }
+        char *result = nullptr, *error = nullptr;
+        auto status = dtl_info(engine, &result, &error);
+        std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free); check(status, error);
+        napi_value value; ok(napi_create_string_utf8(env, result, NAPI_AUTO_LENGTH, &value)); return value;
+    });
+}
 static napi_value init(napi_env env, napi_value exports) {
     napi_property_descriptor props[] = {
+        {"info", nullptr, info_engine, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"open", nullptr, open_engine, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"decide", nullptr, decide, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"close", nullptr, close_engine, nullptr, nullptr, nullptr, napi_default, nullptr}};
-    napi_define_properties(env, exports, 3, props); return exports;
+    napi_define_properties(env, exports, 4, props); return exports;
 }
 NAPI_MODULE(NODE_GYP_MODULE_NAME, init)
