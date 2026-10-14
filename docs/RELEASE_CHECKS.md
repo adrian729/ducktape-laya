@@ -123,3 +123,17 @@ This covers instrumented library parsing, planning and router boundaries; it doe
 not claim coverage-guided testing of upstream tensor kernels or model loading.
 Do not package the instrumented library. Short smoke runs exercise the harness;
 they do not satisfy the one-hour qualification budget.
+
+Use the campaign runner to retain identities, seeded corpus, commands, statistics
+and failures for qualification:
+
+```sh
+python3 scripts/check-fuzz.py --build build-fuzzer --seconds 3600 \
+  --output build-fuzz-campaign
+```
+
+It requires an explicitly configured fuzz build, resets runtime overrides to the
+approved pin, rebuilds the target, verifies shared-library coverage instrumentation,
+and bounds runtime and memory. A shorter `--seconds` smoke can pass while
+`qualification_budget_met` remains false. Campaign success alone never makes
+`release_ready` true. Do not modify its build directory during the run.
