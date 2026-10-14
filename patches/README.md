@@ -9,10 +9,9 @@ tool; consumers do not need it. Candidate upgrade builds apply the same record.
 
 ## typed-cpu-callbacks.patch
 
-Clang 22 UBSan's function-type checks found indirect calls through incompatible
-prototypes in pinned ggml: Q8 row dequantization, FP16/BF16 conversion and
-FP16/BF16 vector dot products. Recovery-mode diagnostics identified the affected
-paths; the strict gate stayed failed until corrected. The patch supplies typed
+The pinned ggml CPU code has incompatible indirect-call prototypes for Q8 row
+dequantization, FP16/BF16 conversion and FP16/BF16 vector dot products. These
+violate function-type sanitizer checks. The patch supplies typed
 callback bridges for Q8 dequantization and the CPU F32/F16/BF16/I32 conversion/dot
 entries. It preserves the called functions and arithmetic. It does not disable
 sanitizers, alter model probabilities or claim to audit every other GGML type.

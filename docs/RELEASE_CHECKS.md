@@ -1,7 +1,9 @@
 # Validation and release checks
 
 Run the native checks with one command. Output directories must be new so earlier
-evidence is retained. Models are supplied explicitly and checked against the pinned
+reports are not overwritten. Keep local outputs under ignored `build*/` paths
+and attach relevant results to the commit, PR or CI run; do not commit run reports.
+Models are supplied explicitly and checked against the pinned
 manifest before real inference; the runner never downloads one.
 
 ```sh
@@ -13,7 +15,10 @@ python3 tests/benchmark.py /path/to/Laya-Q8_0.gguf --report build/benchmark.json
 ```
 
 The native runner configures/builds the library and addon, checks required CTest
-registration, runs native/Rust/Node suites, and checks public exports. With a model,
+registration, runs native/Rust/Node suites, and checks public exports. It also
+runs artifact-identity and browser lifecycle/backend regressions. Reused candidate
+source/revision overrides are cleared, and built runtime diagnostics must match
+the approved compatibility record before any test gate is accepted. With a model,
 it also compares C/C++/Rust/Node fixture outputs. `--packages` builds actual artifacts
 and exercises installed consumers outside the checkout. `--reproducibility` adds two
 independent builds; it is intentionally optional because it recompiles the runtime.
@@ -30,8 +35,9 @@ by itself. A successful normal exit means its selected checks passed.
 The GitHub workflow defines Ubuntu 24.04 model-free checks for Clang/Node 24 and
 GCC/Node 26. Manual dispatch can explicitly enable the pinned model download and
 installed-package checks. Workflow dependencies are pinned by commit; Rust and Node
-versions are explicit. These definitions are not evidence of a hosted run until a
-remote repository executes them. CI does not publish packages or update dependencies.
+versions are explicit. Consult the relevant GitHub Actions run for results;
+workflow definitions alone are not release evidence. CI does not publish packages
+or update dependencies.
 
 A separate model-free CI job instruments the shared library with ASan/UBSan and
 runs `tests/input-fuzz.cpp`: deterministic request/schema/config mutations, nesting
@@ -42,7 +48,8 @@ The benchmark records model open, first request, repeated-request samples,
 sequential request rate, close and peak process RSS. It verifies repeat outputs
 and retains model/library/fixture/configuration identities. Run without competing
 builds/inference; record the host conditions. A handful of laptop samples is an
-initial regression baseline, not a universal latency or throughput promise.
+exploratory measurement, not a universal latency or throughput promise. Store
+measurements as CI/PR artifacts, not dated source documents.
 
 Independent reproducibility compares the bytes, permission bits and symlink targets
 of all installed native and Node files from a single captured working-tree snapshot
@@ -53,7 +60,7 @@ it does not assert identical output across compilers or architectures. Packaging
 determinism is a separate check for identical prebuilt inputs.
 
 Before publication, require all applicable recorded gates, review current evidence
-and numeric-profile limits, configure the security contact and release hosting, and
+and numeric-profile limits, verify the security contact and release hosting, and
 retain the prior artifacts for rollback. Publication and signing are explicit
 maintainer actions. Browser/native probability equivalence currently fails its
 original tolerance and must not be described as a passing gate.

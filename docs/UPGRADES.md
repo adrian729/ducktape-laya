@@ -33,33 +33,23 @@ implemented checks passed; it does not authorize promotion. Promotion is a
 separate reviewed commit updating pins/manifests/versions together. Keeping the
 previous commit and artifacts provides rollback without mutating installed apps.
 
-## Validated experiment
+## Runtime patches and candidate identity
 
-On 2026-10-14 the approved runtime `1e6f04a75e91da4bb66b5248f3fd4bdeff169d41`
-and candidate `df18bee11e96557b07aa7b12db0976f3c7ac9165` were built from the
-same immutable library source with the pinned English Q8_0 artifact. Native,
-Rust and Node tests and all shared fixtures passed for both; public exports
-matched, and maximum output difference was **zero**. No language binding edits
-or pin promotion were needed. See [retained report](evidence/upgrade-20261014.json).
-
-The relevant upstream diff introduces score-bias metadata and other decision
-models. The existing GGUF is unchanged; this experiment does not approve future
-model artifacts or imply every future upstream revision is compatible.
-
-Runtime patches now have an explicit hash-checked record. CMake applies them to
+Runtime patches have an explicit hash-checked record. CMake applies them to
 build-directory source copies with zero fuzz, and refuses patch/context/source
 layout mismatches. The submodule is never edited by configuration. Runtime
 introspection includes the applied patch list; isolated candidate archives get
 their actual revision through `DUCKTAPE_LLAMA_REVISION`. A custom source directory
 without an explicit identity reports `unverified-custom-source`.
 
-The current [callback-signature patch](../patches/README.md) addresses a strict
-UBSan finding in the pinned runtime. A future upstream fix should remove this
-patch after the same sanitizer and unchanged-output checks. The initial upgrade
-report predates it; that historical report is not approval of a patched candidate.
+The [callback-signature patch](../patches/README.md) supplies typed bridges for
+specific ggml CPU callbacks. Remove it when the selected upstream revision fixes
+those signatures and passes strict sanitizers and unchanged-output checks. Patch
+applicability alone does not establish candidate compilation or compatibility.
+Every candidate must run the checks for its actual patched build.
 
-The typed-callback patch also applies with zero fuzz to the previously evaluated
-candidate `df18bee11e96557b07aa7b12db0976f3c7ac9165`; upstream line offsets are
-reported in [the patch probe](evidence/candidate-patch-20261014.json). This only
-checks patch context, not candidate compilation, arithmetic or sanitizer results.
-The earlier unpatched candidate report does not approve a patched release.
+The approved-runtime runner (`scripts/validate.py`) resets candidate source/revision
+overrides in reused CMake caches and verifies built diagnostics against the release
+record. Candidate evaluation uses `scripts/check-upgrade.py` instead. Retain
+run-specific reports as PR/CI artifacts or ignored local build outputs, not source
+documents. Commit the accepted pins, manifests and any migration instructions.

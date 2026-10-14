@@ -14,18 +14,16 @@ Python runtime, child inference process or automatic downloads.
 true) and ordinal `score` inference is implemented for the pinned English Q8_0
 model. It does not generate chat. Installed native/npm/Rust packages, Electron/ASAR checks and
 [experimental shared-core WebGPU/WASM execution](docs/BROWSER.md) are implemented.
-Native sanitizer, binding and installed-package checks pass on the documented
-Linux configurations. Broader platform coverage and browser numeric release gates remain.
+Broader platform coverage and browser numeric release gates remain.
 Other operating systems are deferred until we can test them. See the
-[reviewed plan](docs/PLAN.md), [validation report](docs/VALIDATION.md) and
+[product requirements](docs/PLAN.md), [architecture](docs/ARCHITECTURE.md) and
 [repeatable release checks](docs/RELEASE_CHECKS.md).
 
 The shared backend now also implements bounded batching, flat structured
 decisions, passive per-call hooks, and explicit local model routing with a
 bounded cache. These features are exposed in every language interface, including
 TypeScript. Inference uses llama.cpp with GGUF models. See the [shared API](docs/API.md)
-for contracts, the [product and release plan](docs/PLAN.md) for priorities, and
-[historical comparisons](docs/EVALUATION.md) for research evidence.
+for contracts and the [product and release plan](docs/PLAN.md) for priorities.
 
 The product uses a shared implementation with thin native interfaces. Browser
 execution must reuse that core wherever feasible. Demos are optional test tools
@@ -45,8 +43,7 @@ Different deployment needs may be better served by:
 - [receptron/laya](https://github.com/receptron/laya): another Node/ONNX integration.
 
 Our focus is compact GGUF deployment and one implementation shared across language
-interfaces. The comparison documents which alternatives we ran and which we only
-reviewed; feature lists and star counts alone do not establish maturity.
+interfaces.
 
 ## Build the library
 
@@ -127,6 +124,7 @@ Requires Node.js 20+ and matching platform development headers to build the addo
 cmake -S . -B build -DDUCKTAPE_BUILD_NODE=ON \
   -DNODE_INCLUDE_DIR=/path/to/include/node
 cmake --build build -j 3
+export DUCKTAPE_LAYA_ADDON="$PWD/build/ducktape_laya.node"
 node bindings/node/decide.cjs "$LAYA_MODEL" < examples/request.json
 ```
 
@@ -283,4 +281,4 @@ stays short; it uses the JSON library already in the checkout. Rust uses
 `serde_json` as a **dev dependency for examples only**. The TS demo uses Node's
 built-in type stripping (tested with Node 26); no TS compiler is needed to run it.
 Electron uses the same Node/TS binding; these demos exercise it from the terminal.
-Build tools listed below are required. The first run may take longer to compile.
+Build tools listed above are required. The first run may take longer to compile.

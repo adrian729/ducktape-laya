@@ -29,4 +29,4 @@ cross-binding checks, upstream-reference agreement, sanitizer/resource regressio
 platform coverage, license/provenance inventory and reproducibility. Failed and
 unrun gates remain visible. Public publication, signing keys, security contact and
 release hosting are separate deployment decisions, not silently inferred from
-local implementation work. See SECURITY.md and the current PLAN.md for boundaries.
+local implementation work. See [SECURITY.md](../SECURITY.md) and [PLAN.md](PLAN.md) for boundaries.

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
+"""Compare browser output against an explicitly supplied native parity run."""
 import argparse
 import json
 import pathlib
 p=argparse.ArgumentParser()
 p.add_argument('report',type=pathlib.Path)
+p.add_argument('--native', type=pathlib.Path, required=True,
+               help='Native report produced by tests/parity.py --report with the same model and fixtures')
 a=p.parse_args()
 root=pathlib.Path(__file__).resolve().parents[1]
 report=json.loads(a.report.read_text())
-reference=json.loads((root/'docs/evidence/foundation.json').read_text())['results']
+native=json.loads(a.native.read_text())
+reference={name: outputs['C'] for name, outputs in native['fixtures'].items()}
 tolerance=json.loads((root/'release/browser-toolchain.json').read_text())['native_wasm_absolute_tolerance']
 assert report['status']=='passed',report
 assert report['ticks']>0, 'No main-thread heartbeat during worker execution'

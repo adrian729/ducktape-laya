@@ -1,8 +1,9 @@
 # Shared decision API
 
 All planning, validation, projection, inference and model caching run in C++.
-C++, Rust and Node/TypeScript adapt the same C ABI. No model downloads, HTTP
-server or separate TS inference implementation is involved.
+C++, Rust, Node/TypeScript and browser bindings adapt the same C ABI. Native
+inference performs no downloads and uses no server. Browser asset fetching is
+explicitly controlled by the host; see [BROWSER.md](BROWSER.md).
 
 The original ABI v1 functions and `dtl_options` layout remain available.
 `dtl_execute` adds the features below; `dtl_router_open`, `dtl_router_execute`
@@ -11,8 +12,9 @@ All results/errors use `dtl_free`. No partial result is returned on failure.
 
 The existing single-model `decide()` methods retain `dtl_decide` semantics:
 primitive requests only, with unrelated top-level metadata ignored. Node's
-optional `decide` hooks use the additive `dtl_decide_observed` entry point so
-observation does not change validation. Use `execute` for strict validation,
+optional hooks and controls use `dtl_decide_with_options`, preserving that
+validation behavior. `dtl_decide_observed` remains available to C callers.
+Use `execute` for strict validation,
 structured decisions or batches. Router methods always use the new strict API.
 
 | Interface | Single, structured or batch request | Registry |
@@ -21,6 +23,39 @@ structured decisions or batches. Router methods always use the new strict API.
 | C++ | `engine.execute(json, observer_or_nullptr)` | `ducktape::router(config, options).execute(json)` |
 | Rust | `engine.execute(json)`; `execute_observed(json, id, callback)` | `Engine::open_router(config_json, threads)` |
 | Node/TS | `execute`, `decide`, `decideStructured`, `decideBatch` | `Laya.openRouter(config, options)` |
+| Browser | Same execution methods as Node/TS | `Laya.openRouter(modelAssets, options)`; explicit URLs and browser asset limits |
+
+## Primitive requests and results
+
+A primitive request contains non-null `state` and 1–32 named `questions`.
+Each question requires a supported `type` and non-null `instructions`; state,
+instructions and criterion descriptions may be text or structured JSON.
+
+| Type | Criteria | Answer |
+| --- | --- | --- |
+| `choice` | Object with 2–255 named options | Highest-probability `choice`, a `probabilities` object and normalized `confidence` |
+| `noul` | Omitted/null or an object containing only `false`/`true` descriptions | `noul`: probability of true |
+| `score` | Array of 2–10 ordered level descriptions | `score`: expected zero-based level index; `legend`, `probabilities` and `confidence` |
+
+The adapter applies the GGUF's type/option-count temperature to the selected
+output scores, then computes a normalized softmax. It falls back to the type's
+temperature, then 1 when no corresponding calibration entry exists. Choice
+confidence is the winning probability above uniform, normalized to 0..1. Score
+confidence uses probability-weighted distance from the most likely level relative
+to a uniform distribution's distance from its center. These are model-derived
+statistics, not application-specific decision thresholds.
+
+Results contain `answers` keyed by question ID and `usage` with `input_tokens`
+and `output_tokens: 0`. No chat text is generated. Input insertion order is
+preserved by the core and can affect inference; ties choose the first option.
+JavaScript object serialization reorders integer-like keys: pass a raw JSON
+string when literal ordering matters. Literal mask text in values is sanitized
+before rendering; prompt/head/option overflow is rejected rather than truncated.
+
+The strict `execute` API accepts only `state`, `questions`, `schema`,
+`boolean_threshold` and (on routers) `model`, subject to their documented
+combinations. Legacy single-model `decide` ignores unrelated top-level metadata.
+Neither API supports top-level media `images` or `files`.
 
 ## Batches
 
@@ -45,8 +80,8 @@ Node calls occupy one queue slot per whole batch; `close()` drains the batch.
 ## Structured decisions
 
 Pass `state`, `schema`, and optionally `boolean_threshold` (default 0.5).
-Do not also pass `questions`. [The example](../examples/structured.json) works
-through all four command-line examples. Results include the original `answers`
+Do not also pass `questions`. [The shared fixture](../tests/fixtures/structured.json)
+defines a representative request. Results include the original `answers`
 and `usage`, plus a `values` object.
 
 The supported JSON Schema subset is deliberately small:
@@ -122,8 +157,9 @@ The registry accepts 1–16 model IDs (1–128 bytes each) mapped to local regul
 files. Paths are canonicalized at open, so relative paths resolve then and
 symlink aliases share a cache entry. Hard links with different canonical paths
 are separate entries. Requests must specify a registered `model`; missing or
-unknown IDs fail with invalid argument. Single-model engines reject routing
-fields. Routed results include the chosen `model` ID.
+unknown IDs fail with invalid argument. Single-model strict execution rejects
+routing fields; legacy `decide` still ignores unrelated metadata. Routed results
+include the chosen `model` ID.
 
 Loads are lazy and serialized. Before inference, each model must pass the core's
 Laya GGUF metadata, three-column output, template, marker, head-budget and
@@ -150,7 +186,9 @@ The additive C APIs `dtl_execute_with_options`, `dtl_decide_with_options` and
 it with `dtl_default_call_options()`. Existing entry points retain their behavior.
 `timeout_ms` is zero (disabled) or 1..86400000. The native deadline begins during
 execution setup after the start observer, and includes validation, waiting for
-the handle lock and inference. Callbacks must be nonblocking and thread-safe.
+the handle lock and inference. Cancellation callbacks must be nonblocking and
+thread-safe, may run on backend threads, and must not reenter the active handle.
+Keep their user data alive until the call returns.
 Return zero to continue, `DTL_DEADLINE_EXCEEDED` for a host deadline, or another
 nonzero value to cancel. The first observed stop is latched even if a caller
 subsequently resets its flag. C++ callback exceptions count as cancellation.
@@ -175,6 +213,38 @@ against the queue bound until acknowledged, preventing cancellation from
 bypassing admission limits. `await close({ cancelPending: true })` cancels
 accepted work and waits for cleanup; ordinary `close()` still drains it. Repeated
 close calls share one promise. Never race native handle destruction with calls.
+
+## Ownership, admission and errors
+
+Native `threads` is 0 (automatic, capped at 4) or an integer in 1..256. Node's
+`maxPending` defaults to 16 and accepts 1..1024; each accepted call or entire
+batch occupies one slot. Work is FIFO and excess work is rejected. `close()`
+stops admission and drains accepted calls. Worker failure rejects pending work;
+callers must open a new instance. Browser admission follows the same bounds,
+with platform-specific controls and initialization rules in [BROWSER.md](BROWSER.md).
+
+C inputs are borrowed UTF-8 NUL-terminated strings. Initialize options with the
+provided defaults; incompatible layouts/ABI versions and reserved fields are
+rejected. Output pointers are reset on entry. Successful result buffers and any
+non-null error buffers belong to the caller and must be released by `dtl_free`.
+An error message may be absent on allocation failure. Null close/free is allowed;
+closing a non-null handle invalidates it and must not race any active call.
+
+| Status | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Invalid argument/request or exceeded input bounds |
+| 2 | Model loading/compatibility failure |
+| 3 | Inference failure |
+| 4 | Out of memory |
+| 5 | Cancelled |
+| 6 | Deadline exceeded |
+| 7 | Unsupported platform/required CPU features |
+
+C++ and Rust expose native statuses through their error types; JS rejects with
+an Error carrying native `status` when available. Binding-level validation,
+queue, transport and worker errors may have no native status. Error message
+wording is diagnostic, not a stable machine-readable contract.
 
 ## Runtime and model diagnostics
 

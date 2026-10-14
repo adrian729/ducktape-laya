@@ -1,9 +1,11 @@
 # Product and release plan
 
-This is the current product contract. It supersedes the scope and priorities in
-[historical evaluations](EVALUATION.md). [API.md](API.md) describes implemented
-behavior; [VALIDATION.md](VALIDATION.md) records actual evidence. Requirements
-below are not claims that the prototype already satisfies them.
+This document defines the agreed product requirements and remaining release work.
+[ARCHITECTURE.md](ARCHITECTURE.md) defines implementation boundaries,
+[API.md](API.md) and [BROWSER.md](BROWSER.md) define behavior, and
+[RELEASE_CHECKS.md](RELEASE_CHECKS.md) defines acceptance checks. Implemented
+contracts describe the current baseline; release requirements below must not be
+presented as completed capabilities until their gates are satisfied.
 
 ## Fixed product requirements
 
@@ -32,31 +34,27 @@ No Windows/macOS delivery commitment until suitable test environments exist.
 Linux browser testing is in scope now. Linux native GPU support is a separately
 validated capability, not implied by browser WebGPU support.
 
-## Present state and gaps
+## Current baseline and remaining release work
 
-- Implemented: Linux CPU GGUF adapter, C/C++/Rust/Node interfaces, bounded
-  sequential batching, a flat structured-decision subset, passive hooks, and
-  explicit local routing with a model-count-bounded cache.
-- Checked: pinned English Q8_0 inference, interface parity, selected lifecycle
-  and error cases. Existing reviews and tests do not establish broad platform
-  support, application accuracy, or production reliability.
-- Implemented since the initial plan: native/npm/Rust packaging, Electron/ASAR
-  validation, isolated upgrade tooling, cooperative cancellation/deadlines,
-  lifecycle/resource stress, and experimental shared-core WASM/WebGPU packaging.
-- Also implemented and checked: runtime/model diagnostics, CPU preflight, audited
-  runtime patches, strict sanitizers, input mutation smoke checks, installed
-  Ubuntu userspace checks, license/SBOM inventory and independent compilation
-  reproducibility. Native validation and Linux CI definitions are available through
-  the [release check workflow](RELEASE_CHECKS.md); hosted CI has not run.
-- Remaining release gates: the failed browser/native numeric comparison, broader
-  physical CPU/browser/GPU and resource-pressure coverage, controlled performance
-  regression budgets, and hosted CI evidence. Publication, signing, release hosting
-  and the security reporting contact remain explicit deployment decisions.
-- Model-specific preparation and result processing remain adapted from upstream
-  server code, now isolated behind a private backend boundary. The initial
-  [upstream audit](ARCHITECTURE.md) explains that choice and its limitations.
-  Demos now require an explicit development option; automated conformance
-  consumers and fixtures live under `tests/` independently.
+The implementation includes Linux CPU GGUF inference, C/C++/Rust/Node interfaces,
+bounded sequential batching, flat structured decisions, passive hooks, explicit
+local routing, cooperative cancellation/deadlines and runtime/model diagnostics.
+Native/npm/Rust packaging, Electron/ASAR consumer checks, CPU preflight,
+hash-checked runtime patches, SBOM generation, isolated upgrade tooling,
+reproducibility checks and Linux CI are implemented. Browser delivery uses the
+same core through experimental WASM/WebGPU packages and module workers.
+
+Remaining release work includes the unmet browser/native numeric gate, broader
+physical CPU/browser/GPU and resource-pressure coverage, controlled performance
+regression budgets, a declared distribution baseline and signed package delivery.
+The source repository is public; package publication and signing are separate
+release actions. Private vulnerability reporting is defined in
+[SECURITY.md](../SECURITY.md). Existing tooling does not establish readiness for
+untested operating systems or hardware.
+
+Demos remain opt-in. Shared conformance fixtures and automated consumers live
+under `tests/`. Model adaptation is private to `src/backend_llama.cpp`; all
+interfaces retain the shared behavior described in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Architecture and upstream boundary
 
@@ -231,12 +229,12 @@ this workflow early, before adding more model-specific code or backends.
   adapter revision, model manifests, package versions and validated backends.
   Cross-check it against the submodule and artifacts; avoid independently edited
   copies of pins scattered through bindings/build scripts. Audit current hardcoded
-  pins as part of this work. Historical evidence remains immutable.
+  pins as part of this work. Attach run-specific evidence to the upgrade PR or CI artifacts.
 - Permit compatible model and runtime updates independently. Do not equate a new
   upstream commit with a required model replacement or a binding API change.
   Unknown combinations are unvalidated, not automatically compatible.
 
-### Candidate upgrade workflow to implement
+### Candidate upgrade workflow
 
 1. A maintainer selects a candidate runtime revision, model revision, or both.
    Tooling creates an isolated checkout/build against immutable inputs and a
@@ -273,11 +271,12 @@ this workflow early, before adding more model-specific code or backends.
 Acceptance: one documented automated entry point builds and compares a selected
 candidate and produces the report; a maintainer is not manually editing every
 binding or assembling a test checklist. A new incompatible capability may still
-require shared-core work and deliberate API evolution. This tooling is implemented in `scripts/check-upgrade.py`; the retained
-candidate report distinguishes passed gates from remaining release checks.
+require shared-core work and deliberate API evolution. `scripts/check-upgrade.py`
+implements the native comparison entry point; its reports distinguish passed
+checks from remaining release gates.
 
 Candidate reports must distinguish **passed**, **failed**, and **not run** for
-each gate. Stage 1's adapter experiment is not a production release approval:
+each gate. The native candidate comparison is not a production release approval:
 installed-package, stress, browser and platform gates may still be unavailable.
 Promotion must refuse a required gate that failed or was not run. Separate
 baseline-to-candidate drift from cross-binding equality and upstream-reference
@@ -299,21 +298,6 @@ choices do not obstruct the required browser path. Linux-native packages can be
 released with their scope clearly labeled before the browser package is ready;
 the overall agreed feature set is not complete until both paths meet their gates.
 
-### Reviewed execution order within stage 1
-
-The [two review passes](PLAN_REVIEW.md) retain the product contract above and
-split the first stage into independently verifiable increments:
-
-1. Audit upstream reuse and browser prerequisites; isolate the model adapter;
-   make demos opt-in; move conformance consumers/fixtures out of examples.
-   Require exact before/after output equality and unchanged public exports.
-2. Add the compatibility record and immutable model identities, then isolated
-   candidate tooling. Hash-check models before model-dependent gates. Reject
-   silent skipped tests, pin changes and expected-output regeneration. Include a
-   baseline replay and an actual candidate revision before calling stage 1 done.
-3. Run the browser model feasibility experiment using a pinned Emscripten/Dawn
-   toolchain. Native-only output equality does not establish WASM/WebGPU support.
-
 The adapter seam is internal; it need not create a public backend plugin API.
 Keep platform scheduling and asset ownership separate from model processing.
 Browser-specific implementations require evidence before duplicating shared code.
@@ -321,3 +305,12 @@ Browser-specific implementations require evidence before duplicating shared code
 Chat generation, HTTP serving, model training, implicit downloads/updates and
 untested OS support are outside the current product scope. Demo enhancements
 have no priority in this sequence.
+
+## Documentation and change records
+
+Keep architecture, contracts, support limitations, build/upgrade procedures and
+release requirements current with accepted changes. Preserve reusable tests,
+fixtures and regression checks in source. Put individual audit/review findings,
+benchmark samples, validation logs and generated reports in commit messages, PRs
+or CI artifacts; local outputs belong under ignored `build*/` directories.
+Do not add dated audit documents or accumulate run histories in product specs.

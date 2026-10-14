@@ -1,8 +1,0 @@
-{
-  "candidate_runtime": "df18bee11e96557b07aa7b12db0976f3c7ac9165",
-  "patch_sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f",
-  "status": "passed",
-  "scope": "Patch context applicability only; no candidate rebuild, sanitizers or release promotion",
-  "exit_code": 0,
-  "output": "checking file ggml/src/ggml.c\nHunk #1 succeeded at 638 (offset 11 lines).\nHunk #2 succeeded at 755 (offset 11 lines).\nchecking file ggml/src/ggml-cpu/ggml-cpu.c\n"
-}

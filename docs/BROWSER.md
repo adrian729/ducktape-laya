@@ -5,12 +5,12 @@ calibration, routing, batching and structured projection as native bindings.
 It runs in a private module worker. JavaScript owns asset fetching, queueing,
 shutdown and platform errors; it does not implement a second classifier.
 
-**Status: experimental.** Real WASM and WebGPU fixture runs work on the tested
-Linux/Chrome setup. They do not meet the original 1e-5 comparison against the
-native AVX2 build. That failed gate is retained explicitly. Both browser adapters
-agree exactly with unchanged upstream decision processing on their corresponding backend;
-backend-to-backend differences must not be confused with binding corruption.
-See the retained evidence and `tests/compare-browser*.py` for separate checks.
+**Status: experimental.** The native AVX2 versus WASM/WebGPU numerical gate is
+not satisfied. The declared absolute tolerance is owned by
+`release/browser-toolchain.json`. Do not advertise backend-interchangeable
+probabilities or widen tolerances just to pass. API/structure equivalence,
+same-backend upstream agreement and cross-backend numerical comparison are
+separate requirements.
 
 ## Build and package
 
@@ -94,27 +94,31 @@ Hooks use the same native event contract and execute on the host thread. Callbac
 failures are passive. Low-level runtime text is suppressed unless `onDiagnostic`
 is provided. Requests and results are not logged or sent to telemetry endpoints.
 
-## Tested scope and remaining gates
+## Conformance and release gates
 
-Linux Pop!_OS 24.04 x86-64; headless Chrome 152; Intel Gen12LP, non-fallback GPU.
-The GPU test used `--enable-unsafe-webgpu --use-angle=vulkan
---enable-features=Vulkan --disable-vulkan-surface`. This does not establish that
-WebGPU is enabled by default in every Linux Chrome installation. No Firefox,
-Safari, other GPU or mobile support claim is made. CPU runs kept the main-thread
-heartbeat responsive; all 11 GPU questions showed WebGPU graph execution.
+Browser release checks must cover primitive/schema/batch outputs, ordered hooks,
+invalid/closed calls, asset budgets, route aliases, pre-cancellation, deadlines,
+cancelling/idempotent shutdown and explicit WASM initialization fallback. Include
+missing/corrupt assets, hash mismatch, initialization aborts, device loss, worker
+failure, memory pressure and deployment of the extracted package. Capture the
+browser version, GPU/driver, launch flags, model identity and build configuration;
+flags that enable WebGPU experimentally do not establish default browser support.
 
-Checks cover primitive/schema/batch outputs, ordered hooks, invalid/closed calls,
-asset budgets, route aliases, pre-cancellation, deadlines, cancelling/idempotent
-shutdown, and explicit WASM initialization fallback. Device-loss injection,
-upstream comparisons and extracted-package tests live under `tests/`; retain
-their result reports when running a release gate. Corrupt/missing assets fail
-initialization, and optional SHA-256 checks reject unexpected bytes.
+`tests/browser.html` and `tests/browser-server.py` provide the browser test harness.
+Export its `window.state` after completion to a local report. Compare against a
+native run of the same model and fixtures, not a historical checked-in result:
 
-The cross-backend gate has maximum absolute differences of about 0.0219552
-(WASM vs native AVX2) and 0.0236547 (WebGPU vs native AVX2). A separate portable
-native CPU build also differed from AVX2 by about 0.0330031. Discrete choices in
-this corpus agreed. Quantized backend arithmetic is a plausible explanation;
-these measurements alone do not isolate an individual kernel. Do not advertise
-backend-interchangeable probabilities or raise the tolerance just to pass.
-Broader hardware, resource-pressure, isolated-page cancellation and minimum
-browser coverage remain release work.
+```sh
+python3 tests/parity.py /path/to/Laya-Q8_0.gguf --report build/native-results.json
+python3 tests/compare-browser.py build/browser-results.json --native build/native-results.json
+```
+
+The comparator requires matching fixture sets/key order, a responsive main-thread
+heartbeat, ordered events and values within the declared tolerance. The current
+cross-backend numerical limitation must remain visible even when lifecycle tests
+pass. `tests/compare-browser-reference.py` separately compares with unchanged
+upstream decision processing on the same backend.
+
+Store run results in ignored build directories or CI/PR artifacts. Broader GPU,
+physical CPU, isolated-page cancellation and minimum-browser coverage remain
+release requirements. See [PLAN.md](PLAN.md) and [RELEASE_CHECKS.md](RELEASE_CHECKS.md).
