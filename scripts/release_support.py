@@ -88,7 +88,8 @@ def check_qualification(record, root=ROOT):
             raise ValueError('Invalid qualification budget: ' + key)
     if policy.get('numerical_contract', {}).get('policy') != 'distinct_profiles':
         raise ValueError('Unsupported numerical contract')
-    if policy['budgets'].get('native_binding_absolute_tolerance') != 0:
+    binding = policy['budgets'].get('native_binding_absolute_tolerance')
+    if type(binding) not in (int, float) or binding != 0:
         raise ValueError('Same-binary binding conformance must be exact')
     upstream = policy['budgets'].get('native_upstream_absolute_tolerance')
     if type(upstream) not in (int, float) or not math.isfinite(upstream) or upstream < 0:

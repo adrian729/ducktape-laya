@@ -36,6 +36,7 @@ class Qualification(unittest.TestCase):
 
     def test_numerical_policy(self):
         for key, value in [('native_binding_absolute_tolerance', 0.001),
+                           ('native_binding_absolute_tolerance', False),
                            ('native_upstream_absolute_tolerance', float('nan')),
                            ('native_upstream_absolute_tolerance', True),
                            ('browser_absolute_tolerance_source', 'native_wasm_absolute_tolerance')]:
