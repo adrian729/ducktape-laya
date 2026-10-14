@@ -86,6 +86,9 @@ include queue time and use shared-core checks once execution starts. A rejection
 does not prove immediate resource release. `close()` drains work;
 `close({cancelPending:true})` requests cancellation and waits for cleanup.
 Repeated `close()` returns the same promise.
+`initializationTimeoutMs` accepts integer milliseconds from 1 through 86400000
+(default 120000 per backend attempt). Aborting initialization terminates its
+worker and prevents automatic backend fallback.
 
 Hooks use the same native event contract and execute on the host thread. Callback
 failures are passive. Low-level runtime text is suppressed unless `onDiagnostic`
