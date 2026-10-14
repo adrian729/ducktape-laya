@@ -236,3 +236,14 @@ checkout path. All four consumers ran the pinned three-question fixture;
 npm and Rust outputs matched exactly. Demos are excluded from crate/package
 contents. Scripts: `package-linux.py`, `installed-native.py`,
 `installed-packages.py`. Wider environments and Electron remain separate gates.
+
+## Cooperative call controls (2026-10-14)
+
+Native real-model checks exercise pre-cancellation, a running CPU deadline,
+a running cancellation, a one-shot cancellation callback whose result must stay
+latched, and exact baseline recovery after interruption. C++ wrappers pass the
+same options through the C ABI. Rust verifies cancellation/deadline statuses and
+recovery. Node verifies pre-cancellation, deadlines, bounded admission while
+cancelled work awaits acknowledgment, and cancelling shutdown/repeated close.
+These checks validate cooperative CPU interruption; they do not establish a
+hard real-time bound or interruption of model loading/GPU kernels.

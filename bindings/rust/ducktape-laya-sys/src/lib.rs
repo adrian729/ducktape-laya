@@ -71,3 +71,39 @@ extern "C" {
     ) -> i32;
     pub fn dtl_router_close(router: *mut Router);
 }
+
+#[repr(C)]
+pub struct CallOptions {
+    pub struct_size: u32,
+    pub reserved: u32,
+    pub timeout_ms: u64,
+    pub should_cancel: Option<unsafe extern "C" fn(*mut c_void) -> u32>,
+    pub user_data: *mut c_void,
+}
+extern "C" {
+    pub fn dtl_default_call_options() -> CallOptions;
+    pub fn dtl_execute_with_options(
+        engine: *mut Engine,
+        request: *const c_char,
+        observer: *const Observer,
+        options: *const CallOptions,
+        result: *mut *mut c_char,
+        error: *mut *mut c_char,
+    ) -> i32;
+    pub fn dtl_decide_with_options(
+        engine: *mut Engine,
+        request: *const c_char,
+        observer: *const Observer,
+        options: *const CallOptions,
+        result: *mut *mut c_char,
+        error: *mut *mut c_char,
+    ) -> i32;
+    pub fn dtl_router_execute_with_options(
+        router: *mut Router,
+        request: *const c_char,
+        observer: *const Observer,
+        options: *const CallOptions,
+        result: *mut *mut c_char,
+        error: *mut *mut c_char,
+    ) -> i32;
+}

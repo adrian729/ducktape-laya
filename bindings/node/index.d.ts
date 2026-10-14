@@ -17,7 +17,7 @@ export class Laya {
   decideStructured(request: StructuredRequest, options?: CallOptions): Promise<StructuredResult>;
   decideBatch(requests: (Request | StructuredRequest)[], options?: CallOptions): Promise<(Result | StructuredResult)[]>;
   execute(request: Request | StructuredRequest | (Request | StructuredRequest)[] | string, options?: CallOptions): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
-  close(): Promise<void>;
+  close(options?: { cancelPending?: boolean }): Promise<void>;
 }
 
 export type Property =
@@ -31,6 +31,6 @@ export interface DecisionSchema {
 export interface StructuredRequest { state: Json; schema: DecisionSchema; boolean_threshold?: number; model?: string }
 export interface StructuredResult extends Result { values: Record<string, string | number | boolean> }
 export interface ObserverEvent { event: 'start' | 'end' | 'error'; request_id: number; status: number; elapsed_ms: number }
-export interface CallOptions { onEvent?: (event: ObserverEvent) => void | Promise<void> }
+export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; onEvent?: (event: ObserverEvent) => void | Promise<void> }
 export interface OpenOptions { threads?: number; maxPending?: number; addonPath?: string }
 export interface RouterConfig { models: Record<string, string>; max_loaded?: number }

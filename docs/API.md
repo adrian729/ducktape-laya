@@ -142,3 +142,36 @@ This is a model-count bound, not a byte-accurate RAM quota; size and runtime
 buffers vary with the artifact. Closing releases every cached model/context.
 Native close must never race an active call; Rust ownership and Node draining
 handle their respective lifetimes.
+
+## Cancellation and deadlines
+
+The additive C APIs `dtl_execute_with_options`, `dtl_decide_with_options` and
+`dtl_router_execute_with_options` take a borrowed `dtl_call_options`. Initialize
+it with `dtl_default_call_options()`. Existing entry points retain their behavior.
+`timeout_ms` is zero (disabled) or 1..86400000. The native deadline begins during
+execution setup after the start observer, and includes validation, waiting for
+the handle lock and inference. Callbacks must be nonblocking and thread-safe.
+Return zero to continue, `DTL_DEADLINE_EXCEEDED` for a host deadline, or another
+nonzero value to cancel. The first observed stop is latched even if a caller
+subsequently resets its flag. C++ callback exceptions count as cancellation.
+
+New statuses: `DTL_CANCELLED` (5) and `DTL_DEADLINE_EXCEEDED` (6). Failure returns
+no partial result. Waiting calls check controls while acquiring the mutex;
+preparation and question boundaries check them too. CPU execution uses the
+upstream abort callback and resets it before releasing the inference lock.
+Cancellation is cooperative, not a thread kill or a hard wall-clock guarantee.
+Model loading and template execution may finish before the next safe check.
+Router cache mutations are not rolled back by a cancelled request.
+
+C++ `execute` accepts an optional third `dtl_call_options*`; `decide` accepts an
+optional second one. Rust `execute_with_options`/`decide_with_options` accept
+`CallOptions`, including a borrowed `AtomicBool` flag and `timeout_ms`.
+
+Node calls accept `{ signal, timeoutMs }`. Their deadline starts at enqueue and
+includes time waiting in the worker queue. Abort/deadline rejects the promise
+promptly and signals the same native control through shared memory. Rejection
+does not mean resources have already been freed. Cancelled entries still count
+against the queue bound until acknowledged, preventing cancellation from
+bypassing admission limits. `await close({ cancelPending: true })` cancels
+accepted work and waits for cleanup; ordinary `close()` still drains it. Repeated
+close calls share one promise. Never race native handle destruction with calls.

@@ -45,6 +45,13 @@ enum Handle {
     Router(NonNull<ffi::Router>),
 }
 pub struct Engine(Handle);
+#[derive(Default)]
+pub struct CallOptions<'a> {
+    /// 0 disables the deadline; otherwise 1..86400000 milliseconds.
+    pub timeout_ms: u64,
+    /// Cancellation is latched when observed; keep this flag alive for the call.
+    pub cancelled: Option<&'a std::sync::atomic::AtomicBool>,
+}
 // SAFETY: the native ABI serializes inference on each handle. Rust borrows
 // prevent Drop racing with decide; the pointer is never exposed publicly.
 unsafe impl Send for Engine {}
@@ -83,7 +90,7 @@ impl Engine {
             })
     }
     pub fn decide(&self, request_json: &str) -> Result<String, Error> {
-        self.execute_impl(request_json, 0, None, true)
+        self.execute_impl(request_json, 0, None, true, None)
     }
     /// Execute one primitive/structured request or a bounded JSON array.
     pub fn execute(&self, request_json: &str) -> Result<String, Error> {
@@ -98,7 +105,46 @@ impl Engine {
         request_id: u64,
         callback: Option<&mut dyn FnMut(&str)>,
     ) -> Result<String, Error> {
-        self.execute_impl(request_json, request_id, callback, false)
+        self.execute_impl(request_json, request_id, callback, false, None)
+    }
+    /// Execute with shared native cooperative cancellation/deadline controls.
+    pub fn execute_with_options(
+        &self,
+        request_json: &str,
+        options: &CallOptions<'_>,
+    ) -> Result<String, Error> {
+        self.controlled(request_json, options, false)
+    }
+    pub fn decide_with_options(
+        &self,
+        request_json: &str,
+        options: &CallOptions<'_>,
+    ) -> Result<String, Error> {
+        self.controlled(request_json, options, true)
+    }
+    fn controlled(
+        &self,
+        request_json: &str,
+        options: &CallOptions<'_>,
+        legacy: bool,
+    ) -> Result<String, Error> {
+        unsafe extern "C" fn cancelled(data: *mut std::ffi::c_void) -> u32 {
+            let flag = unsafe { &*data.cast::<std::sync::atomic::AtomicBool>() };
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                5
+            } else {
+                0
+            }
+        }
+        let mut native = unsafe { ffi::dtl_default_call_options() };
+        native.timeout_ms = options.timeout_ms;
+        if let Some(flag) = options.cancelled {
+            native.should_cancel = Some(cancelled);
+            native.user_data = (flag as *const std::sync::atomic::AtomicBool)
+                .cast_mut()
+                .cast();
+        }
+        self.execute_impl(request_json, 0, None, legacy, Some(&native))
     }
     fn execute_impl(
         &self,
@@ -106,6 +152,7 @@ impl Engine {
         request_id: u64,
         callback: Option<&mut dyn FnMut(&str)>,
         legacy: bool,
+        options: Option<&ffi::CallOptions>,
     ) -> Result<String, Error> {
         struct Hook<'a> {
             callback: &'a mut dyn FnMut(&str),
@@ -139,24 +186,27 @@ impl Engine {
         let mut error = std::ptr::null_mut();
         let status = unsafe {
             match self.0 {
-                Handle::Model(p) if legacy => ffi::dtl_decide_observed(
+                Handle::Model(p) if legacy => ffi::dtl_decide_with_options(
                     p.as_ptr(),
                     request.as_ptr(),
                     &observer,
+                    options.map_or(std::ptr::null(), |value| value),
                     &mut result,
                     &mut error,
                 ),
-                Handle::Model(p) => ffi::dtl_execute(
+                Handle::Model(p) => ffi::dtl_execute_with_options(
                     p.as_ptr(),
                     request.as_ptr(),
                     &observer,
+                    options.map_or(std::ptr::null(), |value| value),
                     &mut result,
                     &mut error,
                 ),
-                Handle::Router(p) => ffi::dtl_router_execute(
+                Handle::Router(p) => ffi::dtl_router_execute_with_options(
                     p.as_ptr(),
                     request.as_ptr(),
                     &observer,
+                    options.map_or(std::ptr::null(), |value| value),
                     &mut result,
                     &mut error,
                 ),
@@ -256,6 +306,53 @@ mod tests {
             .unwrap()
             .contains("\"model\":\"english\""));
         assert_eq!(router.execute(request).unwrap_err().status, 1);
+    }
+    #[test]
+    fn cancellation_and_deadline() {
+        let Ok(path) = std::env::var("LAYA_MODEL") else {
+            return;
+        };
+        let engine = Engine::open(&path, 2).unwrap();
+        let request = r#"{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
+        let baseline = engine.execute(request).unwrap();
+        let flag = std::sync::atomic::AtomicBool::new(true);
+        let options = CallOptions {
+            timeout_ms: 0,
+            cancelled: Some(&flag),
+        };
+        assert_eq!(
+            engine
+                .execute_with_options(request, &options)
+                .unwrap_err()
+                .status,
+            5
+        );
+        assert_eq!(
+            engine
+                .decide_with_options(request, &options)
+                .unwrap_err()
+                .status,
+            5
+        );
+        assert_eq!(
+            engine
+                .execute_with_options(
+                    request,
+                    &CallOptions {
+                        timeout_ms: 1,
+                        cancelled: None
+                    }
+                )
+                .unwrap_err()
+                .status,
+            6
+        );
+        assert_eq!(engine.execute(request).unwrap(), baseline);
+        flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            engine.execute_with_options(request, &options).unwrap(),
+            baseline
+        );
     }
     #[test]
     fn rejects_bad_path() {

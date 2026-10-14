@@ -30,18 +30,19 @@ public:
     laya(const laya &) = delete;
     laya &operator=(const laya &) = delete;
     // Accepts one primitive/structured request or a bounded array of requests.
-    std::string execute(const std::string &request, const dtl_observer *observer = nullptr) const {
+    std::string execute(const std::string &request, const dtl_observer *observer = nullptr,
+                        const dtl_call_options *options = nullptr) const {
         if (request.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Request contains a NUL byte");
         char *result = nullptr, *message = nullptr;
-        auto status = dtl_execute(engine_.get(), request.c_str(), observer, &result, &message);
+        auto status = dtl_execute_with_options(engine_.get(), request.c_str(), observer, options, &result, &message);
         std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
         check(status, message);
         return std::string(result);
     }
-    std::string decide(const std::string &request) const {
+    std::string decide(const std::string &request, const dtl_call_options *options = nullptr) const {
         if (request.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Request contains a NUL byte");
         char *result = nullptr, *message = nullptr;
-        auto status = dtl_decide(engine_.get(), request.c_str(), &result, &message);
+        auto status = dtl_decide_with_options(engine_.get(), request.c_str(), nullptr, options, &result, &message);
         std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
         check(status, message);
         return result;
@@ -61,10 +62,11 @@ public:
     router &operator=(router &&) noexcept = default;
     router(const router &) = delete;
     router &operator=(const router &) = delete;
-    std::string execute(const std::string &request, const dtl_observer *observer = nullptr) const {
+    std::string execute(const std::string &request, const dtl_observer *observer = nullptr,
+                        const dtl_call_options *options = nullptr) const {
         if (request.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Request contains a NUL byte");
         char *result = nullptr, *message = nullptr;
-        auto status = dtl_router_execute(router_.get(), request.c_str(), observer, &result, &message);
+        auto status = dtl_router_execute_with_options(router_.get(), request.c_str(), observer, options, &result, &message);
         std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
         check(status, message);
         return std::string(result);

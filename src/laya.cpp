@@ -1,6 +1,7 @@
 #include "ducktape_laya.h"
 #include "backend.hpp"
 #include "errors.hpp"
+#include "execution.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -98,9 +99,10 @@ dtl_status dtl_open(const char *path, const dtl_options *options, dtl_engine **o
         catch (const std::exception &e) { throw failure(DTL_MODEL_ERROR, e.what()); }
     });
 }
-dtl_status dtl_decide(dtl_engine *engine, const char *request, char **result, char **error) {
+static dtl_status decide_controlled(dtl_engine *engine, const char *request, const dtl_call_options *options, char **result, char **error) {
     if (result) *result = nullptr;
     return boundary(error, [&] {
+        dtl::execution control(options); control.check();
         require(engine && request && result, "engine, request_json and result_json are required");
         size_t n = 0;
         while (n <= max_request && request[n]) ++n;
@@ -114,13 +116,16 @@ dtl_status dtl_decide(dtl_engine *engine, const char *request, char **result, ch
         }
         catch (const json::exception &e) { throw failure(DTL_INVALID_ARGUMENT, e.what()); }
         auto questions = parse(body);
-        std::lock_guard<std::mutex> lock(engine->mutex);
-        for (auto &q : questions) engine->runtime.prepare(q, body["state"]);
+        auto lock = control.lock(engine->mutex);
+        for (auto &q : questions) { control.check(); engine->runtime.prepare(q, body["state"]); }
         json answers = json::object();
         size_t tokens = 0;
-        for (const auto &q : questions) { answers[q.id] = engine->runtime.run(q); tokens += q.token_count(); }
+        for (const auto &q : questions) { answers[q.id] = engine->runtime.run(q, &control); tokens += q.token_count(); }
         *result = copy(json({{"answers", answers}, {"usage", {{"input_tokens", tokens}, {"output_tokens", 0}}}}).dump());
     });
+}
+dtl_status dtl_decide(dtl_engine *engine, const char *request, char **result, char **error) {
+    return decide_controlled(engine, request, nullptr, result, error);
 }
 void dtl_close(dtl_engine *engine) { delete engine; }
 void dtl_free(void *p) { std::free(p); }
@@ -242,10 +247,10 @@ std::vector<planned> plans(const json &body, bool routed) {
     }
     return result;
 }
-json evaluate(dtl_engine &engine, planned &p) {
+json evaluate(dtl_engine &engine, planned &p, const dtl::execution &control) {
     json answers = json::object();
     size_t tokens = 0;
-    for (const auto &q : p.questions) { answers[q.id] = engine.runtime.run(q); tokens += q.token_count(); }
+    for (const auto &q : p.questions) { answers[q.id] = engine.runtime.run(q, &control); tokens += q.token_count(); }
     json result = {{"answers", answers}, {"usage", {{"input_tokens", tokens}, {"output_tokens", 0}}}};
     if (!p.fields.empty()) {
         json values = json::object();
@@ -335,20 +340,29 @@ dtl_status dtl_decide_observed(dtl_engine *engine, const char *request, const dt
                               char **result, char **error) {
     return observed_call(observer, result, error, [&] { return dtl_decide(engine, request, result, error); });
 }
-dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_observer *observer,
-                       char **result, char **error) {
+dtl_status dtl_execute_with_options(dtl_engine *engine, const char *request, const dtl_observer *observer,
+                       const dtl_call_options *options, char **result, char **error) {
     return observed(observer, result, error, [&] {
+        dtl::execution control(options); control.check();
         require(engine, "engine is required");
         auto body = read_json(request);
         auto work = plans(body, false);
         json results = json::array();
         {
-            std::lock_guard<std::mutex> lock(engine->mutex);
-            for (auto &p : work) for (auto &q : p.questions) engine->runtime.prepare(q, p.body["state"]);
-            for (auto &p : work) results.push_back(evaluate(*engine, p));
+            auto lock = control.lock(engine->mutex);
+            for (auto &p : work) for (auto &q : p.questions) { control.check(); engine->runtime.prepare(q, p.body["state"]); }
+            for (auto &p : work) results.push_back(evaluate(*engine, p, control));
         }
         return body.is_array() ? results : results[0];
     });
+}
+dtl_call_options dtl_default_call_options(void) { return {sizeof(dtl_call_options), 0, 0, nullptr, nullptr}; }
+dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_observer *observer, char **result, char **error) {
+    return dtl_execute_with_options(engine, request, observer, nullptr, result, error);
+}
+dtl_status dtl_decide_with_options(dtl_engine *engine, const char *request, const dtl_observer *observer,
+    const dtl_call_options *options, char **result, char **error) {
+    return observed_call(observer, result, error, [&] { return decide_controlled(engine, request, options, result, error); });
 }
 dtl_status dtl_router_open(const char *config, const dtl_options *options, dtl_router **out, char **error) {
     if (out) *out = nullptr;
@@ -379,9 +393,10 @@ dtl_status dtl_router_open(const char *config, const dtl_options *options, dtl_r
         *out = r.release();
     });
 }
-dtl_status dtl_router_execute(dtl_router *router, const char *request, const dtl_observer *observer,
-                              char **result, char **error) {
+dtl_status dtl_router_execute_with_options(dtl_router *router, const char *request, const dtl_observer *observer,
+                              const dtl_call_options *options, char **result, char **error) {
     return observed(observer, result, error, [&] {
+        dtl::execution control(options); control.check();
         require(router, "router is required");
         auto body = read_json(request);
         auto work = plans(body, true);
@@ -391,17 +406,21 @@ dtl_status dtl_router_execute(dtl_router *router, const char *request, const dtl
         }
         json results = json::array();
         {
-            std::lock_guard<std::mutex> lock(router->mutex);
+            auto lock = control.lock(router->mutex);
             for (auto &p : work) {
                 auto id = p.body["model"].get<std::string>();
+                control.check();
                 auto &engine = router->load(router->paths.at(id));
-                for (auto &q : p.questions) engine.runtime.prepare(q, p.body["state"]);
-                auto answer = evaluate(engine, p); answer["model"] = id;
+                for (auto &q : p.questions) { control.check(); engine.runtime.prepare(q, p.body["state"]); }
+                auto answer = evaluate(engine, p, control); answer["model"] = id;
                 results.push_back(std::move(answer));
             }
         }
         return body.is_array() ? results : results[0];
     });
+}
+dtl_status dtl_router_execute(dtl_router *router, const char *request, const dtl_observer *observer, char **result, char **error) {
+    return dtl_router_execute_with_options(router, request, observer, nullptr, result, error);
 }
 void dtl_router_close(dtl_router *router) { delete router; }
 }

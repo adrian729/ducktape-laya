@@ -1,5 +1,6 @@
 #include <node_api.h>
 #include "ducktape_laya.h"
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -55,8 +56,8 @@ static napi_value open_engine(napi_env env, napi_callback_info info) {
 }
 static napi_value decide(napi_env env, napi_callback_info info) {
     return guarded(env, [&] {
-        size_t argc = 5; napi_value args[5]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
-        if (argc != 5) throw std::runtime_error("Expected engine, request, request ID, callback and legacy flag");
+        size_t argc = 7; napi_value args[7]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
+        if (argc != 7) throw std::runtime_error("Expected engine, request, ID, callback, legacy flag, cancellation and timeout");
         bool legacy; ok(napi_get_value_bool(env, args[4], &legacy));
         void *p; ok(napi_get_value_external(env, args[0], &p)); auto *h = static_cast<holder *>(p);
         if (!h->engine && !h->router) throw std::runtime_error("Engine is closed");
@@ -73,9 +74,21 @@ static napi_value decide(napi_env env, napi_callback_info info) {
             auto status = napi_call_function(d.env, receiver, d.fn, 1, &arg, &ignored);
             if (status == napi_pending_exception) napi_get_and_clear_last_exception(d.env, &ignored);
         };
-        auto s = h->router ? dtl_router_execute(h->router, request.c_str(), &observer, &result, &error)
-                           : legacy ? dtl_decide_observed(h->engine, request.c_str(), &observer, &result, &error)
-                                    : dtl_execute(h->engine, request.c_str(), &observer, &result, &error);
+        auto options = dtl_default_call_options();
+        napi_typedarray_type array_type; size_t length, offset; void *flag; napi_value buffer;
+        ok(napi_get_typedarray_info(env, args[5], &array_type, &length, &flag, &buffer, &offset));
+        if (array_type != napi_int32_array || length != 1) throw std::runtime_error("Invalid cancellation flag");
+        options.user_data = flag;
+        options.should_cancel = [](void *data) -> uint32_t {
+            return static_cast<uint32_t>(__atomic_load_n(static_cast<int32_t *>(data), __ATOMIC_RELAXED));
+        };
+        double timeout; ok(napi_get_value_double(env, args[6], &timeout));
+        if (!std::isfinite(timeout) || timeout < 0 || timeout > 86400000 || std::floor(timeout) != timeout)
+            throw std::runtime_error("Invalid timeout");
+        options.timeout_ms = static_cast<uint64_t>(timeout);
+        auto s = h->router ? dtl_router_execute_with_options(h->router, request.c_str(), &observer, &options, &result, &error)
+                           : legacy ? dtl_decide_with_options(h->engine, request.c_str(), &observer, &options, &result, &error)
+                                    : dtl_execute_with_options(h->engine, request.c_str(), &observer, &options, &result, &error);
         std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free); check(s, error);
         napi_value value; ok(napi_create_string_utf8(env, result, NAPI_AUTO_LENGTH, &value)); return value;
     });

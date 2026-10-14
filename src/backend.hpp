@@ -7,6 +7,7 @@
 #include <vector>
 namespace dtl {
 using json = nlohmann::ordered_json;
+class execution;
 struct prepared_question;
 struct question {
     std::string id, type;
@@ -27,7 +28,7 @@ public:
     backend(const char *path, uint32_t threads);
     ~backend();
     void prepare(question &q, const json &state);
-    json run(const question &q);
+    json run(const question &q, const execution *control = nullptr);
 private:
     struct impl;
     std::unique_ptr<impl> impl_;

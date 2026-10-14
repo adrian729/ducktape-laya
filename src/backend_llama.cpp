@@ -2,6 +2,7 @@
 // tools/server/server-decision.cpp (MIT). See THIRD_PARTY_NOTICES.md.
 #include "backend.hpp"
 #include "errors.hpp"
+#include "execution.hpp"
 #include "llama.h"
 #include "jinja/parser.h"
 #include "json.h"
@@ -144,7 +145,18 @@ struct backend::impl {
         require(head_length <= std::max(size_t(8), max_head - std::min(max_head, total)),
                 q.id + ": instructions exceed the model's head budget");
     }
-    json run(const question &q) {
+    json run(const question &q, const execution *control) {
+        if (control) control->check();
+#ifndef DTL_BROWSER_WEBGPU
+        struct reset_abort {
+            llama_context *ctx;
+            ~reset_abort() { llama_set_abort_callback(ctx, nullptr, nullptr); }
+        } reset{ctx.get()};
+        llama_set_abort_callback(ctx.get(), [](void *p) {
+            return static_cast<const execution *>(p)->stopped();
+        }, const_cast<execution *>(control));
+        if (!control || !control->enabled()) llama_set_abort_callback(ctx.get(), nullptr, nullptr);
+#endif
         const auto &prepared = *q.prepared;
         if (auto memory = llama_get_memory(ctx.get())) llama_memory_clear(memory, true);
         auto batch = llama_batch_init(prepared.tokens.size(), 0, 1);
@@ -156,6 +168,7 @@ struct backend::impl {
             batch.seq_id[i][0] = 0; batch.logits[i] = 1;
         }
         int status = llama_encode(ctx.get(), batch);
+        if (control) control->check();
         if (status != 0) throw failure(DTL_INFERENCE_ERROR, "Laya forward pass failed: " + std::to_string(status));
         std::vector<float> scores;
         for (size_t index : prepared.markers) {
@@ -199,5 +212,5 @@ struct backend::impl {
 backend::backend(const char *path, uint32_t threads) : impl_(std::make_unique<impl>(path, threads)) {}
 backend::~backend() = default;
 void backend::prepare(question &q, const json &state) { impl_->prepare(q, state); }
-json backend::run(const question &q) { return impl_->run(q); }
+json backend::run(const question &q, const execution *control) { return impl_->run(q, control); }
 } // namespace dtl

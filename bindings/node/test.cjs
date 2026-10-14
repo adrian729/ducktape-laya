@@ -111,3 +111,29 @@ test('router shares native model selection and drains accepted batch on close', 
     await close;
   } finally { await router.close(); }
 });
+
+test('cooperative cancellation, deadline, bounded cancelled queue and shutdown', { skip: !process.env.LAYA_MODEL }, async () => {
+  const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2, maxPending: 2 });
+  const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
+  const baseline = await engine.execute(request);
+  await assert.rejects(engine.execute(request, { timeoutMs: 1 }), { status: 6 });
+  assert.deepEqual(await engine.execute(request), baseline);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(engine.execute(request, { signal: controller.signal }), { status: 5 });
+  const queued = new AbortController();
+  const first = engine.execute(request);
+  const second = engine.execute(request, { signal: queued.signal });
+  queued.abort();
+  const cancelled = assert.rejects(second, { status: 5 });
+  const full = assert.rejects(engine.execute(request), /queue is full/);
+  await Promise.all([first, cancelled, full]);
+  // Drain the cancelled queue entry before the next independent check.
+  await engine.close();
+  const closing = await Laya.open(process.env.LAYA_MODEL, { threads: 2 });
+  const a = closing.execute(request), b = closing.execute(request);
+  const stopped = Promise.all([assert.rejects(a, { status: 5 }), assert.rejects(b, { status: 5 })]);
+  const close = closing.close({ cancelPending: true });
+  assert.equal(closing.close({ cancelPending: true }), close);
+  await Promise.all([stopped, close]);
+});

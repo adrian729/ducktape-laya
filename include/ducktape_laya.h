@@ -17,7 +17,8 @@ extern "C" {
 typedef struct dtl_engine dtl_engine;
 typedef int32_t dtl_status;
 enum { DTL_OK = 0, DTL_INVALID_ARGUMENT = 1, DTL_MODEL_ERROR = 2,
-       DTL_INFERENCE_ERROR = 3, DTL_OUT_OF_MEMORY = 4 };
+       DTL_INFERENCE_ERROR = 3, DTL_OUT_OF_MEMORY = 4,
+       DTL_CANCELLED = 5, DTL_DEADLINE_EXCEEDED = 6 };
 typedef struct dtl_options {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -71,6 +72,31 @@ DTL_API dtl_status dtl_router_open(const char *config_json, const dtl_options *o
 DTL_API dtl_status dtl_router_execute(dtl_router *router, const char *request_json,
                                     const dtl_observer *observer, char **result_json, char **error);
 DTL_API void dtl_router_close(dtl_router *router);
+/* Per-call control: borrowed until the call returns. timeout_ms is 0 (none)
+ * or 1..86400000, measured from execution setup after the start observer.
+ * Cancellation callback must be nonblocking and thread-safe, must not reenter
+ * the active handle, and may be called by backend worker threads. Return zero
+ * to continue, DTL_DEADLINE_EXCEEDED for a host deadline, or any other nonzero
+ * value to cancel. The first observed stop is latched for this call.
+ * C++ callback exceptions are treated as cancellation.
+ * Queued native calls poll while acquiring their handle lock. Running work
+ * stops at safe boundaries; CPU backend interruption is cooperative. No thread
+ * is killed, and no partial result is returned. Keep user_data alive throughout. */
+typedef uint32_t (*dtl_cancel_callback)(void *user_data);
+typedef struct dtl_call_options {
+    uint32_t struct_size;
+    uint32_t reserved;
+    uint64_t timeout_ms;
+    dtl_cancel_callback should_cancel;
+    void *user_data;
+} dtl_call_options;
+DTL_API dtl_call_options dtl_default_call_options(void);
+DTL_API dtl_status dtl_execute_with_options(dtl_engine *engine, const char *request_json,
+    const dtl_observer *observer, const dtl_call_options *options, char **result_json, char **error);
+DTL_API dtl_status dtl_decide_with_options(dtl_engine *engine, const char *request_json,
+    const dtl_observer *observer, const dtl_call_options *options, char **result_json, char **error);
+DTL_API dtl_status dtl_router_execute_with_options(dtl_router *router, const char *request_json,
+    const dtl_observer *observer, const dtl_call_options *options, char **result_json, char **error);
 /* NULL is accepted. Caller must ensure no pending/running calls use engine. */
 DTL_API void dtl_close(dtl_engine *engine);
 DTL_API void dtl_free(void *buffer);
