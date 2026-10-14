@@ -311,3 +311,10 @@ and error behavior through the public ABI without loading model weights.
 This is deterministic mutation smoke fuzzing, not a coverage-guided campaign or
 proof of parser safety. [Evidence](evidence/input-fuzz-20261014.json) records the
 seed, inputs, harness and instrumented library.
+
+Both browser backends were replayed after the typed-callback patch. All 11
+questions and token counts still agree exactly with their corresponding upstream
+reference; WebGPU reported 11 GPU graph executions. The original native comparison
+still fails at the same measured differences. [Replay evidence](evidence/browser-patched-20261014.json)
+records current browser binary hashes and outputs. This run had concurrent builds
+on the host and is not a browser performance benchmark.

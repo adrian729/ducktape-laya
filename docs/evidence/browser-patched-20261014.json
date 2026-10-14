@@ -1,0 +1,571 @@
+{
+  "scope": "Post-typed-callback-patch browser replay; native/browser numeric gate remains independent",
+  "runtime": {
+    "repository": "https://github.com/ggml-org/llama.cpp.git",
+    "path": "third_party/llama.cpp",
+    "commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+    "patches": [
+      {
+        "path": "patches/llama.cpp/typed-cpu-callbacks.patch",
+        "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f",
+        "purpose": "Typed callback bridges for supported Q8/F16/BF16/F32 tensor paths; no arithmetic changes"
+      }
+    ]
+  },
+  "toolchain": {
+    "emsdk_repository": "https://github.com/emscripten-core/emsdk.git",
+    "emsdk_commit": "8f685c26ee9f672081e61e22c6aa60fa972d00a9",
+    "sdk_version": "6.0.12",
+    "emscripten_commit": "5488e0871d46d19a3209988190fa6a653126256f",
+    "sdk_build": "6e9f6885cb17a3d6c8fd488a5cff730f50aba61d",
+    "webgpu_port": {
+      "version": "v20260423.175430",
+      "revision": "01940842b667a7812d0e4ca0ef4367fbec294241",
+      "sha512": "42784f70b67197c614322f9fabb0f1dc64228a0de10e88f99941fa9d29bee9ad6683f4651d4eefd5a7a9fbd1f976eb522b190b683219ed1793e9b531c602ffa6"
+    },
+    "memory64": false,
+    "threads": 1,
+    "native_wasm_absolute_tolerance": 1e-05,
+    "status": "validated experimental Chrome 152 WASM/WebGPU path; cross-backend numeric gate failed"
+  },
+  "backends": {
+    "wasm": {
+      "result": {
+        "status": "passed",
+        "backend": "wasm",
+        "results": {
+          "primitive.json": {
+            "answers": {
+              "department": {
+                "type": "choice",
+                "choice": "billing",
+                "probabilities": {
+                  "billing": 0.9787302473510207,
+                  "technical": 0.00984864019368077,
+                  "sales": 0.01142111245529857
+                },
+                "confidence": 0.968095371026531
+              },
+              "refund_requested": {
+                "type": "noul",
+                "noul": 0.9630462844737767
+              },
+              "urgency": {
+                "type": "score",
+                "score": 1.7338760190166413,
+                "legend": {
+                  "0": "Low urgency",
+                  "1": "Moderate urgency",
+                  "2": "High urgency"
+                },
+                "probabilities": {
+                  "0": 0.0825033797769173,
+                  "1": 0.1011172214295238,
+                  "2": 0.8163793987935588
+                },
+                "confidence": 0.6008140285249624
+              }
+            },
+            "usage": {
+              "input_tokens": 126,
+              "output_tokens": 0
+            }
+          },
+          "structured.json": {
+            "answers": {
+              "department": {
+                "type": "choice",
+                "choice": "technical",
+                "probabilities": {
+                  "billing": 0.10451745687214717,
+                  "technical": 0.7747758028385243,
+                  "sales": 0.12070674028932861
+                },
+                "confidence": 0.6621637042577865
+              },
+              "refund": {
+                "type": "noul",
+                "noul": 0.34756268078050306
+              },
+              "priority": {
+                "type": "score",
+                "score": 0.306994731448361,
+                "legend": {
+                  "0": "-1",
+                  "1": "0",
+                  "2": "1"
+                },
+                "probabilities": {
+                  "0": 0.7543646968903754,
+                  "1": 0.18427587477088805,
+                  "2": 0.06135942833873648
+                },
+                "confidence": 0.5395079028274585
+              }
+            },
+            "usage": {
+              "input_tokens": 121,
+              "output_tokens": 0
+            },
+            "values": {
+              "department": "technical",
+              "refund": false,
+              "priority": -1
+            }
+          },
+          "batch.json": [
+            {
+              "answers": {
+                "technical": {
+                  "type": "noul",
+                  "noul": 0.45353991370651453
+                }
+              },
+              "usage": {
+                "input_tokens": 71,
+                "output_tokens": 0
+              }
+            },
+            {
+              "answers": {
+                "department": {
+                  "type": "choice",
+                  "choice": "billing",
+                  "probabilities": {
+                    "billing": 0.9787302473510207,
+                    "technical": 0.00984864019368077,
+                    "sales": 0.01142111245529857
+                  },
+                  "confidence": 0.968095371026531
+                },
+                "refund_requested": {
+                  "type": "noul",
+                  "noul": 0.9630462844737767
+                },
+                "urgency": {
+                  "type": "score",
+                  "score": 1.7338760190166413,
+                  "legend": {
+                    "0": "Low urgency",
+                    "1": "Moderate urgency",
+                    "2": "High urgency"
+                  },
+                  "probabilities": {
+                    "0": 0.0825033797769173,
+                    "1": 0.1011172214295238,
+                    "2": 0.8163793987935588
+                  },
+                  "confidence": 0.6008140285249624
+                }
+              },
+              "usage": {
+                "input_tokens": 126,
+                "output_tokens": 0
+              }
+            },
+            {
+              "answers": {
+                "technical": {
+                  "type": "noul",
+                  "noul": 0.45353991370651453
+                }
+              },
+              "usage": {
+                "input_tokens": 71,
+                "output_tokens": 0
+              }
+            }
+          ]
+        },
+        "events": [
+          {
+            "event": "start",
+            "request_id": 3,
+            "status": 0,
+            "elapsed_ms": 0
+          },
+          {
+            "event": "end",
+            "request_id": 3,
+            "status": 0,
+            "elapsed_ms": 150328.5
+          },
+          {
+            "event": "start",
+            "request_id": 4,
+            "status": 0,
+            "elapsed_ms": 0
+          },
+          {
+            "event": "end",
+            "request_id": 4,
+            "status": 0,
+            "elapsed_ms": 122027.3
+          },
+          {
+            "event": "start",
+            "request_id": 5,
+            "status": 0,
+            "elapsed_ms": 0
+          },
+          {
+            "event": "end",
+            "request_id": 5,
+            "status": 0,
+            "elapsed_ms": 299873.9
+          }
+        ],
+        "ticks": 29043,
+        "gpuGraphs": 0,
+        "capabilities": {
+          "backend": "wasm",
+          "abi": 1,
+          "threads": 1,
+          "runningCancellation": false,
+          "deadlines": true
+        },
+        "info": {
+          "schema_version": 1,
+          "package_version": "0.1.0",
+          "abi_version": 1,
+          "runtime_patches": [
+            {
+              "path": "patches/llama.cpp/typed-cpu-callbacks.patch",
+              "purpose": "Typed callback bridges for supported Q8/F16/BF16/F32 tensor paths; no arithmetic changes",
+              "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f"
+            }
+          ],
+          "llama_cpp_commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+          "backend": "wasm-cpu",
+          "compiler": "Clang 24.0.0",
+          "required_cpu_features": [],
+          "missing_cpu_features": [],
+          "cpu_supported": true,
+          "decision_types": [
+            "choice",
+            "noul",
+            "score"
+          ],
+          "features": [
+            "structured_decisions",
+            "sequential_batches",
+            "routing",
+            "observers",
+            "cooperative_cancellation",
+            "deadlines"
+          ],
+          "limits": {
+            "request_bytes": 1048576,
+            "questions_per_request": 32,
+            "requests_per_batch": 32,
+            "questions_per_batch": 128,
+            "tokens_per_question": 512,
+            "routes": 16,
+            "loaded_models": 4
+          },
+          "model": {
+            "architecture": "modern-bert",
+            "name": "Laya",
+            "decision_type": "laya",
+            "max_head_tokens": 192,
+            "max_tokens": 512,
+            "temperatures": {
+              "choice": 1.6369030475616455,
+              "choice.11": 0.10058300197124481,
+              "choice.2": 1.9063559770584106,
+              "choice.3_5": 1.760151982307434,
+              "choice.6_10": 1.0000159740447998,
+              "noul": 1.9833999872207642,
+              "noul.2": 1.9833999872207642,
+              "score": 1.2514300346374512,
+              "score.3_5": 1.2514300346374512
+            }
+          }
+        }
+      },
+      "upstream_comparison": {
+        "backend": "wasm",
+        "maximum_absolute_difference": 0,
+        "path": "",
+        "tolerance": 1e-05,
+        "passed": true
+      },
+      "reference_result_sha256": "aa17551ce99aa36e2b9ec3b895182babb482468d3673bf44a0304b2fc356f063",
+      "module_sha256": "b9242af3b8e3ec5f74ab36e1858e0f433e45693a936ad891fd6c6e36806547df",
+      "wasm_sha256": "d85aaac35b151a136784a40eca60c421287b9018e7557f34a8437943fc86c4ce",
+      "native_comparison": {
+        "status": "failed",
+        "summary": "Maximum absolute difference: 0.0219551978113 at $.structured.json.answers.refund.noul; tolerance 1e-05"
+      }
+    },
+    "webgpu": {
+      "result": {
+        "status": "passed",
+        "backend": "webgpu",
+        "results": {
+          "primitive.json": {
+            "answers": {
+              "department": {
+                "type": "choice",
+                "choice": "billing",
+                "probabilities": {
+                  "billing": 0.9785705612880444,
+                  "technical": 0.0099254413325818,
+                  "sales": 0.011503997379373784
+                },
+                "confidence": 0.9678558419320666
+              },
+              "refund_requested": {
+                "type": "noul",
+                "noul": 0.9640178133571814
+              },
+              "urgency": {
+                "type": "score",
+                "score": 1.7229440417336772,
+                "legend": {
+                  "0": "Low urgency",
+                  "1": "Moderate urgency",
+                  "2": "High urgency"
+                },
+                "probabilities": {
+                  "0": 0.08711825163462977,
+                  "1": 0.10281945499706319,
+                  "2": 0.810062293368307
+                },
+                "confidence": 0.5844160626005159
+              }
+            },
+            "usage": {
+              "input_tokens": 126,
+              "output_tokens": 0
+            }
+          },
+          "structured.json": {
+            "answers": {
+              "department": {
+                "type": "choice",
+                "choice": "technical",
+                "probabilities": {
+                  "billing": 0.10389603100947095,
+                  "technical": 0.7785664020423838,
+                  "sales": 0.11753756694814534
+                },
+                "confidence": 0.6678496030635757
+              },
+              "refund": {
+                "type": "noul",
+                "noul": 0.33115455249829856
+              },
+              "priority": {
+                "type": "score",
+                "score": 0.3106809744345459,
+                "legend": {
+                  "0": "-1",
+                  "1": "0",
+                  "2": "1"
+                },
+                "probabilities": {
+                  "0": 0.7504156457672765,
+                  "1": 0.18848773403090122,
+                  "2": 0.06109662020182233
+                },
+                "confidence": 0.5339785383481812
+              }
+            },
+            "usage": {
+              "input_tokens": 121,
+              "output_tokens": 0
+            },
+            "values": {
+              "department": "technical",
+              "refund": false,
+              "priority": -1
+            }
+          },
+          "batch.json": [
+            {
+              "answers": {
+                "technical": {
+                  "type": "noul",
+                  "noul": 0.4448555546773802
+                }
+              },
+              "usage": {
+                "input_tokens": 71,
+                "output_tokens": 0
+              }
+            },
+            {
+              "answers": {
+                "department": {
+                  "type": "choice",
+                  "choice": "billing",
+                  "probabilities": {
+                    "billing": 0.9785705612880444,
+                    "technical": 0.0099254413325818,
+                    "sales": 0.011503997379373784
+                  },
+                  "confidence": 0.9678558419320666
+                },
+                "refund_requested": {
+                  "type": "noul",
+                  "noul": 0.9640178133571814
+                },
+                "urgency": {
+                  "type": "score",
+                  "score": 1.7229440417336772,
+                  "legend": {
+                    "0": "Low urgency",
+                    "1": "Moderate urgency",
+                    "2": "High urgency"
+                  },
+                  "probabilities": {
+                    "0": 0.08711825163462977,
+                    "1": 0.10281945499706319,
+                    "2": 0.810062293368307
+                  },
+                  "confidence": 0.5844160626005159
+                }
+              },
+              "usage": {
+                "input_tokens": 126,
+                "output_tokens": 0
+              }
+            },
+            {
+              "answers": {
+                "technical": {
+                  "type": "noul",
+                  "noul": 0.4448555546773802
+                }
+              },
+              "usage": {
+                "input_tokens": 71,
+                "output_tokens": 0
+              }
+            }
+          ]
+        },
+        "events": [
+          {
+            "event": "start",
+            "request_id": 3,
+            "status": 0,
+            "elapsed_ms": 0
+          },
+          {
+            "event": "end",
+            "request_id": 3,
+            "status": 0,
+            "elapsed_ms": 4247.4
+          },
+          {
+            "event": "start",
+            "request_id": 4,
+            "status": 0,
+            "elapsed_ms": 0
+          },
+          {
+            "event": "end",
+            "request_id": 4,
+            "status": 0,
+            "elapsed_ms": 3386.9
+          },
+          {
+            "event": "start",
+            "request_id": 5,
+            "status": 0,
+            "elapsed_ms": 0
+          },
+          {
+            "event": "end",
+            "request_id": 5,
+            "status": 0,
+            "elapsed_ms": 7486.8
+          }
+        ],
+        "ticks": 1446,
+        "gpuGraphs": 11,
+        "capabilities": {
+          "backend": "webgpu",
+          "abi": 1,
+          "threads": 1,
+          "runningCancellation": false,
+          "deadlines": true
+        },
+        "info": {
+          "schema_version": 1,
+          "package_version": "0.1.0",
+          "abi_version": 1,
+          "runtime_patches": [
+            {
+              "path": "patches/llama.cpp/typed-cpu-callbacks.patch",
+              "purpose": "Typed callback bridges for supported Q8/F16/BF16/F32 tensor paths; no arithmetic changes",
+              "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f"
+            }
+          ],
+          "llama_cpp_commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+          "backend": "webgpu",
+          "compiler": "Clang 24.0.0",
+          "required_cpu_features": [],
+          "missing_cpu_features": [],
+          "cpu_supported": true,
+          "decision_types": [
+            "choice",
+            "noul",
+            "score"
+          ],
+          "features": [
+            "structured_decisions",
+            "sequential_batches",
+            "routing",
+            "observers",
+            "cooperative_cancellation",
+            "deadlines"
+          ],
+          "limits": {
+            "request_bytes": 1048576,
+            "questions_per_request": 32,
+            "requests_per_batch": 32,
+            "questions_per_batch": 128,
+            "tokens_per_question": 512,
+            "routes": 16,
+            "loaded_models": 4
+          },
+          "model": {
+            "architecture": "modern-bert",
+            "name": "Laya",
+            "decision_type": "laya",
+            "max_head_tokens": 192,
+            "max_tokens": 512,
+            "temperatures": {
+              "choice": 1.6369030475616455,
+              "choice.11": 0.10058300197124481,
+              "choice.2": 1.9063559770584106,
+              "choice.3_5": 1.760151982307434,
+              "choice.6_10": 1.0000159740447998,
+              "noul": 1.9833999872207642,
+              "noul.2": 1.9833999872207642,
+              "score": 1.2514300346374512,
+              "score.3_5": 1.2514300346374512
+            }
+          }
+        }
+      },
+      "upstream_comparison": {
+        "backend": "webgpu",
+        "maximum_absolute_difference": 0,
+        "path": "",
+        "tolerance": 1e-05,
+        "passed": true
+      },
+      "reference_result_sha256": "12fefe5d33c7a1770a01fb614a947c98be2b6510de7bb3d34b4b7ff202c9aea7",
+      "module_sha256": "7929091c1c70302f5fef31c1abc395e56d140ea7aa5549e88f9cb2612139e576",
+      "wasm_sha256": "c9fe9aa50c80d8ac8579c7351c93ddeea3911f506d4ae27e18e1af5ae8c580c3",
+      "native_comparison": {
+        "status": "failed",
+        "summary": "Maximum absolute difference: 0.0236547151895 at $.structured.json.answers.priority.confidence; tolerance 1e-05"
+      }
+    }
+  }
+}
