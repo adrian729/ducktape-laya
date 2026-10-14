@@ -232,5 +232,149 @@
   },
   "differences": [],
   "checkout_library_matches": true,
-  "packaged_addon_matches": true
+  "packaged_addon_matches": true,
+  "source_commit_at_snapshot": "ee80f31dab7845c497e3ee1f9a274865530424fa",
+  "source_tracked_dirty_at_snapshot": true,
+  "compiled_input_hashes_at_snapshot": {
+    "CMakeLists.txt": {
+      "sha256": "337bf0ac377a6c68927cb627b5d7210cc9996b16fad315013dbe7e643473a775",
+      "mode": 33204,
+      "symlink": null
+    },
+    "bindings/node/addon.cpp": {
+      "sha256": "fe620fe9625cafaf9e4435e3ebeadd284b29d2c5a3ff387e4df01794cd32e248",
+      "mode": 33204,
+      "symlink": null
+    },
+    "cmake/browser_identity.cmake": {
+      "sha256": "5625b14e39daae326cfcd43dc7aa72af734487fe7685d57d933ba4df244e16d2",
+      "mode": 33204,
+      "symlink": null
+    },
+    "cmake/build_config.hpp.in": {
+      "sha256": "270a41e273cfef8c968a17ba6624a1da3e48e3e8d78118d3f5f0e0e1e07b708d",
+      "mode": 33204,
+      "symlink": null
+    },
+    "cmake/ducktape-laya.pc.in": {
+      "sha256": "00d80b68f30208e3b98731a20c958086768ada61cc98d229ec7461350f0edc96",
+      "mode": 33204,
+      "symlink": null
+    },
+    "cmake/ducktape_laya-config.cmake.in": {
+      "sha256": "4db3b0a0f5c33d684f13282fd4d41336e3d825ff3f9aa2b128f965cdb52b7040",
+      "mode": 33204,
+      "symlink": null
+    },
+    "cmake/runtime_patches.cmake": {
+      "sha256": "710e6a05dfc9f08632241dc1dc8558df2a99fb2ced13a4eb57d604261e65d32f",
+      "mode": 33204,
+      "symlink": null
+    },
+    "include/ducktape_laya.h": {
+      "sha256": "2617e726e6570dbd66b18be790b59bfda829365d819f969ee9ac2f589ac1ac3b",
+      "mode": 33204,
+      "symlink": null
+    },
+    "include/ducktape_laya.hpp": {
+      "sha256": "eb4f2d09be07ff327715cc3df3f5583838d2ddf49a9033af1998f7db692e6e36",
+      "mode": 33204,
+      "symlink": null
+    },
+    "patches/README.md": {
+      "sha256": "28e788b9e01f9f709be41be08ff740b9617442a5a497614a2fe4744bd31318d8",
+      "mode": 33204,
+      "symlink": null
+    },
+    "patches/llama.cpp/typed-cpu-callbacks.patch": {
+      "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f",
+      "mode": 33204,
+      "symlink": null
+    },
+    "release/compatibility.json": {
+      "sha256": "9269c746d8fe8054f7eaa98eb2d18f23b7e5abd944d3eed996808d2b8c03a7bf",
+      "mode": 33204,
+      "symlink": null
+    },
+    "src/backend.hpp": {
+      "sha256": "1754db0535c1e5ee74907ef479cfccc39f2625b732cc6b184fd0654463de09ca",
+      "mode": 33204,
+      "symlink": null
+    },
+    "src/backend_llama.cpp": {
+      "sha256": "9e2f02e8292e6a806e6b6bafbd0a92bd221dec8eff66a647aa96c7af942cec50",
+      "mode": 33204,
+      "symlink": null
+    },
+    "src/errors.hpp": {
+      "sha256": "3c6118b027020bc66b501d4bef29d7c654d5b23dac84d39bb7999e079c8cbbfb",
+      "mode": 33204,
+      "symlink": null
+    },
+    "src/execution.hpp": {
+      "sha256": "06e6a2c5906ace2b544454bce6f5a022a7a4c340843d8f52c868111ab34c95c0",
+      "mode": 33204,
+      "symlink": null
+    },
+    "src/exports.map": {
+      "sha256": "7db1ee20d32f6a8397b2574791e03df00dbcccbbf75f8608410d19c059adec9c",
+      "mode": 33204,
+      "symlink": null
+    },
+    "src/laya.cpp": {
+      "sha256": "2b1b576d534d184774d4ea293fe11648a44d61c52cf4a16354e91496572d0eb4",
+      "mode": 33204,
+      "symlink": null
+    },
+    "src/platform.cpp": {
+      "sha256": "935b7d00111f6b74797e688ba1ac66e19c21e68eea2a8e58b0c0abb99fcbe1f8",
+      "mode": 33204,
+      "symlink": null
+    },
+    "src/platform.hpp": {
+      "sha256": "a7a9fcfce7ca26986bd4281ed306534a1a5ca5afb40418de1dc6b05b7eac0959",
+      "mode": 33204,
+      "symlink": null
+    }
+  },
+  "toolchain": {
+    "compiler": "Homebrew clang version 22.1.8",
+    "build_type": "Release",
+    "cxx_flags": "",
+    "required_runtime_symbol_versions": [
+      "CXXABI_1.3",
+      "CXXABI_1.3.11",
+      "CXXABI_1.3.13",
+      "CXXABI_1.3.2",
+      "CXXABI_1.3.3",
+      "CXXABI_1.3.5",
+      "CXXABI_1.3.9",
+      "GLIBCXX_3.4",
+      "GLIBCXX_3.4.11",
+      "GLIBCXX_3.4.14",
+      "GLIBCXX_3.4.15",
+      "GLIBCXX_3.4.17",
+      "GLIBCXX_3.4.18",
+      "GLIBCXX_3.4.19",
+      "GLIBCXX_3.4.20",
+      "GLIBCXX_3.4.21",
+      "GLIBCXX_3.4.22",
+      "GLIBCXX_3.4.25",
+      "GLIBCXX_3.4.26",
+      "GLIBCXX_3.4.29",
+      "GLIBCXX_3.4.9",
+      "GLIBC_2.14",
+      "GLIBC_2.17",
+      "GLIBC_2.2.5",
+      "GLIBC_2.27",
+      "GLIBC_2.29",
+      "GLIBC_2.3",
+      "GLIBC_2.3.2",
+      "GLIBC_2.32",
+      "GLIBC_2.33",
+      "GLIBC_2.34",
+      "GLIBC_2.38",
+      "GLIBC_2.7"
+    ]
+  }
 }

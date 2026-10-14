@@ -10,13 +10,15 @@ One C++ implementation uses a pinned llama.cpp runtime; thin bindings share the
 same model loading, inference and result formatting. No HTTP server, Ollama,
 Python runtime, child inference process or automatic downloads.
 
-**Status: working Linux CPU prototype.** Real `choice`, `noul` (probability of
+**Status: unreleased development library.** Real `choice`, `noul` (probability of
 true) and ordinal `score` inference is implemented for the pinned English Q8_0
 model. It does not generate chat. Installed native/npm/Rust packages, Electron/ASAR checks and
 [experimental shared-core WebGPU/WASM execution](docs/BROWSER.md) are implemented.
-Broader reliability/platform validation and browser numeric release gates remain.
+Native sanitizer, binding and installed-package checks pass on the documented
+Linux configurations. Broader platform coverage and browser numeric release gates remain.
 Other operating systems are deferred until we can test them. See the
-[reviewed plan](docs/PLAN.md) and [validation report](docs/VALIDATION.md).
+[reviewed plan](docs/PLAN.md), [validation report](docs/VALIDATION.md) and
+[repeatable release checks](docs/RELEASE_CHECKS.md).
 
 The shared backend now also implements bounded batching, flat structured
 decisions, passive per-call hooks, and explicit local model routing with a

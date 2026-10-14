@@ -1,5 +1,31 @@
 # Prototype validation
 
+## Current status (2026-10-14)
+
+The final native library passes 6 native, 6 Rust and 8 Node tests; all shared
+fixtures agree exactly across C/C++/Rust/Node and with the original baseline.
+Installed consumers, Electron directory/ASAR loading, and native inference in
+Ubuntu Base 24.04.3/24.04.5 passed with the final artifacts. The ABI exposes the
+expected 16 functions. [Final native evidence](evidence/native-validation-20261014.json)
+records artifact hashes and the scope of these checks.
+
+Strict sanitizer and mutation tests, resource stress, runtime diagnostics,
+independent build comparison and browser reference replays are documented below
+with their own binary identities. All 26 installed records matched between two
+independent builds after the addon RPATH correction. Browser WASM/WebGPU each
+match their corresponding upstream reference exactly, but the native comparison
+still fails its original tolerance. Browser support remains experimental.
+
+The [validation command](RELEASE_CHECKS.md) passes selected native checks and
+explicitly refuses release approval with required unrun gates; the model-free
+negative approval check returned exit code 1 as intended. Linux CI definitions
+were parsed locally; no hosted CI execution is claimed. The benchmark tool
+passed repeat-output checks, but its retained timing run had competing host
+workloads and is exploratory, not a performance budget or service guarantee.
+
+Earlier entries below are historical, scoped results rather than a claim that
+every gate was rerun on every subsequently rebuilt binary.
+
 ## Shared-core foundation (2026-10-14)
 
 After [two plan reviews](PLAN_REVIEW.md), model preparation/inference/result

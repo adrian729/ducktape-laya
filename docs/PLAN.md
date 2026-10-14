@@ -43,9 +43,15 @@ validated capability, not implied by browser WebGPU support.
 - Implemented since the initial plan: native/npm/Rust packaging, Electron/ASAR
   validation, isolated upgrade tooling, cooperative cancellation/deadlines,
   lifecycle/resource stress, and experimental shared-core WASM/WebGPU packaging.
-- Remaining release work: broader Linux/browser coverage, sanitizer completion,
-  diagnostics/CPU compatibility policy, independently reproducible builds,
-  release/security automation, and the failed cross-backend numeric gate.
+- Also implemented and checked: runtime/model diagnostics, CPU preflight, audited
+  runtime patches, strict sanitizers, input mutation smoke checks, installed
+  Ubuntu userspace checks, license/SBOM inventory and independent compilation
+  reproducibility. Native validation and Linux CI definitions are available through
+  the [release check workflow](RELEASE_CHECKS.md); hosted CI has not run.
+- Remaining release gates: the failed browser/native numeric comparison, broader
+  physical CPU/browser/GPU and resource-pressure coverage, controlled performance
+  regression budgets, and hosted CI evidence. Publication, signing, release hosting
+  and the security reporting contact remain explicit deployment decisions.
 - Model-specific preparation and result processing remain adapted from upstream
   server code, now isolated behind a private backend boundary. The initial
   [upstream audit](ARCHITECTURE.md) explains that choice and its limitations.

@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "status": "selected checks passed; not overall release approval",
+  "runtime": {
+    "repository": "https://github.com/ggml-org/llama.cpp.git",
+    "path": "third_party/llama.cpp",
+    "commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+    "patches": [
+      {
+        "path": "patches/llama.cpp/typed-cpu-callbacks.patch",
+        "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f",
+        "purpose": "Typed callback bridges for supported Q8/F16/BF16/F32 tensor paths; no arithmetic changes"
+      }
+    ]
+  },
+  "model_sha256": "c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2",
+  "library_sha256": "7a319083fa0d36f848159f1240862fea7200983940fec22b69d01f85df786068",
+  "native_tests": {
+    "passed": 6,
+    "failed": 0
+  },
+  "rust_tests": {
+    "passed": 6,
+    "failed": 0
+  },
+  "node_tests": {
+    "passed": 8,
+    "failed": 0
+  },
+  "abi_exports": 16,
+  "binding_outputs": "Exact agreement across C/C++/Rust/Node and with the pre-refactor baseline for all shared fixtures",
+  "installed_artifacts": {
+    "installed": {
+      "exit_code": 0,
+      "log": "build/final-installed.log"
+    },
+    "electron": {
+      "exit_code": 0,
+      "log": "build/final-electron.log"
+    },
+    "userspaces": {
+      "exit_code": 0,
+      "log": "build/final-userspaces.log"
+    }
+  },
+  "artifact_inventory": {
+    "schema_version": 1,
+    "package_version": "0.1.0",
+    "source_commit": "2190430d7fd843d54a7e22a4b7d2a0307fb8f4c6",
+    "source_tracked_dirty": true,
+    "runtime": {
+      "repository": "https://github.com/ggml-org/llama.cpp.git",
+      "path": "third_party/llama.cpp",
+      "commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+      "patches": [
+        {
+          "path": "patches/llama.cpp/typed-cpu-callbacks.patch",
+          "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f",
+          "purpose": "Typed callback bridges for supported Q8/F16/BF16/F32 tensor paths; no arithmetic changes"
+        }
+      ]
+    },
+    "diagnostics": {
+      "schema_version": 1,
+      "package_version": "0.1.0",
+      "abi_version": 1,
+      "runtime_patches": [
+        {
+          "path": "patches/llama.cpp/typed-cpu-callbacks.patch",
+          "purpose": "Typed callback bridges for supported Q8/F16/BF16/F32 tensor paths; no arithmetic changes",
+          "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f"
+        }
+      ],
+      "llama_cpp_commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+      "backend": "native-cpu",
+      "compiler": "Clang 22.1.8",
+      "required_cpu_features": [
+        "avx",
+        "avx2",
+        "fma",
+        "f16c",
+        "bmi2",
+        "sse4.2"
+      ],
+      "missing_cpu_features": [],
+      "cpu_supported": true,
+      "decision_types": [
+        "choice",
+        "noul",
+        "score"
+      ],
+      "features": [
+        "structured_decisions",
+        "sequential_batches",
+        "routing",
+        "observers",
+        "cooperative_cancellation",
+        "deadlines"
+      ],
+      "limits": {
+        "request_bytes": 1048576,
+        "questions_per_request": 32,
+        "requests_per_batch": 32,
+        "questions_per_batch": 128,
+        "tokens_per_question": 512,
+        "routes": 16,
+        "loaded_models": 4
+      }
+    },
+    "platform": "linux-x64",
+    "source_date_epoch": 1791978007,
+    "cpu_build_options": {
+      "GGML_AVX": "ON",
+      "GGML_AVX2": "ON",
+      "GGML_AVX512": "OFF",
+      "GGML_AVX512_BF16": "OFF",
+      "GGML_AVX512_VBMI": "OFF",
+      "GGML_AVX512_VNNI": "OFF",
+      "GGML_AVX_VNNI": "OFF",
+      "GGML_BMI2": "ON",
+      "GGML_F16C": "ON",
+      "GGML_FMA": "ON",
+      "GGML_NATIVE": "OFF",
+      "GGML_SSE42": "ON"
+    },
+    "toolchain": {
+      "compiler": "Homebrew clang version 22.1.8",
+      "build_type": "Release",
+      "cxx_flags": "",
+      "required_runtime_symbol_versions": [
+        "CXXABI_1.3",
+        "CXXABI_1.3.11",
+        "CXXABI_1.3.13",
+        "CXXABI_1.3.2",
+        "CXXABI_1.3.3",
+        "CXXABI_1.3.5",
+        "CXXABI_1.3.9",
+        "GLIBCXX_3.4",
+        "GLIBCXX_3.4.11",
+        "GLIBCXX_3.4.14",
+        "GLIBCXX_3.4.15",
+        "GLIBCXX_3.4.17",
+        "GLIBCXX_3.4.18",
+        "GLIBCXX_3.4.19",
+        "GLIBCXX_3.4.20",
+        "GLIBCXX_3.4.21",
+        "GLIBCXX_3.4.22",
+        "GLIBCXX_3.4.25",
+        "GLIBCXX_3.4.26",
+        "GLIBCXX_3.4.29",
+        "GLIBCXX_3.4.9",
+        "GLIBC_2.14",
+        "GLIBC_2.17",
+        "GLIBC_2.2.5",
+        "GLIBC_2.27",
+        "GLIBC_2.29",
+        "GLIBC_2.3",
+        "GLIBC_2.3.2",
+        "GLIBC_2.32",
+        "GLIBC_2.33",
+        "GLIBC_2.34",
+        "GLIBC_2.38",
+        "GLIBC_2.7"
+      ]
+    },
+    "reproducibility_scope": "deterministic packaging of identical build inputs; independent compilation is a separate gate",
+    "artifacts": {
+      "ducktape-laya-0.1.0-linux-x64.tar.gz": {
+        "sha256": "afa0b1a3232af6581e672cd9baf370303894f003c5591eaf3cf7d2148b795c4c",
+        "bytes": 2735296
+      },
+      "ducktape-laya-0.1.0.crate": {
+        "sha256": "a99603510a0328302d0fe3696600d003eb2d80073c60b23aa70141b5ab5c3202",
+        "bytes": 6777
+      },
+      "ducktape-laya-0.1.0.tgz": {
+        "sha256": "f185fdf5b63805daac429044f53b06bf3e03688d7ea696f5dceaef91ac5ba226",
+        "bytes": 5424985
+      },
+      "ducktape-laya-sys-0.1.0.crate": {
+        "sha256": "ac6fc29949c89e32c29410e30d22365efe3b751acb7497b0bd044a40766b693f",
+        "bytes": 2877
+      },
+      "sbom.cdx.json": {
+        "sha256": "167e21af6f634b0e3f72f26fc08de495c910ce37f975fa173f631101649f42a1",
+        "bytes": 2024
+      }
+    },
+    "components": [
+      {
+        "name": "ducktape-laya",
+        "license": "MIT"
+      },
+      {
+        "name": "llama.cpp/ggml",
+        "license": "MIT",
+        "revision": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41"
+      },
+      {
+        "name": "nlohmann-json",
+        "license": "MIT"
+      }
+    ],
+    "status": "local unsigned development artifacts; not release approval"
+  },
+  "electron": [
+    {
+      "mode": "directory",
+      "electron": "44.7.2",
+      "node": "24.21.0",
+      "result": {
+        "answers": {
+          "refund": {
+            "type": "noul",
+            "noul": 0.8750075797265024
+          }
+        },
+        "usage": {
+          "input_tokens": 35,
+          "output_tokens": 0
+        }
+      }
+    },
+    {
+      "mode": "asar",
+      "electron": "44.7.2",
+      "node": "24.21.0",
+      "result": {
+        "answers": {
+          "refund": {
+            "type": "noul",
+            "noul": 0.8750075797265024
+          }
+        },
+        "usage": {
+          "input_tokens": 35,
+          "output_tokens": 0
+        }
+      }
+    }
+  ],
+  "linux_userspaces": {
+    "24.04.3": {
+      "status": "passed",
+      "os_release": {
+        "PRETTY_NAME": "\"Ubuntu 24.04.3 LTS\"",
+        "NAME": "\"Ubuntu\"",
+        "VERSION_ID": "\"24.04\"",
+        "VERSION": "\"24.04.3 LTS (Noble Numbat)\"",
+        "VERSION_CODENAME": "noble",
+        "ID": "ubuntu",
+        "ID_LIKE": "debian",
+        "HOME_URL": "\"https://www.ubuntu.com/\"",
+        "SUPPORT_URL": "\"https://help.ubuntu.com/\"",
+        "BUG_REPORT_URL": "\"https://bugs.launchpad.net/ubuntu/\"",
+        "PRIVACY_POLICY_URL": "\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"",
+        "UBUNTU_CODENAME": "noble",
+        "LOGO": "ubuntu-logo"
+      },
+      "libc": "ldd (Ubuntu GLIBC 2.39-0ubuntu8.5) 2.39",
+      "result": {
+        "answers": {
+          "department": {
+            "type": "choice",
+            "choice": "billing",
+            "probabilities": {
+              "billing": 0.9787645642568288,
+              "technical": 0.009908482976081734,
+              "sales": 0.01132695276708951
+            },
+            "confidence": 0.9681468463852432
+          },
+          "refund_requested": {
+            "type": "noul",
+            "noul": 0.9649842636859504
+          },
+          "urgency": {
+            "type": "score",
+            "score": 1.7329933721545157,
+            "legend": {
+              "0": "Low urgency",
+              "1": "Moderate urgency",
+              "2": "High urgency"
+            },
+            "probabilities": {
+              "0": 0.08123369425900831,
+              "1": 0.10453923932746782,
+              "2": 0.8142270664135239
+            },
+            "confidence": 0.5994900582317733
+          }
+        },
+        "usage": {
+          "input_tokens": 126,
+          "output_tokens": 0
+        }
+      }
+    },
+    "24.04.5": {
+      "status": "passed",
+      "os_release": {
+        "PRETTY_NAME": "\"Ubuntu 24.04.5 LTS\"",
+        "NAME": "\"Ubuntu\"",
+        "VERSION_ID": "\"24.04\"",
+        "VERSION": "\"24.04.5 LTS (Noble Numbat)\"",
+        "VERSION_CODENAME": "noble",
+        "ID": "ubuntu",
+        "ID_LIKE": "debian",
+        "HOME_URL": "\"https://www.ubuntu.com/\"",
+        "SUPPORT_URL": "\"https://help.ubuntu.com/\"",
+        "BUG_REPORT_URL": "\"https://bugs.launchpad.net/ubuntu/\"",
+        "PRIVACY_POLICY_URL": "\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"",
+        "UBUNTU_CODENAME": "noble",
+        "LOGO": "ubuntu-logo"
+      },
+      "libc": "ldd (Ubuntu GLIBC 2.39-0ubuntu8.8) 2.39",
+      "result": {
+        "answers": {
+          "department": {
+            "type": "choice",
+            "choice": "billing",
+            "probabilities": {
+              "billing": 0.9787645642568288,
+              "technical": 0.009908482976081734,
+              "sales": 0.01132695276708951
+            },
+            "confidence": 0.9681468463852432
+          },
+          "refund_requested": {
+            "type": "noul",
+            "noul": 0.9649842636859504
+          },
+          "urgency": {
+            "type": "score",
+            "score": 1.7329933721545157,
+            "legend": {
+              "0": "Low urgency",
+              "1": "Moderate urgency",
+              "2": "High urgency"
+            },
+            "probabilities": {
+              "0": 0.08123369425900831,
+              "1": 0.10453923932746782,
+              "2": 0.8142270664135239
+            },
+            "confidence": 0.5994900582317733
+          }
+        },
+        "usage": {
+          "input_tokens": 126,
+          "output_tokens": 0
+        }
+      }
+    }
+  },
+  "release_guard": {
+    "model_free_selected_checks": "passed",
+    "required_real_model_gates": "not_run",
+    "require_release_exit_code": 1,
+    "release_ready": false
+  },
+  "ci": {
+    "yaml_structure": "validated locally",
+    "hosted_execution": "not_run"
+  },
+  "notes": [
+    "Native library bytes are unchanged by the final addon RPATH correction.",
+    "Sanitizer, stress, browser and reproducibility evidence is recorded separately with its own tested binaries.",
+    "Browser/native numeric comparison still fails; controlled performance budgets and broader platform coverage remain."
+  ]
+}
