@@ -1,0 +1,3 @@
+# Search local working plans even though Git excludes them.
+!/tmp/
+!/tmp/**
