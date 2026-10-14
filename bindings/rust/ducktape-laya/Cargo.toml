@@ -5,3 +5,6 @@ edition = "2021"
 license = "MIT"
 [dependencies]
 ducktape-laya-sys = { path = "../ducktape-laya-sys", version = "0.1.0" }
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }

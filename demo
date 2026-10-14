@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Build and run one small interactive example. No model download or server.
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+language="${1:-js}"
+case "$language" in
+  -h|--help)
+    cat <<'HELP'
+Usage: ./demo [c|cpp|rust|js|ts] [model.gguf]
+Default: js. Fill three prompts; Enter accepts the prefilled example.
+Answers: 2 to 8 labels separated by | (for example: yes | no).
+The model comes from argument 2, LAYA_MODEL, or the pinned local HF cache.
+The launcher builds the selected example and uses the shared GGUF library.
+HELP
+    exit 0 ;;
+  c) target=laya-demo-c ;;
+  cpp|c++) language=cpp; target=laya-demo-cpp ;;
+  rust) target=ducktape_laya ;;
+  js|node) language=js; target=ducktape_laya_node ;;
+  ts) target=ducktape_laya_node ;;
+  *) echo "Unknown language: $language. Run ./demo --help." >&2; exit 2 ;;
+esac
+if (( $# > 2 )); then echo "Too many arguments. Run ./demo --help." >&2; exit 2; fi
+hub="${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"
+model="${2:-${LAYA_MODEL:-$hub/models--ggml-org--Laya-GGUF/snapshots/22265007700297ba9e128297e82540cf28c5d7d4/Laya-Q8_0.gguf}}"
+if [[ ! -f "$model" ]]; then
+  echo "Model not found. Run ./demo $language /path/to/Laya-Q8_0.gguf or set LAYA_MODEL." >&2
+  exit 1
+fi
+model="$(cd -- "$(dirname -- "$model")" && pwd)/$(basename -- "$model")"
+args=()
+if [[ "$language" == js || "$language" == ts ]]; then
+  args+=(-DDUCKTAPE_BUILD_NODE=ON)
+  node_root="$(dirname -- "$(dirname -- "$(node -p 'process.execPath')")")"
+  headers="${NODE_INCLUDE_DIR:-$node_root/include/node}"
+  if [[ -f "$headers/node_api.h" ]]; then args+=("-DNODE_INCLUDE_DIR=$headers"); fi
+fi
+mkdir -p "$root/build"
+log="$root/build/demo-build.log"
+echo "Preparing the $language demo..."
+if ! cmake -S "$root" -B "$root/build" -DCMAKE_BUILD_TYPE=Release "${args[@]}" > "$log" 2>&1 ||
+   ! cmake --build "$root/build" --target "$target" --parallel 3 >> "$log" 2>&1; then
+  cat "$log" >&2; exit 1
+fi
+export LD_LIBRARY_PATH="$root/build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export DUCKTAPE_LAYA_LIB_DIR="$root/build"
+export DUCKTAPE_LAYA_ADDON="$root/build/ducktape_laya.node"
+case "$language" in
+  c|cpp) exec "$root/build/$target" "$model" ;;
+  rust) exec cargo run --locked --quiet --manifest-path "$root/bindings/rust/Cargo.toml" -p ducktape-laya --example demo -- "$model" ;;
+  js) exec node "$root/examples/demo.cjs" "$model" ;;
+  ts) exec node --experimental-strip-types "$root/examples/demo.cts" "$model" ;;
+esac

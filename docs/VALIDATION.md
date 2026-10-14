@@ -1,5 +1,20 @@
 # Prototype validation
 
+## Interactive demos (2026-10-14)
+
+The C, C++, Rust, JavaScript and TypeScript terminal forms were all run against
+the pinned local GGUF through `./demo`. The default example produced matching
+printed probabilities (billing 97.71%, technical 1.15%, sales 1.14%). A custom
+crash report containing quotes and Unicode selected technical with matching
+printed probabilities in all five programs. Duplicate choices and early EOF
+were rejected in each demo. The TS form was also exercised interactively in a
+terminal, with custom input. TypeScript strict checking, Rust example Clippy
+with warnings denied, and launcher shell syntax checks passed.
+
+These are example/integration checks; the core inference code is unchanged.
+The C/C++ JSON/form helper is example-only, and Rust's JSON dependency is a dev
+dependency. The launcher uses the existing local model and starts no server.
+
 ## Independent review and fixes (2026-10-14)
 
 Three independent `gpt-6-sol` reviewers at medium reasoning reviewed native

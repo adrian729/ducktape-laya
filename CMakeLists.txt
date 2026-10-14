@@ -45,6 +45,13 @@ add_executable(laya-decide examples/decide.c)
 target_link_libraries(laya-decide PRIVATE ducktape_laya)
 add_executable(laya-decide-cpp examples/decide.cpp)
 target_link_libraries(laya-decide-cpp PRIVATE ducktape_laya)
+# Example-only form/JSON helper; no additions to the shipped library API.
+add_library(laya-demo-form STATIC examples/demo_form.cpp)
+target_include_directories(laya-demo-form PRIVATE ${UPSTREAM}/vendor)
+add_executable(laya-demo-c examples/demo.c)
+target_link_libraries(laya-demo-c PRIVATE ducktape_laya laya-demo-form)
+add_executable(laya-demo-cpp examples/demo.cpp)
+target_link_libraries(laya-demo-cpp PRIVATE ducktape_laya laya-demo-form)
 include(GNUInstallDirs)
 install(TARGETS ducktape_laya LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
