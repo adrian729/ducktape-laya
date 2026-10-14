@@ -81,7 +81,7 @@ try:
         # Validation is for the approved checkout, even if this cache previously
         # built a candidate runtime. Candidate evaluation has its own runner.
         f'-DDUCKTAPE_LLAMA_SOURCE={ROOT / record["runtime"]["path"]}', '-DDUCKTAPE_LLAMA_REVISION=',
-        '-DDUCKTAPE_BUILD_TESTS=ON', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_NODE=ON',
+        '-DDUCKTAPE_BUILD_FUZZERS=OFF', '-DDUCKTAPE_BUILD_TESTS=ON', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_NODE=ON',
         '-DDUCKTAPE_BUILD_REFERENCE_PROBE=' + ('ON' if a.upstream_reference else 'OFF'),
         f'-DNODE_INCLUDE_DIR={headers}', f'-DDUCKTAPE_TEST_MODEL={model or ""}'])
     run('build', ['cmake', '--build', build, '--parallel', a.jobs])

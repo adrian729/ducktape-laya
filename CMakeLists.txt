@@ -187,6 +187,20 @@ if(DUCKTAPE_BUILD_NODE)
   endif()
 endif()
 
+# Explicit developer-only coverage instrumentation; never enable in artifacts.
+option(DUCKTAPE_BUILD_FUZZERS "Build Linux Clang libFuzzer request/config target" OFF)
+if(DUCKTAPE_BUILD_FUZZERS)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "Fuzzer builds require Linux and Clang")
+  endif()
+  target_compile_options(ducktape_laya PRIVATE -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
+  target_link_options(ducktape_laya PRIVATE -fsanitize=address,undefined)
+  add_executable(laya-input-fuzzer EXCLUDE_FROM_ALL tests/input-libfuzzer.cpp)
+  target_compile_options(laya-input-fuzzer PRIVATE -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer)
+  target_link_options(laya-input-fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
+  target_link_libraries(laya-input-fuzzer PRIVATE ducktape_laya)
+endif()
+
 # Explicit developer probe, excluded from the normal build/test suite.
 if(DUCKTAPE_BUILD_TESTS)
   add_executable(laya-encoder-probe EXCLUDE_FROM_ALL tests/encoder-batch.cpp)

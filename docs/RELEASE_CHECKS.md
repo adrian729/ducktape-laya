@@ -99,3 +99,27 @@ retain the prior artifacts for rollback. Publication and signing are explicit
 maintainer actions. Each numerical profile must pass strict same-backend upstream
 checks. Cross-profile comparisons report probability and decision drift and must
 not be described as probability equivalence.
+
+For coverage-guided request/planner/router fuzzing, use a separate Linux Clang
+build. The optional target instruments the shared core and links libFuzzer only
+into the test executable. It needs no model; lazy inference is directed at a
+known non-model file. Generated/mutated corpus files and crash reproducers belong
+in ignored build directories. Preserve minimized regressions in tests after triage.
+
+```sh
+CC=clang CXX=clang++ cmake -S . -B build-fuzzer \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDUCKTAPE_BUILD_FUZZERS=ON \
+  -DDUCKTAPE_BUILD_TESTS=OFF -DDUCKTAPE_BUILD_NODE=OFF
+cmake --build build-fuzzer --target laya-input-fuzzer --parallel 2
+python3 tests/fuzz-corpus.py build-fuzzer/corpus
+ASAN_OPTIONS=detect_leaks=1:strict_string_checks=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  build-fuzzer/laya-input-fuzzer build-fuzzer/corpus -seed=444211238 \
+  -max_total_time=3600 -max_len=1048577 -timeout=30 \
+  -artifact_prefix=build-fuzzer/ -print_final_stats=1
+```
+
+This covers instrumented library parsing, planning and router boundaries; it does
+not claim coverage-guided testing of upstream tensor kernels or model loading.
+Do not package the instrumented library. Short smoke runs exercise the harness;
+they do not satisfy the one-hour qualification budget.

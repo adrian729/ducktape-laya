@@ -37,6 +37,25 @@ jobs:
             tests/input-fuzz.cpp -Iinclude -Lbuild-sanitized -lducktape_laya -o build-sanitized/input-fuzz
           LD_LIBRARY_PATH="$PWD/build-sanitized" build-sanitized/input-fuzz \
             tests/fixtures/primitive.json tests/fixtures/structured.json tests/fixtures/batch.json
+      - name: Coverage-guided parser and router smoke
+        run: |
+          cmake -S . -B build-sanitized -DDUCKTAPE_BUILD_FUZZERS=ON
+          cmake --build build-sanitized --target laya-input-fuzzer --parallel 2
+          python3 tests/fuzz-corpus.py build-sanitized/corpus
+          build-sanitized/laya-input-fuzzer build-sanitized/corpus -seed=444211238 \
+            -max_total_time=60 -max_len=1048577 -timeout=30 \
+            -artifact_prefix=build-sanitized/fuzzer- -print_final_stats=1 \
+            > build-sanitized/fuzzer-smoke.log 2>&1
+      - name: Retain sanitizer and fuzz evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: parser-sanitizers
+          path: |
+            build-sanitized/fuzzer-*
+            build-sanitized/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+          retention-days: 14
   native:
     name: ${{ matrix.compiler }} / Node ${{ matrix.node }} / ${{ inputs.real_model && 'real model' || 'model free' }}
     runs-on: ubuntu-24.04
@@ -87,7 +106,7 @@ jobs:
         run: python3 scripts/validate.py --output build-ci-report --jobs 2
       - name: Real-model and installed artifact checks
         if: inputs.real_model
-        run: python3 scripts/validate.py --model build-model/laya.gguf --packages --output build-ci-report --jobs 2
+        run: python3 scripts/validate.py --model build-model/laya.gguf --packages --upstream-reference --output build-ci-report --jobs 2
       - name: Retain logs and explicit gate report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
