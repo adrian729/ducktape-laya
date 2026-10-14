@@ -17,14 +17,18 @@ if not compiler.is_file():
     p.error('Run npm ci --ignore-scripts --prefix tests/typescript first')
 with tempfile.TemporaryDirectory(prefix='ducktape-typescript-') as directory:
     tmp = pathlib.Path(directory)
-    for name, binding, artifact in [('ducktape-laya', 'node', a.node_package),
-                                    ('ducktape-laya-browser', 'browser', a.browser_package)]:
+    packages = [('ducktape-laya', 'node', a.node_package),
+                ('ducktape-laya-browser', 'browser', a.browser_package)]
+    # Install all real artifacts before adding fallback source declarations:
+    # npm may prune copied modules that are absent from its dependency manifest.
+    for name, binding, artifact in packages:
         if artifact:
             subprocess.run(['npm', 'install', '--ignore-scripts', '--offline', '--no-audit', '--no-fund',
                             '--prefix', str(tmp), str(artifact.resolve())], check=True)
-        else:
+    for name, binding, artifact in packages:
+        if not artifact:
             target = tmp / 'node_modules' / name
-            target.mkdir(parents=True)
+            target.mkdir(parents=True, exist_ok=True)
             for file in (ROOT / 'bindings' / binding).iterdir():
                 if file.name == 'package.json' or file.name.endswith('.d.ts'):
                     shutil.copy(file, target / file.name)
