@@ -1,0 +1,6 @@
+{
+  "name": "ducktape-browser-contract-tests",
+  "private": true,
+  "type": "module",
+  "devDependencies": { "playwright": "1.64.1" }
+}

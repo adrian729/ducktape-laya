@@ -10,15 +10,32 @@ p = argparse.ArgumentParser()
 p.add_argument('model', type=pathlib.Path)
 p.add_argument('--package-dir', type=pathlib.Path, help='Serve an extracted browser package instead of development files')
 p.add_argument('--port', type=int, default=0)
+p.add_argument('--isolated', action='store_true', help='Exercise SharedArrayBuffer cancellation with COOP/COEP')
 a = p.parse_args()
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        if a.isolated:
+            self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+            self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
+        super().end_headers()
     def translate_path(self, path):
         path = urllib.parse.unquote(urllib.parse.urlsplit(path).path)
         if path == '/lost-worker.mjs': return str(root / 'tests/lost-worker.mjs')
         if path == '/reference-worker.mjs': return str(root / 'tests/reference-worker.mjs')
         if path == '/': return str(root / 'tests/browser.html')
         if path == '/model.gguf': return str(a.model.resolve())
-        for prefix, base in [('/browser/', a.package_dir or root / 'bindings/browser'), ('/wasm/', a.package_dir / 'wasm' if a.package_dir else root / 'build-browser-wasm'), ('/webgpu/', a.package_dir / 'webgpu' if a.package_dir else root / 'build-browser-webgpu'), ('/fixtures/', root / 'tests/fixtures')]:
+        # Upstream probes remain separate development assets, even when testing
+        # an extracted product package that correctly excludes those probes.
+        for backend in ['wasm', 'webgpu']:
+            for name in ['laya-reference.mjs', 'laya-reference.wasm']:
+                if path == f'/{backend}/{name}':
+                    return str(root / f'build-browser-{backend}' / name)
+        routes = []
+        for backend in ['wasm', 'webgpu']:
+            base = a.package_dir / backend if a.package_dir else root / f'build-browser-{backend}'
+            routes.extend([(f'/browser/{backend}/', base), (f'/{backend}/', base)])
+        routes.extend([('/browser/', a.package_dir or root / 'bindings/browser'), ('/fixtures/', root / 'tests/fixtures')])
+        for prefix, base in routes:
             if path.startswith(prefix):
                 resolved = (base / path[len(prefix):]).resolve()
                 if resolved.is_relative_to(base.resolve()) and resolved.is_file(): return str(resolved)

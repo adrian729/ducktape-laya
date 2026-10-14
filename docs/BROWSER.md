@@ -119,6 +119,25 @@ cross-backend numerical limitation must remain visible even when lifecycle tests
 pass. `tests/compare-browser-reference.py` separately compares with unchanged
 upstream decision processing on the same backend.
 
+For repeatable real-browser runs, install the locked developer tools and use an
+installed Chrome. Build both backend reference probes with `--reference` first:
+
+```sh
+npm ci --ignore-scripts --prefix tests/browser-automation
+node tests/browser-automation/run.mjs --model /path/to/Laya-Q8_0.gguf \
+  --native build/native-results.json --output build-browser-check
+```
+
+The runner starts its own loopback-only harness, verifies the model, runs both
+backends, upstream comparisons, lifecycle/assets/device-loss checks, and closes
+the browser and server afterward. It records browser/platform, model, fixture
+and asset identities. Numeric failures cause a failed exit. It defaults to headed
+Chrome without custom launch flags; use `--headless` only when that environment
+provides the intended GPU. `--isolated` adds COOP/COEP for shared-memory controls.
+`--package-dir EXTRACTED_PACKAGE` tests shipped assets; `--backend wasm|webgpu`
+selects a backend. Explicit `--skip-reference`/`--skip-controls` leave those checks
+not run. Selected-check success is never full release approval.
+
 Store run results in ignored build directories or CI/PR artifacts. Broader GPU,
 physical CPU, isolated-page cancellation and minimum-browser coverage remain
 release requirements. See [PLAN.md](PLAN.md) and [RELEASE_CHECKS.md](RELEASE_CHECKS.md).
