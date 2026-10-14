@@ -1,6 +1,9 @@
-# Ducktape Laya
-
-<img src="assets/ducktape-logo.png" alt="Ducktape logo" width="240">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/ducktape-lockup-dark.svg">
+    <img src="assets/ducktape-lockup-light.svg" alt="ducktape laya" width="440">
+  </picture>
+</p>
 
 Embed local Laya classification in C/C++, Rust, Node.js and Electron applications.
 One C++ implementation uses a pinned llama.cpp runtime; thin bindings share the
