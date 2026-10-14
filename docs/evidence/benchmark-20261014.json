@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "source_commit": "ecf613a5a39cb159f3c04b8196d7a37c0a278892",
+  "source_tracked_dirty": true,
+  "library_sha256": "7a319083fa0d36f848159f1240862fea7200983940fec22b69d01f85df786068",
+  "diagnostics": {
+    "schema_version": 1,
+    "package_version": "0.1.0",
+    "abi_version": 1,
+    "runtime_patches": [
+      {
+        "path": "patches/llama.cpp/typed-cpu-callbacks.patch",
+        "purpose": "Typed callback bridges for supported Q8/F16/BF16/F32 tensor paths; no arithmetic changes",
+        "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f"
+      }
+    ],
+    "llama_cpp_commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+    "backend": "native-cpu",
+    "compiler": "Clang 22.1.8",
+    "required_cpu_features": [
+      "avx",
+      "avx2",
+      "fma",
+      "f16c",
+      "bmi2",
+      "sse4.2"
+    ],
+    "missing_cpu_features": [],
+    "cpu_supported": true,
+    "decision_types": [
+      "choice",
+      "noul",
+      "score"
+    ],
+    "features": [
+      "structured_decisions",
+      "sequential_batches",
+      "routing",
+      "observers",
+      "cooperative_cancellation",
+      "deadlines"
+    ],
+    "limits": {
+      "request_bytes": 1048576,
+      "questions_per_request": 32,
+      "requests_per_batch": 32,
+      "questions_per_batch": 128,
+      "tokens_per_question": 512,
+      "routes": 16,
+      "loaded_models": 4
+    }
+  },
+  "model_sha256": "c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2",
+  "request_sha256": "772196aeafb86c3de47419d96081fcf743cef29f4d5997385c3530d785e9a562",
+  "threads": 2,
+  "system": "Linux-7.1.5-76070105-generic-x86_64-with-glibc2.39",
+  "logical_cpus": 8,
+  "cpu_model": "11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz",
+  "load_before": [
+    14.9765625,
+    16.6279296875,
+    13.23681640625
+  ],
+  "notes": [
+    "Same process, sequential requests, warm OS file cache after hash verification.",
+    "Host is not isolated; timings are a retained baseline, not a service-level guarantee.",
+    "Timed execute includes C ABI JSON parsing/serialization; Python result decoding is excluded.",
+    "Other host workloads were active; do not derive a regression budget from this run."
+  ],
+  "open_seconds": 0.16993793193250895,
+  "first_request_seconds": 3.209516030969098,
+  "warm_seconds": [
+    3.062618516967632,
+    2.8126680169953033,
+    3.3102130779298022,
+    5.647983052069321,
+    6.308075553970411
+  ],
+  "warm_median_seconds": 3.3102130779298022,
+  "sequential_requests_per_second": 0.23650101607737467,
+  "warm_min_seconds": 2.8126680169953033,
+  "warm_max_seconds": 6.308075553970411,
+  "usage": {
+    "input_tokens": 126,
+    "output_tokens": 0
+  },
+  "status": "passed",
+  "close_seconds": 0.04196828696876764,
+  "peak_rss_kib": 1449536,
+  "load_after": [
+    15.6875,
+    16.63330078125,
+    13.32763671875
+  ],
+  "measurement_class": "exploratory shared-host measurement; not a performance release gate",
+  "harness_sha256": "796dfdf769207499015ef488e8850a6d0bad876c1aa1f79bb4bbd1dc69abc352"
+}
