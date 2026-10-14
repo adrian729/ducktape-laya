@@ -96,3 +96,23 @@ Only the test setup downloads Electron; applications do not acquire this test
 dependency. The test installs the actual tarball into a temporary app, uses a
 pinned ASAR packager, and removes the app after both runs. Directory/ASAR outputs
 agreed exactly on the tested host. Other Electron versions remain unvalidated.
+
+## Validated Linux userspaces
+
+The installed native artifact also ran the three-question real-model fixture in
+isolated Ubuntu Base 24.04.3 and 24.04.5 root filesystems, using each distribution's
+own glibc/libstdc++. Results agreed exactly with the host. Bubblewrap supplied
+read-only package/model mounts, an empty temporary filesystem and a disabled
+network; the repository, Python, Node, Rust and inference servers were absent.
+The C consumer was compiled from installed headers before entering the namespace.
+This validates native runtime loading/inference in those userspaces, not building
+all bindings there or testing a different kernel/physical CPU.
+
+`tests/linux-userspace.py ARTIFACT_DIR MODEL ROOTFS... --report REPORT.json`
+repeats this check against locally verified rootfs directories. The official
+[Ubuntu Base images](https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/)
+were verified against the published SHA-256 sums; exact identities and package
+checksums are retained in [the report](evidence/linux-userspace-20261014.json).
+Pop!_OS 24.04 on the current x86-64 AVX2 machine remains the full toolchain,
+Node/Electron and browser validation host. Other architectures/distributions are
+not advertised as tested.
