@@ -1,0 +1,8 @@
+file(READ "${INPUT}" source)
+file(SHA256 "${BINARY}" hash)
+get_filename_component(name "${BINARY}" NAME)
+set(identity "{}")
+string(JSON identity SET "${identity}" source "${source}")
+string(JSON identity SET "${identity}" binary_name "\"${name}\"")
+string(JSON identity SET "${identity}" binary_sha256 "\"${hash}\"")
+file(WRITE "${OUTPUT}" "${identity}\n")

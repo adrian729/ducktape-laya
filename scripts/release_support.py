@@ -4,6 +4,7 @@ import json
 import pathlib
 import subprocess
 import tomllib
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -78,11 +79,35 @@ def binary_info(build):
     finally:
         library.dtl_free(result); library.dtl_free(error)
 
-def browser_build_identity(build, backend, record, toolchain):
+def source_identity(root=ROOT):
+    """Use the same fingerprint definition as native and browser CMake builds."""
+    with tempfile.TemporaryDirectory(prefix='ducktape-source-identity-') as directory:
+        output = pathlib.Path(directory) / 'source.json'
+        subprocess.run(['cmake', f'-DDTL_SOURCE_ROOT={root}', f'-DOUTPUT={output}',
+                        '-P', str(root / 'cmake/source_identity.cmake')], check=True, capture_output=True)
+        return read_json(output)
+
+def require_build_source(identity, expected, label):
+    if identity.get('source') != expected:
+        raise ValueError(label + ': build sources differ from packaging sources; rebuild first')
+
+def native_build_identity(build, target, binary, expected):
+    path = build / (target + '.build.json')
+    if not path.is_file():
+        raise ValueError(target + ': missing completed build identity; rebuild first')
+    identity = read_json(path)
+    require_build_source(identity, expected, target)
+    if (identity.get('binary_name') != (build / binary).resolve().name or
+        identity.get('binary_sha256') != sha256(build / binary)):
+        raise ValueError(target + ': binary differs from completed build record; rebuild first')
+    return identity
+
+def browser_build_identity(build, backend, record, toolchain, expected_source):
     """Reject swapped, stale or modified browser assets before packaging."""
     identity = read_json(build / 'laya.build.json')
     if identity.get('backend') != backend:
         raise ValueError(backend + ': built backend differs from package slot; rebuild with the correct backend')
+    require_build_source(identity, expected_source, backend)
     if (identity.get('package_version') != record['package_version'] or
         identity.get('llama_cpp_commit') != record['runtime']['commit'] or
         identity.get('runtime_patches') != record['runtime']['patches'] or

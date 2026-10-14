@@ -51,6 +51,32 @@ Node-API addon/shared library/worker/types, two normalized `.crate` files, and
 an inventory with SHA-256 checksums and source/runtime identity. Existing output
 directories are rejected. No script publishes anything or downloads a model.
 
+Both native and browser packaging require completed build records. CMake records
+a path-independent SHA-256 manifest of the project's native sources, headers,
+binding sources, build configuration, runtime patches and packaged metadata.
+Changes to these inputs trigger CMake regeneration and relinking. Each native
+target records its own binary hash: rebuilding only the shared library cannot
+make an old Node addon pass validation. Browser records bind both asset hashes
+to the source manifest and actual WASM/WebGPU backend; swapped builds are rejected.
+The browser worker also verifies the runtime's backend before loading any model.
+
+Run `cmake --build <build-directory>` after changing these inputs, including when
+upgrading an older build directory without these records. Packagers reject missing
+records, changed inputs and changed binaries. Fingerprints cover project build
+inputs and shipped bindings; upstream llama.cpp retains its separately checked
+runtime pin and audited patch identity. Build flags/toolchains remain recorded
+separately. Git commit and dirty-state fields in inventory schema 2 are named
+`packaging_source_commit` and `packaging_source_tracked_dirty`: they identify the
+packaging checkout, while `build_source` identifies the verified build inputs.
+Documentation-only commits therefore do not falsely become binary build provenance.
+
+Model-free identity regression tests run through `scripts/validate.py`, or directly:
+
+```sh
+python3 tests/packaging-identity.py
+node --experimental-vm-modules --test tests/browser-backend.mjs
+```
+
 The npm package selects its bundled Linux x64 addon. Source-checkout users must
 supply `addonPath` or `DUCKTAPE_LAYA_ADDON`; installed users need neither. For
 Electron, unpack `node_modules/ducktape-laya` in the application's packager

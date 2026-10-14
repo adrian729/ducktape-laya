@@ -68,6 +68,8 @@ def run(label, command, gate=None):
     if code: raise RuntimeError(f'{label} failed; see {out / (label + ".log")}')
 save()
 try:
+    run('packaging-identities', [sys.executable, ROOT / 'tests/packaging-identity.py'])
+    run('browser-backend-identities', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-backend.mjs'])
     run('configure', ['cmake', '-S', ROOT, '-B', build, '-DCMAKE_BUILD_TYPE=Release',
         '-DDUCKTAPE_BUILD_TESTS=ON', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_NODE=ON',
         f'-DNODE_INCLUDE_DIR={headers}', f'-DDUCKTAPE_TEST_MODEL={model or ""}'])
