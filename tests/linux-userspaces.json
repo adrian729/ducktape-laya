@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "signing_fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092",
+  "images": [
+    {
+      "id": "ubuntu-24.04.5",
+      "directory_url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/",
+      "filename": "ubuntu-base-24.04.5-base-amd64.tar.gz",
+      "sha256": "e77b6f10c2590cef872b33ee9f635a0e3fd1f57fb074c0e52b5c7f56147a0c86"
+    },
+    {
+      "id": "ubuntu-26.04.1",
+      "directory_url": "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/",
+      "filename": "ubuntu-base-26.04.1-base-amd64.tar.gz",
+      "sha256": "a496a960472ce474a59590b8987d3a1135d3cbef1991f3b1abe8cacfea8bf85a"
+    }
+  ]
+}

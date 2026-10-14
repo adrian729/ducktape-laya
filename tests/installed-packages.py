@@ -8,14 +8,17 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import sys
 
 root = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root / 'scripts'))
+from artifact_support import verify_inventory
 p = argparse.ArgumentParser()
 p.add_argument('artifacts', type=pathlib.Path)
 p.add_argument('model', type=pathlib.Path)
 a = p.parse_args()
 artifacts, model = a.artifacts.resolve(), a.model.resolve()
-version = json.loads((artifacts / 'inventory.json').read_text())['package_version']
+version = verify_inventory(artifacts)['package_version']
 request = (root / 'tests/fixtures/primitive.json').read_bytes()
 with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
     directory = pathlib.Path(directory)

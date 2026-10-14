@@ -11,6 +11,29 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from release_support import require_uninstrumented_binary, ROOT, browser_build_identity, sha256, source_identity, native_build_identity, require_runtime_identity
 
+from artifact_support import verify_inventory
+
+
+class ArtifactInventoryTests(unittest.TestCase):
+    def test_installed_consumers_reject_tampered_or_missing_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            artifact = base / 'package.tgz'
+            artifact.write_bytes(b'approved')
+            inventory = {'artifacts': {'package.tgz': {'bytes': artifact.stat().st_size, 'sha256': sha256(artifact)}}}
+            (base / 'inventory.json').write_text(json.dumps(inventory))
+            self.assertEqual(verify_inventory(base), inventory)
+            artifact.write_bytes(b'tampered')
+            with self.assertRaisesRegex(ValueError, 'mismatch'):
+                verify_inventory(base)
+            artifact.unlink()
+            with self.assertRaisesRegex(ValueError, 'Missing'):
+                verify_inventory(base)
+            inventory['artifacts'] = {'../outside': {'bytes': 0, 'sha256': '0' * 64}}
+            (base / 'inventory.json').write_text(json.dumps(inventory))
+            with self.assertRaisesRegex(ValueError, 'local filename'):
+                verify_inventory(base)
+
 
 class BrowserIdentityTests(unittest.TestCase):
     def setUp(self):

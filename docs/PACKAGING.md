@@ -164,10 +164,23 @@ and validate every Electron version advertised by a release.
 ## Linux userspace checks
 
 ```sh
-python3 tests/linux-userspace.py ARTIFACT_DIR MODEL ROOTFS... --report build/userspaces.json
+python3 tests/download-userspaces.py --output build-platforms
+python3 tests/linux-userspace.py ARTIFACT_DIR MODEL \
+  build-platforms/ubuntu-24.04.5/rootfs build-platforms/ubuntu-26.04.1/rootfs \
+  --report build/userspaces.json
 ```
 
-Supply locally verified root filesystems. The runner uses Bubblewrap with
+Provisioning is an explicit maintainer download. `tests/linux-userspaces.json`
+pins official Ubuntu image URLs, hashes and the image-signing fingerprint. The
+provisioner verifies the checksum signature with a trusted local Ubuntu keyring
+and the pinned archive hash before extraction; it records image provenance.
+Device entries are omitted and absolute symlinks become equivalent relative
+links inside the extracted root. No system packages are installed on the host.
+
+The consumer runner verifies the artifact inventory and approved model hash,
+retains distinct records for every root (even when directory names match), and
+requires exact ordered result agreement. Supply locally verified root filesystems
+when using other images; missing provenance is explicit in the report. It uses Bubblewrap with
 read-only artifact/model mounts, each userspace's own runtime libraries and
 network access disabled. It executes an installed C consumer and compares
 results. This tests userspace loading/inference, not a different host kernel,
