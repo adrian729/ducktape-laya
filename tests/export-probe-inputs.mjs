@@ -10,7 +10,7 @@ const data = parseTokenizerJson(JSON.parse(fs.readFileSync(tokenizer)));
 if (!data) throw new Error('Unsupported tokenizer');
 const tok = { clsId: data.ids.cls, sepId: data.ids.sep, maskId: data.ids.mask,
   padId: data.ids.pad, maskToken: data.maskToken, encode: text => encodeWithData(data, text) };
-const questions = JSON.parse(fs.readFileSync(new URL('../examples/request.json', import.meta.url))).questions;
+const questions = JSON.parse(fs.readFileSync(new URL('./fixtures/primitive.json', import.meta.url))).questions;
 const rows = JSON.parse(fs.readFileSync(samples)).results.map(({ state }) => ({ state,
   questions: Object.entries(questions).map(([id, definition]) => {
     const q = toInternal(definition);

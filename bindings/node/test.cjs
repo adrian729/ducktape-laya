@@ -35,7 +35,7 @@ test('serialization reentry cannot bypass queue or close boundaries', async () =
 });
 test('inference, queue bound and drain on close', { skip: !process.env.LAYA_MODEL }, async () => {
   const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2, maxPending: 1 });
-  const request = fs.readFileSync(path.join(__dirname, '../../examples/request.json'), 'utf8');
+  const request = fs.readFileSync(path.join(__dirname, '../../tests/fixtures/primitive.json'), 'utf8');
   try {
     await assert.rejects(engine.decide('{'), error => error.status === 1);
     const first = engine.decide(request);
@@ -53,7 +53,7 @@ test('inference, queue bound and drain on close', { skip: !process.env.LAYA_MODE
 
 test('batch, structured projection, hooks and worker responsiveness', { skip: !process.env.LAYA_MODEL }, async () => {
   const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2 });
-  const request = JSON.parse(fs.readFileSync(path.join(__dirname, '../../examples/request.json'), 'utf8'));
+  const request = JSON.parse(fs.readFileSync(path.join(__dirname, '../../tests/fixtures/primitive.json'), 'utf8'));
   const structured = { state: request.state, schema: { type: 'object', properties: {
     refund: { type: 'boolean', description: 'Does the customer request a refund?' },
     priority: { type: 'integer', minimum: 1, maximum: 3, description: 'How urgent is this?' },

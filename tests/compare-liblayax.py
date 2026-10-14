@@ -40,7 +40,7 @@ def take(ptr):
     finally:
         lib.laya_free_string(ptr)
 
-fixture = json.loads((pathlib.Path(__file__).resolve().parents[1] / 'examples/request.json').read_text())
+fixture = json.loads((pathlib.Path(__file__).resolve().parents[1] / 'tests/fixtures/primitive.json').read_text())
 samples = json.loads(a.samples.read_text())['results'][:a.limit]
 start = time.perf_counter()
 agent = lib.laya_create(str(a.model.resolve()).encode(), b'{"backend":"cpu","threads":2}')

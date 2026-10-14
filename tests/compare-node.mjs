@@ -8,7 +8,7 @@ const [kind, model, upstream] = process.argv.slice(2);
 if (!['ours', 'laya-ts'].includes(kind) || !model || (kind === 'laya-ts' && !upstream)) {
   throw new Error('Usage: compare-node.mjs ours|laya-ts MODEL [UPSTREAM_DIST_INDEX]');
 }
-const fixture = JSON.parse(fs.readFileSync(new URL('../examples/request.json', import.meta.url)));
+const fixture = JSON.parse(fs.readFileSync(new URL('./fixtures/primitive.json', import.meta.url)));
 const states = [fixture.state,
   'The app crashes every time I open settings. Can you help?',
   'How much does your enterprise plan cost for twenty users?',
