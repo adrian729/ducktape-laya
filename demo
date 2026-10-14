@@ -28,7 +28,7 @@ if [[ ! -f "$model" ]]; then
   exit 1
 fi
 model="$(cd -- "$(dirname -- "$model")" && pwd)/$(basename -- "$model")"
-args=()
+args=(-DDUCKTAPE_BUILD_EXAMPLES=ON)
 if [[ "$language" == js || "$language" == ts ]]; then
   args+=(-DDUCKTAPE_BUILD_NODE=ON)
   node_root="$(dirname -- "$(dirname -- "$(node -p 'process.execPath')")")"

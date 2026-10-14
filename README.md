@@ -15,7 +15,7 @@ Other operating systems are deferred until we can test them. See the
 The shared backend now also implements bounded batching, flat structured
 decisions, passive per-call hooks, and explicit local model routing with a
 bounded cache. These features are exposed in every language interface, including
-TypeScript. GGUF remains the inference backend. See the [shared API](docs/API.md)
+TypeScript. Inference uses llama.cpp with GGUF models. See the [shared API](docs/API.md)
 for contracts, the [product and release plan](docs/PLAN.md) for priorities, and
 [historical comparisons](docs/EVALUATION.md) for research evidence.
 
@@ -40,7 +40,7 @@ Our focus is compact GGUF deployment and one implementation shared across langua
 interfaces. The comparison documents which alternatives we ran and which we only
 reviewed; feature lists and star counts alone do not establish maturity.
 
-## Build and try
+## Build the library
 
 Requires CMake 3.22+, a C/C++17 compiler and Git. The default Linux x86-64 CPU
 build requires AVX2, FMA, F16C, BMI2 and SSE4.2; it is not yet a universal binary
@@ -58,8 +58,12 @@ For this machine, the existing cached file works:
 ```sh
 export LAYA_MODEL="$HOME/.cache/huggingface/hub/models--ggml-org--Laya-GGUF/snapshots/22265007700297ba9e128297e82540cf28c5d7d4/Laya-Q8_0.gguf"
 python3 scripts/verify-model.py "$LAYA_MODEL"
-./build/laya-decide "$LAYA_MODEL" < examples/request.json
 ```
+
+Examples and interactive forms are excluded by default. Enable them explicitly
+with `-DDUCKTAPE_BUILD_EXAMPLES=ON`; the `./demo` launcher does this automatically.
+For a library-only build, also set `-DDUCKTAPE_BUILD_TESTS=OFF`. Automated tests
+use their own public-API consumers and do not build or import demonstrations.
 
 Python 3.11+ is only used for optional developer verification, never by the library.
 The model is about 449 MB on disk and is intentionally not in Git. An app can
@@ -190,17 +194,21 @@ are model estimates; evaluate them on your application's own data.
 ## Tests
 
 ```sh
-cmake -S . -B build -DDUCKTAPE_TEST_MODEL="$LAYA_MODEL"
+cmake -S . -B build -DDUCKTAPE_BUILD_TESTS=ON -DDUCKTAPE_TEST_MODEL="$LAYA_MODEL"
 cmake --build build -j 3
 ctest --test-dir build --output-on-failure
 LAYA_MODEL="$LAYA_MODEL" cargo test --manifest-path bindings/rust/Cargo.toml
 LAYA_MODEL="$LAYA_MODEL" node --test bindings/node/test.cjs
 ```
 
-Without a model path, CTest runs ABI/error tests only and Node skips its inference
-test. Rust real-model checks also require `LAYA_MODEL`, plus the native library
-loader path shown above. Run cross-language primitive/structured batch parity with
-`python3 tests/parity.py "$LAYA_MODEL" --request examples/batch.json`.
+Without a model path, CTest runs ABI/error tests only and Node skips its real-model
+tests. Rust real-model checks also require `LAYA_MODEL`, plus the native library
+loader path shown above. Node tests and cross-language parity require the addon
+build described above. Run cross-language primitive/structured batch parity with
+`python3 tests/parity.py "$LAYA_MODEL"` (all fixtures in `tests/fixtures`).
+Use `--request path/to/fixture.json` for one fixture and `--build-dir path/to/build`
+for a separate build. `--report path/to/report.json` captures outputs for explicit
+before/after comparisons; it does not update expected results automatically.
 
 Code is MIT. See [third-party notices](THIRD_PARTY_NOTICES.md) for runtime and
 model licenses. This repository is independent of the upstream Laya project.

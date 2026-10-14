@@ -1,0 +1,57 @@
+[
+  {
+    "state": {
+      "message": "Réglages: «crash» — 設定. Literal [MASK] and a quoted \\\"value\\\".",
+      "history": [
+        "Please help."
+      ]
+    },
+    "questions": {
+      "technical": {
+        "type": "noul",
+        "instructions": "Is this a technical issue?"
+      }
+    }
+  },
+  {
+    "state": "I was charged twice. Please refund me.",
+    "questions": {
+      "department": {
+        "type": "choice",
+        "instructions": "Which department should handle this request?",
+        "criteria": {
+          "billing": "Charges, payments and refunds",
+          "technical": "Software problems",
+          "sales": "Product purchases"
+        }
+      },
+      "refund_requested": {
+        "type": "noul",
+        "instructions": "Does the customer request a refund?"
+      },
+      "urgency": {
+        "type": "score",
+        "instructions": "How urgent is this request?",
+        "criteria": [
+          "Low urgency",
+          "Moderate urgency",
+          "High urgency"
+        ]
+      }
+    }
+  },
+  {
+    "state": {
+      "message": "Réglages: «crash» — 設定. Literal [MASK] and a quoted \\\"value\\\".",
+      "history": [
+        "Please help."
+      ]
+    },
+    "questions": {
+      "technical": {
+        "type": "noul",
+        "instructions": "Is this a technical issue?"
+      }
+    }
+  }
+]

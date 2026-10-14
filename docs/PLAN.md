@@ -43,10 +43,11 @@ validated capability, not implied by browser WebGPU support.
 - Missing: browser runtime, supported release packages, automated compatibility
   and upgrade tooling, broad Linux coverage, sustained reliability validation,
   and explicit cancellation/deadline behavior.
-- Architectural debt: model-specific preparation and result processing are
-  adapted into our core from upstream server code. Review that boundary before
-  extending it. Existing demos are also built by the default CMake configuration;
-  move them behind an explicit development option.
+- Model-specific preparation and result processing remain adapted from upstream
+  server code, now isolated behind a private backend boundary. The initial
+  [upstream audit](ARCHITECTURE.md) explains that choice and its limitations.
+  Demos now require an explicit development option; automated conformance
+  consumers and fixtures live under `tests/` independently.
 
 ## Architecture and upstream boundary
 
@@ -266,6 +267,15 @@ binding or assembling a test checklist. A new incompatible capability may still
 require shared-core work and deliberate API evolution. This tooling is planned,
 not implemented yet.
 
+Candidate reports must distinguish **passed**, **failed**, and **not run** for
+each gate. Stage 1's adapter experiment is not a production release approval:
+installed-package, stress, browser and platform gates may still be unavailable.
+Promotion must refuse a required gate that failed or was not run. Separate
+baseline-to-candidate drift from cross-binding equality and upstream-reference
+agreement; those answer different compatibility questions. Store reports with
+the tested source identity (including dirty state), model hash, fixture hash,
+toolchain and flags. A report without those identities is exploratory evidence.
+
 ## Implementation sequence and release gates
 
 | Stage | Deliverable | Completion gate |
@@ -279,6 +289,25 @@ Investigate browser backend feasibility during stage 1 so native architecture
 choices do not obstruct the required browser path. Linux-native packages can be
 released with their scope clearly labeled before the browser package is ready;
 the overall agreed feature set is not complete until both paths meet their gates.
+
+### Reviewed execution order within stage 1
+
+The [two review passes](PLAN_REVIEW.md) retain the product contract above and
+split the first stage into independently verifiable increments:
+
+1. Audit upstream reuse and browser prerequisites; isolate the model adapter;
+   make demos opt-in; move conformance consumers/fixtures out of examples.
+   Require exact before/after output equality and unchanged public exports.
+2. Add the compatibility record and immutable model identities, then isolated
+   candidate tooling. Hash-check models before model-dependent gates. Reject
+   silent skipped tests, pin changes and expected-output regeneration. Include a
+   baseline replay and an actual candidate revision before calling stage 1 done.
+3. Run the browser model feasibility experiment using a pinned Emscripten/Dawn
+   toolchain. Native-only output equality does not establish WASM/WebGPU support.
+
+The adapter seam is internal; it need not create a public backend plugin API.
+Keep platform scheduling and asset ownership separate from model processing.
+Browser-specific implementations require evidence before duplicating shared code.
 
 Chat generation, HTTP serving, model training, implicit downloads/updates and
 untested OS support are outside the current product scope. Demo enhancements

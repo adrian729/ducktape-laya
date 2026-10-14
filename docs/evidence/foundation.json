@@ -1,0 +1,222 @@
+{
+  "date": "2026-10-14",
+  "scope": "First stage-1 increment: private adapter refactor and demo-independent conformance. Not release approval.",
+  "baseline_source_commit": "2afa60f2fcec37b1202abaa4199cb070a4adfb7f",
+  "after_source_sha256": {
+    "CMakeLists.txt": "29fdc34a8e462dcae75d2727f9a7e9263f6bfc691a07efde01372c9a46b0428d",
+    "src/laya.cpp": "2a84ac4122c2c719480ba05bb2e8ab731840e87d83d5fea325f4523f0e451bb2",
+    "src/backend.hpp": "6724d000c0d368e8c6b8dd92cd8edc39e38711331ba654e0fc8596af4ca54d27",
+    "src/backend_llama.cpp": "47961d42390f10aefa831510ca03c596378bc94aa30610f656ae359aabaa12de",
+    "src/errors.hpp": "3c6118b027020bc66b501d4bef29d7c654d5b23dac84d39bb7999e079c8cbbfb",
+    "src/exports.map": "0efb4e463fc8ff6cf7d0c84017e30a6e98a3a1b1233949146e95fd5b274b8f5d"
+  },
+  "llama_cpp_commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+  "model": {
+    "id": "laya-english-q8_0",
+    "repository": "ggml-org/Laya-GGUF",
+    "revision": "22265007700297ba9e128297e82540cf28c5d7d4",
+    "filename": "Laya-Q8_0.gguf",
+    "size_bytes": 449397600,
+    "sha256": "c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2",
+    "url": "https://huggingface.co/ggml-org/Laya-GGUF/resolve/22265007700297ba9e128297e82540cf28c5d7d4/Laya-Q8_0.gguf",
+    "source_model": "https://huggingface.co/convaiinnovations/laya",
+    "model_license": "Apache-2.0",
+    "llama_cpp_commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+    "max_tokens_per_question": 512
+  },
+  "model_sha256_verified": true,
+  "fixtures_sha256": {
+    "tests/fixtures/batch.json": "28384830c068670000fd67572be613ce376f0850373bfefb3d5b5249cbb63e73",
+    "tests/fixtures/primitive.json": "772196aeafb86c3de47419d96081fcf743cef29f4d5997385c3530d785e9a562",
+    "tests/fixtures/structured.json": "5cd1647e0c9a4f046fba994d5687f5ebb1093c260933cbcce92317c06290496c"
+  },
+  "build": {
+    "os": "Linux x86_64 Pop!_OS 24.04",
+    "cpu": "Intel i7-1165G7",
+    "compiler": "Clang 22.1.8",
+    "configuration": "Release",
+    "backend": "CPU",
+    "examples": false,
+    "node": "26.7.0",
+    "cargo": "1.98.0"
+  },
+  "checks": {
+    "native_tests": {
+      "passed": 4,
+      "failed": 0
+    },
+    "rust_tests": {
+      "passed": 4,
+      "failed": 0
+    },
+    "node_tests": {
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0
+    },
+    "public_export_count": 11,
+    "public_headers_and_bindings_unchanged": true,
+    "binding_results_and_key_order_equal": true,
+    "before_after_reports_byte_identical": true,
+    "batch_repeated_input_equal": true,
+    "fresh_library_only_build_and_load": true,
+    "library_only_has_no_demo_or_test_compilation_units": true
+  },
+  "results": {
+    "batch.json": [
+      {
+        "answers": {
+          "technical": {
+            "type": "noul",
+            "noul": 0.45213995091826753
+          }
+        },
+        "usage": {
+          "input_tokens": 71,
+          "output_tokens": 0
+        }
+      },
+      {
+        "answers": {
+          "department": {
+            "type": "choice",
+            "choice": "billing",
+            "probabilities": {
+              "billing": 0.9787645642568288,
+              "technical": 0.009908482976081734,
+              "sales": 0.01132695276708951
+            },
+            "confidence": 0.9681468463852432
+          },
+          "refund_requested": {
+            "type": "noul",
+            "noul": 0.9649842636859504
+          },
+          "urgency": {
+            "type": "score",
+            "score": 1.7329933721545157,
+            "legend": {
+              "0": "Low urgency",
+              "1": "Moderate urgency",
+              "2": "High urgency"
+            },
+            "probabilities": {
+              "0": 0.08123369425900831,
+              "1": 0.10453923932746782,
+              "2": 0.8142270664135239
+            },
+            "confidence": 0.5994900582317733
+          }
+        },
+        "usage": {
+          "input_tokens": 126,
+          "output_tokens": 0
+        }
+      },
+      {
+        "answers": {
+          "technical": {
+            "type": "noul",
+            "noul": 0.45213995091826753
+          }
+        },
+        "usage": {
+          "input_tokens": 71,
+          "output_tokens": 0
+        }
+      }
+    ],
+    "primitive.json": {
+      "answers": {
+        "department": {
+          "type": "choice",
+          "choice": "billing",
+          "probabilities": {
+            "billing": 0.9787645642568288,
+            "technical": 0.009908482976081734,
+            "sales": 0.01132695276708951
+          },
+          "confidence": 0.9681468463852432
+        },
+        "refund_requested": {
+          "type": "noul",
+          "noul": 0.9649842636859504
+        },
+        "urgency": {
+          "type": "score",
+          "score": 1.7329933721545157,
+          "legend": {
+            "0": "Low urgency",
+            "1": "Moderate urgency",
+            "2": "High urgency"
+          },
+          "probabilities": {
+            "0": 0.08123369425900831,
+            "1": 0.10453923932746782,
+            "2": 0.8142270664135239
+          },
+          "confidence": 0.5994900582317733
+        }
+      },
+      "usage": {
+        "input_tokens": 126,
+        "output_tokens": 0
+      }
+    },
+    "structured.json": {
+      "answers": {
+        "department": {
+          "type": "choice",
+          "choice": "technical",
+          "probabilities": {
+            "billing": 0.10915018147429896,
+            "technical": 0.7715559053776886,
+            "sales": 0.11929391314801245
+          },
+          "confidence": 0.6573338580665329
+        },
+        "refund": {
+          "type": "noul",
+          "noul": 0.3256074829691641
+        },
+        "priority": {
+          "type": "score",
+          "score": 0.2949111643082199,
+          "legend": {
+            "0": "-1",
+            "1": "0",
+            "2": "1"
+          },
+          "probabilities": {
+            "0": 0.7637228786490151,
+            "1": 0.1776430783937496,
+            "2": 0.058634042957235157
+          },
+          "confidence": 0.5576332535376701
+        }
+      },
+      "usage": {
+        "input_tokens": 121,
+        "output_tokens": 0
+      },
+      "values": {
+        "department": "technical",
+        "refund": false,
+        "priority": -1
+      }
+    }
+  },
+  "not_run": [
+    "new upstream reference comparison",
+    "candidate runtime/model upgrade",
+    "sanitizers and sustained stress",
+    "installed package consumers",
+    "browser WASM/WebGPU",
+    "other Linux hardware/distributions"
+  ],
+  "notes": [
+    "Captured pre-refactor working-library outputs before rebuilding. Reports under build/ are local test outputs, not a complete candidate-upgrade report.",
+    "Output equality verifies preservation on this corpus, not model task quality or all future input behavior.",
+    "Required release gates remain open in docs/PLAN.md."
+  ]
+}

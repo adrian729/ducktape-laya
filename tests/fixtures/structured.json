@@ -1,0 +1,28 @@
+{
+  "state": "The app crashes whenever I open settings. No refund needed.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "department": {
+        "type": "string",
+        "description": "Which department handles this?",
+        "enum": [
+          "billing",
+          "technical",
+          "sales"
+        ]
+      },
+      "refund": {
+        "type": "boolean",
+        "description": "Is a refund requested?"
+      },
+      "priority": {
+        "type": "integer",
+        "description": "Urgency from low to high",
+        "minimum": -1,
+        "maximum": 1
+      }
+    },
+    "additionalProperties": false
+  }
+}

@@ -1,5 +1,46 @@
 # Prototype validation
 
+## Shared-core foundation (2026-10-14)
+
+After [two plan reviews](PLAN_REVIEW.md), model preparation/inference/result
+processing was moved into `src/backend_llama.cpp`, behind the private
+`backend.hpp` interface. Shared schema planning, routing, batching, hooks and
+ABI handling remain in `src/laya.cpp`. Public headers and language bindings
+did not change. The [upstream audit](ARCHITECTURE.md) records why the pinned
+server decision component was not linked wholesale.
+
+- Release build with examples disabled passed. Default build targets contain
+  no interactive forms or example executables.
+- A fresh library-only build with tests/examples disabled also passed and the
+  resulting shared library loaded successfully. Its compilation database has
+  no demo/test sources; the optional encoder probe is gated by the test option.
+- Real-model native CTest: 4/4; Rust: 4/4; Node: 6/6, none skipped.
+- Three independent conformance fixtures cover primitive choice/noul/score,
+  structured projection, and an ordered batch containing Unicode/structured
+  state, literal mask text and a repeated input. C, C++, Rust and Node agree
+  exactly, including object key order. Repeated batch inputs agree.
+- Outputs captured from the working library before the refactor and after
+  rebuilding are byte-identical for the full corpus across all four interfaces.
+- The pinned model's size/SHA-256 were verified. The eleven public C symbols,
+  public headers and binding implementations are unchanged. Upstream submodule
+  sources/pins are unchanged.
+- Rust conformance-consumer formatting, Python syntax, launcher shell syntax,
+  and whitespace checks passed. The conformance Rust consumer depends only on
+  our Rust library and sys crate, without demo-only dependencies.
+
+The runner now uses `tests/consumers` and `tests/fixtures`, with no example/demo
+dependencies. `--build-dir` selects a build and `--report` captures outputs for
+explicit comparison; this is not yet the planned dependency-upgrade tool.
+[Recorded evidence](evidence/foundation.json) includes fixture/source hashes and
+outputs. It is refactor evidence, not release approval or automatically promoted
+golden data. The upstream server comparison was not repeated in this increment;
+the earlier reference result remains historical evidence below.
+
+Browser work so far is a source audit only. Emscripten is absent, and no WASM
+or WebGPU model run has been performed. Stage 1 remains open for compatibility
+records, actual candidate-upgrade reports and browser feasibility. Packaging,
+sanitizers/stress, cancellation and wider Linux coverage remain release work.
+
 ## Interactive demos (2026-10-14)
 
 The C, C++, Rust, JavaScript and TypeScript terminal forms were all run against
