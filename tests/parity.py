@@ -12,6 +12,9 @@ import os
 import pathlib
 import subprocess
 import urllib.request
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+from compare_results import compare_results
 
 parser = argparse.ArgumentParser()
 parser.add_argument('model', type=pathlib.Path)
@@ -55,8 +58,7 @@ for fixture in fixtures:
         if output.returncode:
             raise RuntimeError(f'{fixture.name}/{name}: {output.stderr.decode(errors="replace")}')
         results[name] = json.loads(output.stdout, object_pairs_hook=OrderedDict)
-        if results[name] != results['C']:
-            raise AssertionError(f'{fixture.name}/{name} differs from C output')
+        compare_results(results['C'], results[name], path=f'{fixture.name}/{name}')
         print(f'{fixture.name}/{name}: exact agreement', flush=True)
     report['fixtures'][fixture.name] = results
     if args.server_url:
@@ -64,22 +66,8 @@ for fixture in fixtures:
                                      {'Content-Type': 'application/json'})
         with urllib.request.urlopen(req, timeout=120) as response:
             reference = json.load(response)
-        differences = []
-
-        def compare(a, b, path):
-            if isinstance(a, dict):
-                assert list(a) == list(b), f'Key/order mismatch at {path}'
-                for key in a:
-                    compare(a[key], b[key], path + '.' + key)
-            elif isinstance(a, (int, float)):
-                differences.append((abs(a - b), path))
-            else:
-                assert a == b, f'Value mismatch at {path}: {a!r} vs {b!r}'
-
-        compare(results['C']['answers'], reference['answers'], 'answers')
-        assert results['C']['usage'] == reference['usage'], 'Token usage mismatch'
-        error, path = max(differences)
+        error, path = compare_results(results['C']['answers'], reference['answers'], args.tolerance, 'answers')
+        compare_results(results['C']['usage'], reference['usage'])
         print(f'Reference maximum absolute difference: {error:.9g} at {path}')
-        assert error <= args.tolerance, f'Exceeded declared tolerance {args.tolerance}'
 if args.report:
     args.report.write_text(json.dumps(report, indent=2) + '\n')
