@@ -37,3 +37,36 @@ its original source-checkpoint revision remains unknown rather than inferred.
 
 Package publication, signing and broad production readiness remain separate
 release gates. This repository has not published packages as part of these checks.
+
+## npm and Rust artifacts
+
+```sh
+# Build with DUCKTAPE_BUILD_NODE=ON and NODE_INCLUDE_DIR first.
+python3 scripts/package-linux.py --build build --output build/packages-0.1.0
+python3 tests/installed-packages.py build/packages-0.1.0 /path/to/approved.gguf
+```
+
+The output contains a native installation tarball, an npm tarball with its own
+Node-API addon/shared library/worker/types, two normalized `.crate` files, and
+an inventory with SHA-256 checksums and source/runtime identity. Existing output
+directories are rejected. No script publishes anything or downloads a model.
+
+The npm package selects its bundled Linux x64 addon. Source-checkout users must
+supply `addonPath` or `DUCKTAPE_LAYA_ADDON`; installed users need neither. For
+Electron, unpack the worker/package and native directory as described in the
+application's packager configuration. The addon resolver recognizes a physical
+`.asar.unpacked` native directory. Electron behavior still requires its own
+integration validation; Node success alone does not establish Electron support.
+
+Rust packages contain library source, metadata and license, excluding demos.
+The sys crate locates an installed native library using `DUCKTAPE_LAYA_LIB_DIR`,
+or `pkg-config` when the variable is absent. It no longer assumes a monorepo
+`build/` directory. Crates express their sibling dependency by version in the
+published manifest. Before publication, the artifact consumer test uses a local
+Cargo patch to the extracted sys crate, never a path into this repository.
+
+Validated locally: installed C/C++, pkg-config, npm and Rust artifact consumers
+perform real-model inference outside the checkout, with npm/Rust agreeing
+exactly. This is an installation test on the current host, not a clean-container
+or Electron/platform-matrix certification. Local artifacts remain unsigned and
+can include explicitly recorded dirty development sources.

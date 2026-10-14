@@ -1,6 +1,7 @@
 'use strict';
 const { Worker } = require('node:worker_threads');
 const path = require('node:path');
+const resolveAddon = require('./resolve-addon.cjs');
 class Laya {
   #worker; #pending = new Map(); #next = 0; #closing = false; #closePromise;
   #maxPending; #dead = false;
@@ -17,7 +18,7 @@ class Laya {
     if (!Number.isInteger(threads) || threads < 0 || threads > 256) throw new RangeError('threads must be 0..256');
     if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw new RangeError('maxPending must be 1..1024');
     const worker = new Worker(path.join(__dirname, 'worker.cjs'), { workerData: {
-      modelPath, threads, router, addonPath: path.resolve(addonPath || process.env.DUCKTAPE_LAYA_ADDON || path.join(__dirname, '../../build/ducktape_laya.node'))
+      modelPath, threads, router, addonPath: resolveAddon(addonPath)
     }});
     const engine = new Laya(internal, worker, maxPending);
     await new Promise((resolve, reject) => {

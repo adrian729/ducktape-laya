@@ -5,3 +5,5 @@ edition = "2021"
 links = "ducktape_laya"
 build = "build.rs"
 license = "MIT"
+description = "Embedded Laya GGUF decisions through a shared native C ABI"
+include = ["src/**", "build.rs", "Cargo.toml", "LICENSE", "README.md"]

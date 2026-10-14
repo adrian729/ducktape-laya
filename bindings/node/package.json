@@ -4,7 +4,29 @@
   "private": true,
   "main": "index.cjs",
   "types": "index.d.ts",
-  "engines": { "node": ">=20" },
-  "scripts": { "test": "node --test test.cjs" },
-  "license": "MIT"
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test.cjs"
+  },
+  "license": "MIT",
+  "files": [
+    "index.cjs",
+    "index.d.ts",
+    "worker.cjs",
+    "resolve-addon.cjs",
+    "native/",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "licenses/",
+    "compatibility.json",
+    "model-manifest.json"
+  ],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ]
 }

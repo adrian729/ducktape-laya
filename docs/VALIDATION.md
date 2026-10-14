@@ -223,3 +223,16 @@ a small regression fixture, not a broad parity or accuracy certification.
 
 Tests do not download weights. Run `tests/parity.py` for the binding comparison;
 its optional `--server-url` additionally checks a supplied reference server.
+
+## Native and language packaging foundation (2026-10-14)
+
+Installed CMake C/C++ targets and pkg-config metadata were consumed from a
+separate temporary project. Real-model results agreed. Local npm and Rust crate
+artifacts were then installed/extracted into a fresh temporary application.
+The npm package loaded its bundled addon/library with no development path
+overrides. Rust discovered the installed native library through pkg-config;
+its normalized crate manifest contains a versioned sys dependency and no
+checkout path. All four consumers ran the pinned three-question fixture;
+npm and Rust outputs matched exactly. Demos are excluded from crate/package
+contents. Scripts: `package-linux.py`, `installed-native.py`,
+`installed-packages.py`. Wider environments and Electron remain separate gates.
