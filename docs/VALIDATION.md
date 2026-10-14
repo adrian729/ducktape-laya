@@ -300,3 +300,14 @@ six tests with leak detection enabled (517 seconds for this instrumented run).
 All shared fixtures remain exactly equal to the pre-refactor baseline across
 C, C++, Rust and Node. [Evidence](evidence/sanitizers-20261014.json) records the
 compiler, flags, runtime/patch/model identities and tested library hash.
+
+## Input mutation smoke test (2026-10-14)
+
+`tests/input-fuzz.cpp` passed 20,000 request/schema mutations and 20,000 router
+configuration mutations against the ASan/UBSan-instrumented shared library, with
+leak detection and no suppressions. Seeds include the real fixtures, malformed
+JSON, excessive nesting and the request-size boundary. It checks owned outputs
+and error behavior through the public ABI without loading model weights.
+This is deterministic mutation smoke fuzzing, not a coverage-guided campaign or
+proof of parser safety. [Evidence](evidence/input-fuzz-20261014.json) records the
+seed, inputs, harness and instrumented library.
