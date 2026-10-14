@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: ducktape-laya
+Description: Embedded Laya GGUF decisions through a shared C ABI
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lducktape_laya
+Cflags: -I${includedir}

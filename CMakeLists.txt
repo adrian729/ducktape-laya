@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
-project(ducktape_laya VERSION 0.1.0 LANGUAGES C CXX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/release/compatibility.json" DTL_RELEASE_RECORD)
+string(JSON DTL_VERSION GET "${DTL_RELEASE_RECORD}" package_version)
+project(ducktape_laya VERSION ${DTL_VERSION} LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -22,8 +24,9 @@ set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_CUDA OFF CACHE BOOL "" FORCE)
 set(GGML_METAL OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/llama.cpp EXCLUDE_FROM_ALL)
-set(UPSTREAM ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp)
+set(DUCKTAPE_LLAMA_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp" CACHE PATH "Pinned or isolated candidate llama.cpp checkout")
+get_filename_component(UPSTREAM "${DUCKTAPE_LLAMA_SOURCE}" ABSOLUTE)
+add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
 add_library(ducktape_laya SHARED src/laya.cpp src/backend_llama.cpp
   ${UPSTREAM}/common/json.cpp ${UPSTREAM}/common/unicode.cpp
   ${UPSTREAM}/common/jinja/lexer.cpp ${UPSTREAM}/common/jinja/parser.cpp
@@ -34,7 +37,7 @@ target_include_directories(ducktape_laya PUBLIC
   PRIVATE ${UPSTREAM}/common ${UPSTREAM}/vendor)
 target_link_libraries(ducktape_laya PRIVATE llama)
 target_compile_definitions(ducktape_laya PRIVATE DUCKTAPE_LAYA_BUILD)
-set_target_properties(ducktape_laya PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0
+set_target_properties(ducktape_laya PROPERTIES EXPORT_NAME laya VERSION ${PROJECT_VERSION} SOVERSION 0
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 if(UNIX AND NOT APPLE)
   target_link_options(ducktape_laya PRIVATE "LINKER:--exclude-libs,ALL"
@@ -56,8 +59,20 @@ if(DUCKTAPE_BUILD_EXAMPLES)
   target_link_libraries(laya-demo-cpp PRIVATE ducktape_laya laya-demo-form)
 endif()
 include(GNUInstallDirs)
-install(TARGETS ducktape_laya LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+install(TARGETS ducktape_laya EXPORT ducktape_laya-targets LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+include(CMakePackageConfigHelpers)
+configure_package_config_file(cmake/ducktape_laya-config.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/ducktape_laya-config.cmake
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ducktape_laya)
+write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/ducktape_laya-config-version.cmake
+  VERSION ${PROJECT_VERSION} COMPATIBILITY SameMinorVersion)
+configure_file(cmake/ducktape-laya.pc.in ${CMAKE_CURRENT_BINARY_DIR}/ducktape-laya.pc @ONLY)
+install(EXPORT ducktape_laya-targets NAMESPACE ducktape:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ducktape_laya)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ducktape_laya-config.cmake
+  ${CMAKE_CURRENT_BINARY_DIR}/ducktape_laya-config-version.cmake DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ducktape_laya)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ducktape-laya.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+install(FILES release/compatibility.json models/manifest.json DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya)
 install(FILES include/ducktape_laya.h include/ducktape_laya.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya)
 install(DIRECTORY licenses/ DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya/licenses)
@@ -89,7 +104,8 @@ if(DUCKTAPE_BUILD_NODE)
   target_link_libraries(ducktape_laya_node PRIVATE ducktape_laya)
   target_compile_definitions(ducktape_laya_node PRIVATE NAPI_VERSION=8 NODE_GYP_MODULE_NAME=ducktape_laya)
   set_target_properties(ducktape_laya_node PROPERTIES PREFIX "" SUFFIX ".node" OUTPUT_NAME ducktape_laya
-    BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+    BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN;$ORIGIN/../..")
+  install(TARGETS ducktape_laya_node LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/ducktape-laya/node)
   if(APPLE)
     target_link_options(ducktape_laya_node PRIVATE "LINKER:-undefined,dynamic_lookup")
   endif()

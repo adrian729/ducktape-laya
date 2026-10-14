@@ -1,5 +1,7 @@
 # Ducktape Laya
 
+<img src="assets/ducktape-logo.png" alt="Ducktape logo" width="240">
+
 Embed local Laya classification in C/C++, Rust, Node.js and Electron applications.
 One C++ implementation uses a pinned llama.cpp runtime; thin bindings share the
 same model loading, inference and result formatting. No HTTP server, Ollama,
@@ -84,7 +86,9 @@ std::string result = engine.execute(request_json); // primitive, schema, or batc
 
 The RAII wrapper releases the engine automatically. Link `ducktape_laya` and
 ship its shared library with your app. `cmake --install build --prefix staging`
-stages headers and the library. Model weights are not installed by CMake.
+stages headers, the library, CMake targets and pkg-config metadata.
+See [packaging](docs/PACKAGING.md) for installed consumer usage. Model weights
+are not installed by CMake.
 
 ## Rust
 

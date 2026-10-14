@@ -1,0 +1,3 @@
+@PACKAGE_INIT@
+include("${CMAKE_CURRENT_LIST_DIR}/ducktape_laya-targets.cmake")
+check_required_components(ducktape_laya)

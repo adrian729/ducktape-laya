@@ -3,7 +3,7 @@
 - llama.cpp / ggml: MIT, copyright 2023–2026 The ggml authors.
   Pinned source: `third_party/llama.cpp`, commit
   `1e6f04a75e91da4bb66b5248f3fd4bdeff169d41` (b11540).
-  [License](licenses/llama.cpp-MIT.txt). `src/laya.cpp` adapts Laya's prompt
+  [License](licenses/llama.cpp-MIT.txt). `src/backend_llama.cpp` adapts Laya's prompt
   preparation, temperature lookup and answer formatting from
   `tools/server/server-decision.cpp`. Jinja, Unicode and JSON support are compiled
   directly from the pinned source. Additional copyright notices remain in the

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "package_version": "0.1.0",
+  "abi_version": 1,
+  "runtime": {
+    "repository": "https://github.com/ggml-org/llama.cpp.git",
+    "path": "third_party/llama.cpp",
+    "commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+    "patches": []
+  },
+  "models": ["models/manifest.json"],
+  "adapter": "src/backend_llama.cpp",
+  "status": "development",
+  "tested_backend": "linux-x86_64-cpu-avx2",
+  "candidate_absolute_tolerance": 0.000001,
+  "required_release_gates": [
+    "native_contracts", "binding_conformance", "upstream_reference", "abi",
+    "installed_packages", "sanitizers", "stress", "linux_matrix",
+    "browser_wasm", "browser_webgpu", "license_inventory", "reproducibility"
+  ]
+}
