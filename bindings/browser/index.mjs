@@ -29,12 +29,12 @@ export class Laya {
   static open(options) { return Laya.#open(options); }
   static openRouter(models, options) { return Laya.#open({ ...options, models }); }
   static async #open(options = {}) {
-    const { maxPending = 16, maxModelBytes = 1073741824, initializationTimeoutMs = 120000, signal, backend = 'wasm' } = options;
+    const { maxPending = 16, maxModelBytes = 1073741824, initializationTimeoutMs = 120000, signal, backend = 'wasm', onDiagnostic } = options;
     if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw new RangeError('maxPending must be 1..1024');
     if (!Number.isSafeInteger(maxModelBytes) || maxModelBytes < 1) throw new RangeError('maxModelBytes must be positive');
     if (!Number.isInteger(initializationTimeoutMs) || initializationTimeoutMs < 1 || initializationTimeoutMs > 86400000) throw new RangeError('initializationTimeoutMs must be 1..86400000');
     if (!['wasm','webgpu','auto'].includes(backend)) throw new TypeError('Invalid backend');
-    if (options.onDiagnostic !== undefined && typeof options.onDiagnostic !== 'function') throw new TypeError('onDiagnostic must be a function');
+    if (onDiagnostic !== undefined && typeof onDiagnostic !== 'function') throw new TypeError('onDiagnostic must be a function');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw new TypeError('signal must be an AbortSignal');
     if (signal?.aborted) throw new DOMException('Initialization aborted', 'AbortError');
     const models = options.models && Object.fromEntries(Object.entries(options.models).map(([id, model]) => {
@@ -52,7 +52,7 @@ export class Laya {
       const moduleUrl = selected === 'webgpu' ? (options.webgpuModuleUrl || new URL('./webgpu/laya.mjs', import.meta.url).href) : (options.moduleUrl || new URL('./wasm/laya.mjs', import.meta.url).href);
       if (!moduleUrl) throw new TypeError(`Missing ${selected} module URL`);
       const worker = new Worker(options.workerUrl || new URL('./worker.mjs', import.meta.url), { type: 'module' });
-      const engine = new Laya(internal, worker, maxPending, options.onDiagnostic);
+      const engine = new Laya(internal, worker, maxPending, onDiagnostic);
       const abort = () => engine.#fail(new DOMException('Initialization aborted', 'AbortError'));
       const timer = setTimeout(() => engine.#fail(new Error('Laya initialization timed out')), initializationTimeoutMs);
       try {
@@ -60,7 +60,7 @@ export class Laya {
         // Option getters/URL coercion can run caller code before registration.
         // AbortSignal does not replay an abort that already happened.
         if (signal?.aborted) throw new DOMException('Initialization aborted', 'AbortError');
-        engine.capabilities = await engine.#send('init', undefined, undefined, { ...options, signal: undefined, onDiagnostic: undefined, diagnostics: !!options.onDiagnostic,
+        engine.capabilities = await engine.#send('init', undefined, undefined, { ...options, signal: undefined, onDiagnostic: undefined, diagnostics: !!onDiagnostic,
           models, modelUrl: models ? undefined : absolute(options.modelUrl), maxModelBytes, backend: selected,
           moduleUrl: absolute(moduleUrl), wasmUrl: absolute(selected === 'webgpu' ? (options.webgpuWasmUrl || new URL('laya.wasm', absolute(moduleUrl))) : (options.wasmUrl || new URL('laya.wasm', absolute(moduleUrl)))) });
         if (signal?.aborted) throw new DOMException('Initialization aborted', 'AbortError');

@@ -66,3 +66,19 @@ test('successful open stays usable and close terminates its worker', async () =>
   assert.ok(workers[0].terminated);
   await assert.rejects(engine.info(), /closed/);
 });
+
+test('throwing diagnostic option getters cannot leak a created worker', async () => {
+  for (const throwOnRead of [1, 2, 3]) {
+    const { Laya, workers } = await harness();
+    let reads = 0;
+    let engine;
+    try {
+      engine = await Laya.open({ modelUrl: 'model.gguf', get onDiagnostic() {
+        if (++reads === throwOnRead) throw new Error('diagnostic getter failed');
+        return () => {};
+      } });
+    } catch (error) { assert.equal(error.message, 'diagnostic getter failed'); }
+    if (engine) await engine.close();
+    assert.ok(workers.every(worker => worker.terminated));
+  }
+});
