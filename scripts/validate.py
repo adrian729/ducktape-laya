@@ -70,6 +70,7 @@ save()
 try:
     run('result-comparison', [sys.executable, ROOT / 'tests/result-comparison.py'])
     run('qualification-policy', [sys.executable, ROOT / 'tests/qualification.py'])
+    run('abi-layouts', [sys.executable, ROOT / 'tests/abi-layout.py'])
     run('packaging-identities', [sys.executable, ROOT / 'tests/packaging-identity.py'])
     run('browser-backend-identities', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-backend.mjs'])
     run('browser-lifecycle', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-lifecycle.mjs'])
