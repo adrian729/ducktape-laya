@@ -61,6 +61,25 @@ builds/inference; record the host conditions. A handful of laptop samples is an
 exploratory measurement, not a universal latency or throughput promise. Store
 measurements as CI/PR artifacts, not dated source documents.
 
+The native stress target supports a bounded round smoke test and elapsed-time
+qualification runs. Configure first, then explicitly build this optional target:
+
+```sh
+cmake -S . -B build -DDUCKTAPE_BUILD_TESTS=ON
+cmake --build build --target laya-stress --parallel 2
+build/laya-stress /path/to/Laya-Q8_0.gguf 10
+build/laya-stress /path/to/Laya-Q8_0.gguf --seconds 3600
+# Candidate soak uses --seconds 28800 instead.
+```
+
+Each duration run completes at least ten rounds, then runs the concurrent-caller
+check. It exercises open/use/close, malformed input, deadline recovery and mixed
+batches with two inference threads. After every close, descriptors/threads must
+return to baseline and RSS must stay within the declared 128 MiB allocator
+retention allowance. Progress goes to stderr; the final JSON on stdout includes
+elapsed time and resource measurements. A short smoke run does not satisfy the
+one-hour or eight-hour gates, and this native test does not cover browser memory.
+
 Independent reproducibility compares the bytes, permission bits and symlink targets
 of all installed native and Node files from a single captured working-tree snapshot
 compiled in two separate source/build/install roots. Runtime source is archived from

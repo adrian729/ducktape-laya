@@ -192,6 +192,8 @@ if(DUCKTAPE_BUILD_TESTS)
   add_executable(laya-encoder-probe EXCLUDE_FROM_ALL tests/encoder-batch.cpp)
   target_include_directories(laya-encoder-probe PRIVATE ${UPSTREAM}/vendor)
   target_link_libraries(laya-encoder-probe PRIVATE llama)
+  add_executable(laya-stress EXCLUDE_FROM_ALL tests/stress.cpp)
+  target_link_libraries(laya-stress PRIVATE ducktape_laya)
 endif()
 
 if(EMSCRIPTEN)
