@@ -268,3 +268,16 @@ build/laya-stress /path/to/approved.gguf 40
 
 [Retained evidence](evidence/stress-20261014.json) includes the runtime/model,
 native source revision, harness hash and thresholds.
+
+## Experimental shared-core browser path (2026-10-14)
+
+WASM and WebGPU ran the shared primitive/schema/batch corpus and agreed exactly
+with unchanged upstream decision processing compiled for each corresponding
+backend (all 11 questions and input-token counts). Native AVX2 comparison still
+fails its declared 1e-5 tolerance; these are separate gates. The extracted
+browser package passed a GPU fixture run, asset-failure checks and injected GPU
+device-loss handling. Routing, deadlines, cancellation/shutdown, hooks and WASM
+initialization fallback were also exercised. See [browser integration](BROWSER.md)
+and [complete retained results](evidence/browser-20261014.json), including source
+hashes, binary hashes, browser flags and tested hardware. This is experimental
+support on that configuration, not a universal cross-backend parity claim.

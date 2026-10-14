@@ -60,7 +60,7 @@ state, Unicode, literal mask text and repeated inputs within ordered batches.
 Native and binding suites additionally cover errors, bounds, hooks, routing and
 lifecycle. This small corpus is a starting point, not broad model accuracy data.
 
-## Browser feasibility: initial source audit
+## Browser feasibility: initial source audit (historical)
 
 The pinned ModernBERT graph includes normalization, RoPE, attention, matrix
 multiplication, row selection, activation functions (including GELU_ERF in the
@@ -82,3 +82,6 @@ memory needs, initialization, threading/isolation, worker lifecycle and device
 loss. The current shared-library build, native filesystem routing and forced
 CPU offload policy require platform integration work. Browser support remains
 unimplemented; this audit is not its acceptance gate.
+
+The experiment above has now been implemented; see [BROWSER.md](BROWSER.md) for
+actual WASM/WebGPU runs, shared-core packaging and remaining numeric gates.

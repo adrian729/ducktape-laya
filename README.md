@@ -12,8 +12,9 @@ Python runtime, child inference process or automatic downloads.
 
 **Status: working Linux CPU prototype.** Real `choice`, `noul` (probability of
 true) and ordinal `score` inference is implemented for the pinned English Q8_0
-model. It does not generate chat. Professional Linux packaging, reliability
-validation and the required WebGPU/WASM browser path remain release work.
+model. It does not generate chat. Installed native/npm/Rust packages, Electron/ASAR checks and
+[experimental shared-core WebGPU/WASM execution](docs/BROWSER.md) are implemented.
+Broader reliability/platform validation and browser numeric release gates remain.
 Other operating systems are deferred until we can test them. See the
 [reviewed plan](docs/PLAN.md) and [validation report](docs/VALIDATION.md).
 

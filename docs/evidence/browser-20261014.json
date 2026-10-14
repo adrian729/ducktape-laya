@@ -1,0 +1,765 @@
+{
+  "status": "experimental",
+  "runtime": {
+    "repository": "https://github.com/ggml-org/llama.cpp.git",
+    "path": "third_party/llama.cpp",
+    "commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+    "patches": []
+  },
+  "model_sha256": "c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2",
+  "toolchain": {
+    "emsdk_repository": "https://github.com/emscripten-core/emsdk.git",
+    "emsdk_commit": "8f685c26ee9f672081e61e22c6aa60fa972d00a9",
+    "sdk_version": "6.0.12",
+    "emscripten_commit": "5488e0871d46d19a3209988190fa6a653126256f",
+    "sdk_build": "6e9f6885cb17a3d6c8fd488a5cff730f50aba61d",
+    "webgpu_port": "emdawnwebgpu (version pinned by this Emscripten SDK)",
+    "memory64": false,
+    "threads": 1,
+    "native_wasm_absolute_tolerance": 1e-05,
+    "status": "validated experimental Chrome 152 WASM/WebGPU path; cross-backend numeric gate failed"
+  },
+  "environment": {
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+    "crossOriginIsolated": false,
+    "gpu": {
+      "vendor": "intel",
+      "architecture": "gen-12lp",
+      "fallback": false
+    }
+  },
+  "browser_flags": [
+    "--enable-unsafe-webgpu",
+    "--use-angle=vulkan",
+    "--enable-features=Vulkan",
+    "--disable-vulkan-surface"
+  ],
+  "compiled_webgpu_debug": true,
+  "link_optimization": 1,
+  "source_base_commit": "662621a6d745cb74d76e5cd2c2396a8ac46c7594",
+  "source_files": {
+    "CMakeLists.txt": "0f1accdf69493b8b67346534d7a5dba009c52f04739e9f94ce36e9165f6f0912",
+    "src/execution.hpp": "06e6a2c5906ace2b544454bce6f5a022a7a4c340843d8f52c868111ab34c95c0",
+    "src/laya.cpp": "3c1e5a28a627d884fdc3b692d2f451b637d1e85796b85e9239e81c7ee18f8743",
+    "src/errors.hpp": "3c6118b027020bc66b501d4bef29d7c654d5b23dac84d39bb7999e079c8cbbfb",
+    "src/backend_llama.cpp": "60471156b43d07dc069cea78f1a6c51bb098bb2b9b390530b20647ffdcc972a9",
+    "src/exports.map": "730e49ba901485d05b751cb264ede5cfe0459ed00b19e8a257786ee0294f2d2f",
+    "src/backend.hpp": "bde1360be58e2cf115dfed5511c612f05cece970e3f0789d9ba254f90fcfbebf",
+    "include/ducktape_laya.h": "b2130297391c5d2e63dd6d85fbf5e875ff13db2616ec00b487ae284af3cc9280",
+    "include/ducktape_laya.hpp": "feed9f5340a268e5b36142e6011808795429818e3276ea5f92a43f3f077b96eb",
+    "bindings/browser/index.d.ts": "5a4e7d5c41179c5e9ab167ff0183657c078f80512eedf7938069954d47263f3d",
+    "bindings/browser/worker.mjs": "179408f669c5d89a13b8f6799947e62f503a3eebb36820dfebb66a04797608c2",
+    "bindings/browser/package.json": "2d8e0d4494363382246d548118fec88df9575cfdec7ab9cf77c43b069d663616",
+    "bindings/browser/index.mjs": "63f3e0548ca5ea0a28a202e6ce0c35688d4a6d6941b9ec02d22e5d028868eb13",
+    "bindings/browser/protocol.d.ts": "506f1242e3918463df34d45aec5ef01409512875b2ff52eecb9f8b32f8208c97",
+    "bindings/browser/entry.cpp": "34049a09d28612b92d3b35f134c25e500f502acfe489793fca777e8c6a078701",
+    "tests/upstream-reference.cpp": "e752f68365811c14b4a73ad810d29847a69954e9ea5133631359d6558ed56ba8",
+    "tests/browser.html": "ba671483ebbdd43b0c85c8f9ce41a7d0939ebb17835dcdb2e048be673e359432"
+  },
+  "assets": {
+    "build-browser-wasm/laya.mjs": "b79a32b20004d18222586e97089b8ade0ca153e7ee27c4608ef7d62258a17239",
+    "build-browser-wasm/laya.wasm": "441d0801f19542960caf23d399215b7d037627304fae33d668fa10aa2d2b4390",
+    "build-browser-wasm/laya-reference.mjs": "a394841ee9c675a137a6e32dd031bf7ce6739a4b34e7fc69dda180ba01dbcace",
+    "build-browser-wasm/laya-reference.wasm": "ab42375647ee4e57cb9eaae8734365a571c17f01f48a93a9d808c8f0a8359f74",
+    "build-browser-webgpu/laya.mjs": "f378e434c52c7d0d633763c2dd1fcf5e87af944dca764c4ae04a1203a0533825",
+    "build-browser-webgpu/laya.wasm": "2d5a91c61a6dd7316d6645ac059fc69ca338cd6efe054a9b92d15f487f5c4b82",
+    "build-browser-webgpu/laya-reference.mjs": "032e38a08f25d483c4a8f22347d3c26cb94a64c1669d31f18daacb62720764d0",
+    "build-browser-webgpu/laya-reference.wasm": "4aa7490a7acdac1e5ce4cc9618941af7aec9598704090dcd394fdf0137e0f96d"
+  },
+  "gates": {
+    "wasm_fixtures": {
+      "status": "passed",
+      "backend": "wasm",
+      "results": {
+        "primitive.json": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "billing",
+              "probabilities": {
+                "billing": 0.9787302473510207,
+                "technical": 0.00984864019368077,
+                "sales": 0.01142111245529857
+              },
+              "confidence": 0.968095371026531
+            },
+            "refund_requested": {
+              "type": "noul",
+              "noul": 0.9630462844737767
+            },
+            "urgency": {
+              "type": "score",
+              "score": 1.7338760190166413,
+              "legend": {
+                "0": "Low urgency",
+                "1": "Moderate urgency",
+                "2": "High urgency"
+              },
+              "probabilities": {
+                "0": 0.0825033797769173,
+                "1": 0.1011172214295238,
+                "2": 0.8163793987935588
+              },
+              "confidence": 0.6008140285249624
+            }
+          },
+          "usage": {
+            "input_tokens": 126,
+            "output_tokens": 0
+          }
+        },
+        "structured.json": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "technical",
+              "probabilities": {
+                "billing": 0.10451745687214717,
+                "technical": 0.7747758028385243,
+                "sales": 0.12070674028932861
+              },
+              "confidence": 0.6621637042577865
+            },
+            "refund": {
+              "type": "noul",
+              "noul": 0.34756268078050306
+            },
+            "priority": {
+              "type": "score",
+              "score": 0.306994731448361,
+              "legend": {
+                "0": "-1",
+                "1": "0",
+                "2": "1"
+              },
+              "probabilities": {
+                "0": 0.7543646968903754,
+                "1": 0.18427587477088805,
+                "2": 0.06135942833873648
+              },
+              "confidence": 0.5395079028274585
+            }
+          },
+          "usage": {
+            "input_tokens": 121,
+            "output_tokens": 0
+          },
+          "values": {
+            "department": "technical",
+            "refund": false,
+            "priority": -1
+          }
+        },
+        "batch.json": [
+          {
+            "answers": {
+              "technical": {
+                "type": "noul",
+                "noul": 0.45353991370651453
+              }
+            },
+            "usage": {
+              "input_tokens": 71,
+              "output_tokens": 0
+            }
+          },
+          {
+            "answers": {
+              "department": {
+                "type": "choice",
+                "choice": "billing",
+                "probabilities": {
+                  "billing": 0.9787302473510207,
+                  "technical": 0.00984864019368077,
+                  "sales": 0.01142111245529857
+                },
+                "confidence": 0.968095371026531
+              },
+              "refund_requested": {
+                "type": "noul",
+                "noul": 0.9630462844737767
+              },
+              "urgency": {
+                "type": "score",
+                "score": 1.7338760190166413,
+                "legend": {
+                  "0": "Low urgency",
+                  "1": "Moderate urgency",
+                  "2": "High urgency"
+                },
+                "probabilities": {
+                  "0": 0.0825033797769173,
+                  "1": 0.1011172214295238,
+                  "2": 0.8163793987935588
+                },
+                "confidence": 0.6008140285249624
+              }
+            },
+            "usage": {
+              "input_tokens": 126,
+              "output_tokens": 0
+            }
+          },
+          {
+            "answers": {
+              "technical": {
+                "type": "noul",
+                "noul": 0.45353991370651453
+              }
+            },
+            "usage": {
+              "input_tokens": 71,
+              "output_tokens": 0
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "event": "start",
+          "request_id": 2,
+          "status": 0,
+          "elapsed_ms": 0
+        },
+        {
+          "event": "end",
+          "request_id": 2,
+          "status": 0,
+          "elapsed_ms": 73945.5
+        },
+        {
+          "event": "start",
+          "request_id": 3,
+          "status": 0,
+          "elapsed_ms": 0
+        },
+        {
+          "event": "end",
+          "request_id": 3,
+          "status": 0,
+          "elapsed_ms": 99366.9
+        },
+        {
+          "event": "start",
+          "request_id": 4,
+          "status": 0,
+          "elapsed_ms": 0
+        },
+        {
+          "event": "end",
+          "request_id": 4,
+          "status": 0,
+          "elapsed_ms": 177330.2
+        }
+      ],
+      "ticks": 17827,
+      "gpuGraphs": 0,
+      "capabilities": {
+        "backend": "wasm",
+        "abi": 1,
+        "threads": 1,
+        "runningCancellation": false,
+        "deadlines": true
+      }
+    },
+    "wasm_upstream_reference": {
+      "status": "passed",
+      "backend": "wasm",
+      "results": {
+        "primitive": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "billing",
+              "probabilities": {
+                "billing": 0.9787302473510207,
+                "technical": 0.00984864019368077,
+                "sales": 0.01142111245529857
+              },
+              "confidence": 0.968095371026531
+            },
+            "refund_requested": {
+              "type": "noul",
+              "noul": 0.9630462844737767
+            },
+            "urgency": {
+              "type": "score",
+              "score": 1.7338760190166413,
+              "legend": {
+                "0": "Low urgency",
+                "1": "Moderate urgency",
+                "2": "High urgency"
+              },
+              "probabilities": {
+                "0": 0.0825033797769173,
+                "1": 0.1011172214295238,
+                "2": 0.8163793987935588
+              },
+              "confidence": 0.6008140285249624
+            }
+          },
+          "input_tokens": 126
+        },
+        "structured": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "technical",
+              "probabilities": {
+                "billing": 0.10451745687214717,
+                "technical": 0.7747758028385243,
+                "sales": 0.12070674028932861
+              },
+              "confidence": 0.6621637042577865
+            },
+            "refund": {
+              "type": "noul",
+              "noul": 0.34756268078050306
+            },
+            "priority": {
+              "type": "score",
+              "score": 0.306994731448361,
+              "legend": {
+                "0": "-1",
+                "1": "0",
+                "2": "1"
+              },
+              "probabilities": {
+                "0": 0.7543646968903754,
+                "1": 0.18427587477088805,
+                "2": 0.06135942833873648
+              },
+              "confidence": 0.5395079028274585
+            }
+          },
+          "input_tokens": 121
+        },
+        "batch0": {
+          "answers": {
+            "technical": {
+              "type": "noul",
+              "noul": 0.45353991370651453
+            }
+          },
+          "input_tokens": 71
+        },
+        "batch1": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "billing",
+              "probabilities": {
+                "billing": 0.9787302473510207,
+                "technical": 0.00984864019368077,
+                "sales": 0.01142111245529857
+              },
+              "confidence": 0.968095371026531
+            },
+            "refund_requested": {
+              "type": "noul",
+              "noul": 0.9630462844737767
+            },
+            "urgency": {
+              "type": "score",
+              "score": 1.7338760190166413,
+              "legend": {
+                "0": "Low urgency",
+                "1": "Moderate urgency",
+                "2": "High urgency"
+              },
+              "probabilities": {
+                "0": 0.0825033797769173,
+                "1": 0.1011172214295238,
+                "2": 0.8163793987935588
+              },
+              "confidence": 0.6008140285249624
+            }
+          },
+          "input_tokens": 126
+        },
+        "batch2": {
+          "answers": {
+            "technical": {
+              "type": "noul",
+              "noul": 0.45353991370651453
+            }
+          },
+          "input_tokens": 71
+        }
+      }
+    },
+    "wasm_reference_comparison": {
+      "backend": "wasm",
+      "maximum_absolute_difference": 0,
+      "path": "",
+      "tolerance": 1e-05,
+      "passed": true
+    },
+    "webgpu_fixtures": {
+      "status": "passed",
+      "backend": "webgpu",
+      "results": {
+        "primitive.json": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "billing",
+              "probabilities": {
+                "billing": 0.9785705612880444,
+                "technical": 0.0099254413325818,
+                "sales": 0.011503997379373784
+              },
+              "confidence": 0.9678558419320666
+            },
+            "refund_requested": {
+              "type": "noul",
+              "noul": 0.9640178133571814
+            },
+            "urgency": {
+              "type": "score",
+              "score": 1.7229440417336772,
+              "legend": {
+                "0": "Low urgency",
+                "1": "Moderate urgency",
+                "2": "High urgency"
+              },
+              "probabilities": {
+                "0": 0.08711825163462977,
+                "1": 0.10281945499706319,
+                "2": 0.810062293368307
+              },
+              "confidence": 0.5844160626005159
+            }
+          },
+          "usage": {
+            "input_tokens": 126,
+            "output_tokens": 0
+          }
+        },
+        "structured.json": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "technical",
+              "probabilities": {
+                "billing": 0.10389603100947095,
+                "technical": 0.7785664020423838,
+                "sales": 0.11753756694814534
+              },
+              "confidence": 0.6678496030635757
+            },
+            "refund": {
+              "type": "noul",
+              "noul": 0.33115455249829856
+            },
+            "priority": {
+              "type": "score",
+              "score": 0.3106809744345459,
+              "legend": {
+                "0": "-1",
+                "1": "0",
+                "2": "1"
+              },
+              "probabilities": {
+                "0": 0.7504156457672765,
+                "1": 0.18848773403090122,
+                "2": 0.06109662020182233
+              },
+              "confidence": 0.5339785383481812
+            }
+          },
+          "usage": {
+            "input_tokens": 121,
+            "output_tokens": 0
+          },
+          "values": {
+            "department": "technical",
+            "refund": false,
+            "priority": -1
+          }
+        },
+        "batch.json": [
+          {
+            "answers": {
+              "technical": {
+                "type": "noul",
+                "noul": 0.4448555546773802
+              }
+            },
+            "usage": {
+              "input_tokens": 71,
+              "output_tokens": 0
+            }
+          },
+          {
+            "answers": {
+              "department": {
+                "type": "choice",
+                "choice": "billing",
+                "probabilities": {
+                  "billing": 0.9785705612880444,
+                  "technical": 0.0099254413325818,
+                  "sales": 0.011503997379373784
+                },
+                "confidence": 0.9678558419320666
+              },
+              "refund_requested": {
+                "type": "noul",
+                "noul": 0.9640178133571814
+              },
+              "urgency": {
+                "type": "score",
+                "score": 1.7229440417336772,
+                "legend": {
+                  "0": "Low urgency",
+                  "1": "Moderate urgency",
+                  "2": "High urgency"
+                },
+                "probabilities": {
+                  "0": 0.08711825163462977,
+                  "1": 0.10281945499706319,
+                  "2": 0.810062293368307
+                },
+                "confidence": 0.5844160626005159
+              }
+            },
+            "usage": {
+              "input_tokens": 126,
+              "output_tokens": 0
+            }
+          },
+          {
+            "answers": {
+              "technical": {
+                "type": "noul",
+                "noul": 0.4448555546773802
+              }
+            },
+            "usage": {
+              "input_tokens": 71,
+              "output_tokens": 0
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "event": "start",
+          "request_id": 2,
+          "status": 0,
+          "elapsed_ms": 0
+        },
+        {
+          "event": "end",
+          "request_id": 2,
+          "status": 0,
+          "elapsed_ms": 2070.1
+        },
+        {
+          "event": "start",
+          "request_id": 3,
+          "status": 0,
+          "elapsed_ms": 0
+        },
+        {
+          "event": "end",
+          "request_id": 3,
+          "status": 0,
+          "elapsed_ms": 1679.4
+        },
+        {
+          "event": "start",
+          "request_id": 4,
+          "status": 0,
+          "elapsed_ms": 0
+        },
+        {
+          "event": "end",
+          "request_id": 4,
+          "status": 0,
+          "elapsed_ms": 3630.4
+        }
+      ],
+      "ticks": 697,
+      "gpuGraphs": 11,
+      "capabilities": {
+        "backend": "webgpu",
+        "abi": 1,
+        "threads": 1,
+        "runningCancellation": false,
+        "deadlines": true
+      }
+    },
+    "webgpu_upstream_reference": {
+      "status": "passed",
+      "backend": "webgpu",
+      "results": {
+        "primitive": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "billing",
+              "probabilities": {
+                "billing": 0.9785705612880444,
+                "technical": 0.0099254413325818,
+                "sales": 0.011503997379373784
+              },
+              "confidence": 0.9678558419320666
+            },
+            "refund_requested": {
+              "type": "noul",
+              "noul": 0.9640178133571814
+            },
+            "urgency": {
+              "type": "score",
+              "score": 1.7229440417336772,
+              "legend": {
+                "0": "Low urgency",
+                "1": "Moderate urgency",
+                "2": "High urgency"
+              },
+              "probabilities": {
+                "0": 0.08711825163462977,
+                "1": 0.10281945499706319,
+                "2": 0.810062293368307
+              },
+              "confidence": 0.5844160626005159
+            }
+          },
+          "input_tokens": 126
+        },
+        "structured": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "technical",
+              "probabilities": {
+                "billing": 0.10389603100947095,
+                "technical": 0.7785664020423838,
+                "sales": 0.11753756694814534
+              },
+              "confidence": 0.6678496030635757
+            },
+            "refund": {
+              "type": "noul",
+              "noul": 0.33115455249829856
+            },
+            "priority": {
+              "type": "score",
+              "score": 0.3106809744345459,
+              "legend": {
+                "0": "-1",
+                "1": "0",
+                "2": "1"
+              },
+              "probabilities": {
+                "0": 0.7504156457672765,
+                "1": 0.18848773403090122,
+                "2": 0.06109662020182233
+              },
+              "confidence": 0.5339785383481812
+            }
+          },
+          "input_tokens": 121
+        },
+        "batch0": {
+          "answers": {
+            "technical": {
+              "type": "noul",
+              "noul": 0.4448555546773802
+            }
+          },
+          "input_tokens": 71
+        },
+        "batch1": {
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "billing",
+              "probabilities": {
+                "billing": 0.9785705612880444,
+                "technical": 0.0099254413325818,
+                "sales": 0.011503997379373784
+              },
+              "confidence": 0.9678558419320666
+            },
+            "refund_requested": {
+              "type": "noul",
+              "noul": 0.9640178133571814
+            },
+            "urgency": {
+              "type": "score",
+              "score": 1.7229440417336772,
+              "legend": {
+                "0": "Low urgency",
+                "1": "Moderate urgency",
+                "2": "High urgency"
+              },
+              "probabilities": {
+                "0": 0.08711825163462977,
+                "1": 0.10281945499706319,
+                "2": 0.810062293368307
+              },
+              "confidence": 0.5844160626005159
+            }
+          },
+          "input_tokens": 126
+        },
+        "batch2": {
+          "answers": {
+            "technical": {
+              "type": "noul",
+              "noul": 0.4448555546773802
+            }
+          },
+          "input_tokens": 71
+        }
+      }
+    },
+    "webgpu_reference_comparison": {
+      "backend": "webgpu",
+      "maximum_absolute_difference": 0,
+      "path": "",
+      "tolerance": 1e-05,
+      "passed": true
+    },
+    "lifecycle": {
+      "status": "passed",
+      "backend": "webgpu",
+      "checks": [
+        "aborted initialization",
+        "asset budget",
+        "pre-cancellation",
+        "deadline",
+        "cancelled close",
+        "routing and asset deduplication",
+        "idempotent shutdown",
+        "WASM fallback and deadline"
+      ]
+    },
+    "device_loss": {
+      "status": "passed",
+      "errorStatus": 3,
+      "reuseRejected": true
+    },
+    "assets": {
+      "status": "passed",
+      "checks": [
+        "HTTP 404",
+        "SHA-256 mismatch",
+        "Could not load"
+      ]
+    },
+    "cross_backend": {
+      "status": "failed",
+      "absolute_tolerance": 1e-05,
+      "wasm_vs_avx2_maximum_absolute_difference": 0.0219551978113,
+      "webgpu_vs_avx2_maximum_absolute_difference": 0.0236547151895,
+      "portable_vs_avx2_maximum_absolute_difference": 0.03300307378848277
+    },
+    "extracted_package": {
+      "status": "passed",
+      "scope": "11-question WebGPU fixture run, GPU device loss and default asset paths"
+    }
+  }
+}

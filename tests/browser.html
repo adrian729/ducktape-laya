@@ -1,0 +1,119 @@
+<!doctype html><meta charset="utf-8"><title>Laya browser conformance</title>
+<script type="module">
+import { Laya } from '/browser/index.mjs';
+window.state = { status: 'ready' };
+window.start = async (backend = 'wasm') => {
+  window.state = { status: 'running', backend, results: {}, events: [], ticks: 0, gpuGraphs: 0 };
+  const timer = setInterval(() => window.state.ticks++, 20);
+  let engine;
+  try {
+    engine = await Laya.open({ backend, modelUrl: '/model.gguf', moduleUrl: '/wasm/laya.mjs', webgpuModuleUrl: '/webgpu/laya.mjs',
+      onDiagnostic: text => { if (text.includes('ggml_backend_webgpu_graph_compute')) window.state.gpuGraphs++; },
+      sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2', initializationTimeoutMs: 240000 });
+    window.state.capabilities = engine.capabilities;
+    for (const name of ['primitive','structured','batch']) {
+      const request = await (await fetch(`/fixtures/${name}.json`)).text();
+      window.state.results[name + '.json'] = await engine.execute(request, { onEvent: event => window.state.events.push(event) });
+    }
+    try { await engine.execute('{}'); throw new Error('Invalid request accepted'); }
+    catch (error) { if (error.status !== 1) throw error; }
+    await engine.close();
+    try { await engine.execute('{}'); throw new Error('Closed handle accepted'); }
+    catch (error) { if (!error.message.includes('closed')) throw error; }
+    window.state.status = 'passed';
+  } catch (error) { window.state.status = 'failed'; window.state.error = error.stack; }
+  finally { clearInterval(timer); if (engine) await engine.close().catch(() => {}); }
+};
+window.startControls = async (backend = 'webgpu') => {
+  window.controls = { status: 'running', backend, checks: [] };
+  const check = name => window.controls.checks.push(name);
+  const expectStatus = async (promise, status) => {
+    try { await promise; throw new Error('Expected status ' + status); }
+    catch (error) { if (error.status !== status) throw error; }
+  };
+  const options = { backend, modelUrl: '/model.gguf', moduleUrl: '/wasm/laya.mjs', webgpuModuleUrl: '/webgpu/laya.mjs', initializationTimeoutMs: 240000 };
+  let engine;
+  try {
+    const abort = new AbortController(); abort.abort();
+    try { await Laya.open({ ...options, signal: abort.signal }); throw new Error('Accepted aborted init'); }
+    catch (error) { if (error.name !== 'AbortError') throw error; }
+    check('aborted initialization');
+    try { await Laya.open({ ...options, maxModelBytes: 1 }); throw new Error('Ignored byte budget'); }
+    catch (error) { if (!error.message.includes('maxModelBytes')) throw error; }
+    check('asset budget');
+    engine = await Laya.open({ ...options, maxPending: 1 });
+    const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
+    await expectStatus(engine.execute(request, { signal: abort.signal }), 5); check('pre-cancellation');
+    await expectStatus(engine.execute(request, { timeoutMs: 1 }), 6); check('deadline');
+    // Host rejection can precede the worker acknowledgment. Draining close proves cleanup.
+    await engine.close({ cancelPending: true }); check('cancelled close');
+    engine = await Laya.openRouter({ a: { url: '/model.gguf' }, b: { url: '/model.gguf' } }, { ...options, maxModelBytes: 449397600, maxLoaded: 1 });
+    const events = [];
+    const result = await engine.execute([{ ...request, model: 'a' }, { ...request, model: 'b' }], { onEvent: e => events.push(e) });
+    if (JSON.stringify(result[0].answers) !== JSON.stringify(result[1].answers) || result[0].model !== 'a' || result[1].model !== 'b') throw new Error('Alias router result changed');
+    if (events.filter(e => e.event === 'end').length !== 1) throw new Error('Missing observer end');
+    check('routing and asset deduplication');
+    const first = engine.close(); if (first !== engine.close()) throw new Error('close not idempotent'); await first;
+    check('idempotent shutdown');
+    // Force a failed GPU initialization, then validate explicit automatic CPU fallback.
+    engine = await Laya.open({ ...options, backend: 'auto', webgpuModuleUrl: '/missing.mjs' });
+    if (engine.capabilities.backend !== 'wasm') throw new Error('Fallback not selected');
+    await expectStatus(engine.execute(request, { timeoutMs: 1 }), 6);
+    check('WASM fallback and deadline');
+    await engine.close(); window.controls.status = 'passed';
+  } catch (error) { window.controls.status = 'failed'; window.controls.error = error.stack; }
+  finally { if (engine) await engine.close({ cancelPending: true }).catch(() => {}); }
+};
+window.startReference = async (backend = 'webgpu') => {
+  window.reference = { status: 'running', backend };
+  const primitive = await (await fetch('/fixtures/primitive.json')).json();
+  const batch = await (await fetch('/fixtures/batch.json')).json();
+  const structured = await (await fetch('/fixtures/structured.json')).json();
+  const questions = {
+    department: { type: 'choice', instructions: 'Which department handles this?', criteria: { billing: 'billing', technical: 'technical', sales: 'sales' } },
+    refund: { type: 'noul', instructions: 'Is a refund requested?' },
+    priority: { type: 'score', instructions: 'Urgency from low to high', criteria: ['-1','0','1'] },
+  };
+  const requests = { primitive, structured: { state: structured.state, questions }, batch0: batch[0], batch1: batch[1], batch2: batch[2] };
+  const worker = new Worker('/reference-worker.mjs', { type: 'module' });
+  worker.onmessage = ({ data }) => { if (data.progress) window.reference.progress = data.progress; else { window.reference = data; worker.terminate(); } };
+  worker.onerror = event => { window.reference = { status: 'failed', error: event.message }; worker.terminate(); };
+  worker.postMessage({ backend, requests });
+};
+window.startDeviceLoss = async () => {
+  window.loss = { status: 'running' };
+  let engine, worker;
+  const OriginalWorker = globalThis.Worker;
+  globalThis.Worker = class extends OriginalWorker { constructor(...args) { super(...args); worker = this; } };
+  try {
+    const pending = Laya.open({ backend: 'webgpu', modelUrl: '/model.gguf', webgpuModuleUrl: '/webgpu/laya.mjs', workerUrl: '/lost-worker.mjs' });
+    globalThis.Worker = OriginalWorker;
+    engine = await pending;
+    window.loss.phase = 'executing';
+    const request = await (await fetch('/fixtures/batch.json')).json();
+    const running = engine.execute(request);
+    setTimeout(() => worker.postMessage({ kind: 'cancel', id: -1, testDestroy: true }), 10);
+    try { await running; throw new Error('Device loss did not reject work'); }
+    catch (error) { if (error.status !== 3) throw error; }
+    try { await engine.execute(request); throw new Error('Failed worker reused'); }
+    catch (error) { if (!error.message.includes('closed')) throw error; }
+    window.loss = { status: 'passed', errorStatus: 3, reuseRejected: true };
+  } catch (error) { window.loss = { status: 'failed', error: error.stack }; }
+  finally { globalThis.Worker = OriginalWorker; if (engine) await engine.close().catch(() => {}); }
+};
+window.startAssets = async () => {
+  window.assets = { status: 'running', checks: [] };
+  try {
+    for (const [options, expected] of [
+      [{ modelUrl: '/missing-model.gguf' }, 'HTTP 404'],
+      [{ modelUrl: '/fixtures/primitive.json', sha256: '0'.repeat(64) }, 'SHA-256 mismatch'],
+      [{ modelUrl: '/fixtures/primitive.json' }, 'Could not load'],
+    ]) {
+      try { const engine = await Laya.open(options); await engine.close(); throw new Error('Unexpected initialization success'); }
+      catch (error) { if (!error.message.includes(expected)) throw error; }
+      window.assets.checks.push(expected);
+    }
+    window.assets.status = 'passed';
+  } catch (error) { window.assets.status = 'failed'; window.assets.error = error.stack; }
+};
+</script>

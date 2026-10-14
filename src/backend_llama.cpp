@@ -67,7 +67,11 @@ struct backend::impl {
             llama_backend_init();
         });
         auto mp = llama_model_default_params();
+#ifdef DTL_BROWSER_WEBGPU
+        mp.n_gpu_layers = 999;
+#else
         mp.n_gpu_layers = 0;
+#endif
         model.reset(llama_model_load_from_file(path, mp));
         if (!model) throw failure(DTL_MODEL_ERROR, "Could not load local GGUF model");
         auto prefix = meta(model.get(), "general.architecture") + ".decision.";
@@ -107,7 +111,11 @@ struct backend::impl {
         cp.n_threads = cp.n_threads_batch = threads ? threads : std::max(1u, std::min(4u, std::thread::hardware_concurrency()));
         cp.embeddings = true; cp.pooling_type = LLAMA_POOLING_TYPE_NONE;
         cp.attention_type = LLAMA_ATTENTION_TYPE_NON_CAUSAL;
+#ifdef DTL_BROWSER_WEBGPU
+        cp.offload_kqv = true; cp.op_offload = true;
+#else
         cp.offload_kqv = false; cp.op_offload = false;
+#endif
         ctx.reset(llama_init_from_model(model.get(), cp));
         if (!ctx) throw failure(DTL_MODEL_ERROR, "Could not create CPU inference context");
     }

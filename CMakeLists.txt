@@ -5,6 +5,20 @@ project(ducktape_laya VERSION ${DTL_VERSION} LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+if(EMSCRIPTEN)
+  set(LLAMA_WASM_MEM64 OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_HTML OFF CACHE BOOL "" FORCE)
+  if(GGML_WEBGPU)
+    add_compile_options(-msimd128 -fwasm-exceptions)
+    add_link_options(-msimd128 -fwasm-exceptions)
+  else()
+    add_compile_options(-msimd128 -fexceptions)
+    add_link_options(-msimd128 -fexceptions)
+  endif()
+  set(DTL_LIBRARY_KIND STATIC)
+else()
+  set(DTL_LIBRARY_KIND SHARED)
+endif()
 option(DUCKTAPE_BUILD_TESTS "Build native tests" ON)
 set(DUCKTAPE_TEST_MODEL "" CACHE FILEPATH "Local Laya GGUF for integration tests")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -19,6 +33,14 @@ if(DUCKTAPE_BUILD_REFERENCE_SERVER)
   set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
   set(LLAMA_USE_PREBUILT_UI OFF CACHE BOOL "" FORCE)
 endif()
+option(DUCKTAPE_BUILD_REFERENCE_PROBE "Build developer upstream-processing reference (never packaged)" OFF)
+if(DUCKTAPE_BUILD_REFERENCE_PROBE)
+  set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_MTMD ON CACHE BOOL "" FORCE)
+  set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
+  set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+  set(LLAMA_SUBPROCESS OFF CACHE BOOL "" FORCE)
+endif()
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_CUDA OFF CACHE BOOL "" FORCE)
@@ -27,7 +49,7 @@ set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(DUCKTAPE_LLAMA_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp" CACHE PATH "Pinned or isolated candidate llama.cpp checkout")
 get_filename_component(UPSTREAM "${DUCKTAPE_LLAMA_SOURCE}" ABSOLUTE)
 add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
-add_library(ducktape_laya SHARED src/laya.cpp src/backend_llama.cpp
+add_library(ducktape_laya ${DTL_LIBRARY_KIND} src/laya.cpp src/backend_llama.cpp
   ${UPSTREAM}/common/json.cpp ${UPSTREAM}/common/unicode.cpp
   ${UPSTREAM}/common/jinja/lexer.cpp ${UPSTREAM}/common/jinja/parser.cpp
   ${UPSTREAM}/common/jinja/runtime.cpp ${UPSTREAM}/common/jinja/value.cpp
@@ -39,7 +61,7 @@ target_link_libraries(ducktape_laya PRIVATE llama)
 target_compile_definitions(ducktape_laya PRIVATE DUCKTAPE_LAYA_BUILD)
 set_target_properties(ducktape_laya PROPERTIES EXPORT_NAME laya VERSION ${PROJECT_VERSION} SOVERSION 0
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
   target_link_options(ducktape_laya PRIVATE "LINKER:--exclude-libs,ALL"
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/exports.map")
   set_property(TARGET ducktape_laya APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/exports.map)
@@ -58,6 +80,7 @@ if(DUCKTAPE_BUILD_EXAMPLES)
   add_executable(laya-demo-cpp examples/demo.cpp)
   target_link_libraries(laya-demo-cpp PRIVATE ducktape_laya laya-demo-form)
 endif()
+if(NOT EMSCRIPTEN)
 include(GNUInstallDirs)
 install(TARGETS ducktape_laya EXPORT ducktape_laya-targets LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
@@ -76,6 +99,7 @@ install(FILES release/compatibility.json models/manifest.json DESTINATION ${CMAK
 install(FILES include/ducktape_laya.h include/ducktape_laya.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya)
 install(DIRECTORY licenses/ DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya/licenses)
+endif()
 if(DUCKTAPE_BUILD_TESTS)
   enable_testing()
   add_executable(laya-conformance-c tests/consumers/c.c)
@@ -120,4 +144,51 @@ if(DUCKTAPE_BUILD_TESTS)
   add_executable(laya-encoder-probe EXCLUDE_FROM_ALL tests/encoder-batch.cpp)
   target_include_directories(laya-encoder-probe PRIVATE ${UPSTREAM}/vendor)
   target_link_libraries(laya-encoder-probe PRIVATE llama)
+endif()
+
+if(EMSCRIPTEN)
+  if(DUCKTAPE_BUILD_NODE OR DUCKTAPE_BUILD_TESTS OR DUCKTAPE_BUILD_EXAMPLES)
+    message(FATAL_ERROR "Browser build requires native Node/tests/examples options OFF")
+  endif()
+  if(GGML_WEBGPU)
+    target_compile_definitions(ducktape_laya PRIVATE DTL_BROWSER_WEBGPU)
+  endif()
+  add_executable(ducktape_laya_wasm bindings/browser/entry.cpp)
+  target_link_libraries(ducktape_laya_wasm PRIVATE ducktape_laya)
+  set_target_properties(ducktape_laya_wasm PROPERTIES OUTPUT_NAME laya SUFFIX .mjs)
+  if(GGML_WEBGPU)
+    target_link_options(ducktape_laya_wasm PRIVATE "-sJSPI_EXPORTS=['dtl_open','dtl_execute','dtl_decide','dtl_decide_observed','dtl_router_open','dtl_router_execute','dtl_close','dtl_router_close','dtl_execute_with_options','dtl_decide_with_options','dtl_router_execute_with_options']")
+  endif()
+  set(DUCKTAPE_WASM_OPTIMIZATION "2" CACHE STRING "WASM link optimization: 0, 1, 2, 3, s or z")
+  if(NOT DUCKTAPE_WASM_OPTIMIZATION MATCHES "^[0123sz]$")
+    message(FATAL_ERROR "Invalid DUCKTAPE_WASM_OPTIMIZATION")
+  endif()
+  target_link_options(ducktape_laya_wasm PRIVATE "-O${DUCKTAPE_WASM_OPTIMIZATION}"
+    "-sMODULARIZE=1" "-sEXPORT_ES6=1" "-sENVIRONMENT=web,worker"
+    "-sALLOW_MEMORY_GROWTH=1" "-sMAXIMUM_MEMORY=4294967296" "-sINITIAL_MEMORY=67108864"
+    "-sSTACK_SIZE=2097152" "-sFORCE_FILESYSTEM=1"
+    "$<$<NOT:$<BOOL:${GGML_WEBGPU}>>:-sDISABLE_EXCEPTION_CATCHING=0>"
+    "-sEXPORTED_FUNCTIONS=['_malloc','_free','_dtl_abi_version','_dtl_open','_dtl_close','_dtl_free','_dtl_decide','_dtl_decide_observed','_dtl_execute','_dtl_router_open','_dtl_router_execute','_dtl_router_close','_dtl_execute_with_options','_dtl_decide_with_options','_dtl_router_execute_with_options']"
+    "-sALLOW_TABLE_GROWTH=1"
+    "-sEXPORTED_RUNTIME_METHODS=['HEAPU32','addFunction','removeFunction','ccall','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']")
+endif()
+
+if(DUCKTAPE_BUILD_REFERENCE_PROBE)
+  add_executable(laya-reference tests/upstream-reference.cpp
+    ${UPSTREAM}/tools/server/server-decision.cpp ${UPSTREAM}/tools/server/server-common.cpp)
+  target_include_directories(laya-reference PRIVATE ${UPSTREAM}/tools/server ${UPSTREAM})
+  target_link_libraries(laya-reference PRIVATE llama-common mtmd)
+  if(EMSCRIPTEN)
+    set_target_properties(laya-reference PROPERTIES SUFFIX .mjs)
+    target_link_options(laya-reference PRIVATE "-O1" "-sMODULARIZE=1" "-sEXPORT_ES6=1"
+      "-sENVIRONMENT=web,worker" "-sALLOW_MEMORY_GROWTH=1" "-sMAXIMUM_MEMORY=4294967296"
+      "-sINITIAL_MEMORY=67108864" "-sSTACK_SIZE=2097152" "-sFORCE_FILESYSTEM=1"
+      "-sEXPORTED_FUNCTIONS=['_reference_open','_reference_execute','_reference_close']"
+      "-sEXPORTED_RUNTIME_METHODS=['ccall','FS']"
+      "$<$<NOT:$<BOOL:${GGML_WEBGPU}>>:-sDISABLE_EXCEPTION_CATCHING=0>")
+    if(GGML_WEBGPU)
+      target_compile_definitions(laya-reference PRIVATE REFERENCE_WEBGPU)
+      target_link_options(laya-reference PRIVATE "-sJSPI_EXPORTS=['reference_open','reference_execute','reference_close']")
+    endif()
+  endif()
 endif()

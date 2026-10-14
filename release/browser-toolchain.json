@@ -1,0 +1,12 @@
+{
+  "emsdk_repository": "https://github.com/emscripten-core/emsdk.git",
+  "emsdk_commit": "8f685c26ee9f672081e61e22c6aa60fa972d00a9",
+  "sdk_version": "6.0.12",
+  "emscripten_commit": "5488e0871d46d19a3209988190fa6a653126256f",
+  "sdk_build": "6e9f6885cb17a3d6c8fd488a5cff730f50aba61d",
+  "webgpu_port": "emdawnwebgpu (version pinned by this Emscripten SDK)",
+  "memory64": false,
+  "threads": 1,
+  "native_wasm_absolute_tolerance": 1e-05,
+  "status": "validated experimental Chrome 152 WASM/WebGPU path; cross-backend numeric gate failed"
+}

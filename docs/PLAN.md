@@ -40,9 +40,12 @@ validated capability, not implied by browser WebGPU support.
 - Checked: pinned English Q8_0 inference, interface parity, selected lifecycle
   and error cases. Existing reviews and tests do not establish broad platform
   support, application accuracy, or production reliability.
-- Missing: browser runtime, supported release packages, automated compatibility
-  and upgrade tooling, broad Linux coverage, sustained reliability validation,
-  and explicit cancellation/deadline behavior.
+- Implemented since the initial plan: native/npm/Rust packaging, Electron/ASAR
+  validation, isolated upgrade tooling, cooperative cancellation/deadlines,
+  lifecycle/resource stress, and experimental shared-core WASM/WebGPU packaging.
+- Remaining release work: broader Linux/browser coverage, sanitizer completion,
+  diagnostics/CPU compatibility policy, independently reproducible builds,
+  release/security automation, and the failed cross-backend numeric gate.
 - Model-specific preparation and result processing remain adapted from upstream
   server code, now isolated behind a private backend boundary. The initial
   [upstream audit](ARCHITECTURE.md) explains that choice and its limitations.
@@ -264,8 +267,8 @@ this workflow early, before adding more model-specific code or backends.
 Acceptance: one documented automated entry point builds and compares a selected
 candidate and produces the report; a maintainer is not manually editing every
 binding or assembling a test checklist. A new incompatible capability may still
-require shared-core work and deliberate API evolution. This tooling is planned,
-not implemented yet.
+require shared-core work and deliberate API evolution. This tooling is implemented in `scripts/check-upgrade.py`; the retained
+candidate report distinguishes passed gates from remaining release checks.
 
 Candidate reports must distinguish **passed**, **failed**, and **not run** for
 each gate. Stage 1's adapter experiment is not a production release approval:
