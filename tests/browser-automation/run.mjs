@@ -18,10 +18,13 @@ const { values: args } = parseArgs({ options: {
   headless: { type: 'boolean', default: false }, isolated: { type: 'boolean', default: false },
   'skip-reference': { type: 'boolean', default: false },
   'skip-controls': { type: 'boolean', default: false },
+  'stage-timeout-ms': { type: 'string', default: '900000' },
 } });
 if (!args.model || !args.output || !['wasm', 'webgpu', 'both'].includes(args.backend)) {
-  throw new Error('Usage: node tests/browser-automation/run.mjs --model GGUF --output NEW_DIR [--native REPORT] [--package-dir EXTRACTED_PACKAGE] [--backend wasm|webgpu|both] [--isolated] [--headless]');
+  throw new Error('Usage: node tests/browser-automation/run.mjs --model GGUF --output NEW_DIR [--native REPORT] [--package-dir EXTRACTED_PACKAGE] [--backend wasm|webgpu|both] [--isolated] [--headless] [--stage-timeout-ms MS]');
 }
+const stageTimeout = Number(args['stage-timeout-ms']);
+if (!Number.isInteger(stageTimeout) || stageTimeout < 1000) throw new Error('--stage-timeout-ms must be an integer >= 1000');
 const out = resolve(args.output), model = resolve(args.model);
 await mkdir(out); // Existing output must never be overwritten.
 async function hash(path) {
@@ -97,9 +100,16 @@ try {
         console.log(`${backend}/${name}: running`);
         const fixtures = Object.keys(report.fixture_hashes).map(name => name.slice(0, -'.json'.length));
         await page.evaluate(([method, backend, fixtures]) => { void window[method](backend, fixtures); }, [method, backend, fixtures]);
-        await page.waitForFunction(state => ['passed', 'failed'].includes(window[state]?.status), state, { timeout: 900000 });
-        const result = await page.evaluate(state => window[state], state);
         const file = backend + '-' + name + '.json';
+        try {
+          await page.waitForFunction(state => ['passed', 'failed'].includes(window[state]?.status), state, { timeout: stageTimeout });
+        } catch (error) {
+          // Keep partial progress (e.g. completed fixtures and timings) for diagnosis.
+          const partial = await page.evaluate(state => window[state], state).catch(() => null);
+          if (partial) await writeFile(join(out, backend + '-' + name + '.partial.json'), JSON.stringify(partial, null, 2) + '\n');
+          throw error;
+        }
+        const result = await page.evaluate(state => window[state], state);
         await writeFile(join(out, file), JSON.stringify(result, null, 2) + '\n');
         gates[name] = { status: result.status, report: file, sha256: await hash(join(out, file)) };
         if (result.status !== 'passed') failed = true;
