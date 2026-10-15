@@ -21,6 +21,13 @@ explicitly linked to the same source and relevant configuration as shipped
 artifacts. Missing evidence remains not run. A successful native runner alone
 does not qualify the browser, platform matrix, security or publication.
 
+The shared fixtures under `tests/fixtures` are the conformance and drift corpus for
+every binding, backend and upstream comparison. They must cover each decision type
+and calibration bucket, close probabilities, structured and text inputs, Unicode,
+literal mask text, integer-like keys, a prompt near the token budget and every
+supported schema projection. Reports identify the corpus by fixture hashes. Budget
+overflow rejection is checked by focused tests, not inferred from it.
+
 Routine stress lasts at least one hour; candidate soak lasts at least eight
 hours. Fuzz each selected target for at least one hour in qualification runs.
 Use at least three independent baseline runs, then freeze profile-specific
