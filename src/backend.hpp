@@ -1,6 +1,9 @@
 #pragma once
 // Private boundary: no llama/ggml/Jinja types in shared orchestration or bindings.
 #include <nlohmann/json.hpp>
+#ifndef DTL_NLOHMANN_NOTHROW_DESTROY
+#error "Build must use the patched nlohmann/json.hpp (patches/llama.cpp/nlohmann-nothrow-destroy.patch)"
+#endif
 #include <cstdint>
 #include <memory>
 #include <string>

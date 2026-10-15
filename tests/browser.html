@@ -110,11 +110,23 @@ window.startAssets = async () => {
       [{ modelUrl: '/missing-model.gguf' }, 'HTTP 404'],
       [{ modelUrl: '/fixtures/primitive.json', sha256: '0'.repeat(64) }, 'SHA-256 mismatch'],
       [{ modelUrl: '/fixtures/primitive.json' }, 'Could not load'],
+      [{ modelUrl: '/faults/truncated.gguf' }, 'Could not load'],
+      [{ modelUrl: '/faults/interrupted.gguf' }, ''],
+      [{ modelUrl: '/model.gguf', backend: 'wasm', moduleUrl: '/missing-module.mjs' }, ''],
+      [{ modelUrl: '/model.gguf', backend: 'wasm', wasmUrl: '/fixtures/primitive.json' }, ''],
     ]) {
-      try { const engine = await Laya.open(options); await engine.close(); throw new Error('Unexpected initialization success'); }
-      catch (error) { if (!error.message.includes(expected)) throw error; }
-      window.assets.checks.push(expected);
+      const label = expected || JSON.stringify(options);
+      try { const engine = await Laya.open({ initializationTimeoutMs: 240000, ...options }); await engine.close(); throw new Error('Unexpected initialization success: ' + label); }
+      catch (error) {
+        if (error.message.startsWith('Unexpected initialization success') || !error.message.includes(expected)) throw error;
+        window.assets.checks.push({ case: label, error: error.message });
+      }
     }
+    // The page still opens a working engine after every failed initialization.
+    const engine = await Laya.open({ modelUrl: '/model.gguf', backend: 'wasm' });
+    await engine.execute({ state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } });
+    await engine.close();
+    window.assets.checks.push({ case: 'recovery after failed initialization' });
     window.assets.status = 'passed';
   } catch (error) { window.assets.status = 'failed'; window.assets.error = error.stack; }
 };

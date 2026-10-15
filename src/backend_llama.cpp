@@ -1,6 +1,7 @@
 // Laya prompt layout and result formulas adapted from llama.cpp b11540
 // tools/server/server-decision.cpp (MIT). See THIRD_PARTY_NOTICES.md.
 #include "backend.hpp"
+#include "decision.hpp"
 #include "errors.hpp"
 #include "execution.hpp"
 #include "platform.hpp"
@@ -186,37 +187,7 @@ struct backend::impl {
             if (!v || !std::isfinite(v[prepared.column])) throw failure(DTL_INFERENCE_ERROR, "Missing/nonfinite decision output");
             scores.push_back(v[prepared.column]);
         }
-        size_t n = scores.size();
-        std::string bucket = n <= 2 ? "2" : n <= 5 ? "3_5" : n <= 10 ? "6_10" : "11";
-        auto it = temperatures.find(q.type + "." + bucket);
-        if (it == temperatures.end()) it = temperatures.find(q.type);
-        float temperature = it == temperatures.end() ? 1.0f : it->second;
-        float largest = *std::max_element(scores.begin(), scores.end());
-        std::vector<double> p(n);
-        double sum = 0;
-        for (size_t i = 0; i < n; ++i) { p[i] = std::exp(double(scores[i] - largest) / temperature); sum += p[i]; }
-        for (double &v : p) v /= sum;
-        json answer = {{"type", q.type}};
-        if (q.type == "noul") { answer["noul"] = p[1]; return answer; }
-        json probabilities = json::object(), legend = json::object();
-        size_t best = std::max_element(p.begin(), p.end()) - p.begin();
-        double expected = 0, distance = 0, uniform_distance = 0;
-        for (size_t i = 0; i < n; ++i) {
-            auto key = q.options[i]["key"].get<std::string>();
-            probabilities[key] = p[i]; legend[key] = q.options[i]["description"];
-            expected += i * p[i]; distance += p[i] * std::fabs(double(i) - double(best));
-            uniform_distance += std::fabs(double(i) - (n - 1) / 2.0) / n;
-        }
-        if (q.type == "choice") {
-            answer["choice"] = q.options[best]["key"];
-            answer["probabilities"] = probabilities;
-            answer["confidence"] = std::max(0.0, (p[best] - 1.0/n) / (1.0 - 1.0/n));
-        } else {
-            answer["score"] = expected; answer["legend"] = legend;
-            answer["probabilities"] = probabilities;
-            answer["confidence"] = std::max(0.0, 1.0 - distance / uniform_distance);
-        }
-        return answer;
+        return answer_from_scores(q.type, q.options, scores, temperature_for(q.type, scores.size(), temperatures));
     }
 };
 backend::backend(const char *path, uint32_t threads) : impl_(std::make_unique<impl>(path, threads)) {}

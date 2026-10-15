@@ -19,6 +19,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FILES = ('libducktape_laya.so', 'laya-conformance-c')
+SONAME = 'libducktape_laya.so.0'
 
 def sha256(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -44,9 +45,15 @@ def bundle(args):
     args.output.mkdir(parents=True, exist_ok=False)
     for name in FILES:
         shutil.copy2(args.build / name, args.output / name)
+    # The consumer loads the library by its SONAME; keep both names identical.
+    shutil.copy2(args.build / 'libducktape_laya.so', args.output / SONAME)
 
 def record(args):
     files = {name: sha256(args.bundle / name) for name in FILES}
+    if not (args.bundle / SONAME).is_file():
+        shutil.copy2(args.bundle / 'libducktape_laya.so', args.bundle / SONAME)
+    if sha256(args.bundle / SONAME) != files['libducktape_laya.so']:
+        raise SystemExit(f'{SONAME} differs from libducktape_laya.so')
     fixtures = sorted((ROOT / 'tests/fixtures').glob('*.json'))
     env = dict(os.environ, LD_LIBRARY_PATH=str(args.bundle.resolve()))
     outputs = {}

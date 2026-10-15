@@ -1,5 +1,6 @@
 #include "ducktape_laya.h"
 #include "backend.hpp"
+#include "decision.hpp"
 #include "errors.hpp"
 #include "execution.hpp"
 #include "platform.hpp"
@@ -268,15 +269,7 @@ json evaluate(dtl_engine &engine, planned &p, const dtl::execution &control) {
             const auto &a = answers[name];
             if (field["type"] == "boolean") values[name] = a["noul"].get<double>() >= p.threshold;
             else if (field["type"] == "string") values[name] = a["choice"];
-            else {
-                size_t best = 0, index = 0;
-                double probability = -1;
-                for (auto &v : a["probabilities"]) {
-                    if (v.get<double>() > probability) { probability = v.get<double>(); best = index; }
-                    ++index;
-                }
-                values[name] = field["minimum"].get<int64_t>() + static_cast<int64_t>(best);
-            }
+            else values[name] = field["minimum"].get<int64_t>() + static_cast<int64_t>(dtl::ordinal_index(a["probabilities"]));
         }
         result["values"] = std::move(values);
     }

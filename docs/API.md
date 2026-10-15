@@ -243,6 +243,13 @@ closing a non-null handle invalidates it and must not race any active call.
 | 6 | Deadline exceeded |
 | 7 | Unsupported platform/required CPU features |
 
+Allocation failure while parsing, planning, rendering or returning a request
+yields status 4 and leaves the engine usable. During model loading the runtime
+loader may report it as status 2. The library does not terminate the process on
+C++ allocation failure; the operating system may still kill a process under
+memory pressure, and allocation failures inside llama.cpp/ggml C code follow
+upstream behavior.
+
 C++ and Rust expose native statuses through their error types; JS rejects with
 an Error carrying native `status` when available. Binding-level validation,
 queue, transport and worker errors may have no native status. Error message

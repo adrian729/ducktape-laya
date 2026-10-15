@@ -26,7 +26,10 @@ every binding, backend and upstream comparison. They must cover each decision ty
 and calibration bucket, close probabilities, structured and text inputs, Unicode,
 literal mask text, integer-like keys, a prompt near the token budget and every
 supported schema projection. Reports identify the corpus by fixture hashes. Budget
-overflow rejection is checked by focused tests, not inferred from it.
+overflow rejection is checked by focused tests, not inferred from it. Exact score
+ties cannot be produced reliably through a model, so the tie rule (first option or
+level), calibration bucket selection and confidence formulas are checked by the
+model-free `decision-rules` test against the arithmetic the backend uses.
 
 Routine stress lasts at least one hour; candidate soak lasts at least eight
 hours. Fuzz each selected target for at least one hour in qualification runs.

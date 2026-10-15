@@ -25,6 +25,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
             self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
         super().end_headers()
+    def do_GET(self):
+        # Fault routes: a well-formed response with a truncated model, and a response
+        # whose connection closes after 1 MiB of its declared length.
+        path = urllib.parse.urlsplit(self.path).path
+        if path in ('/faults/truncated.gguf', '/faults/interrupted.gguf'):
+            size = a.model.stat().st_size
+            sent = size // 2 if path == '/faults/truncated.gguf' else 1 << 20
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Length', str(sent if path == '/faults/truncated.gguf' else size))
+            self.end_headers()
+            with a.model.open('rb') as model:
+                while sent:
+                    chunk = model.read(min(sent, 1 << 20))
+                    self.wfile.write(chunk)
+                    sent -= len(chunk)
+            self.wfile.flush()
+            self.close_connection = True
+            return
+        super().do_GET()
     def translate_path(self, path):
         path = urllib.parse.unquote(urllib.parse.urlsplit(path).path)
         if path == '/lost-worker.mjs': return str(root / 'tests/lost-worker.mjs')

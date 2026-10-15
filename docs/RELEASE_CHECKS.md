@@ -121,6 +121,20 @@ python3 tests/cross-host.py compare ARTIFACT/cross-host/record.json build/cross-
 Comparison requires identical bundle, model and fixture hashes, distinct CPU
 identities and byte-identical outputs. It covers that build's ISA profile only.
 
+`real-faults` (`tests/faults.cpp`, Linux, registered with a test model) feeds
+damaged models to `dtl_open`: empty, non-GGUF and unreadable files, a directory,
+truncation from the header to the last byte, and in-place corruption of the magic,
+version, tensor/metadata counts, a string length, the decision type, temperatures
+and the head budget. Each must return `DTL_MODEL_ERROR` with a message and no
+descriptor leak; corrupted tensor bytes are not detectable without the host's
+SHA-256 check. It then injects allocation failure: model loading under an
+address-space limit, and failing the Nth C++ allocation of `dtl_execute` (every
+point through 384, then every 97th) and of `dtl_open` (geometric points). Request
+failures must return `DTL_OUT_OF_MEMORY`; failures absorbed internally must still
+produce exact results; the engine must keep returning exact results afterwards.
+Allocation failures inside C code (ggml `malloc`) and the browser heap are not
+covered by this injection.
+
 ThreadSanitizer covers the native library, llama.cpp/ggml (its own pthread pool;
 OpenMP is disabled) and the native test executables, including the real-model
 suites and the stress loop's concurrent callers, second engines and router

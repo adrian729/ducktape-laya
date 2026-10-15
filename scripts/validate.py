@@ -95,8 +95,8 @@ try:
         line.startswith(('CMAKE_C_COMPILER:', 'CMAKE_CXX_COMPILER:', 'CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS', 'CMAKE_BUILD_TYPE:', 'GGML_'))}
     # Assert model-dependent tests were registered; an empty green suite is not evidence.
     registered = json.loads(subprocess.check_output(['ctest', '--test-dir', build, '--show-only=json-v1'], env=env))
-    required = {'abi-errors', 'feature-errors', 'control-errors'}
-    if model: required |= {'real-model', 'real-features', 'real-control'}
+    required = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules'}
+    if model: required |= {'real-model', 'real-features', 'real-control', 'real-faults'}
     if not required <= {test['name'] for test in registered['tests']}:
         raise RuntimeError('Required native tests are missing')
     run('native', ['ctest', '--test-dir', build, '--output-on-failure'], 'native_contracts' if model else None)
