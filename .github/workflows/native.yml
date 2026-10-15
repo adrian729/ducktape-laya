@@ -107,6 +107,12 @@ jobs:
       - name: Real-model and installed artifact checks
         if: inputs.real_model
         run: python3 scripts/validate.py --model build-model/laya.gguf --packages --upstream-reference --output build-ci-report --jobs 2
+      - name: Record exact outputs of the built library on this runner CPU
+        if: inputs.real_model
+        run: |
+          python3 tests/cross-host.py bundle --build build-validation --output build-ci-report/cross-host/bundle
+          python3 tests/cross-host.py record --bundle build-ci-report/cross-host/bundle \
+            --model build-model/laya.gguf --report build-ci-report/cross-host/record.json
       - name: Retain logs and explicit gate report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

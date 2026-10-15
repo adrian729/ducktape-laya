@@ -107,6 +107,20 @@ maintainer actions. Each numerical profile must pass strict same-backend upstrea
 checks. Cross-profile comparisons report probability and decision drift and must
 not be described as probability equivalence.
 
+Exact native results on a second physical CPU are checked with one unchanged
+binary. A manually dispatched real-model CI run bundles its built library and C
+conformance consumer, records raw fixture outputs with the runner's CPU identity
+and uploads both. Download that artifact and run the same bundle on a different CPU:
+
+```sh
+python3 tests/cross-host.py record --bundle ARTIFACT/cross-host/bundle \
+  --model /path/to/Laya-Q8_0.gguf --report build/cross-host-local.json
+python3 tests/cross-host.py compare ARTIFACT/cross-host/record.json build/cross-host-local.json
+```
+
+Comparison requires identical bundle, model and fixture hashes, distinct CPU
+identities and byte-identical outputs. It covers that build's ISA profile only.
+
 ThreadSanitizer covers the native library, llama.cpp/ggml (its own pthread pool;
 OpenMP is disabled) and the native test executables, including the real-model
 suites and the stress loop's concurrent callers, second engines and router
