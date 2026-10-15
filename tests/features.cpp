@@ -91,6 +91,31 @@ int main(int argc, char **argv) {
         invalid([&] { engine.execute(json::array({requests[0], json::object()}).dump()); });
         invalid([&] { engine.execute(std::string(1048577, 'x')); });
         checkpoint("batches and bounds");
+        // Overflow is rejected, never truncated. Each repeated word is one token, so the
+        // boundary is exact; rejected prompts fail during planning, before any inference.
+        auto repeated = [](const char *word, size_t count) { std::string s; while (count--) s += word; return s; };
+        auto sized = [&](size_t words) {
+            json r = {{"state", repeated("refund ", words)}, {"questions", {{"refund", requests[0]["questions"]["refund"]}}}};
+            return r.dump();
+        };
+        auto rejected = [&](const std::string &request, const char *reason) {
+            try { engine.execute(request); return false; }
+            catch (const ducktape::error &e) {
+                expect(e.status == DTL_INVALID_ARGUMENT && std::string(e.what()).find(reason) != std::string::npos, e.what());
+                return true;
+            }
+        };
+        const size_t base = json::parse(engine.execute(sized(1)))["usage"]["input_tokens"].get<size_t>() - 1;
+        expect(base < 512 && json::parse(engine.execute(sized(512 - base)))["usage"]["input_tokens"] == 512,
+               "largest accepted prompt uses the whole budget");
+        expect(rejected(sized(513 - base), "512-token"), "prompt over budget rejected");
+        json long_option = primitive("Please refund me.");
+        long_option["questions"]["department"]["criteria"]["billing"] = repeated("payments ", 60);
+        expect(rejected(long_option.dump(), "option text exceeds"), "long option rejected");
+        json long_head = primitive("Please refund me.");
+        long_head["questions"]["refund"]["instructions"] = repeated("refund ", 400);
+        expect(rejected(long_head.dump(), "instructions exceed"), "long instructions rejected");
+        checkpoint("token and head budgets");
         auto schema = json::parse(R"({"state":"Please refund me.","schema":{"type":"object","properties":{
           "department":{"type":"string","enum":["billing","technical","sales"],"description":"Which department should handle this?"},
           "refund":{"type":"boolean","description":"Does the customer request a refund?"},
