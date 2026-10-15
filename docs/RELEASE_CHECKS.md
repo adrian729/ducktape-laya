@@ -107,6 +107,21 @@ maintainer actions. Each numerical profile must pass strict same-backend upstrea
 checks. Cross-profile comparisons report probability and decision drift and must
 not be described as probability equivalence.
 
+ThreadSanitizer covers the native library, llama.cpp/ggml (its own pthread pool;
+OpenMP is disabled) and the native test executables, including the real-model
+suites and the stress loop's concurrent callers, second engines and router
+evictions. It does not cover the Node worker or Rust threads. No suppressions:
+
+```sh
+CC=clang CXX=clang++ cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DDUCKTAPE_BUILD_TESTS=ON -DDUCKTAPE_BUILD_NODE=OFF -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf \
+  '-DCMAKE_C_FLAGS=-fsanitize=thread -fno-omit-frame-pointer' \
+  '-DCMAKE_CXX_FLAGS=-fsanitize=thread -fno-omit-frame-pointer'
+cmake --build build-tsan --parallel 2 && cmake --build build-tsan --target laya-stress
+TSAN_OPTIONS=halt_on_error=1 ctest --test-dir build-tsan --output-on-failure
+TSAN_OPTIONS=halt_on_error=1 LD_LIBRARY_PATH=build-tsan build-tsan/laya-stress /path/to/Laya-Q8_0.gguf 10
+```
+
 For coverage-guided request/planner/router fuzzing, use a separate Linux Clang
 build. The optional target instruments the shared core and links libFuzzer only
 into the test executable. It needs no model; lazy inference is directed at a
