@@ -9,7 +9,7 @@ onmessage = async ({ data: { backend, requests } }) => {
     if (error) throw new Error(error);
     const results = {};
     for (const [name, request] of Object.entries(requests)) {
-      const result = JSON.parse(await runtime.ccall('reference_execute', 'string', ['string'], [JSON.stringify(request)], { async: true }));
+      const result = JSON.parse(await runtime.ccall('reference_execute', 'string', ['string'], [request], { async: true }));
       if (result.error) throw new Error(result.error);
       results[name] = result;
       postMessage({ progress: name });

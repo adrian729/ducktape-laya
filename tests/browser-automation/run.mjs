@@ -95,7 +95,8 @@ try {
       if (backend === 'webgpu') gates.device_loss = { status: 'not_run' };
       for (const [name, method, state] of stages) {
         console.log(`${backend}/${name}: running`);
-        await page.evaluate(([method, backend]) => { void window[method](backend); }, [method, backend]);
+        const fixtures = Object.keys(report.fixture_hashes).map(name => name.slice(0, -'.json'.length));
+        await page.evaluate(([method, backend, fixtures]) => { void window[method](backend, fixtures); }, [method, backend, fixtures]);
         await page.waitForFunction(state => ['passed', 'failed'].includes(window[state]?.status), state, { timeout: 900000 });
         const result = await page.evaluate(state => window[state], state);
         const file = backend + '-' + name + '.json';

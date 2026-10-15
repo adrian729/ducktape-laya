@@ -2,7 +2,7 @@
 <script type="module">
 import { Laya } from '/browser/index.mjs';
 window.state = { status: 'ready' };
-window.start = async (backend = 'wasm') => {
+window.start = async (backend = 'wasm', fixtures = ['batch', 'primitive', 'structured']) => {
   window.state = { status: 'running', backend, results: {}, events: [], ticks: 0, gpuGraphs: 0,
     model_sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2', fixture_hashes: {} };
   const timer = setInterval(() => window.state.ticks++, 20);
@@ -16,7 +16,7 @@ window.start = async (backend = 'wasm') => {
     if (window.state.info.numerical_profile.id !== (backend === 'wasm' ? 'wasm-cpu' : 'webgpu') ||
         window.state.info.numerical_profile.cross_profile_equivalence !== false) throw new Error('Invalid numerical profile');
     if (window.state.info.model.decision_type !== 'laya') throw new Error('Missing model diagnostics');
-    for (const name of ['primitive','structured','batch']) {
+    for (const name of fixtures) {
       const request = await (await fetch(`/fixtures/${name}.json`)).text();
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(request));
       window.state.fixture_hashes[name + '.json'] = Array.from(new Uint8Array(digest), x => x.toString(16).padStart(2, '0')).join('');
@@ -73,15 +73,8 @@ window.startControls = async (backend = 'webgpu') => {
 };
 window.startReference = async (backend = 'webgpu') => {
   window.reference = { status: 'running', backend };
-  const primitive = await (await fetch('/fixtures/primitive.json')).json();
-  const batch = await (await fetch('/fixtures/batch.json')).json();
-  const structured = await (await fetch('/fixtures/structured.json')).json();
-  const questions = {
-    department: { type: 'choice', instructions: 'Which department handles this?', criteria: { billing: 'billing', technical: 'technical', sales: 'sales' } },
-    refund: { type: 'noul', instructions: 'Is a refund requested?' },
-    priority: { type: 'score', instructions: 'Urgency from low to high', criteria: ['-1','0','1'] },
-  };
-  const requests = { primitive, structured: { state: structured.state, questions }, batch0: batch[0], batch1: batch[1], batch2: batch[2] };
+  // Every fixture request as literal JSON text; structured ones as schema-derived primitive questions.
+  const requests = await (await fetch('/reference-requests.json')).json();
   const worker = new Worker('/reference-worker.mjs', { type: 'module' });
   worker.onmessage = ({ data }) => { if (data.progress) window.reference.progress = data.progress; else { window.reference = data; worker.terminate(); } };
   worker.onerror = event => { window.reference = { status: 'failed', error: event.message }; worker.terminate(); };

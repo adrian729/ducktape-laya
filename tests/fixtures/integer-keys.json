@@ -1,0 +1,49 @@
+[
+  {
+    "state": "I was charged twice for order 42. Please refund me.",
+    "questions": {
+      "route": {
+        "type": "choice",
+        "instructions": "Which queue should handle this request?",
+        "criteria": {
+          "sales": "Product purchases",
+          "10": "Charges, payments and refunds",
+          "2": "Software problems"
+        }
+      },
+      "7": {
+        "type": "noul",
+        "instructions": "Does the customer request a refund?"
+      },
+      "0": {
+        "type": "score",
+        "instructions": "How urgent is this request?",
+        "criteria": ["Low urgency", "Medium urgency", "High urgency"]
+      }
+    }
+  },
+  {
+    "state": "The app crashes whenever I open settings.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "team": {
+          "type": "string",
+          "description": "Which team handles this?",
+          "enum": ["billing", "technical", "sales"]
+        },
+        "3": {
+          "type": "boolean",
+          "description": "Is a refund requested?"
+        },
+        "1": {
+          "type": "integer",
+          "description": "Urgency from low to high",
+          "minimum": 0,
+          "maximum": 2
+        }
+      },
+      "required": ["team", "3", "1"]
+    }
+  }
+]

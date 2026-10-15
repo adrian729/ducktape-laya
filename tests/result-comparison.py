@@ -8,7 +8,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from compare_results import compare_results, measure_profile_drift
+from compare_results import compare_results, js_object_order, measure_profile_drift
 
 
 class Comparison(unittest.TestCase):
@@ -32,6 +32,18 @@ class Comparison(unittest.TestCase):
                             (3, 4), (3, 3.0), ('a', 'b'), (0.5, 0.6)]:
             with self.subTest(left=left, right=right), self.assertRaises(AssertionError):
                 compare_results(left, right, 0.00001)
+
+    def test_js_object_order_matches_ecmascript_enumeration(self):
+        value = {'b': 1, '10': 2, '2': {'x': 0, '1': 0}, '01': 3, '-1': 4, '4294967295': 5,
+                 '4294967294': 6, 'a': [{'9': 0, 'z': 1, '0': 2}]}
+        ordered = js_object_order(value)
+        self.assertEqual(list(ordered), ['2', '10', '4294967294', 'b', '01', '-1', '4294967295', 'a'])
+        self.assertEqual(list(ordered['2']), ['1', 'x'])
+        self.assertEqual(list(ordered['a'][0]), ['0', '9', 'z'])
+        node = subprocess.run(['node', '-e', 'process.stdout.write(JSON.stringify(JSON.parse(require("fs").readFileSync(0, "utf8"))))'],
+                              input=json.dumps(value), capture_output=True, text=True, check=True)
+        self.assertEqual(json.dumps(ordered, separators=(',', ':')), node.stdout)
+        compare_results(ordered, json.loads(node.stdout))
 
     def test_profile_drift_records_only_permitted_decisions(self):
         left = {'probability': 0.49, 'values': {'flag': False, 'level': 1, 'name': 'a'},

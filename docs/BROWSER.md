@@ -113,7 +113,7 @@ python3 tests/parity.py /path/to/Laya-Q8_0.gguf --report build/native-results.js
 python3 tests/compare-browser.py build/browser-results.json --native build/native-results.json
 ```
 
-The comparator requires matching fixture sets/key order, a responsive main-thread
+The comparator requires matching fixture sets, native key order mapped to JavaScript property order, a responsive main-thread
 heartbeat, ordered events and finite values. It reports numeric drift and changed
 choice/structured decisions without a cross-profile tolerance gate. Metadata,
 token counts and result shapes remain exact. `tests/compare-browser-reference.py` separately compares with unchanged

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Compare primitive fixture questions with upstream processing in-process."""
+"""Compare every fixture request with upstream primitive processing in-process.
+
+Structured requests are compared through their schema-derived primitive questions."""
 import argparse
 import json
 import os
@@ -10,6 +12,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from compare_results import compare_results
 from release_support import ROOT, check_record, read_json, sha256, verify_model, git
+from reference_requests import reference_key, reference_requests
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('model', type=pathlib.Path)
@@ -30,28 +33,30 @@ report = {'schema_version': 1, 'status': 'not_run', 'source_commit': git(ROOT, '
           'reference_source_sha256': sha256(ROOT / 'tests/upstream-reference.cpp'), 'fixtures': {}}
 env = dict(os.environ, LD_LIBRARY_PATH=str(build))
 try:
-    for fixture in sorted((ROOT / 'tests/fixtures').glob('*.json')):
+    fixtures = sorted((ROOT / 'tests/fixtures').glob('*.json'))
+    report['fixtures'] = {fixture.name: {'sha256': sha256(fixture), 'cases': []} for fixture in fixtures}
+    originals = {}
+    for fixture in fixtures:
         body = read_json(fixture)
-        requests = body if isinstance(body, list) else [body]
-        cases = []
-        for index, request in enumerate(requests):
-            if not isinstance(request, dict) or 'questions' not in request:
-                continue # Structured projection is a core contract, not an upstream primitive API.
-            outputs = {}
-            for label, binary in [('adapter', 'laya-conformance-c'), ('upstream', 'laya-reference')]:
-                process = subprocess.run([build / binary, model], input=json.dumps(request), capture_output=True,
-                                         text=True, timeout=180, env=env)
-                if process.returncode:
-                    raise RuntimeError(f'{fixture.name}/{index}/{label}: {process.stderr[-4000:]}')
-                outputs[label] = json.loads(process.stdout)
-            adapter, upstream = outputs['adapter'], outputs['upstream']
-            maximum = compare_results(adapter['answers'], upstream['answers'], tolerance)
-            compare_results(adapter['usage']['input_tokens'], upstream['input_tokens'])
-            cases.append({'index': index, 'maximum_absolute_error': maximum[0], 'path': maximum[1]})
-            print(f'{fixture.name}/{index}: upstream agreement, maximum error {maximum[0]}', flush=True)
-        report['fixtures'][fixture.name] = {'sha256': sha256(fixture), 'primitive_cases': cases}
-    if not any(value['primitive_cases'] for value in report['fixtures'].values()):
-        raise RuntimeError('No primitive reference cases ran')
+        for index, request in (enumerate(body) if isinstance(body, list) else [(None, body)]):
+            originals[reference_key(fixture.stem, index)] = request
+    for key, (name, primitive) in reference_requests().items():
+        outputs = {}
+        for label, binary, request in [('adapter', 'laya-conformance-c', originals[key]),
+                                       ('upstream', 'laya-reference', primitive)]:
+            process = subprocess.run([build / binary, model], input=json.dumps(request), capture_output=True,
+                                     text=True, timeout=180, env=env)
+            if process.returncode:
+                raise RuntimeError(f'{key}/{label}: {process.stderr[-4000:]}')
+            outputs[label] = json.loads(process.stdout)
+        adapter, upstream = outputs['adapter'], outputs['upstream']
+        maximum = compare_results(adapter['answers'], upstream['answers'], tolerance)
+        compare_results(adapter['usage']['input_tokens'], upstream['input_tokens'])
+        report['fixtures'][name]['cases'].append({'key': key, 'structured': 'schema' in originals[key],
+                                                  'maximum_absolute_error': maximum[0], 'path': maximum[1]})
+        print(f'{key}: upstream agreement, maximum error {maximum[0]}', flush=True)
+    if not any(value['cases'] for value in report['fixtures'].values()):
+        raise RuntimeError('No reference cases ran')
     report['status'] = 'passed'
 except Exception as error:
     report['status'] = 'failed'; report['error'] = str(error)

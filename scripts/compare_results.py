@@ -41,6 +41,22 @@ def _walk(expected, actual, path, decision_paths):
     return report
 
 
+def js_object_order(value):
+    """Return value with every object in ECMAScript own-property order.
+
+    JavaScript enumerates canonical array-index keys ascending, then other
+    string keys in insertion order. Parsed JS results follow this order.
+    """
+    if isinstance(value, list):
+        return [js_object_order(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    def index(key):
+        return key.isdigit() and str(int(key)) == key and int(key) < 2**32 - 1
+    keys = sorted((k for k in value if index(k)), key=int) + [k for k in value if not index(k)]
+    return {key: js_object_order(value[key]) for key in keys}
+
+
 def compare_results(expected, actual, tolerance=0, path='$'):
     """Return (maximum numeric error, path); reject shape/type/value drift.
 

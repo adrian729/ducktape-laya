@@ -49,7 +49,9 @@ Results contain `answers` keyed by question ID and `usage` with `input_tokens`
 and `output_tokens: 0`. No chat text is generated. Input insertion order is
 preserved by the core and can affect inference; ties choose the first option.
 JavaScript object serialization reorders integer-like keys: pass a raw JSON
-string when literal ordering matters. Literal mask text in values is sanitized
+string when literal ordering matters. Node and browser results are parsed JavaScript
+objects, so their members follow ECMAScript property order (integer-like keys
+ascending, then insertion order); names and values match the core result exactly. Literal mask text in values is sanitized
 before rendering; prompt/head/option overflow is rejected rather than truncated.
 
 The strict `execute` API accepts only `state`, `questions`, `schema`,

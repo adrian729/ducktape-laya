@@ -14,7 +14,7 @@ import subprocess
 import urllib.request
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
-from compare_results import compare_results
+from compare_results import compare_results, js_object_order
 from release_support import binary_info, sha256, source_identity
 
 parser = argparse.ArgumentParser()
@@ -62,7 +62,9 @@ for fixture in fixtures:
         if output.returncode:
             raise RuntimeError(f'{fixture.name}/{name}: {output.stderr.decode(errors="replace")}')
         results[name] = json.loads(output.stdout, object_pairs_hook=OrderedDict)
-        compare_results(results['C'], results[name], path=f'{fixture.name}/{name}')
+        # Parsed JavaScript objects enumerate integer-like keys first; values stay exact.
+        expected = js_object_order(results['C']) if name == 'Node' else results['C']
+        compare_results(expected, results[name], path=f'{fixture.name}/{name}')
         print(f'{fixture.name}/{name}: exact agreement', flush=True)
     report['fixtures'][fixture.name] = results
     if args.server_url:

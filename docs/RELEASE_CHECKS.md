@@ -37,9 +37,11 @@ Every run retains commands, logs, exit codes and source/runtime/model/fixture/bi
 identities. `report.json` distinguishes selected checks from release readiness.
 Without a model, native real-model and binding-conformance gates stay `not_run`.
 `--upstream-reference` builds a separate test executable using upstream primitive
-processing and compares primitive fixtures, including batch members, without an
+processing and compares every fixture request, including batch members, without an
 HTTP server. It never links that processor into the product library. Structured
-projection remains covered by the shared-core contracts. Without this option,
+requests are compared through their schema-derived primitive questions
+(`tests/reference_requests.py`); value projection remains covered by the
+shared-core contracts. Without this option,
 the upstream-reference gate stays not run.
 Sanitizer, stress, browser and platform evidence remain separate;
 the runner does not silently transplant historical results to a different binary.

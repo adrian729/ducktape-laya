@@ -5,7 +5,7 @@ import json
 import pathlib
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
-from compare_results import compare_results, measure_profile_drift
+from compare_results import compare_results, js_object_order, measure_profile_drift
 from release_support import sha256
 p=argparse.ArgumentParser()
 p.add_argument('report',type=pathlib.Path)
@@ -14,7 +14,8 @@ p.add_argument('--native', type=pathlib.Path, required=True,
 a=p.parse_args()
 report=json.loads(a.report.read_text())
 native=json.loads(a.native.read_text())
-reference={name: outputs['C'] for name, outputs in native['fixtures'].items()}
+# Browser results are parsed JavaScript objects; compare in their property order.
+reference={name: js_object_order(outputs['C']) for name, outputs in native['fixtures'].items()}
 def require(condition, message):
     if not condition:
         raise AssertionError(message)

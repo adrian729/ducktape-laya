@@ -6,6 +6,7 @@ import pathlib
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 from compare_results import compare_results
+from reference_requests import reference_key
 p = argparse.ArgumentParser()
 p.add_argument('adapter', type=pathlib.Path)
 p.add_argument('reference', type=pathlib.Path)
@@ -16,8 +17,11 @@ if not adapter['status'] == reference['status'] == 'passed':
     raise AssertionError('Execution or reference failed')
 if adapter['backend'] != reference['backend']:
     raise AssertionError('Backend mismatch')
-results = adapter['results']
-results = {'primitive': results['primitive.json'], 'structured': results['structured.json'], **{f'batch{i}': v for i, v in enumerate(results['batch.json'])}}
+results = {}
+for name, value in adapter['results'].items():
+    stem = name.removesuffix('.json')
+    items = enumerate(value) if isinstance(value, list) else [(None, value)]
+    results.update({reference_key(stem, index): item for index, item in items})
 if set(results) != set(reference['results']):
     raise AssertionError('Reference fixture set changed')
 maximum = (0, '')

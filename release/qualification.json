@@ -95,7 +95,7 @@
         "tests/parity.py",
         "tests/consumers"
       ],
-      "acceptance": "Exact ordered outputs across the same native binary; Rust layouts and TS consumer compilation agree with the public ABI/API."
+      "acceptance": "Exact ordered outputs across the same native binary (JavaScript objects in ECMAScript property order); Rust layouts and TS consumer compilation agree with the public ABI/API."
     },
     "upstream_reference": {
       "implementation": [
