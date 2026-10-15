@@ -16,7 +16,6 @@ python3 scripts/validate.py --output build-check-model-free
 python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf \
   --packages --upstream-reference --output build-check-native
 python3 scripts/check-reproducibility.py --output build-repro --jobs 2
-python3 tests/benchmark.py /path/to/Laya-Q8_0.gguf --report build/benchmark.json
 ```
 
 The native runner configures/builds the library and addon, checks required CTest
@@ -61,12 +60,24 @@ runs `tests/input-fuzz.cpp`: deterministic request/schema/config mutations, nest
 and size boundaries. It does not replace real-model sanitizer runs or claim
 coverage-guided fuzzing. No sanitizer recovery or suppression is enabled.
 
-The benchmark records model open, first request, repeated-request samples,
-sequential request rate, close and peak process RSS. It verifies repeat outputs
-and retains model/library/fixture/configuration identities. Run without competing
-builds/inference; record the host conditions. A handful of laptop samples is an
-exploratory measurement, not a universal latency or throughput promise. Store
-measurements as CI/PR artifacts, not dated source documents.
+The benchmark (`tests/benchmark.py`, one fresh process per run) records model
+open/close, first and warm p50/p95/p99 latency for small, structured, near-limit
+and batch requests, two engines in concurrent threads, router cold loads with
+evictions, cancellation response and deadline overshoot, RSS, descriptors and
+threads. Repeated outputs must match and descriptors/threads must return to their
+starting counts. Budgets are frozen per profile, model, thread count and reference
+CPU from at least three independent runs, then candidates are checked against them:
+
+```sh
+python3 tests/benchmark.py /path/to/Laya-Q8_0.gguf --report build/bench-1.json  # repeat per run
+python3 scripts/performance-budgets.py derive build/bench-{1,2,3}.json --output release/budgets/native-performance.json
+python3 scripts/performance-budgets.py check build/bench-candidate.json
+```
+
+Limits are the worst baseline value times a declared headroom (1.5 for time, 1.25
+for memory); leaks have none. They detect regressions on the reference host, not
+portable latency promises. Run without competing builds or inference and keep
+the reports as CI/PR artifacts.
 
 The native stress target supports a bounded round smoke test and elapsed-time
 qualification runs. Configure first, then explicitly build this optional target:

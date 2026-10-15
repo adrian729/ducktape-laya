@@ -7,7 +7,9 @@
   preparation, temperature lookup and answer formatting from
   `tools/server/server-decision.cpp`. Jinja, Unicode and JSON support are compiled
   directly from the pinned source. Additional copyright notices remain in the
-  vendored files; preserve them when redistributing source.
+  vendored files; preserve them when redistributing source. Builds compile modified
+  copies of some upstream files, including the vendored nlohmann/json header, using
+  the recorded patches in `patches/llama.cpp` (see `patches/README.md`).
 - llamafile CPU kernels incorporated by ggml: MIT, Copyright 2024 Mozilla
   Foundation. [Full notice](licenses/llamafile-MIT.txt).
 - nlohmann JSON: MIT, Niels Lohmann. Included through llama.cpp's vendor directory.

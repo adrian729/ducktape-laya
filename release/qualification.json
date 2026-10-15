@@ -220,7 +220,8 @@
         "bindings/browser"
       ],
       "checks": [
-        "tests/benchmark.py"
+        "tests/benchmark.py",
+        "scripts/performance-budgets.py"
       ],
       "acceptance": "Repeated baselines and candidate measurements meet predeclared per-profile latency, memory, throughput and responsiveness budgets."
     },
