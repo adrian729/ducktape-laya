@@ -80,10 +80,15 @@ build/laya-stress /path/to/Laya-Q8_0.gguf --seconds 3600
 ```
 
 Each duration run completes at least ten rounds, then runs the concurrent-caller
-check. It exercises open/use/close, malformed input, deadline recovery and mixed
-batches with two inference threads. After every close, descriptors/threads must
-return to baseline and RSS must stay within the declared 128 MiB allocator
-retention allowance. Progress goes to stderr; the final JSON on stdout includes
+check. Every round exercises open/use/close, malformed input, deadline recovery
+and concurrent callers on one handle with two inference threads; periodic rounds
+add mixed batches, an independent second engine, and a router whose two hard-linked
+model paths (created in the working directory, which must share the model's
+filesystem) force cold loads and evictions. After every close, descriptors/threads
+must return to baseline and RSS must stay within the declared 128 MiB allocator
+retention allowance. From 40 rounds, the last quarter's median closed RSS must not
+exceed the second quarter's by more than 32 MiB, so slow leaks inside that
+allowance fail long runs. Progress goes to stderr; the final JSON on stdout includes
 elapsed time and resource measurements. A short smoke run does not satisfy the
 one-hour or eight-hour gates, and this native test does not cover browser memory.
 
