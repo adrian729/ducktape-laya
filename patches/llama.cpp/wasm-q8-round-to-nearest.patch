@@ -1,0 +1,20 @@
+--- a/ggml/src/ggml-cpu/arch/wasm/quants.c
++++ b/ggml/src/ggml-cpu/arch/wasm/quants.c
+@@ -70,7 +70,7 @@
+ 
+         for (int j = 0; j < 8; j++) {
+             const v128_t v  = wasm_f32x4_mul(srcv[j], wasm_f32x4_splat(id));
+-            const v128_t vi = wasm_i32x4_trunc_sat_f32x4(v);
++            const v128_t vi = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_nearest(v));
+ 
+             y[i].qs[4*j + 0] = wasm_i32x4_extract_lane(vi, 0);
+             y[i].qs[4*j + 1] = wasm_i32x4_extract_lane(vi, 1);
+@@ -117,7 +117,7 @@
+ 
+         for (int j = 0; j < 8; j++) {
+             const v128_t v  = wasm_f32x4_mul(srcv[j], wasm_f32x4_splat(id));
+-            const v128_t vi = wasm_i32x4_trunc_sat_f32x4(v);
++            const v128_t vi = wasm_i32x4_trunc_sat_f32x4(wasm_f32x4_nearest(v));
+ 
+             y[i].qs[4*j + 0] = wasm_i32x4_extract_lane(vi, 0);
+             y[i].qs[4*j + 1] = wasm_i32x4_extract_lane(vi, 1);

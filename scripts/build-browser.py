@@ -24,7 +24,7 @@ build.mkdir(parents=True, exist_ok=True)
 subprocess.run([str(em / 'emcmake'), 'cmake', '-S', str(ROOT), '-B', str(a.build.resolve()),
     f'-DDUCKTAPE_LLAMA_SOURCE={ROOT / record["runtime"]["path"]}', '-DDUCKTAPE_LLAMA_REVISION=',
     '-DDUCKTAPE_BUILD_FUZZERS=OFF', '-DCMAKE_BUILD_TYPE=Release', '-DDUCKTAPE_BUILD_TESTS=OFF', '-DDUCKTAPE_BUILD_NODE=OFF', '-DDUCKTAPE_BUILD_EXAMPLES=OFF',
-    '-DDUCKTAPE_WASM_OPTIMIZATION=1', '-DGGML_WEBGPU=' + ('ON' if a.backend == 'webgpu' else 'OFF'),
+    '-DDUCKTAPE_WASM_OPTIMIZATION=1', '-DEMSCRIPTEN_SYSTEM_PROCESSOR=wasm32', '-DGGML_WEBGPU=' + ('ON' if a.backend == 'webgpu' else 'OFF'),
     '-DGGML_WEBGPU_DEBUG=' + ('ON' if a.trace_gpu else 'OFF'),
     '-DDUCKTAPE_BUILD_REFERENCE_PROBE=' + ('ON' if a.reference else 'OFF')], check=True, cwd=build)
 subprocess.run(['cmake', '--build', str(build), '--target', 'ducktape_laya_wasm', '--parallel', str(a.jobs)], check=True, cwd=build)

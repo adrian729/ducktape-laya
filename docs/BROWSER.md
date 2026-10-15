@@ -27,6 +27,11 @@ python3 scripts/build-browser.py --emsdk .research/emsdk --backend webgpu --buil
 python3 scripts/package-browser.py --wasm build-browser-wasm --webgpu build-browser-webgpu --output build/browser-package
 ```
 
+Browser builds select ggml's WASM SIMD CPU kernels
+(`EMSCRIPTEN_SYSTEM_PROCESSOR=wasm32`; configuration fails otherwise) with the
+recorded rounding patch described in [patches/README.md](../patches/README.md).
+This applies to CPU operations of both backends.
+
 The resulting npm tarball contains loader, worker, shared protocol declarations,
 WASM and WebGPU assets, pinned toolchain metadata and license notices. It excludes
 weights, test references, demos and native addons. The development upstream

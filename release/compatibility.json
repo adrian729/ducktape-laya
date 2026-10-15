@@ -11,6 +11,11 @@
         "path": "patches/llama.cpp/typed-cpu-callbacks.patch",
         "sha256": "f078d54edda1b4ae64d77025d58408eb66778d7880f0b7088bbed2e08b8b2f1f",
         "purpose": "Typed callback bridges for supported Q8/F16/BF16/F32 tensor paths; no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/wasm-q8-round-to-nearest.patch",
+        "sha256": "21889acaaae4240f4f1b379cd7851c579bcb318544ec1eeaf8ddcda639e8a608",
+        "purpose": "WASM SIMD Q8_0/Q8_1 activation quantization rounds to nearest like the reference and x86 paths instead of truncating; browser WASM CPU arithmetic only"
       }
     ]
   },
