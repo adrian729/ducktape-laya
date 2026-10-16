@@ -13,24 +13,34 @@ Missing evidence is not_run; mismatched or failed evidence is failed.
 import argparse
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from release_support import ROOT, check_record, git, read_json, sha256, source_identity
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('evidence', type=pathlib.Path, help='JSON object: evidence name -> report path (relative to the manifest)')
+p.add_argument('--candidate', default='HEAD', help='Candidate commit (default HEAD); evaluated from its own tree')
 p.add_argument('--report', type=pathlib.Path, required=True)
 a = p.parse_args()
-record = check_record()
-policy = read_json(ROOT / 'release/qualification.json')
-manifest_model = read_json(ROOT / record['models'][0])
+commit = git(ROOT, 'rev-parse', '--verify', a.candidate + '^{commit}')
+# Release record, policy, notices and source identity come from the candidate's
+# tree, so later tooling or documentation commits cannot change what is checked.
+candidate_tree = pathlib.Path(tempfile.mkdtemp(prefix='ducktape-candidate-'))
+with subprocess.Popen(['git', '-C', str(ROOT), 'archive', commit], stdout=subprocess.PIPE) as archive:
+    with tarfile.open(fileobj=archive.stdout, mode='r|') as stream:
+        stream.extractall(candidate_tree, filter='data')
+record = read_json(candidate_tree / 'release/compatibility.json')
+check_record()
+policy = read_json(candidate_tree / 'release/qualification.json')
+manifest_model = read_json(candidate_tree / record['models'][0])
 base = a.evidence.resolve().parent
 paths = {key: (base / value).resolve() for key, value in read_json(a.evidence).items()}
-commit = git(ROOT, 'rev-parse', 'HEAD')
-dirty = bool(git(ROOT, 'diff', 'HEAD', '--name-only'))
-source = source_identity()['sha256']
+dirty = False  # Evidence must come from a clean candidate tree; checked per report.
+source = source_identity(candidate_tree)['sha256']
 
 class Missing(Exception): pass
 class Mismatch(Exception): pass
@@ -98,7 +108,7 @@ def linux_matrix():
     userspaces = load('userspaces')
     need(userspaces['status'] == 'passed' and userspaces['artifact_inventory_sha256'] == sha256(directory / 'inventory.json'),
          'userspaces: failed or not the candidate packages')
-    releases = {env['os_release'].get('VERSION_ID') for env in userspaces['environments'].values() if env['status'] == 'passed'}
+    releases = {env['os_release'].get('VERSION_ID', '').strip('"') for env in userspaces['environments'].values() if env['status'] == 'passed'}
     required = {policy['platforms']['native']['minimum_userspace'], *policy['platforms']['native']['additional_userspaces']}
     need({f'ubuntu-{v}' for v in releases} >= required, f'userspaces: {sorted(releases)} do not cover {sorted(required)}')
     electron = load('electron')
@@ -108,7 +118,9 @@ def linux_matrix():
     # Native validation reports from every compiler/Node combination (local or CI artifacts).
     compilers, nodes = set(), set()
     for item in load('native_matrix'):
-        report = json.loads((paths['native_matrix'].parent / item).read_text())
+        path = paths['native_matrix'].parent / item
+        if not path.is_file(): raise Missing(f'native matrix report {item} missing')
+        report = json.loads(path.read_text())
         same_source(report, f'native matrix {item}')
         need(all(report['gates'][g]['status'] == 'passed' for g in ('native_contracts', 'binding_conformance', 'installed_packages')),
              f'native matrix {item}: required gates did not pass')
@@ -156,7 +168,7 @@ def license_inventory():
         for component in sbom['components']:
             for prop in component['properties']:
                 if prop['name'].startswith('ducktape:notice:'):
-                    need(sha256(ROOT / prop['name'].split(':', 2)[2]) == prop['value'], f'{label}: SBOM notice hash is stale')
+                    need(sha256(candidate_tree / prop['name'].split(':', 2)[2]) == prop['value'], f'{label}: SBOM notice hash is stale')
     with tarfile.open(directory / f'ducktape-laya-{inventory["package_version"]}-linux-x64.tar.gz') as archive:
         members = {pathlib.PurePosixPath(m).name for m in archive.getnames()}
     need({'LICENSE', 'THIRD_PARTY_NOTICES.md', 'Apache-2.0.txt', 'llama.cpp-MIT.txt', 'nlohmann-json-MIT.txt'} <= members, 'native archive lacks license texts')
@@ -179,7 +191,8 @@ def performance():
     report = load('performance')
     same_source(report, 'performance')
     need(report['library_sha256'] == native()['library_sha256'], 'performance: not the candidate library')
-    result = subprocess.run([sys.executable, str(ROOT / 'scripts/performance-budgets.py'), 'check', str(paths['performance'])],
+    result = subprocess.run([sys.executable, str(ROOT / 'scripts/performance-budgets.py'), 'check', str(paths['performance']),
+                             '--budgets', str(candidate_tree / 'release/budgets/native-performance.json')],
                             capture_output=True, text=True)
     need(result.returncode == 0, 'performance: ' + result.stdout.strip())
 
@@ -211,7 +224,8 @@ GATES = {'native_contracts': native_gate('native_contracts'), 'binding_conforman
          'upgrade_rollback': upgrade_rollback}
 if set(GATES) != set(record['required_release_gates']):
     raise SystemExit('Gate checker does not match release/compatibility.json required gates')
-result = {'schema_version': 1, 'candidate_commit': commit, 'source_tracked_dirty': dirty, 'source_identity_sha256': source,
+result = {'schema_version': 1, 'candidate_commit': commit, 'checker_commit': git(ROOT, 'rev-parse', 'HEAD'),
+          'checker_tree_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'source_identity_sha256': source,
           'model_sha256': manifest_model['sha256'], 'evidence': {k: str(v) for k, v in paths.items()}, 'gates': {}}
 for gate, check in GATES.items():
     try:
@@ -221,8 +235,9 @@ for gate, check in GATES.items():
         result['gates'][gate] = {'status': 'not_run', 'detail': str(error)}
     except (Mismatch, KeyError, ValueError, OSError) as error:
         result['gates'][gate] = {'status': 'failed', 'detail': f'{type(error).__name__}: {error}'}
-result['release_ready'] = not dirty and all(g['status'] == 'passed' for g in result['gates'].values())
+result['release_ready'] = all(g['status'] == 'passed' for g in result['gates'].values())
 result['publication_gates'] = {gate: 'not_run' for gate in policy['publication_gates']}
 a.report.write_text(json.dumps(result, indent=2) + '\n')
+shutil.rmtree(candidate_tree, ignore_errors=True)
 print(json.dumps({'release_ready': result['release_ready'], 'gates': {k: v['status'] for k, v in result['gates'].items()}}, indent=2))
 raise SystemExit(0 if result['release_ready'] else 1)

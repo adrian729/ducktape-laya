@@ -119,7 +119,7 @@ python3 scripts/check-stress.py /path/to/Laya-Q8_0.gguf --build build-validation
 python3 scripts/check-sanitizers.py /path/to/Laya-Q8_0.gguf --output build-sanitizers
 python3 tests/rollback.py LKG_PACKAGES CANDIDATE_PACKAGES /path/to/Laya-Q8_0.gguf --report build/rollback.json
 node tests/electron/run.cjs PACKAGES/ducktape-laya-0.1.0.tgz /path/to/Laya-Q8_0.gguf build/electron.json
-python3 scripts/check-candidate.py build-candidate/evidence.json --report build-candidate/gates.json
+python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COMMIT --report build-candidate/gates.json
 ```
 
 The sanitizer runner builds ASan+UBSan and TSan configurations, runs every
@@ -133,7 +133,9 @@ outputs after rollback. `check-candidate.py` takes a JSON map of evidence names
 `reproducibility`, `performance`, `security_review`, `upgrade`, `model_upgrade`,
 `rollback`) to report paths. A gate passes only when its evidence passed and is
 bound to the clean HEAD commit, the validated library and packages, the browser
-package assets and the pinned model; missing evidence is `not_run`.
+package assets and the pinned model; missing evidence is `not_run`. The release
+record, policy, budgets, notices and source identity are read from the candidate
+commit's own tree, so later tooling commits cannot alter what is checked.
 `release_ready` requires every required gate. Publication gates stay separate.
 
 Before publication, require all applicable recorded gates, review current evidence
