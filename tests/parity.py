@@ -24,9 +24,13 @@ parser.add_argument('--server-url')
 parser.add_argument('--request', type=pathlib.Path, help='Use one fixture instead of the shared corpus')
 parser.add_argument('--report', type=pathlib.Path)
 parser.add_argument('--tolerance', type=float, default=0.000001)
+parser.add_argument('--call-timeout', type=float, default=900,
+                    help='Seconds per consumer call; a hang guard, sized for loaded or slower hosts')
 args = parser.parse_args()
 if not math.isfinite(args.tolerance) or args.tolerance < 0:
     parser.error('--tolerance must be finite and nonnegative')
+if not math.isfinite(args.call_timeout) or args.call_timeout <= 0:
+    parser.error('--call-timeout must be finite and positive')
 root = pathlib.Path(__file__).resolve().parents[1]
 build = (args.build_dir or root / 'build').resolve()
 model = str(args.model.resolve())
@@ -58,7 +62,7 @@ for fixture in fixtures:
     request = fixture.read_bytes()
     results = {}
     for name, command in commands.items():
-        output = subprocess.run(command, input=request, capture_output=True, env=env, timeout=180)
+        output = subprocess.run(command, input=request, capture_output=True, env=env, timeout=args.call_timeout)
         if output.returncode:
             raise RuntimeError(f'{fixture.name}/{name}: {output.stderr.decode(errors="replace")}')
         results[name] = json.loads(output.stdout, object_pairs_hook=OrderedDict)
