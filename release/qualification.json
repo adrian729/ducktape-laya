@@ -81,7 +81,9 @@
       "checks": [
         "tests/native.cpp",
         "tests/features.cpp",
-        "tests/control.cpp"
+        "tests/control.cpp",
+        "tests/faults.cpp",
+        "tests/decision.cpp"
       ],
       "acceptance": "All real-model contracts, bounds and failure semantics pass."
     },
@@ -137,7 +139,9 @@
         "tests/native.cpp",
         "tests/control.cpp",
         "tests/input-libfuzzer.cpp",
-        "tests/fuzz-corpus.py"
+        "tests/fuzz-corpus.py",
+        "scripts/check-sanitizers.py",
+        "tests/faults.cpp"
       ],
       "acceptance": "Strict ASan/UBSan/leak checks cover real-model and model-free paths; concurrency tooling coverage explicitly recorded."
     },
@@ -149,7 +153,8 @@
       ],
       "checks": [
         "tests/stress.cpp",
-        "tests/browser-lifecycle.mjs"
+        "tests/browser-lifecycle.mjs",
+        "scripts/check-stress.py"
       ],
       "acceptance": "One-hour routine stress and eight-hour candidate soak meet frozen resource budgets without leaks, hangs or corrupted results."
     },
@@ -158,7 +163,9 @@
         "src/platform.cpp"
       ],
       "checks": [
-        "tests/linux-userspace.py"
+        "tests/linux-userspace.py",
+        "tests/cross-host.py",
+        "tests/electron/run.cjs"
       ],
       "acceptance": "Every required userspace/ISA/compiler/runtime combination passes installed-artifact checks; physical CPU evidence is separate."
     },
@@ -239,7 +246,8 @@
         "scripts/check-upgrade.py"
       ],
       "checks": [
-        "scripts/check-upgrade.py"
+        "scripts/check-upgrade.py",
+        "tests/rollback.py"
       ],
       "acceptance": "Runtime/model candidate axes and rollback rehearsed; failed, missing or mismatched evidence cannot qualify a candidate."
     },
@@ -278,5 +286,6 @@
       "device_and_driver",
       "artifact_hashes"
     ]
-  }
+  },
+  "candidate_gate_checker": "scripts/check-candidate.py"
 }

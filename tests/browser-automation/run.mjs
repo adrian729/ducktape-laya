@@ -41,6 +41,7 @@ const report = { schema_version: 1, source_commit: execFileSync('git', ['rev-par
   source_tracked_dirty: !!execFileSync('git', ['diff', 'HEAD', '--name-only'], { cwd: root, encoding: 'utf8' }).trim(),
   model_sha256: manifest.sha256, fixture_hashes: {}, asset_hashes: {},
   headless: args.headless, isolated: args.isolated, launch_flags: [], chromium_sandbox: true,
+  package_dir: args['package-dir'] ? resolve(args['package-dir']) : null,
   backends: {}, release_ready: false };
 for (const name of (await readdir(join(root, 'tests/fixtures'))).filter(x => x.endsWith('.json')).sort()) {
   report.fixture_hashes[name] = await hash(join(root, 'tests/fixtures', name));

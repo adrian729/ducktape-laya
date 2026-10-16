@@ -7,9 +7,12 @@ def document(record, browser=False):
         return {'type': 'library', 'bom-ref': name, 'name': name, 'version': version,
             'licenses': [{'expression': license_expression}],
             'properties': [{'name': 'ducktape:notice:' + path, 'value': sha256(ROOT / path)} for path in notices]}
+    patches = [{'name': 'ducktape:patch:' + patch['path'], 'value': patch['sha256']} for patch in record['runtime']['patches']]
     components = [component('llama.cpp-ggml', record['runtime']['commit'], 'MIT', ['licenses/llama.cpp-MIT.txt']),
         component('nlohmann-json', '3.12.0', 'MIT', ['licenses/nlohmann-json-MIT.txt']),
         component('llamafile-cpu-kernels', record['runtime']['commit'], 'MIT', ['licenses/llamafile-MIT.txt'])]
+    # Recorded patches modify build copies of llama.cpp/ggml and its vendored nlohmann header.
+    for item in components: item['properties'] += patches
     if browser:
         sdk = read_json(ROOT / 'release/browser-toolchain.json')
         components += [component('emscripten-runtime', sdk['sdk_version'], 'MIT OR NCSA', ['licenses/emscripten.txt', 'licenses/emscripten-authors.txt']),

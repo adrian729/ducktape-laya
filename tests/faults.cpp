@@ -21,6 +21,12 @@
 #include <string>
 #include <vector>
 namespace fs = std::filesystem;
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__) || __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define DTL_SANITIZED 1 // Sanitizer runtimes own operator new and reserve shadow address space.
+#else
 // Allocation-failure injection for the C++ allocations of library calls. Armed
 // only around a single call; the allocation at index fail_after throws.
 static std::atomic<long> fail_after{-1}, failed{0};
@@ -31,6 +37,7 @@ void *operator new(std::size_t size) {
 }
 void operator delete(void *p) noexcept { std::free(p); }
 void operator delete(void *p, std::size_t) noexcept { std::free(p); }
+#endif
 static void expect(bool ok, const std::string &message) { if (!ok) throw std::runtime_error(message); }
 
 struct gguf_layout {
@@ -142,6 +149,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 2; ++i) batch += (i ? "," : "") + request;
         batch += "]";
 
+#ifndef DTL_SANITIZED
         // Allocation failure, before this process creates any runtime threads.
         in_child("open under address-space limit", [&] {
             limit_address_space(virtual_bytes() + (32ull << 20));
@@ -201,6 +209,9 @@ int main(int argc, char **argv) {
             std::cerr << "open allocation failures: " << opened << " rejected\n";
         }
 
+#else
+        std::cerr << "allocation-failure injection skipped under a sanitizer runtime\n";
+#endif
         fs::create_directory(work);
         const auto before = open_descriptors();
         auto rejected = [&](const std::string &label, const std::string &path, const char *message = nullptr) {

@@ -111,6 +111,31 @@ and hashes the actual snapshot. The guarantee is for the same toolchain and opti
 it does not assert identical output across compilers or architectures. Packaging
 determinism is a separate check for identical prebuilt inputs.
 
+Identity-bound runners write a `report.json` with source commit, build and model
+identities for the remaining long or instrumented gates:
+
+```sh
+python3 scripts/check-stress.py /path/to/Laya-Q8_0.gguf --build build-validation --output build-stress  # --seconds 28800 for soak
+python3 scripts/check-sanitizers.py /path/to/Laya-Q8_0.gguf --output build-sanitizers
+python3 tests/rollback.py LKG_PACKAGES CANDIDATE_PACKAGES /path/to/Laya-Q8_0.gguf --report build/rollback.json
+node tests/electron/run.cjs PACKAGES/ducktape-laya-0.1.0.tgz /path/to/Laya-Q8_0.gguf build/electron.json
+python3 scripts/check-candidate.py build-candidate/evidence.json --report build-candidate/gates.json
+```
+
+The sanitizer runner builds ASan+UBSan and TSan configurations, runs every
+registered native test with the model (allocation-failure injection is skipped
+under sanitizer runtimes) and a short stress run. The rollback rehearsal switches
+an installed application from retained last-known-good packages to the candidate
+and back with one consumer binary, requiring the LKG library and byte-identical
+outputs after rollback. `check-candidate.py` takes a JSON map of evidence names
+(`native`, `native_matrix`, `browser_package`, `browser`, `browser_isolated`,
+`userspaces`, `electron`, `cross_cpu`, `sanitizers`, `fuzz`, `stress`, `soak`,
+`reproducibility`, `performance`, `security_review`, `upgrade`, `model_upgrade`,
+`rollback`) to report paths. A gate passes only when its evidence passed and is
+bound to the clean HEAD commit, the validated library and packages, the browser
+package assets and the pinned model; missing evidence is `not_run`.
+`release_ready` requires every required gate. Publication gates stay separate.
+
 Before publication, require all applicable recorded gates, review current evidence
 and numeric-profile limits, verify the security contact and release hosting, and
 retain the prior artifacts for rollback. Publication and signing are explicit

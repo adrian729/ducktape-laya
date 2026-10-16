@@ -1,11 +1,13 @@
 // Isolated consumer of a built npm tarball, tested in actual Electron main/worker processes.
-const { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } = require('node:fs');
+const { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } = require('node:fs');
+const { createHash } = require('node:crypto');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 async function main() {
-  const [artifact, model] = process.argv.slice(2).map(p => path.resolve(p));
-  if (!artifact || !model || !existsSync(artifact) || !existsSync(model)) throw new Error('Usage: node run.cjs package.tgz model.gguf');
+  const [artifact, model, report] = process.argv.slice(2).map(p => path.resolve(p));
+  if (!artifact || !model || !existsSync(artifact) || !existsSync(model)) throw new Error('Usage: node run.cjs package.tgz model.gguf [report.json]');
+  const results = [];
   const directory = mkdtempSync(path.join(tmpdir(), 'ducktape-electron-'));
   const { createPackageWithOptions } = await import('@electron/asar');
   try {
@@ -39,8 +41,11 @@ app.whenReady().then(async () => {
       if (result.status !== 0) throw new Error(`Electron ${application}: ${result.error || result.stderr}\n${result.stdout}`);
       const line = result.stdout.split('\n').find(line => line.startsWith('{"electron"'));
       if (!line) throw new Error('No Electron inference result');
-      console.log(JSON.stringify({ mode: application === asar ? 'asar' : 'directory', ...JSON.parse(line) }));
+      results.push({ mode: application === asar ? 'asar' : 'directory', ...JSON.parse(line) });
+      console.log(JSON.stringify(results.at(-1)));
     }
+    if (report) writeFileSync(report, JSON.stringify({ status: 'passed', artifact: path.basename(artifact),
+      artifact_sha256: createHash('sha256').update(readFileSync(artifact)).digest('hex'), results }, null, 2) + '\n');
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

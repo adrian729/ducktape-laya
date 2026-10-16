@@ -17,10 +17,12 @@
 - Laya model: the upstream model card declares Apache-2.0.
   [Model source](https://huggingface.co/convaiinnovations/laya),
   [GGUF conversion](https://huggingface.co/ggml-org/Laya-GGUF),
-  [license text](licenses/Apache-2.0.txt). Weights are not committed or downloaded
-  by the runtime. `models/manifest.json` pins the tested conversion. Model
-  attribution and any applicable upstream NOTICE must accompany a distributed
-  app's model assets; finish this artifact audit before publishing installers.
+  [license text](licenses/Apache-2.0.txt). It is fine-tuned from
+  [ModernBERT-large](https://huggingface.co/answerdotai/ModernBERT-large) (Apache-2.0).
+  Neither the Laya model, its GGUF conversion nor ModernBERT-large publishes a
+  NOTICE file. Weights are not committed or downloaded by the runtime.
+  `models/manifest.json` pins the tested conversion. An app distributing the
+  model must include the Apache-2.0 text and this attribution with it.
 
 Ducktape Laya is an independent integration, not an upstream Laya release.
 

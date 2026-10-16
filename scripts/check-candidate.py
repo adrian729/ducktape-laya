@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Aggregate identity-bound evidence for one release candidate into gate results.
+
+The evidence manifest maps evidence names to report paths produced by the
+runners in docs/RELEASE_CHECKS.md. The candidate is the clean HEAD commit, the
+packages from the native validation report and the browser package inventory.
+Each required gate passes only if its evidence exists, passed, and is bound to
+that candidate (source commit, library, package, asset and model hashes).
+Missing evidence is not_run; mismatched or failed evidence is failed.
+`release_ready` is true only when every required gate passed. Publication gates
+(signing, registry installation, retained rollback artifacts) are separate.
+"""
+import argparse
+import json
+import pathlib
+import subprocess
+import sys
+import tarfile
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from release_support import ROOT, check_record, git, read_json, sha256, source_identity
+
+p = argparse.ArgumentParser(description=__doc__)
+p.add_argument('evidence', type=pathlib.Path, help='JSON object: evidence name -> report path (relative to the manifest)')
+p.add_argument('--report', type=pathlib.Path, required=True)
+a = p.parse_args()
+record = check_record()
+policy = read_json(ROOT / 'release/qualification.json')
+manifest_model = read_json(ROOT / record['models'][0])
+base = a.evidence.resolve().parent
+paths = {key: (base / value).resolve() for key, value in read_json(a.evidence).items()}
+commit = git(ROOT, 'rev-parse', 'HEAD')
+dirty = bool(git(ROOT, 'diff', 'HEAD', '--name-only'))
+source = source_identity()['sha256']
+
+class Missing(Exception): pass
+class Mismatch(Exception): pass
+def need(condition, message):
+    if not condition: raise Mismatch(message)
+def load(name):
+    path = paths.get(name)
+    if not path or not path.is_file(): raise Missing(f'{name} evidence missing')
+    return json.loads(path.read_text())
+def same_source(report, name, key='source_commit', dirty_key='source_tracked_dirty'):
+    need(report.get(key) == commit, f'{name}: source {report.get(key)} is not candidate {commit}')
+    need(report.get(dirty_key) is False, f'{name}: produced from a dirty tree')
+
+def native():
+    report = load('native')
+    same_source(report, 'native')
+    need(report.get('mode') == 'real_model' and report.get('model', {}).get('sha256') == manifest_model['sha256'], 'native: not a real-model run of the pinned model')
+    return report
+def packages():
+    report = native()
+    directory = paths['native'].parent / 'packages'
+    inventory = read_json(directory / 'inventory.json')
+    need(inventory['packaging_source_commit'] == commit and not inventory['packaging_source_tracked_dirty'], 'packages: not built from candidate')
+    for name, identity in inventory['artifacts'].items():
+        need(sha256(directory / name) == identity['sha256'], f'packages: {name} differs from inventory')
+    return report, directory, inventory
+def browser_package():
+    path = paths.get('browser_package')
+    if not path or not path.is_file(): raise Missing('browser_package evidence missing')
+    inventory = json.loads(path.read_text())
+    need(inventory['packaging_source_commit'] == commit and not inventory['packaging_source_tracked_dirty'], 'browser package: not built from candidate')
+    need(inventory['build_source']['sha256'] == source, 'browser package: assets built from different sources')
+    for name, digest in inventory['artifacts'].items():
+        need(sha256(path.parent / name) == digest, f'browser package: {name} differs from inventory')
+    return inventory
+
+def native_gate(gate):
+    def check():
+        report = native()
+        need(report['gates'][gate]['status'] == 'passed', f'native: {gate} {report["gates"][gate]["status"]}')
+        if gate == 'installed_packages':
+            packages()
+    return check
+
+def sanitizers():
+    report = load('sanitizers')
+    same_source(report, 'sanitizers')
+    need(report['status'] == 'passed' and all(s['status'] == 'passed' for s in report['sanitizers'].values()), 'sanitizers: not all passed')
+    need(report['model_sha256'] == manifest_model['sha256'], 'sanitizers: model differs')
+    fuzz = load('fuzz')
+    same_source(fuzz, 'fuzz')
+    need(fuzz['status'] == 'passed' and fuzz['qualification_budget_met'], 'fuzz: failed or below the qualification budget')
+
+def stress():
+    library = native()['library_sha256']
+    for name, kind in (('stress', 'routine_stress'), ('soak', 'candidate_soak')):
+        report = load(name)
+        same_source(report, name)
+        need(report['status'] == 'passed' and report['kind'] == kind and report['qualification_budget_met'], f'{name}: failed or below budget')
+        need(report['library_sha256'] == library, f'{name}: library is not the candidate library')
+        need(report['model_sha256'] == manifest_model['sha256'], f'{name}: model differs')
+
+def linux_matrix():
+    _, directory, _ = packages()
+    userspaces = load('userspaces')
+    need(userspaces['status'] == 'passed' and userspaces['artifact_inventory_sha256'] == sha256(directory / 'inventory.json'),
+         'userspaces: failed or not the candidate packages')
+    releases = {env['os_release'].get('VERSION_ID') for env in userspaces['environments'].values() if env['status'] == 'passed'}
+    required = {policy['platforms']['native']['minimum_userspace'], *policy['platforms']['native']['additional_userspaces']}
+    need({f'ubuntu-{v}' for v in releases} >= required, f'userspaces: {sorted(releases)} do not cover {sorted(required)}')
+    electron = load('electron')
+    need(electron['status'] == 'passed' and electron['artifact_sha256'] == sha256(directory / electron['artifact']), 'electron: not the candidate npm package')
+    need({r['mode'] for r in electron['results']} == {'directory', 'asar'}, 'electron: directory and ASAR modes required')
+    need({r['electron'] for r in electron['results']} <= set(policy['platforms']['native']['electron_versions']), 'electron: unlisted version')
+    # Native validation reports from every compiler/Node combination (local or CI artifacts).
+    compilers, nodes = set(), set()
+    for item in load('native_matrix'):
+        report = json.loads((paths['native_matrix'].parent / item).read_text())
+        same_source(report, f'native matrix {item}')
+        need(all(report['gates'][g]['status'] == 'passed' for g in ('native_contracts', 'binding_conformance', 'installed_packages')),
+             f'native matrix {item}: required gates did not pass')
+        family, version = report['diagnostics']['compiler'].split()
+        compilers.add({'GNU': 'gcc', 'Clang': 'clang'}.get(family, family.lower()) + '-' + version)
+        nodes.add(report.get('node_version', '').lstrip('v'))
+    need(compilers >= set(policy['platforms']['native']['compilers']), f'compilers: {sorted(compilers)} do not cover the matrix')
+    need(nodes >= set(policy['platforms']['native']['node_versions']), f'node: {sorted(nodes)} do not cover the matrix')
+    cross = load('cross_cpu')
+    need(cross['exact'] and len({c['model name'] for c in cross['cpus']}) == 2, 'cross_cpu: outputs differ or CPUs not distinct')
+
+def browser_gate(backend):
+    def check():
+        package = browser_package()
+        for page in ('browser', 'browser_isolated'):
+            report = load(page)
+            same_source(report, page)
+            need(report['model_sha256'] == manifest_model['sha256'], f'{page}: model differs')
+            need(report.get('package_dir'), f'{page}: did not test the extracted package')
+            need(report['isolated'] == (page == 'browser_isolated') and not report['headless'] and not report['launch_flags'], f'{page}: page/launch settings differ')
+            for name in ('laya.mjs', 'laya.wasm'):
+                need(report['asset_hashes'][f'{backend}/{name}'] == package['assets'][f'{backend}/{name}'], f'{page}: {backend} assets are not the candidate package')
+            gates = report['backends'][backend]
+            required = ['execution', 'reference', 'controls', 'assets', 'upstream_numeric'] + (['device_loss'] if backend == 'webgpu' else [])
+            for name in required:
+                need(gates.get(name, {}).get('status') == 'passed', f'{page}: {backend}/{name} {gates.get(name, {}).get("status", "missing")}')
+    return check
+
+def cross_profile_drift():
+    report = native()
+    outputs = sha256(paths['native'].parent / 'outputs.json')
+    browser = load('browser')
+    same_source(browser, 'browser')
+    need(browser.get('native_report_sha256') == outputs, 'drift: browser compared against a different native report')
+    for backend in ('wasm', 'webgpu'):
+        need(browser['backends'][backend]['cross_profile_drift']['status'] == 'passed', f'drift: {backend} comparison failed')
+    need(report['gates']['binding_conformance']['status'] == 'passed', 'drift: native conformance failed')
+
+def license_inventory():
+    _, directory, inventory = packages()
+    package = browser_package()
+    for label, names, folder in (('native', inventory['artifacts'], directory), ('browser', package['artifacts'], paths['browser_package'].parent)):
+        need('sbom.cdx.json' in names, f'{label}: SBOM missing from inventory')
+        sbom = json.loads((folder / 'sbom.cdx.json').read_text())
+        for component in sbom['components']:
+            for prop in component['properties']:
+                if prop['name'].startswith('ducktape:notice:'):
+                    need(sha256(ROOT / prop['name'].split(':', 2)[2]) == prop['value'], f'{label}: SBOM notice hash is stale')
+    with tarfile.open(directory / f'ducktape-laya-{inventory["package_version"]}-linux-x64.tar.gz') as archive:
+        members = {pathlib.PurePosixPath(m).name for m in archive.getnames()}
+    need({'LICENSE', 'THIRD_PARTY_NOTICES.md', 'Apache-2.0.txt', 'llama.cpp-MIT.txt', 'nlohmann-json-MIT.txt'} <= members, 'native archive lacks license texts')
+    review = load('security_review')
+    need(review.get('model_licence'), 'license review missing')
+
+def reproducibility():
+    report = load('reproducibility')
+    same_source(report, 'reproducibility')
+    need(report['status'] == 'passed' and not report['differences'], 'reproducibility: builds differ')
+
+def artifact_integrity():
+    report, _, inventory = packages()
+    browser_package()
+    for run in ('packaging-identities', 'browser-backend-identities'):
+        need(report['runs'][run]['exit_code'] == 0, f'native: {run} failed')
+    need(inventory['build_identities']['ducktape_laya']['binary_sha256'] == report['library_sha256'], 'packages: library differs from validated library')
+
+def performance():
+    report = load('performance')
+    same_source(report, 'performance')
+    need(report['library_sha256'] == native()['library_sha256'], 'performance: not the candidate library')
+    result = subprocess.run([sys.executable, str(ROOT / 'scripts/performance-budgets.py'), 'check', str(paths['performance'])],
+                            capture_output=True, text=True)
+    need(result.returncode == 0, 'performance: ' + result.stdout.strip())
+
+def security_review():
+    review = load('security_review')
+    need(review.get('runtime_commit') == record['runtime']['commit'], 'security review: different runtime pin')
+    need(review.get('runtime_patches') == [patch['sha256'] for patch in record['runtime']['patches']], 'security review: different runtime patches')
+    need(review.get('release_blocking_code_issues') == [], 'security review: unresolved release-blocking issues')
+
+def upgrade_rollback():
+    upgrade = load('upgrade')
+    same_source(upgrade, 'upgrade')
+    need(upgrade['candidate_runtime'] != upgrade['baseline_runtime'] and upgrade['adapter_checks_passed'], 'upgrade: runtime axis not rehearsed')
+    model = load('model_upgrade')
+    same_source(model, 'model_upgrade')
+    need(model['candidate_model']['sha256'] != model['model']['sha256'], 'model upgrade: no model axis')
+    need(all(model['gates'][g]['status'] == 'passed' for g in ('native_contracts', 'binding_conformance', 'abi')) and
+         model.get('comparison', {}).get('status') in ('passed', 'failed'), 'model upgrade: candidate checks did not complete')
+    rollback = load('rollback')
+    need(rollback['status'] == 'passed' and rollback['candidate_inventory_sha256'] == sha256(packages()[1] / 'inventory.json'),
+         'rollback: failed or not rehearsed with the candidate packages')
+
+GATES = {'native_contracts': native_gate('native_contracts'), 'binding_conformance': native_gate('binding_conformance'),
+         'upstream_reference': native_gate('upstream_reference'), 'abi': native_gate('abi'),
+         'installed_packages': native_gate('installed_packages'), 'sanitizers': sanitizers, 'stress': stress,
+         'linux_matrix': linux_matrix, 'browser_wasm': browser_gate('wasm'), 'browser_webgpu': browser_gate('webgpu'),
+         'license_inventory': license_inventory, 'reproducibility': reproducibility, 'cross_profile_drift': cross_profile_drift,
+         'artifact_integrity': artifact_integrity, 'performance': performance, 'security_review': security_review,
+         'upgrade_rollback': upgrade_rollback}
+if set(GATES) != set(record['required_release_gates']):
+    raise SystemExit('Gate checker does not match release/compatibility.json required gates')
+result = {'schema_version': 1, 'candidate_commit': commit, 'source_tracked_dirty': dirty, 'source_identity_sha256': source,
+          'model_sha256': manifest_model['sha256'], 'evidence': {k: str(v) for k, v in paths.items()}, 'gates': {}}
+for gate, check in GATES.items():
+    try:
+        check()
+        result['gates'][gate] = {'status': 'passed'}
+    except Missing as error:
+        result['gates'][gate] = {'status': 'not_run', 'detail': str(error)}
+    except (Mismatch, KeyError, ValueError, OSError) as error:
+        result['gates'][gate] = {'status': 'failed', 'detail': f'{type(error).__name__}: {error}'}
+result['release_ready'] = not dirty and all(g['status'] == 'passed' for g in result['gates'].values())
+result['publication_gates'] = {gate: 'not_run' for gate in policy['publication_gates']}
+a.report.write_text(json.dumps(result, indent=2) + '\n')
+print(json.dumps({'release_ready': result['release_ready'], 'gates': {k: v['status'] for k, v in result['gates'].items()}}, indent=2))
+raise SystemExit(0 if result['release_ready'] else 1)
