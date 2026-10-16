@@ -36,6 +36,8 @@ SANITIZERS = {
                'env': {'TSAN_OPTIONS': 'halt_on_error=1:second_deadlock_stack=1'}},
 }
 selected = [a.only] if a.only else list(SANITIZERS)
+# Instrumented code runs several times slower; the CTest TIMEOUT property overrides --timeout.
+TEST_TIMEOUT = 3600
 report = {'schema_version': 1, 'status': 'running', 'release_ready': False,
           'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')),
@@ -59,6 +61,7 @@ try:
             f'-DDUCKTAPE_LLAMA_SOURCE={ROOT / record["runtime"]["path"]}', '-DDUCKTAPE_LLAMA_REVISION=',
             '-DDUCKTAPE_BUILD_TESTS=ON', '-DDUCKTAPE_BUILD_NODE=OFF', '-DDUCKTAPE_BUILD_FUZZERS=OFF',
             f'-DDUCKTAPE_TEST_MODEL={model}',
+            f'-DDUCKTAPE_REAL_TEST_TIMEOUT={TEST_TIMEOUT}',
             f'-DCMAKE_C_FLAGS={SANITIZERS[name]["flags"]}', f'-DCMAKE_CXX_FLAGS={SANITIZERS[name]["flags"]}'], env)
         run(f'{name}-build', ['cmake', '--build', build, '--parallel', str(a.jobs)], env)
         run(f'{name}-build-stress', ['cmake', '--build', build, '--target', 'laya-stress', '--parallel', str(a.jobs)], env)
@@ -69,7 +72,7 @@ try:
         if not {'real-model', 'real-features', 'real-control', 'real-faults'} <= set(entry['tests']):
             raise RuntimeError(f'{name}: real-model tests are not registered')
         started = time.monotonic()
-        run(f'{name}-ctest', ['ctest', '--test-dir', build, '--output-on-failure', '--timeout', '3600'], env)
+        run(f'{name}-ctest', ['ctest', '--test-dir', build, '--output-on-failure', '--timeout', str(TEST_TIMEOUT)], env)
         stress_dir = out / f'{name}-stress'
         stress_dir.mkdir()
         run(f'{name}-stress', [build / 'laya-stress', model, str(a.stress_rounds)],
