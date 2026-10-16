@@ -140,7 +140,13 @@ try:
         report['gates'][gate] = {'status': 'passed'}
     report['symbols'] = symbols
     try:
-        delta, path = compare_results(outcomes['baseline'], outcomes['candidate'], record['candidate_absolute_tolerance'])
+        # Runtime, library and model identities are expected to differ and are recorded per run;
+        # the inputs and settings must match and the results are compared.
+        for key in ('fixture_hashes', 'settings'):
+            if outcomes['baseline'][key] != outcomes['candidate'][key]:
+                raise ValueError(f'Value/type changed: $.{key}')
+        delta, path = compare_results(outcomes['baseline']['fixtures'], outcomes['candidate']['fixtures'],
+                                      record['candidate_absolute_tolerance'], '$.fixtures')
         report['comparison'] = {'maximum_absolute_delta': delta, 'path': path, 'status': 'passed'}
     except (AssertionError, ValueError) as error:
         report['comparison'] = {'status': 'failed', 'detail': str(error)}
