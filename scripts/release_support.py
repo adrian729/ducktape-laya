@@ -156,6 +156,8 @@ def browser_build_identity(build, backend, record, toolchain, expected_source):
     if identity.get('backend') != backend:
         raise ValueError(backend + ': built backend differs from package slot; rebuild with the correct backend')
     require_build_source(identity, expected_source, backend)
+    if identity.get('maximum_memory') != 4294967296:
+        raise ValueError(backend + ': not the product WebAssembly memory ceiling (test build); rebuild first')
     if (identity.get('package_version') != record['package_version'] or
         identity.get('llama_cpp_commit') != record['runtime']['commit'] or
         identity.get('runtime_patches') != record['runtime']['patches'] or

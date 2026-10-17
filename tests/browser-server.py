@@ -14,6 +14,7 @@ p.add_argument('model', type=pathlib.Path)
 p.add_argument('--package-dir', type=pathlib.Path, help='Serve an extracted browser package instead of development files')
 p.add_argument('--port', type=int, default=0)
 p.add_argument('--isolated', action='store_true', help='Exercise SharedArrayBuffer cancellation with COOP/COEP')
+p.add_argument('--constrained-wasm', type=pathlib.Path, help='WASM build with a lowered memory ceiling, served at /constrained/')
 a = p.parse_args()
 # Literal JSON request texts: parsing them in JavaScript would reorder integer-like keys.
 references = tempfile.NamedTemporaryFile('w', suffix='.json')
@@ -63,6 +64,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             base = a.package_dir / backend if a.package_dir else root / f'build-browser-{backend}'
             routes.extend([(f'/browser/{backend}/', base), (f'/{backend}/', base)])
         routes.extend([('/browser/', a.package_dir or root / 'bindings/browser'), ('/fixtures/', root / 'tests/fixtures')])
+        if a.constrained_wasm: routes.append(('/constrained/', a.constrained_wasm))
         for prefix, base in routes:
             if path.startswith(prefix):
                 resolved = (base / path[len(prefix):]).resolve()

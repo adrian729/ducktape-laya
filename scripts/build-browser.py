@@ -11,6 +11,8 @@ p.add_argument('--backend', choices=['wasm', 'webgpu'], required=True)
 p.add_argument('--jobs', type=int, default=3)
 p.add_argument('--reference', action='store_true', help='Build the test-only upstream reference separately')
 p.add_argument('--trace-gpu', action='store_true', help='Enable upstream operation diagnostics for validation')
+p.add_argument('--maximum-memory', type=int, default=4294967296,
+               help='Test-only WebAssembly memory ceiling in bytes; packaging rejects anything but the default')
 a = p.parse_args()
 record = check_record()
 pin = read_json(ROOT / 'release/browser-toolchain.json')
@@ -26,7 +28,8 @@ subprocess.run([str(em / 'emcmake'), 'cmake', '-S', str(ROOT), '-B', str(a.build
     '-DDUCKTAPE_BUILD_FUZZERS=OFF', '-DCMAKE_BUILD_TYPE=Release', '-DDUCKTAPE_BUILD_TESTS=OFF', '-DDUCKTAPE_BUILD_NODE=OFF', '-DDUCKTAPE_BUILD_EXAMPLES=OFF',
     '-DDUCKTAPE_WASM_OPTIMIZATION=1', '-DEMSCRIPTEN_SYSTEM_PROCESSOR=wasm32', '-DGGML_WEBGPU=' + ('ON' if a.backend == 'webgpu' else 'OFF'),
     '-DGGML_WEBGPU_DEBUG=' + ('ON' if a.trace_gpu else 'OFF'),
-    '-DDUCKTAPE_BUILD_REFERENCE_PROBE=' + ('ON' if a.reference else 'OFF')], check=True, cwd=build)
+    '-DDUCKTAPE_BUILD_REFERENCE_PROBE=' + ('ON' if a.reference else 'OFF'),
+    f'-DDUCKTAPE_WASM_MAXIMUM_MEMORY={a.maximum_memory}'], check=True, cwd=build)
 subprocess.run(['cmake', '--build', str(build), '--target', 'ducktape_laya_wasm', '--parallel', str(a.jobs)], check=True, cwd=build)
 if a.reference:
     subprocess.run(['cmake', '--build', str(build), '--target', 'laya-reference', '--parallel', str(a.jobs)], check=True, cwd=build)

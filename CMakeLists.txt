@@ -266,6 +266,18 @@ if(EMSCRIPTEN)
     set(DTL_BROWSER_BACKEND wasm)
   endif()
   string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" backend "\"${DTL_BROWSER_BACKEND}\"")
+  # Test builds may lower the WebAssembly memory ceiling to exercise growth failure;
+  # packaging accepts only the product ceiling (4 GiB).
+  set(DUCKTAPE_WASM_MAXIMUM_MEMORY "4294967296" CACHE STRING "WebAssembly memory ceiling in bytes (64 KiB multiple)")
+  if(NOT DUCKTAPE_WASM_MAXIMUM_MEMORY MATCHES "^[0-9]+$" OR DUCKTAPE_WASM_MAXIMUM_MEMORY GREATER 4294967296
+     OR DUCKTAPE_WASM_MAXIMUM_MEMORY LESS 67108864)
+    message(FATAL_ERROR "Invalid DUCKTAPE_WASM_MAXIMUM_MEMORY")
+  endif()
+  math(EXPR DTL_WASM_PAGE_REMAINDER "${DUCKTAPE_WASM_MAXIMUM_MEMORY} % 65536")
+  if(NOT DTL_WASM_PAGE_REMAINDER EQUAL 0)
+    message(FATAL_ERROR "DUCKTAPE_WASM_MAXIMUM_MEMORY must be a multiple of 65536")
+  endif()
+  string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" maximum_memory "${DUCKTAPE_WASM_MAXIMUM_MEMORY}")
   file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json" CONTENT "${DTL_BROWSER_IDENTITY}")
   set_property(TARGET ducktape_laya_wasm APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json")
   add_custom_command(TARGET ducktape_laya_wasm POST_BUILD COMMAND ${CMAKE_COMMAND}
@@ -281,7 +293,7 @@ if(EMSCRIPTEN)
   endif()
   target_link_options(ducktape_laya_wasm PRIVATE "-O${DUCKTAPE_WASM_OPTIMIZATION}"
     "-sMODULARIZE=1" "-sEXPORT_ES6=1" "-sENVIRONMENT=web,worker"
-    "-sALLOW_MEMORY_GROWTH=1" "-sMAXIMUM_MEMORY=4294967296" "-sINITIAL_MEMORY=67108864"
+    "-sALLOW_MEMORY_GROWTH=1" "-sMAXIMUM_MEMORY=${DUCKTAPE_WASM_MAXIMUM_MEMORY}" "-sINITIAL_MEMORY=67108864"
     "-sSTACK_SIZE=2097152" "-sFORCE_FILESYSTEM=1"
     "$<$<NOT:$<BOOL:${GGML_WEBGPU}>>:-sDISABLE_EXCEPTION_CATCHING=0>"
     "-sEXPORTED_FUNCTIONS=['_malloc','_free','_dtl_abi_version','_dtl_open','_dtl_close','_dtl_free','_dtl_decide','_dtl_decide_observed','_dtl_execute','_dtl_router_open','_dtl_router_execute','_dtl_router_close','_dtl_execute_with_options','_dtl_decide_with_options','_dtl_router_execute_with_options','_dtl_info']"

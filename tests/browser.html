@@ -130,6 +130,40 @@ window.startAssets = async () => {
     window.assets.status = 'passed';
   } catch (error) { window.assets.status = 'failed'; window.assets.error = error.stack; }
 };
+// A WASM build whose memory ceiling is below what an engine needs: initialization must
+// reject (native status, or the binding's error for an aborted runtime), never hang
+// or succeed, and the page must then open a working engine with the product build.
+window.startMemory = async () => {
+  window.memory = { status: 'running', checks: [] };
+  try {
+    const build = await (await fetch('/constrained/laya.build.json')).json();
+    window.memory.maximum_memory = build.maximum_memory;
+    if (!(build.maximum_memory < 4294967296)) throw new Error('Not a constrained build');
+    const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
+    const options = { backend: 'wasm', moduleUrl: '/constrained/laya.mjs', initializationTimeoutMs: 240000 };
+    try {
+      const engine = await Laya.open({ ...options, modelUrl: '/model.gguf' });
+      await engine.close(); throw new Error('Unexpected initialization success');
+    } catch (error) {
+      if (error.message === 'Unexpected initialization success') throw error;
+      window.memory.checks.push({ case: 'engine initialization', status: error.status ?? null, error: error.message });
+    }
+    // Routers load lazily: the first routed request loads the model and must reject.
+    let router;
+    try {
+      router = await Laya.openRouter({ a: { url: '/model.gguf' } }, options);
+      await router.execute({ ...request, model: 'a' }); throw new Error('Unexpected routed success');
+    } catch (error) {
+      if (error.message === 'Unexpected routed success') throw error;
+      window.memory.checks.push({ case: 'router first request', status: error.status ?? null, error: error.message });
+    } finally { if (router) await router.close().catch(() => {}); }
+    const engine = await Laya.open({ modelUrl: '/model.gguf', backend: 'wasm' });
+    await engine.execute(request);
+    await engine.close();
+    window.memory.checks.push({ case: 'recovery with the product build' });
+    window.memory.status = 'passed';
+  } catch (error) { window.memory.status = 'failed'; window.memory.error = error.stack; }
+};
 window.startInfo = async (backend) => {
   window.infoCheck = { status: 'running', backend }; let engine;
   try {

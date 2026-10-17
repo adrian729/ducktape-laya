@@ -69,7 +69,11 @@ URL/hash pairs are downloaded once and use one canonical model path. Native
 routing validation/cache limits remain authoritative. `maxModelBytes` limits
 total fetched model bytes (default 1 GiB), not peak process/GPU RAM. Download
 buffers, filesystem storage, weights and inference buffers add memory overhead.
-This is a wasm32 build with a 4 GiB heap ceiling; OOM may terminate its worker.
+This is a wasm32 build with a 4 GiB heap ceiling. When the browser cannot grow
+the heap, large allocations (weights, inference buffers) fail with a native status;
+a failed small ggml allocation aborts the WebAssembly runtime, which rejects the
+pending work with status 3 and closes that engine. Other engines and the page are
+unaffected, and the host can open a new engine.
 
 ## Execution and failure semantics
 
@@ -142,7 +146,13 @@ Chrome without custom launch flags; use `--headless` only when that environment
 provides the intended GPU. `--isolated` adds COOP/COEP for shared-memory controls.
 `--package-dir EXTRACTED_PACKAGE` tests shipped assets; `--backend wasm|webgpu`
 selects a backend. Explicit `--skip-reference`/`--skip-controls` leave those checks
-not run. Selected-check success is never full release approval.
+not run. `--constrained-wasm BUILD` adds a WASM `memory` stage using a test build
+with a lowered heap ceiling (`scripts/build-browser.py --maximum-memory 469762048`, 448 MiB):
+opening an engine and a router's first request there must reject, never hang or
+succeed, and the
+page must then open a working engine with the product build. Packaging rejects
+builds whose ceiling is not 4 GiB. Selected-check success is never full release
+approval.
 
 Store run results in ignored build directories or CI/PR artifacts. Broader GPU,
 physical CPU, isolated-page cancellation and minimum-browser coverage remain

@@ -19,6 +19,7 @@ const { values: args } = parseArgs({ options: {
   'skip-reference': { type: 'boolean', default: false },
   'skip-controls': { type: 'boolean', default: false },
   'stage-timeout-ms': { type: 'string', default: '900000' },
+  'constrained-wasm': { type: 'string' },
 } });
 if (!args.model || !args.output || !['wasm', 'webgpu', 'both'].includes(args.backend)) {
   throw new Error('Usage: node tests/browser-automation/run.mjs --model GGUF --output NEW_DIR [--native REPORT] [--package-dir EXTRACTED_PACKAGE] [--backend wasm|webgpu|both] [--isolated] [--headless] [--stage-timeout-ms MS]');
@@ -61,6 +62,10 @@ const save = () => writeFile(join(out, 'report.json'), JSON.stringify(report, nu
 const serverArgs = [join(root, 'tests/browser-server.py'), model];
 if (args['package-dir']) serverArgs.push('--package-dir', resolve(args['package-dir']));
 if (args.isolated) serverArgs.push('--isolated');
+if (args['constrained-wasm']) {
+  serverArgs.push('--constrained-wasm', resolve(args['constrained-wasm']));
+  for (const name of ['laya.mjs', 'laya.wasm', 'laya.build.json']) report.asset_hashes['constrained/' + name] = await hash(join(resolve(args['constrained-wasm']), name));
+}
 let browser;
 const server = spawn('python3', serverArgs, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
 let serverError = '';
@@ -93,10 +98,12 @@ try {
       const stages = [['execution', 'start', 'state'],
         ...(!args['skip-reference'] ? [['reference', 'startReference', 'reference']] : []),
         ...(!args['skip-controls'] ? [['controls', 'startControls', 'controls'], ['assets', 'startAssets', 'assets'],
-          ...(backend === 'webgpu' ? [['device_loss', 'startDeviceLoss', 'loss']] : [])] : [])];
+          ...(backend === 'webgpu' ? [['device_loss', 'startDeviceLoss', 'loss']] : [])] : []),
+        ...(backend === 'wasm' && args['constrained-wasm'] ? [['memory', 'startMemory', 'memory']] : [])];
       gates.reference = { status: 'not_run' };
       gates.controls = gates.assets = { status: 'not_run' };
       if (backend === 'webgpu') gates.device_loss = { status: 'not_run' };
+      if (backend === 'wasm') gates.memory = { status: 'not_run' };
       for (const [name, method, state] of stages) {
         console.log(`${backend}/${name}: running`);
         const fixtures = Object.keys(report.fixture_hashes).map(name => name.slice(0, -'.json'.length));
