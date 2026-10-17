@@ -170,16 +170,20 @@ struct backend::impl {
 #endif
         const auto &prepared = *q.prepared;
         if (auto memory = llama_get_memory(ctx.get())) llama_memory_clear(memory, true);
-        auto batch = llama_batch_init(prepared.tokens.size(), 0, 1);
-        struct cleanup { llama_batch &b; ~cleanup() { llama_batch_free(b); } } guard{batch};
-        if (!batch.token || !batch.pos || !batch.n_seq_id || !batch.seq_id || !batch.logits) throw std::bad_alloc();
-        batch.n_tokens = prepared.tokens.size();
-        for (int i = 0; i < batch.n_tokens; ++i) {
-            batch.token[i] = prepared.tokens[i]; batch.pos[i] = i; batch.n_seq_id[i] = 1;
-            batch.seq_id[i][0] = 0; batch.logits[i] = 1;
-        }
+        // Own the batch arrays: llama_batch_init does not check its malloc results.
+        const auto n = prepared.tokens.size();
+        std::vector<llama_token> tokens(prepared.tokens.begin(), prepared.tokens.end());
+        std::vector<llama_pos> positions(n);
+        std::vector<int32_t> seq_counts(n, 1);
+        llama_seq_id sequence = 0;
+        std::vector<llama_seq_id *> seq_ids(n, &sequence);
+        std::vector<int8_t> outputs(n, 1);
+        for (size_t i = 0; i < n; ++i) positions[i] = static_cast<llama_pos>(i);
+        llama_batch batch{static_cast<int32_t>(n), tokens.data(), nullptr, positions.data(), seq_counts.data(),
+                          seq_ids.data(), outputs.data()};
         int status = llama_encode(ctx.get(), batch);
         if (control) control->check();
+        if (status == -2) throw std::bad_alloc(); // llama_encode: allocation failed
         if (status != 0) throw failure(DTL_INFERENCE_ERROR, "Laya forward pass failed: " + std::to_string(status));
         std::vector<float> scores;
         for (size_t index : prepared.markers) {

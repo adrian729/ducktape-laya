@@ -68,3 +68,19 @@ upstream handling. No arithmetic or output changes.
 
 Removal condition: upstream propagates allocation failure from these sites and
 `real-faults` passes unchanged. Upstream submission has not been performed.
+
+## ggml-check-allocations.patch
+
+Several ggml allocations are used without a NULL check: the CPU thread pool that
+every graph computation creates, the graph allocator's chunk and dynamic-allocator
+records, and the backend scheduler's arrays (found by the fault suite's C
+allocation injection). Natively a failure there is a segmentation fault; in
+WebAssembly, where `malloc` returns NULL when memory cannot grow and address 0 is
+valid memory, it would silently write into low memory. The thread pool now returns
+NULL and `ggml_graph_compute` reports `GGML_STATUS_ALLOC_FAILED`, which llama.cpp
+returns from `llama_encode` and the library maps to `DTL_OUT_OF_MEMORY`. The other
+sites assert, matching ggml's existing handling of small allocation failure
+(`ggml_malloc` and `ggml_init` abort). No arithmetic or output changes.
+
+Removal condition: upstream checks these allocations and `real-faults` passes
+unchanged. Upstream submission has not been performed.

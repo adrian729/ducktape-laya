@@ -246,9 +246,16 @@ closing a non-null handle invalidates it and must not race any active call.
 Allocation failure while parsing, planning, rendering or returning a request
 yields status 4 and leaves the engine usable. During model loading the runtime
 loader may report it as status 2. The library does not terminate the process on
-C++ allocation failure; the operating system may still kill a process under
-memory pressure, and allocation failures inside llama.cpp/ggml C code follow
-upstream behavior.
+C++ allocation failure. Inside llama.cpp/ggml C code, failing to allocate model
+weights or compute buffers is reported as status 2 or 4, and a failed CPU
+thread-pool allocation during inference as status 4. ggml aborts the process
+(`SIGABRT`) when one of its small bookkeeping allocations fails, such as a graph
+context or scheduler array; that is upstream design. On Linux with the default
+memory overcommit such allocations practically never fail, because the kernel's
+OOM killer stops a process under memory pressure first. In the browser an abort
+ends only that worker's WebAssembly instance (see BROWSER.md). Applications that
+must survive allocation failure inside ggml should run the engine in a separate
+process.
 
 C++ and Rust expose native statuses through their error types; JS rejects with
 an Error carrying native `status` when available. Binding-level validation,

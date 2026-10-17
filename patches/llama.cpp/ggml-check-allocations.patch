@@ -1,0 +1,118 @@
+--- a/ggml/src/ggml-alloc.c
++++ b/ggml/src/ggml-alloc.c
+@@ -162,6 +162,7 @@
+         return -1;
+     }
+     struct tallocr_chunk * chunk = calloc(1, sizeof(struct tallocr_chunk));
++    GGML_ASSERT(chunk != NULL); // DTL: unchecked allocation
+     chunk->n_free_blocks = 1;
+     chunk->free_blocks[0].offset = 0;
+     // available space in a chunk is limited to max_chunk_size, but can be higher if:
+@@ -365,6 +366,7 @@
+ 
+ static struct ggml_dyn_tallocr * ggml_dyn_tallocr_new(size_t alignment, size_t max_buffer_size) {
+     struct ggml_dyn_tallocr * alloc = (struct ggml_dyn_tallocr *)malloc(sizeof(struct ggml_dyn_tallocr));
++    GGML_ASSERT(alloc != NULL); // DTL: unchecked allocation
+ 
+     *alloc = (struct ggml_dyn_tallocr) {
+         /*.alignment      = */ alignment,
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -642,6 +642,7 @@
+ #endif // NDEBUG
+         size_t nbytes = ggml_nbytes(src);
+         void * data = malloc(nbytes);
++        GGML_ASSERT(data != NULL); // DTL: unchecked allocation
+         ggml_backend_tensor_get(src, data, 0, nbytes);
+         ggml_backend_tensor_set(dst, data, 0, nbytes);
+         free(data);
+@@ -857,6 +858,7 @@
+ 
+ ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers) {
+     ggml_backend_multi_buffer_context * ctx = (ggml_backend_multi_buffer_context *) malloc(sizeof(struct ggml_backend_multi_buffer_context));
++    GGML_ASSERT(ctx != NULL); // DTL: unchecked allocation
+     ctx->n_buffers = n_buffers;
+     ctx->buffers = (ggml_backend_buffer_t *) malloc(n_buffers * sizeof(ggml_backend_buffer_t));
+ 
+@@ -1946,6 +1948,7 @@
+     GGML_ASSERT(ggml_backend_dev_type(ggml_backend_get_device(backends[n_backends - 1])) == GGML_BACKEND_DEVICE_TYPE_CPU);
+ 
+     struct ggml_backend_sched * sched = (ggml_backend_sched *) calloc(1, sizeof(struct ggml_backend_sched));
++    GGML_ASSERT(sched != NULL); // DTL: unchecked allocation
+ 
+     const char * GGML_SCHED_DEBUG = getenv("GGML_SCHED_DEBUG");
+     sched->debug = GGML_SCHED_DEBUG ? atoi(GGML_SCHED_DEBUG) : 0;
+@@ -1965,6 +1968,7 @@
+     sched->hash_set    = ggml_hash_set_new(graph_size);
+     sched->hv_tensor_backend_ids = (int *) malloc(sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
+     sched->hv_tensor_copies      = (ggml_tensor **) malloc(sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
++    GGML_ASSERT(sched->hv_tensor_backend_ids != NULL && sched->hv_tensor_copies != NULL); // DTL: unchecked allocation
+ 
+     const size_t ggml_sched_max_splits = graph_size; // at most there is one split for each node in the graph
+     const size_t nodes_size = graph_size + ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2;
+@@ -1972,19 +1976,24 @@
+     sched->leaf_backend_ids = (int *) calloc(nodes_size, sizeof(sched->leaf_backend_ids[0]));
+     sched->prev_node_backend_ids = (int *) calloc(nodes_size, sizeof(sched->prev_node_backend_ids[0]));
+     sched->prev_leaf_backend_ids = (int *) calloc(nodes_size, sizeof(sched->prev_leaf_backend_ids[0]));
++    GGML_ASSERT(sched->node_backend_ids != NULL && sched->leaf_backend_ids != NULL &&
++                sched->prev_node_backend_ids != NULL && sched->prev_leaf_backend_ids != NULL); // DTL: unchecked allocation
+ 
+     sched->debug_graph_size = 0;
+     sched->debug_prev_graph_size = 0;
+ 
+     sched->context_buffer_size = ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2*sizeof(struct ggml_tensor) + ggml_graph_overhead_custom(graph_size, false);
+     sched->context_buffer = (char *) malloc(sched->context_buffer_size);
++    GGML_ASSERT(sched->context_buffer != NULL); // DTL: unchecked allocation
+ 
+     const int initial_splits_capacity = 16;
+     sched->splits = (ggml_backend_sched_split *) calloc(initial_splits_capacity, sizeof(sched->splits[0]));
++    GGML_ASSERT(sched->splits != NULL); // DTL: unchecked allocation
+     sched->splits_capacity = initial_splits_capacity;
+ 
+     sched->graph_inputs_capacity = GGML_SCHED_MAX_SPLIT_INPUTS;
+     sched->graph_inputs = (struct ggml_tensor **) calloc(sched->graph_inputs_capacity, sizeof(struct ggml_tensor *));
++    GGML_ASSERT(sched->graph_inputs != NULL); // DTL: unchecked allocation
+ 
+     for (int b = 0; b < n_backends; b++) {
+         sched->backends[b] = backends[b];
+@@ -2307,6 +2316,7 @@
+     struct ggml_hash_set hash_set = ggml_hash_set_new(graph->visited_hash_set.size);
+     struct ggml_tensor ** node_copies = (ggml_tensor **) calloc(hash_set.size, sizeof(node_copies[0])); // NOLINT
+     bool * node_init = (bool *) calloc(hash_set.size, sizeof(node_init[0]));
++    GGML_ASSERT(node_copies != NULL && node_init != NULL); // DTL: unchecked allocation
+ 
+     struct ggml_init_params params = {
+         /* .mem_size   = */ ggml_tensor_overhead()*hash_set.size + ggml_graph_overhead_custom(graph->size, false),
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -3341,6 +3341,9 @@
+ 
+     struct ggml_threadpool * threadpool =
+         ggml_aligned_malloc(sizeof(struct ggml_threadpool));
++    if (threadpool == NULL) { // DTL: report allocation failure to the caller
++        return NULL;
++    }
+     {
+         threadpool->cgraph           = cgraph;
+         threadpool->cplan            = cplan;
+@@ -3361,6 +3364,10 @@
+     // Allocate and init workers state
+     const size_t workers_size = sizeof(struct ggml_compute_state) * tpp->n_threads;
+     struct ggml_compute_state * workers = ggml_aligned_malloc(workers_size);
++    if (workers == NULL) { // DTL: report allocation failure to the caller
++        ggml_aligned_free(threadpool, sizeof(struct ggml_threadpool));
++        return NULL;
++    }
+ 
+     memset(workers, 0, workers_size);
+     for (int j = 0; j < tpp->n_threads; j++) {
+@@ -3429,6 +3436,9 @@
+ 
+         struct ggml_threadpool_params ttp = ggml_threadpool_params_default(n_threads);
+         threadpool = ggml_threadpool_new_impl(&ttp, cgraph, cplan);
++        if (threadpool == NULL) { // DTL
++            return GGML_STATUS_ALLOC_FAILED;
++        }
+     } else {
+         // Reset some of the parameters that need resetting
+         // No worker threads should be accessing the parameters below at this stage

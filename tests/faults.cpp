@@ -3,10 +3,14 @@
 // supplied model is only read. Allocation failure runs in forked children so an
 // address-space limit cannot affect the parent or the other checks.
 #include "ducktape_laya.hpp"
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <cstdlib>
 #include <new>
@@ -27,16 +31,42 @@ namespace fs = std::filesystem;
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__) || __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
 #define DTL_SANITIZED 1 // Sanitizer runtimes own operator new and reserve shadow address space.
 #else
-// Allocation-failure injection for the C++ allocations of library calls. Armed
-// only around a single call; the allocation at index fail_after throws.
-static std::atomic<long> fail_after{-1}, failed{0};
+// Allocation-failure injection, armed only around a single call. C++ allocations
+// (fail_after) throw; C allocations (c_fail_after: malloc and friends, which ggml
+// and llama.cpp use directly) return NULL. Each counter fails its Nth allocation.
+// operator new takes glibc's allocator directly so the two are counted separately.
+extern "C" void *__libc_malloc(size_t);
+extern "C" void *__libc_calloc(size_t, size_t);
+extern "C" void *__libc_realloc(void *, size_t);
+extern "C" void *__libc_memalign(size_t, size_t);
+static std::atomic<long> fail_after{-1}, failed{0}, c_fail_after{-1}, c_failed{0}, c_counted{0};
+static std::atomic<bool> c_counting{false};
 void *operator new(std::size_t size) {
     if (fail_after.load(std::memory_order_relaxed) >= 0 && fail_after.fetch_sub(1) == 0) { ++failed; throw std::bad_alloc(); }
-    if (void *p = std::malloc(size ? size : 1)) return p;
+    if (void *p = __libc_malloc(size ? size : 1)) return p;
     throw std::bad_alloc();
 }
 void operator delete(void *p) noexcept { std::free(p); }
 void operator delete(void *p, std::size_t) noexcept { std::free(p); }
+static bool c_inject() {
+    if (c_counting.load(std::memory_order_relaxed)) ++c_counted;
+    if (c_fail_after.load(std::memory_order_relaxed) >= 0 && c_fail_after.fetch_sub(1) == 0) { ++c_failed; errno = ENOMEM; return true; }
+    return false;
+}
+extern "C" {
+void *malloc(size_t n) { return c_inject() ? nullptr : __libc_malloc(n); }
+void *calloc(size_t n, size_t size) { return c_inject() ? nullptr : __libc_calloc(n, size); }
+void *realloc(void *p, size_t n) { return n && c_inject() ? nullptr : __libc_realloc(p, n); }
+void *memalign(size_t alignment, size_t n) { return c_inject() ? nullptr : __libc_memalign(alignment, n); }
+void *aligned_alloc(size_t alignment, size_t n) { return c_inject() ? nullptr : __libc_memalign(alignment, n); }
+int posix_memalign(void **out, size_t alignment, size_t n) {
+    if (c_inject()) return ENOMEM;
+    void *p = __libc_memalign(alignment, n);
+    if (!p) return ENOMEM;
+    *out = p;
+    return 0;
+}
+}
 #endif
 static void expect(bool ok, const std::string &message) { if (!ok) throw std::runtime_error(message); }
 
@@ -138,8 +168,86 @@ static void in_child(const char *name, const std::function<void()> &fn) {
     std::cerr << name << ": passed\n";
 }
 
+#ifndef DTL_SANITIZED
+// Fail each C allocation of one dtl_execute and one dtl_open in its own child
+// (four at a time). ggml aborts by design on most small allocation failures,
+// so a point may end in an exact result, DTL_OUT_OF_MEMORY or SIGABRT from
+// ggml; never another signal (an unchecked NULL). The thread pool's failure
+// must reach the caller as DTL_OUT_OF_MEMORY and leave the engine usable.
+static void c_allocation_sweep(const std::string &model, const std::string &batch) {
+    setenv("GGML_NO_BACKTRACE", "1", 1); // ggml_abort would otherwise attach gdb
+    dtl_engine *engine = nullptr; char *result = nullptr, *error = nullptr;
+    auto options = dtl_default_options(); options.threads = 2;
+    expect(dtl_open(model.c_str(), &options, &engine, &error) == DTL_OK, "open");
+    expect(dtl_execute(engine, batch.c_str(), nullptr, &result, &error) == DTL_OK, "baseline");
+    const std::string expected = result; dtl_free(result);
+    auto count = [&](const std::function<void()> &call) { c_counted = 0; c_counting = true; call(); c_counting = false; return long(c_counted); };
+    const long in_execute = count([&] { dtl_execute(engine, batch.c_str(), nullptr, &result, &error); dtl_free(result); });
+    const long in_open = count([&] { dtl_engine *e = nullptr; dtl_open(model.c_str(), &options, &e, &error); dtl_close(e); });
+    enum outcome { exact = 0, out_of_memory = 3, aborted = 4, model_error = 6 };
+    auto sweep = [&](const char *label, long points, const std::function<int()> &child) {
+        std::map<int, long> outcomes;
+        std::map<pid_t, long> running;
+        auto reap = [&] {
+            int status = 0;
+            pid_t pid = wait(&status);
+            expect(pid > 0, "wait");
+            const long point = running[pid]; running.erase(pid);
+            if (WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT) ++outcomes[aborted];
+            else {
+                expect(WIFEXITED(status) && (WEXITSTATUS(status) == exact || WEXITSTATUS(status) == out_of_memory || WEXITSTATUS(status) == model_error),
+                       std::string(label) + " C allocation " + std::to_string(point) + ": " +
+                       (WIFSIGNALED(status) ? "killed by signal " + std::to_string(WTERMSIG(status)) : "exit " + std::to_string(WEXITSTATUS(status))));
+                ++outcomes[WEXITSTATUS(status)];
+            }
+        };
+        for (long n = 0; n < points; ++n) {
+            if (running.size() == 4) reap();
+            std::cout.flush(); std::cerr.flush();
+            pid_t pid = fork();
+            expect(pid >= 0, "fork");
+            if (!pid) {
+                if (int null = ::open("/dev/null", O_WRONLY); null >= 0) dup2(null, 2);
+                prctl(PR_SET_DUMPABLE, 0); // expected aborts skip the system crash handler
+                c_fail_after = n;
+                std::_Exit(child());
+            }
+            running[pid] = n;
+        }
+        while (!running.empty()) reap();
+        std::cerr << label << " C allocation failures: " << points << " points, " << outcomes[exact] << " exact, "
+                  << outcomes[out_of_memory] << " DTL_OUT_OF_MEMORY, " << outcomes[model_error] << " DTL_MODEL_ERROR, "
+                  << outcomes[aborted] << " ggml abort\n";
+        return outcomes;
+    };
+    auto executed = sweep("execute", in_execute, [&] {
+        auto status = dtl_execute(engine, batch.c_str(), nullptr, &result, &error);
+        c_fail_after = -1;
+        if (status == DTL_OK && result != expected) return 1;
+        if (status != DTL_OK && status != DTL_OUT_OF_MEMORY) return 2;
+        // The engine must keep returning exact results after a rejected call.
+        char *again = nullptr;
+        if (dtl_execute(engine, batch.c_str(), nullptr, &again, &error) != DTL_OK || again != expected) return 5;
+        return status == DTL_OK ? int(exact) : int(out_of_memory);
+    });
+    expect(executed[out_of_memory] > 0, "no C allocation failure reached the caller as DTL_OUT_OF_MEMORY");
+    sweep("open", in_open, [&] {
+        dtl_engine *e = nullptr;
+        auto status = dtl_open(model.c_str(), &options, &e, &error);
+        c_fail_after = -1;
+        if (status == DTL_OK) { dtl_close(e); return int(exact); }
+        if (e) return 2;
+        return status == DTL_OUT_OF_MEMORY ? int(out_of_memory) : status == DTL_MODEL_ERROR ? int(model_error) : 2;
+    });
+    dtl_close(engine);
+}
+#endif
+
 int main(int argc, char **argv) {
-    if (argc != 2) { std::cerr << "usage: laya-fault-tests MODEL\n"; return 2; }
+    // --c-allocations runs only the C allocation sweep (registered as its own test).
+    if (argc < 2 || argc > 3 || (argc == 3 && std::string(argv[2]) != "--c-allocations")) {
+        std::cerr << "usage: laya-fault-tests MODEL [--c-allocations]\n"; return 2;
+    }
     const std::string model = fs::canonical(argv[1]).string();
     const auto work = fs::current_path() / ("fault-test-" + std::to_string(getpid()));
     struct cleanup { fs::path dir; ~cleanup() { std::error_code ec; fs::permissions(dir, fs::perms::owner_all, ec); fs::remove_all(dir, ec); } } guard{work};
@@ -150,6 +258,11 @@ int main(int argc, char **argv) {
         batch += "]";
 
 #ifndef DTL_SANITIZED
+        if (argc == 3) {
+            c_allocation_sweep(model, batch);
+            std::cout << "C allocation fault tests passed\n";
+            return 0;
+        }
         // Allocation failure, before this process creates any runtime threads.
         in_child("open under address-space limit", [&] {
             limit_address_space(virtual_bytes() + (32ull << 20));
@@ -210,6 +323,7 @@ int main(int argc, char **argv) {
         }
 
 #else
+        if (argc == 3) { std::cerr << "C allocation injection requires an uninstrumented build\n"; return 1; }
         std::cerr << "allocation-failure injection skipped under a sanitizer runtime\n";
 #endif
         fs::create_directory(work);

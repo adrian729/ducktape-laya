@@ -26,6 +26,11 @@
         "path": "patches/llama.cpp/common-propagate-allocation-failure.patch",
         "sha256": "171ba77e176147f7112a2e99f89aee1a062e4e07c10f1466f98d4cc536b7399c",
         "purpose": "JSON parsing and Jinja rendering propagate std::bad_alloc instead of rewrapping or swallowing it; no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/ggml-check-allocations.patch",
+        "sha256": "3f5450bd7e55f20e45f261a4bfc0e961aa4325b64512ffdcc7f5f37a6e871871",
+        "purpose": "ggml checks unchecked internal allocations: the CPU thread pool reports GGML_STATUS_ALLOC_FAILED, graph allocator/scheduler sites abort instead of dereferencing NULL; no arithmetic changes"
       }
     ]
   },

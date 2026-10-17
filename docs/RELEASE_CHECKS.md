@@ -170,8 +170,14 @@ address-space limit, and failing the Nth C++ allocation of `dtl_execute` (every
 point through 384, then every 97th) and of `dtl_open` (geometric points). Request
 failures must return `DTL_OUT_OF_MEMORY`; failures absorbed internally must still
 produce exact results; the engine must keep returning exact results afterwards.
-Allocation failures inside C code (ggml `malloc`) and the browser heap are not
-covered by this injection.
+`real-c-faults` (same executable, `--c-allocations`; not in sanitizer builds)
+fails each C allocation (`malloc`, `calloc`, `realloc`, `posix_memalign`,
+`aligned_alloc`, `memalign`) of one `dtl_execute` and one `dtl_open`, each in its
+own child process. Every point must end in an exact result,
+`DTL_OUT_OF_MEMORY`/`DTL_MODEL_ERROR`, or `SIGABRT` from ggml's own allocation
+checks; any other signal fails (an unchecked NULL). At least one inference point
+must reach the caller as `DTL_OUT_OF_MEMORY` and leave the engine returning exact
+results.
 
 `cpu-guard` (`tests/cpu-guard.py`, x86-64, registered with a test model when
 `qemu-x86_64` and `python3` are found; not in sanitizer builds) runs a C probe and
