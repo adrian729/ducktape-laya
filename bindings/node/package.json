@@ -1,7 +1,7 @@
 {
   "name": "ducktape-laya",
   "version": "0.1.0",
-  "private": true,
+  "description": "Embedded Laya decision engine for Node.js (Linux x64 native addon)",
   "main": "index.cjs",
   "types": "index.d.ts",
   "engines": {
@@ -29,5 +29,14 @@
   ],
   "cpu": [
     "x64"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adrian729/ducktape-laya.git",
+    "directory": "bindings/node"
+  },
+  "homepage": "https://github.com/adrian729/ducktape-laya#readme",
+  "bugs": {
+    "url": "https://github.com/adrian729/ducktape-laya/issues"
+  }
 }

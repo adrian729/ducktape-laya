@@ -1,10 +1,13 @@
 {
   "name": "ducktape-laya-browser",
   "version": "0.1.0",
-  "private": true,
+  "description": "Embedded Laya decision engine for browsers (WebAssembly and WebGPU)",
   "type": "module",
   "main": "index.mjs",
   "types": "index.d.ts",
   "files": ["index.mjs", "index.d.ts", "protocol.d.ts", "worker.mjs", "wasm/", "webgpu/", "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/", "toolchain.json"],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {"type": "git", "url": "git+https://github.com/adrian729/ducktape-laya.git", "directory": "bindings/browser"},
+  "homepage": "https://github.com/adrian729/ducktape-laya#readme",
+  "bugs": {"url": "https://github.com/adrian729/ducktape-laya/issues"}
 }
