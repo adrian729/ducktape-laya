@@ -89,6 +89,9 @@ jobs:
           rustup override set 1.98.0
           cargo fetch --locked --manifest-path bindings/rust/Cargo.toml
           cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
+      - name: Install QEMU user mode for the emulated-CPU guard test
+        if: inputs.real_model
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user
       - name: Download and verify explicitly requested test model
         if: inputs.real_model
         run: |

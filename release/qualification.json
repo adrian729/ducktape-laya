@@ -83,7 +83,8 @@
         "tests/features.cpp",
         "tests/control.cpp",
         "tests/faults.cpp",
-        "tests/decision.cpp"
+        "tests/decision.cpp",
+        "tests/cpu-guard.py"
       ],
       "acceptance": "All real-model contracts, bounds and failure semantics pass."
     },

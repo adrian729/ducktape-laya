@@ -289,4 +289,5 @@ custom compiler ISA flags can invalidate that guarantee. AVX512/VNNI variants
 are rejected by this package's CMake configuration until their guard/coverage is
 implemented. A portable build disables GGML_AVX, GGML_AVX2, GGML_FMA, GGML_F16C,
 GGML_BMI2 and GGML_SSE42. Different CPU profiles can change floating-point outputs
-and require their own conformance results. Older physical CPUs remain untested.
+and require their own conformance results. The `cpu-guard` test checks the guard on
+emulated CPUs (QEMU user mode); older physical CPUs remain untested.

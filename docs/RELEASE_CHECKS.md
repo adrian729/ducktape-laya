@@ -173,6 +173,17 @@ produce exact results; the engine must keep returning exact results afterwards.
 Allocation failures inside C code (ggml `malloc`) and the browser heap are not
 covered by this injection.
 
+`cpu-guard` (`tests/cpu-guard.py`, x86-64, registered with a test model when
+`qemu-x86_64` and `python3` are found; not in sanitizer builds) runs a C probe and
+the Node binding under QEMU user-mode CPU models. Nehalem (no AVX) and Sandy Bridge
+(AVX, no AVX2/FMA/F16C/BMI2) must return `DTL_UNSUPPORTED_PLATFORM` naming the first
+missing feature, with `dtl_info` listing every missing one. QEMU executes
+AVX-family instructions regardless of the emulated CPU, so the probe runs with
+execution logging and each executed block is decoded: no instruction from a
+feature the emulated CPU lacks may run. An emulated CPU with every feature must
+open the model, and the scan must see AVX/AVX2 there (positive control). It does
+not replace a run on physical older hardware.
+
 ThreadSanitizer covers the native library, llama.cpp/ggml (its own pthread pool;
 OpenMP is disabled) and the native test executables, including the real-model
 suites and the stress loop's concurrent callers, second engines and router
