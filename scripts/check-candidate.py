@@ -5,12 +5,16 @@ The evidence manifest maps evidence names to report paths produced by the
 runners in docs/RELEASE_CHECKS.md. The candidate is the clean HEAD commit, the
 packages from the native validation report and the browser package inventory.
 Each required gate passes only if its evidence exists, passed, and is bound to
-that candidate (source commit, library, package, asset and model hashes).
+that candidate (source commit, library, package, asset and model hashes). Hours-long
+gates (soak, stress, fuzz, sanitizers, performance, upgrade rehearsals) may reuse
+evidence from an ancestor commit when no library input and none of that gate's own
+harness files changed since; the report lists every reuse.
 Missing evidence is not_run; mismatched or failed evidence is failed.
 `release_ready` is true only when every required gate passed. Publication gates
 (signing, registry installation, retained rollback artifacts) are separate.
 """
 import argparse
+import fnmatch
 import json
 import pathlib
 import shutil
@@ -54,6 +58,35 @@ def same_source(report, name, key='source_commit', dirty_key='source_tracked_dir
     need(report.get(key) == commit, f'{name}: source {report.get(key)} is not candidate {commit}')
     need(report.get(dirty_key) is False, f'{name}: produced from a dirty tree')
 
+# Inputs of the library under test, and of each reusable gate's harness.
+LIBRARY_INPUTS = ['src/*', 'include/*', 'cmake/*', 'patches/*', 'CMakeLists.txt', 'release/compatibility.json',
+                  'models/*', 'third_party/*', '.gitmodules']
+NATIVE_TESTS = ['tests/*.cpp', 'tests/*.c', 'tests/consumers/*', 'tests/fixtures/*']
+# Binding code and build manifests; package metadata alone does not change behaviour.
+BINDING_CODE = ['bindings/*.cjs', 'bindings/*.mjs', 'bindings/*.cpp', 'bindings/*.rs', 'bindings/*.toml', 'bindings/*.lock']
+HARNESS = {
+    'stress': ['tests/stress.cpp', 'scripts/check-stress.py'],
+    'soak': ['tests/stress.cpp', 'scripts/check-stress.py'],
+    'fuzz': ['tests/input-libfuzzer.cpp', 'tests/fuzz-corpus.py', 'scripts/check-fuzz.py'],
+    'sanitizers': NATIVE_TESTS + ['scripts/check-sanitizers.py', 'bindings/rust/*.rs', 'bindings/rust/*.toml', 'bindings/rust/*.lock'],
+    'performance': ['tests/benchmark.py', 'scripts/performance-budgets.py', 'tests/fixtures/*'],
+    'upgrade': NATIVE_TESTS + ['scripts/check-upgrade.py', 'scripts/compare_results.py', 'tests/parity.py'] + BINDING_CODE,
+    'model_upgrade': NATIVE_TESTS + ['scripts/check-upgrade.py', 'scripts/compare_results.py', 'tests/parity.py'] + BINDING_CODE,
+}
+reused = {}
+def tested_source(report, name):
+    """Same commit, or an ancestor whose changes since touch no input of this gate."""
+    produced = report.get('source_commit')
+    need(report.get('source_tracked_dirty') is False, f'{name}: produced from a dirty tree')
+    if produced == commit:
+        return
+    need(isinstance(produced, str) and subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', produced, commit],
+         capture_output=True).returncode == 0, f'{name}: source {produced} is not the candidate or its ancestor')
+    changed = git(ROOT, 'diff', '--name-only', produced, commit).splitlines()
+    touched = [path for path in changed if any(fnmatch.fnmatch(path, pattern) for pattern in LIBRARY_INPUTS + HARNESS[name])]
+    need(not touched, f'{name}: inputs changed since {produced[:12]}: {", ".join(touched[:6])}')
+    reused[name] = produced
+
 def native():
     report = load('native')
     same_source(report, 'native')
@@ -87,18 +120,18 @@ def native_gate(gate):
 
 def sanitizers():
     report = load('sanitizers')
-    same_source(report, 'sanitizers')
+    tested_source(report, 'sanitizers')
     need(report['status'] == 'passed' and all(s['status'] == 'passed' for s in report['sanitizers'].values()), 'sanitizers: not all passed')
     need(report['model_sha256'] == manifest_model['sha256'], 'sanitizers: model differs')
     fuzz = load('fuzz')
-    same_source(fuzz, 'fuzz')
+    tested_source(fuzz, 'fuzz')
     need(fuzz['status'] == 'passed' and fuzz['qualification_budget_met'], 'fuzz: failed or below the qualification budget')
 
 def stress():
     library = native()['library_sha256']
     for name, kind in (('stress', 'routine_stress'), ('soak', 'candidate_soak')):
         report = load(name)
-        same_source(report, name)
+        tested_source(report, name)
         need(report['status'] == 'passed' and report['kind'] == kind and report['qualification_budget_met'], f'{name}: failed or below budget')
         need(report['library_sha256'] == library, f'{name}: library is not the candidate library')
         need(report['model_sha256'] == manifest_model['sha256'], f'{name}: model differs')
@@ -189,7 +222,7 @@ def artifact_integrity():
 
 def performance():
     report = load('performance')
-    same_source(report, 'performance')
+    tested_source(report, 'performance')
     need(report['library_sha256'] == native()['library_sha256'], 'performance: not the candidate library')
     result = subprocess.run([sys.executable, str(ROOT / 'scripts/performance-budgets.py'), 'check', str(paths['performance']),
                              '--budgets', str(candidate_tree / 'release/budgets/native-performance.json')],
@@ -204,10 +237,10 @@ def security_review():
 
 def upgrade_rollback():
     upgrade = load('upgrade')
-    same_source(upgrade, 'upgrade')
+    tested_source(upgrade, 'upgrade')
     need(upgrade['candidate_runtime'] != upgrade['baseline_runtime'] and upgrade['adapter_checks_passed'], 'upgrade: runtime axis not rehearsed')
     model = load('model_upgrade')
-    same_source(model, 'model_upgrade')
+    tested_source(model, 'model_upgrade')
     need(model['candidate_model']['sha256'] != model['model']['sha256'], 'model upgrade: no model axis')
     need(all(model['gates'][g]['status'] == 'passed' for g in ('native_contracts', 'binding_conformance', 'abi')) and
          model.get('comparison', {}).get('status') in ('passed', 'failed'), 'model upgrade: candidate checks did not complete')
@@ -236,6 +269,7 @@ for gate, check in GATES.items():
     except (Mismatch, KeyError, ValueError, OSError) as error:
         result['gates'][gate] = {'status': 'failed', 'detail': f'{type(error).__name__}: {error}'}
 result['release_ready'] = all(g['status'] == 'passed' for g in result['gates'].values())
+result['reused_evidence'] = reused
 result['publication_gates'] = {gate: 'not_run' for gate in policy['publication_gates']}
 a.report.write_text(json.dumps(result, indent=2) + '\n')
 shutil.rmtree(candidate_tree, ignore_errors=True)

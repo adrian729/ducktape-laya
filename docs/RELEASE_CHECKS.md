@@ -132,8 +132,16 @@ outputs after rollback. `check-candidate.py` takes a JSON map of evidence names
 `userspaces`, `electron`, `cross_cpu`, `sanitizers`, `fuzz`, `stress`, `soak`,
 `reproducibility`, `performance`, `security_review`, `upgrade`, `model_upgrade`,
 `rollback`) to report paths. A gate passes only when its evidence passed and is
-bound to the clean HEAD commit, the validated library and packages, the browser
-package assets and the pinned model; missing evidence is `not_run`. The release
+bound to the candidate commit, the validated library and packages, the browser
+package assets and the pinned model; missing evidence is `not_run`. Hours-long
+evidence (`soak`, `stress`, `fuzz`, `sanitizers`, `performance`, `upgrade`,
+`model_upgrade`) may come from an ancestor commit when the diff since touches no
+library input (`src/`, `include/`, `cmake/`, `patches/`, `CMakeLists.txt`, the
+runtime record and pin, the model manifest) and none of that gate's harness files;
+soak, stress and performance must also have run on the candidate's exact library
+bytes. Everything else (native validation, packages, browser runs, reproducibility,
+install checks) is produced from the candidate itself. The report lists reused
+evidence under `reused_evidence`. The release
 record, policy, budgets, notices and source identity are read from the candidate
 commit's own tree, so later tooling commits cannot alter what is checked.
 `release_ready` requires every required gate. Publication gates stay separate.
