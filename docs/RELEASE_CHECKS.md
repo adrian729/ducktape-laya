@@ -187,7 +187,9 @@ not replace a run on physical older hardware.
 ThreadSanitizer covers the native library, llama.cpp/ggml (its own pthread pool;
 OpenMP is disabled) and the native test executables, including the real-model
 suites and the stress loop's concurrent callers, second engines and router
-evictions. It does not cover the Node worker or Rust threads. No suppressions:
+evictions, and the Rust binding's tests (one engine and one router shared across
+threads, cancellation set from another thread, close on a different thread). It
+does not cover the Node worker threads. No suppressions:
 
 ```sh
 CC=clang CXX=clang++ cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -198,6 +200,20 @@ cmake --build build-tsan --parallel 2 && cmake --build build-tsan --target laya-
 TSAN_OPTIONS=halt_on_error=1 ctest --test-dir build-tsan --output-on-failure
 TSAN_OPTIONS=halt_on_error=1 LD_LIBRARY_PATH=build-tsan build-tsan/laya-stress /path/to/Laya-Q8_0.gguf 10
 ```
+
+Rust needs a nightly toolchain with `rust-src` (`rustup toolchain install nightly
+--component rust-src`) and the instrumented library from the build above:
+
+```sh
+RUSTFLAGS='-Zsanitizer=thread -Clink-arg=-Wl,--export-dynamic' \
+  DUCKTAPE_LAYA_LIB_DIR=build-tsan LD_LIBRARY_PATH=build-tsan LAYA_MODEL=/path/to/Laya-Q8_0.gguf \
+  cargo +nightly test --locked -Zbuild-std --target x86_64-unknown-linux-gnu --lib \
+  --manifest-path bindings/rust/Cargo.toml
+```
+
+`--export-dynamic` exports the runtime's interceptors to the shared library as a
+Clang link does; without it, guarded static initialization inside the library
+(`__cxa_guard_*`) is reported as a race. `scripts/check-sanitizers.py` runs this.
 
 For coverage-guided request/planner/router fuzzing, use a separate Linux Clang
 build. The optional target instruments the shared core and links libFuzzer only

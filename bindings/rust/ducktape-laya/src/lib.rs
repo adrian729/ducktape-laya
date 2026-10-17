@@ -376,6 +376,64 @@ mod tests {
         );
     }
     #[test]
+    fn shared_across_threads() {
+        let Ok(path) = std::env::var("LAYA_MODEL") else {
+            return;
+        };
+        let engine = Engine::open(&path, 2).unwrap();
+        let request = r#"{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
+        let baseline = engine.execute(request).unwrap();
+        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+        // Two names for one file with one slot: concurrent calls evict each other.
+        let router = Engine::open_router(
+            &format!(r#"{{"models":{{"a":"{escaped}","b":"{escaped}"}},"max_loaded":1}}"#),
+            2,
+        )
+        .unwrap();
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let callers: Vec<_> = (0..3)
+                .map(|_| scope.spawn(|| engine.execute(request).unwrap()))
+                .collect();
+            let routed: Vec<_> = ["a", "b"]
+                .map(|name| {
+                    let request = request.replacen('{', &format!("{{\"model\":\"{name}\","), 1);
+                    let router = &router;
+                    scope.spawn(move || (name, router.execute(&request).unwrap()))
+                })
+                .into_iter()
+                .collect();
+            // Cancellation is requested from another thread while the call waits or runs.
+            let cancelled = scope.spawn(|| {
+                engine.execute_with_options(
+                    request,
+                    &CallOptions {
+                        timeout_ms: 0,
+                        cancelled: Some(&flag),
+                    },
+                )
+            });
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            for caller in callers {
+                assert_eq!(caller.join().unwrap(), baseline);
+            }
+            for caller in routed {
+                let (name, result) = caller.join().unwrap();
+                let expected =
+                    format!("{},\"model\":\"{name}\"}}", &baseline[..baseline.len() - 1]);
+                assert_eq!(result, expected);
+            }
+            match cancelled.join().unwrap() {
+                Ok(result) => assert_eq!(result, baseline),
+                Err(error) => assert_eq!(error.status, 5),
+            }
+        });
+        // Engines may be closed on a thread other than the one that opened them.
+        std::thread::spawn(move || drop((engine, router)))
+            .join()
+            .unwrap();
+    }
+    #[test]
     fn diagnostics() {
         let runtime = runtime_info().unwrap();
         assert!(runtime.contains("\"abi_version\":1"));

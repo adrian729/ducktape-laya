@@ -5,6 +5,9 @@ Configures dedicated Clang builds (ASan+UBSan and TSan, no suppressions or
 recovery), runs every registered native test with the supplied model and a short
 stress run under each, and records source/build/model identities and logs.
 Instrumented libraries share the candidate source but are never packaged.
+The ThreadSanitizer run also builds the Rust binding's tests with nightly Rust
+(-Zsanitizer=thread, -Zbuild-std; needs the rust-src component) against the
+instrumented library. Node worker threads are not covered.
 """
 import argparse
 import json
@@ -42,7 +45,7 @@ report = {'schema_version': 1, 'status': 'running', 'release_ready': False,
           'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')),
           'runtime': record['runtime'], 'platform': platform.platform(), 'model_sha256': manifest['sha256'],
-          'scope': 'native library, llama.cpp/ggml and native real-model test executables; not Node or Rust threads',
+          'scope': 'native library, llama.cpp/ggml, native real-model test executables and Rust binding tests; not Node threads',
           'sanitizers': {name: {'status': 'not_run'} for name in SANITIZERS}}
 def save():
     (out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -77,6 +80,15 @@ try:
         stress_dir.mkdir()
         run(f'{name}-stress', [build / 'laya-stress', model, str(a.stress_rounds)],
             dict(env, LD_LIBRARY_PATH=str(build)), cwd=stress_dir)
+        if name == 'thread':
+            # rustc does not export the runtime's interceptors to shared libraries the way
+            # clang does; without __cxa_guard_* exported, guarded static initialization in
+            # the library is reported as a race. Doctests are not built with RUSTFLAGS.
+            entry['rust_toolchain'] = subprocess.check_output(['rustc', '+nightly', '--version'], text=True).strip()
+            run('thread-rust', ['cargo', '+nightly', 'test', '--locked', '-Zbuild-std', '--target', 'x86_64-unknown-linux-gnu',
+                '--lib', '--manifest-path', ROOT / 'bindings/rust/Cargo.toml'],
+                dict(env, RUSTFLAGS='-Zsanitizer=thread -Clink-arg=-Wl,--export-dynamic', LAYA_MODEL=str(model),
+                     DUCKTAPE_LAYA_LIB_DIR=str(build), LD_LIBRARY_PATH=str(build), CARGO_TARGET_DIR=str(build / 'rust-tsan')))
         entry['elapsed_seconds'] = time.monotonic() - started
         if sha256(build / 'libducktape_laya.so') != entry['build_identity']['binary_sha256']:
             raise RuntimeError(f'{name}: library changed during the run')
