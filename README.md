@@ -11,7 +11,7 @@ ordinal `score` results. Inference needs no server, Python or network access.
 
 **Status:** 0.1.0 is the first release, published on
 [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0);
-npm and crates.io packages are pending. Linux x86-64 and the pinned English
+the Rust crates are on crates.io and the npm packages are pending. Linux x86-64 and the pinned English
 Q8_0 model are the validated native target. The browser build is
 [experimental](docs/BROWSER.md). This is a decision model; it does not generate
 chat text.

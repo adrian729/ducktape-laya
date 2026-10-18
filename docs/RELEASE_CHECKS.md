@@ -148,8 +148,11 @@ commit's own tree, so later tooling commits cannot alter what is checked.
 
 Before publication, require all applicable recorded gates, review current evidence
 and numeric-profile limits, verify the security contact and release hosting, and
-retain the prior artifacts for rollback. Publication and signing are explicit
-maintainer actions. Each numerical profile must pass strict same-backend upstream
+retain the prior artifacts for rollback. Publication is an explicit maintainer
+action. After the GitHub release exists, run the `attest-release` workflow with its
+tag: it checks the assets against `SHA256SUMS` and a `release_ready` `gates.json`,
+then signs a release-qualification attestation for each asset. It is not build
+provenance; the assets are built and qualified locally. Each numerical profile must pass strict same-backend upstream
 checks. Cross-profile comparisons report probability and decision drift and must
 not be described as probability equivalence.
 

@@ -2,7 +2,11 @@
 
 The first release, 0.1.0, is published on
 [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0)
-with SHA-256 checksums. Its artifacts are not signed.
+with SHA-256 checksums. Each artifact has a GitHub (Sigstore) attestation binding it
+to the release and its qualification report; verify one with
+`gh attestation verify FILE -R adrian729/ducktape-laya --predicate-type
+https://github.com/adrian729/ducktape-laya/release-qualification/v1`.
+The same command verifies the copies served by crates.io and npm.
 Report suspected library vulnerabilities privately through
 [GitHub's vulnerability reporting form](https://github.com/adrian729/ducktape-laya/security/advisories/new).
 Reports are delivered to the repository maintainer, @adrian729. For issues specific
