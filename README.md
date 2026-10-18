@@ -9,7 +9,9 @@ Embed local Laya decisions in C/C++, Rust, Node.js and Electron. One native
 library loads a GGUF model and returns `choice`, `noul` (probability of true) and
 ordinal `score` results. Inference needs no server, Python or network access.
 
-**Status:** unreleased development library. Linux x86-64 and the pinned English
+**Status:** 0.1.0 is the first release, published on
+[GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0);
+npm and crates.io packages are pending. Linux x86-64 and the pinned English
 Q8_0 model are the validated native target. The browser build is
 [experimental](docs/BROWSER.md). This is a decision model; it does not generate
 chat text.

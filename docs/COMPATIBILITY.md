@@ -1,6 +1,6 @@
 # Compatibility and release policy
 
-The current 0.1.0 tree is unreleased development work. A passing demo or a model-less
+Version 0.1.0 is released from tag `v0.1.0` (candidate `b375b04`). A passing demo or a model-less
 test does not establish release readiness. Runtime/model combinations are identified
 by `release/compatibility.json`, immutable model manifests and applied patch hashes.
 

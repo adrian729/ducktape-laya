@@ -1,6 +1,8 @@
 # Security and maintenance
 
-This library is a public development project with no published package release.
+The first release, 0.1.0, is published on
+[GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0)
+with SHA-256 checksums. Its artifacts are not signed.
 Report suspected library vulnerabilities privately through
 [GitHub's vulnerability reporting form](https://github.com/adrian729/ducktape-laya/security/advisories/new).
 Reports are delivered to the repository maintainer, @adrian729. For issues specific
