@@ -1,0 +1,43 @@
+name: attest-release
+
+# Signs a statement, through GitHub's Sigstore attestations, that a published
+# release's assets are the ones its gates.json qualified. It builds nothing: the
+# predicate records the release, tag commit and qualification report, not build
+# provenance.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attest
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download and check release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D assets
+          cd assets
+          sha256sum -c SHA256SUMS
+          commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+          jq -e '.release_ready == true' gates.json > /dev/null
+          jq -n --arg tag "$TAG" --arg commit "$commit" --arg gates "$(sha256sum gates.json | cut -d' ' -f1)" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            '{release: $tag, repository: $repo, source_commit: $commit, gates_sha256: $gates, release_ready: true}' > ../predicate.json
+          grep -v ' gates.json$' SHA256SUMS > ../subjects.txt
+          cat ../predicate.json ../subjects.txt
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: subjects.txt
+          predicate-type: https://github.com/adrian729/ducktape-laya/release-qualification/v1
+          predicate-path: predicate.json
