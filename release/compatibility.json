@@ -38,7 +38,6 @@
     "models/manifest.json"
   ],
   "adapter": "src/backend_llama.cpp",
-  "status": "development",
   "tested_backend": "linux-x86_64-cpu-avx2",
   "candidate_absolute_tolerance": 1e-06,
   "required_release_gates": [
