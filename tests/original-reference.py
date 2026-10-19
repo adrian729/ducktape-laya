@@ -21,8 +21,6 @@ MAX_PROBABILITY_DRIFT = 0.05
 NEAR_TIE = 0.05
 # Case name -> why the core refuses it today. Remove an entry when its feature lands.
 UNSUPPORTED = {
-    'choice_criteria_list': 'plain-list choice criteria',
-    'single_option': 'single-option choice',
     'long_state': 'state longer than the context (overflow policies)',
     'many_options': 'option text over the head budget (overflow policies)',
     'shortlist_many_options': 'embedding shortlist (not planned)',
@@ -48,14 +46,20 @@ def run(request):
 
 
 def compare(expected, got):
-    """Return (max |dp|, decision changed, near tie) for one answer."""
+    """Return (max drift over probabilities and confidence fields, decision changed, near tie).
+
+    `answer_confidence` (max p) is compared for every type. The entropy `confidence`
+    is compared for choice and score; the original's noul `confidence` is max(p),
+    which is our `answer_confidence`."""
+    drift = abs(got['answer_confidence'] - expected['answer_confidence'])
     if expected['type'] == 'noul':
-        drift = abs(got['noul'] - expected['noul'])
+        drift = max(drift, abs(got['noul'] - expected['noul']), abs(got['answer_confidence'] - expected['confidence']))
         changed = (got['noul'] >= 0.5) != (expected['noul'] >= 0.5)
         near = abs(expected['noul'] - 0.5) * 2 < NEAR_TIE
         return drift, changed, near
     probs, ours = expected['probabilities'], got['probabilities']
-    drift = max(abs(ours[label] - p) for label, p in probs.items())
+    drift = max(drift, abs(got['confidence'] - expected['confidence']),
+                *(abs(ours[label] - p) for label, p in probs.items()))
     top = sorted(probs.values(), reverse=True)
     near = len(top) > 1 and top[0] - top[1] < NEAR_TIE
     best = lambda p: max(p, key=p.get)
@@ -81,6 +85,9 @@ for path in sorted(args.cases.glob('case_*.json')):
         continue
     entry = {'answers': {}}
     expected_tokens = case['result']['usage']['input_tokens']
+    # Single-option choices are answered without inference, so they use no tokens.
+    if all(q.get('type') == 'choice' and len(q.get('criteria') or ()) == 1 for q in case['questions'].values()):
+        expected_tokens = 0
     if got['usage']['input_tokens'] != expected_tokens:
         failures.append(f'{name}: input_tokens {got["usage"]["input_tokens"]} != {expected_tokens}')
     entry['input_tokens'] = {'ours': got['usage']['input_tokens'], 'original': expected_tokens}

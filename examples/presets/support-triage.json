@@ -1,0 +1,23 @@
+{
+  "state": "We were charged twice for March and nobody answered my last two emails. Fix it today or we cancel.",
+  "questions": {
+    "intent": {
+      "type": "choice",
+      "instructions": "What does the customer want?",
+      "criteria": {
+        "billing": "a charge, invoice, refund or payment problem",
+        "technical": "something in the product is broken or unclear",
+        "account": "login, access or account settings",
+        "sales": "pricing, plans or buying more",
+        "other": "anything else"
+      }
+    },
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgent is this request?",
+      "criteria": ["can wait", "should be handled today", "needs attention now"]
+    },
+    "frustrated": {"type": "noul", "instructions": "The customer is frustrated or angry."},
+    "churn_risk": {"type": "noul", "instructions": "The customer threatens to cancel or leave."}
+  }
+}

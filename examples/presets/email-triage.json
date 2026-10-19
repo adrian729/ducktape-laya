@@ -1,0 +1,27 @@
+{
+  "state": {
+    "from": "billing@vendor.example",
+    "subject": "Invoice 4471 overdue - action required",
+    "body": "Your invoice 4471 for 1,240.00 EUR is 15 days overdue. Please pay by Friday to avoid suspension."
+  },
+  "questions": {
+    "category": {
+      "type": "choice",
+      "instructions": "What kind of email is this?",
+      "criteria": {
+        "invoice": "a bill, invoice or payment request",
+        "support": "a customer asking for help",
+        "newsletter": "marketing, news or a mailing list",
+        "personal": "a personal message",
+        "other": "anything else"
+      }
+    },
+    "needs_reply": {"type": "noul", "instructions": "The sender expects a reply or an action."},
+    "phishing": {"type": "noul", "instructions": "The email tries to trick the reader into giving credentials, money or access."},
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgent is this email?",
+      "criteria": ["no deadline", "deadline within weeks", "deadline within days or sooner"]
+    }
+  }
+}

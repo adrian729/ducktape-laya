@@ -1,14 +1,14 @@
 // Shared request/result types. Keep in sync with ../node/index.d.ts (copied, minus Node-only declarations).
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type Question =
-  | { type: 'choice'; instructions: Json; criteria: Record<string, Json> }
+  | { type: 'choice'; instructions: Json; criteria: Record<string, Json> | string[] }
   | { type: 'score'; instructions: Json; criteria: Json[] }
   | { type: 'noul'; instructions: Json; criteria?: { false?: Json; true?: Json } };
 export interface Request { state: Json; questions: Record<string, Question>; model?: string }
 export type Answer =
-  | { type: 'choice'; choice: string; probabilities: Record<string, number>; confidence: number }
-  | { type: 'score'; score: number; legend: Record<string, Json>; probabilities: Record<string, number>; confidence: number }
-  | { type: 'noul'; noul: number };
+  | { type: 'choice'; choice: string; probabilities: Record<string, number>; confidence: number; answer_confidence: number }
+  | { type: 'score'; score: number; legend: Record<string, Json>; probabilities: Record<string, number>; confidence: number; answer_confidence: number }
+  | { type: 'noul'; noul: number; confidence: number; answer_confidence: number };
 export interface Result { answers: Record<string, Answer>; usage: { input_tokens: number; output_tokens: 0 }; model?: string }
 
 export type Property =

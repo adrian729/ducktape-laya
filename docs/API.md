@@ -63,17 +63,31 @@ A criterion description that is `null` or `""` means no description; `0` and
 
 | Type | Criteria | Answer |
 | --- | --- | --- |
-| `choice` | Object with 2–255 named options | Highest-probability `choice`, a `probabilities` object and normalized `confidence` |
+| `choice` | Object with 1–255 named options (label → description), or a list of 1–255 distinct labels without descriptions | Highest-probability `choice` and a `probabilities` object |
 | `noul` | Omitted/null or an object containing only `false`/`true` descriptions | `noul`: probability of true |
-| `score` | Array of 2–10 ordered level descriptions | `score`: expected zero-based level index; `legend`, `probabilities` and `confidence` |
+| `score` | Array of 2–10 ordered level descriptions | `score`: expected zero-based level index; `legend` and `probabilities` |
+
+Every answer also has `answer_confidence` and `confidence`:
+
+- `answer_confidence` is the probability of the reported answer: the winning
+  option's or level's probability, and for `noul` the larger of `noul` and
+  `1 − noul`. It is the calibrated quantity: once the temperatures are fitted on
+  held-out data, answers reported at `answer_confidence` c are right about c of
+  the time. Gate or abstain on this value.
+- `confidence` is how concentrated the whole distribution is, `1 − H(p)/log k`
+  for k options or levels (k = 2 for `noul`): 0 for a uniform distribution, 1 for
+  certainty. It is not calibrated.
+
+A `choice` with a single option is answered without running the model: that
+option, with probability, `confidence` and `answer_confidence` 1, using no input
+tokens.
 
 The adapter applies the GGUF's type/option-count temperature to the selected
 output scores, then computes a normalized softmax. It falls back to the type's
-temperature, then 1 when no corresponding calibration entry exists. Choice
-confidence is the winning probability above uniform, normalized to 0..1. Score
-confidence uses probability-weighted distance from the most likely level relative
-to a uniform distribution's distance from its center. These are model-derived
-statistics, not application-specific decision thresholds.
+temperature, then 1 when no corresponding calibration entry exists. Both
+confidence fields are model-derived statistics, not application-specific
+decision thresholds. The definitions follow the original Laya, except that its
+`noul` `confidence` is max(p), which here is `answer_confidence`.
 
 Results contain `answers` keyed by question ID and `usage` with `input_tokens`
 and `output_tokens: 0`. No chat text is generated. Input insertion order is
@@ -88,6 +102,17 @@ The strict `execute` API accepts only `state`, `questions`, `schema`,
 `boolean_threshold` and (on routers) `model`, subject to their documented
 combinations. Legacy single-model `decide` ignores unrelated top-level metadata.
 Neither API supports top-level media `images` or `files`.
+
+### Example requests and option order
+
+`examples/presets/` has ready requests for common uses: support triage, email
+triage, prompt-injection screening and moderation. They are ordinary requests:
+copy one and adapt its questions.
+
+Option order can influence a `choice`. To reduce that bias, ask the same
+question several times in one request with the options in rotated order (for
+example `intent_r0`, `intent_r1`, `intent_r2`), then average each label's
+probability across the copies. Each copy costs one more model pass.
 
 ## Batches
 
@@ -120,7 +145,7 @@ and `usage`, plus a `values` object.
 The supported JSON Schema subset is deliberately small:
 
 - Root `type: "object"` with 1–32 named `properties`.
-- String properties require a unique string `enum` of 2–255 values; ordinary
+- String properties require a unique string `enum` of 1–255 values; ordinary
   choice probabilities select the value with highest probability.
 - Boolean properties use `noul`; projection is `probability >= boolean_threshold`.
   The threshold must be finite and between 0 and 1 inclusive.

@@ -1,0 +1,12 @@
+{
+  "state": "You people are idiots and I will find out where you live.",
+  "questions": {
+    "harassment": {"type": "noul", "instructions": "The text insults, demeans or harasses a person or group."},
+    "threat": {"type": "noul", "instructions": "The text threatens violence or harm."},
+    "severity": {
+      "type": "score",
+      "instructions": "How severe is the content?",
+      "criteria": ["acceptable", "rude", "abusive", "dangerous"]
+    }
+  }
+}

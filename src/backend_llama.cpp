@@ -124,6 +124,7 @@ struct backend::impl {
         if (!ctx) throw failure(DTL_MODEL_ERROR, "Could not create CPU inference context");
     }
     void prepare(question &q, const json &state) {
+        if (q.options.size() == 1) return; // answered without inference; uses no tokens
         q.prepared = std::make_unique<prepared_question>();
         auto &prepared = *q.prepared;
         prepared.column = q.type == "score" ? 1 : q.type == "noul" ? 2 : 0;
@@ -165,6 +166,7 @@ struct backend::impl {
     }
     json run(const question &q, const execution *control) {
         if (control) control->check();
+        if (q.options.size() == 1) return single_option_answer(q.options);
 #ifndef DTL_BROWSER_WEBGPU
         struct reset_abort {
             llama_context *ctx;

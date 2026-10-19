@@ -37,7 +37,9 @@ int main(int argc, char **argv) {
             };
             invalid("{"); invalid("{}"); invalid("[]");
             invalid(R"({"state":"x","questions":{"q":{"type":"chat","instructions":"hi"}}})");
-            invalid(R"({"state":"x","questions":{"q":{"type":"choice","instructions":"hi","criteria":{"a":"x"}}}})");
+            invalid(R"({"state":"x","questions":{"q":{"type":"choice","instructions":"hi","criteria":{}}}})");
+            invalid(R"({"state":"x","questions":{"q":{"type":"choice","instructions":"hi","criteria":["a","a"]}}})");
+            invalid(R"({"state":"x","questions":{"q":{"type":"choice","instructions":"hi","criteria":["a",""]}}})");
             invalid(R"({"state":"x","questions":{"q":{"type":"score","instructions":"hi","criteria":["one"]}}})");
             invalid(std::string(1048577, 'x'));
             invalid("{\"state\":" + std::string(70, '[') + "0" + std::string(70, ']') +

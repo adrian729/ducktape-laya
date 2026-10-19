@@ -59,9 +59,18 @@ std::vector<question> parse(const json &body) {
             out.options.push_back({{"key", key}, {"description", description}});
         };
         if (out.type == "choice") {
-            require(criteria.is_object() && criteria.size() >= 2 && criteria.size() <= 255,
-                    id + ": choice criteria must contain 2..255 options");
-            for (auto &[key, description] : criteria.items()) add(key, description);
+            require((criteria.is_object() || criteria.is_array()) && !criteria.empty() && criteria.size() <= 255,
+                    id + ": choice criteria must contain 1..255 options");
+            if (criteria.is_object()) {
+                for (auto &[key, description] : criteria.items()) add(key, description);
+            } else {  // a plain list of labels without descriptions
+                std::set<std::string> seen;
+                for (auto &label : criteria) {
+                    require(label.is_string() && !label.get<std::string>().empty() && seen.insert(label.get<std::string>()).second,
+                            id + ": choice labels must be distinct non-empty strings");
+                    add(label.get<std::string>(), json());
+                }
+            }
         } else if (out.type == "score") {
             require(criteria.is_array() && criteria.size() >= 2 && criteria.size() <= 10,
                     id + ": score criteria must be an array of 2..10 levels");
@@ -211,8 +220,8 @@ planned plan(json body, bool routed) {
             const auto type = prop["type"].get<std::string>();
             if (type == "string") {
                 require(!prop.contains("minimum") && !prop.contains("maximum"), name + ": bounds only apply to integers");
-                require(prop.contains("enum") && prop["enum"].is_array() && prop["enum"].size() >= 2 &&
-                        prop["enum"].size() <= 255, name + ": string enum needs 2..255 values");
+                require(prop.contains("enum") && prop["enum"].is_array() && !prop["enum"].empty() &&
+                        prop["enum"].size() <= 255, name + ": string enum needs 1..255 values");
                 json criteria = json::object();
                 for (const auto &value : prop["enum"]) {
                     require(value.is_string(), name + ": enum values must be strings");
