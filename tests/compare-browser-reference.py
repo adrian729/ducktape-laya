@@ -6,7 +6,7 @@ import pathlib
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 from compare_results import compare_results
-from reference_requests import reference_key
+from reference_requests import comparable_answers, reference_key
 p = argparse.ArgumentParser()
 p.add_argument('adapter', type=pathlib.Path)
 p.add_argument('reference', type=pathlib.Path)
@@ -26,7 +26,8 @@ if set(results) != set(reference['results']):
     raise AssertionError('Reference fixture set changed')
 maximum = (0, '')
 for key, value in results.items():
-    difference = compare_results(value['answers'], reference['results'][key]['answers'], a.tolerance, key + '.answers')
+    ours, theirs = comparable_answers(value['answers'], reference['results'][key]['answers'], key + '.answers')
+    difference = compare_results(ours, theirs, a.tolerance, key + '.answers')
     if difference[0] > maximum[0]: maximum = difference
     compare_results(value['usage']['input_tokens'], reference['results'][key]['input_tokens'])
 print(json.dumps({'backend': adapter['backend'], 'maximum_absolute_difference': maximum[0], 'path': maximum[1], 'tolerance': a.tolerance, 'passed': True}))

@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from compare_results import compare_results
 from release_support import ROOT, check_record, read_json, sha256, verify_model, git
-from reference_requests import reference_key, reference_requests
+from reference_requests import comparable_answers, reference_key, reference_requests
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('model', type=pathlib.Path)
@@ -50,17 +50,7 @@ try:
                 raise RuntimeError(f'{key}/{label}: {process.stderr[-4000:]}')
             outputs[label] = json.loads(process.stdout)
         adapter, upstream = outputs['adapter'], outputs['upstream']
-        # ABI 2 redefined the confidence fields (answer_confidence = max p; confidence = 1 - H(p)/log k) and
-        # reports them for every type; the upstream probe's `confidence` is the older definition. Compare
-        # every other field in order, and check the fields we add against their definition.
-        answers, reference = {}, {}
-        for question, answer in adapter['answers'].items():
-            theirs = upstream['answers'][question]
-            probabilities = list(answer['probabilities'].values()) if 'probabilities' in answer else [answer['noul'], 1 - answer['noul']]
-            assert abs(answer['answer_confidence'] - max(probabilities)) < 1e-12 and 0 <= answer['confidence'] <= 1, \
-                f'{key}/{question}: inconsistent confidence fields'
-            answers[question] = {n: v for n, v in answer.items() if n not in ('answer_confidence', 'confidence')}
-            reference[question] = {n: v for n, v in theirs.items() if n != 'confidence'}
+        answers, reference = comparable_answers(adapter['answers'], upstream['answers'], key)
         maximum = compare_results(answers, reference, tolerance)
         compare_results(adapter['usage']['input_tokens'], upstream['input_tokens'])
         report['fixtures'][name]['cases'].append({'key': key, 'structured': 'schema' in originals[key],

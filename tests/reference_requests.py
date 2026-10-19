@@ -59,3 +59,23 @@ def reference_requests(fixtures=FIXTURES):
         for index, request in items:
             requests[reference_key(fixture.stem, index)] = (fixture.name, trained_text(primitive_request(request)))
     return requests
+
+
+def comparable_answers(ours, theirs, where):
+    """Answers with the confidence fields set aside, for comparison with upstream.
+
+    The core reports answer_confidence (max p) and confidence (1 - H(p)/log k) for
+    every type; the upstream decision processing has an older `confidence` and no
+    answer_confidence. Check ours against their definitions, then compare every
+    other field."""
+    import math
+    mine, reference = {}, {}
+    for question, answer in ours.items():
+        probabilities = list(answer['probabilities'].values()) if 'probabilities' in answer else [answer['noul'], 1 - answer['noul']]
+        entropy = -sum(p * math.log(p) for p in probabilities if p > 0)
+        concentration = 1.0 if len(probabilities) < 2 else max(0.0, min(1.0, 1 - entropy / math.log(len(probabilities))))
+        if abs(answer['answer_confidence'] - max(probabilities)) > 1e-9 or abs(answer['confidence'] - concentration) > 1e-9:
+            raise AssertionError(f'{where}.{question}: confidence fields do not match their definitions')
+        mine[question] = {k: v for k, v in answer.items() if k not in ('answer_confidence', 'confidence')}
+        reference[question] = {k: v for k, v in theirs[question].items() if k not in ('answer_confidence', 'confidence')}
+    return mine, reference
