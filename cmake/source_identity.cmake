@@ -20,7 +20,8 @@ file(GLOB binding_files LIST_DIRECTORIES false ${glob_options}
   "${DTL_SOURCE_ROOT}/bindings/node/*" "${DTL_SOURCE_ROOT}/bindings/browser/*"
   "${DTL_SOURCE_ROOT}/bindings/rust/Cargo.*"
   "${DTL_SOURCE_ROOT}/bindings/rust/ducktape-laya/*"
-  "${DTL_SOURCE_ROOT}/bindings/rust/ducktape-laya-sys/*")
+  "${DTL_SOURCE_ROOT}/bindings/rust/ducktape-laya-sys/*"
+  "${DTL_SOURCE_ROOT}/bindings/python/*" "${DTL_SOURCE_ROOT}/bindings/python/src/ducktape_laya/*")
 list(APPEND identity_files ${binding_files})
 list(SORT identity_files)
 set(identity_manifest "{}")

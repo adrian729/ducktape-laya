@@ -89,6 +89,17 @@ jobs:
           rustup override set 1.98.0
           cargo fetch --locked --manifest-path bindings/rust/Cargo.toml
           cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
       - name: Install QEMU user mode for the emulated-CPU guard test
         if: inputs.real_model
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user

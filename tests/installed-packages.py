@@ -64,4 +64,14 @@ ducktape-laya-sys = {{ path = "{sys}" }}
     env['LD_LIBRARY_PATH'] = str(libdir)
     rust = json.loads(subprocess.check_output(['cargo', 'run', '--offline', '--quiet', '--', str(model)], cwd=app, env=env, input=request))
     assert node == rust
-print('Installed npm and Rust crate consumers: exact real-model agreement, no repository paths or inference server')
+    # The wheel bundles the library; loader overrides must not be needed.
+    wheel, = artifacts.glob(f'ducktape_laya-{version}-*.whl')
+    venv = directory / 'venv'
+    subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
+    subprocess.run([str(venv / 'bin/python'), '-m', 'pip', 'install', '--quiet', '--no-index', str(wheel)], check=True)
+    for key in ['LD_LIBRARY_PATH', 'PKG_CONFIG_PATH', 'PYTHONPATH']:
+        env.pop(key, None)
+    python = json.loads(subprocess.check_output([str(venv / 'bin/python'), str(root / 'tests/consumers/python/consumer.py'), str(model)],
+                                                cwd=app, env=env, input=request))
+    assert python == rust
+print('Installed npm, Rust crate and Python wheel consumers: exact real-model agreement, no repository paths or inference server')

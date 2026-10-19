@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>DucktapeLaya</PackageId>
+    <Version>0.1.0</Version>
+    <RootNamespace>Ducktape.Laya</RootNamespace>
+    <AssemblyName>DucktapeLaya</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Description>Linux native Laya GGUF decisions backed by libducktape_laya.so.</Description>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(DucktapeLayaNativeLibrary)' != ''">
+    <None Include="$(DucktapeLayaNativeLibrary)" Pack="true" PackagePath="runtimes/linux-x64/native/libducktape_laya.so" Link="runtimes/linux-x64/native/libducktape_laya.so" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

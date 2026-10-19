@@ -55,6 +55,14 @@ def check_record(root=ROOT):
             raise ValueError(f'Rust package version mismatch: {package}')
     if read_json(root / 'bindings/node/package.json')['version'] != version:
         raise ValueError('npm package version mismatch')
+    python = tomllib.loads((root / 'bindings/python/pyproject.toml').read_text())['project']['version']
+    if python != version or f"__version__ = '{version}'" not in (root / 'bindings/python/src/ducktape_laya/__init__.py').read_text():
+        raise ValueError('Python package version mismatch')
+    pom = (root / 'bindings/java/pom.xml').read_text()
+    if re.search(r'<artifactId>ducktape-laya</artifactId>\s*<version>([^<]+)</version>', pom)[1] != version:
+        raise ValueError('Java package version mismatch')
+    if f'<Version>{version}</Version>' not in (root / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj').read_text():
+        raise ValueError('.NET package version mismatch')
     browser = root / 'bindings/browser/package.json'
     if browser.exists() and read_json(browser)['version'] != version:
         raise ValueError('Browser package version mismatch')

@@ -1,8 +1,9 @@
 # Shared-core architecture
 
 Ducktape Laya is an embedded inference library. It uses llama.cpp and GGUF with
-one C++ implementation behind a shared C ABI. C++, Rust, Node/TypeScript and
-browser interfaces must preserve that implementation's decision semantics.
+one C++ implementation behind a shared C ABI. C++, Rust, Node/TypeScript, Python,
+Go, Java, .NET and browser interfaces must preserve that implementation's decision
+semantics.
 The product requirements are in [PLAN.md](PLAN.md); observable behavior is in
 [API.md](API.md) and [BROWSER.md](BROWSER.md).
 

@@ -1,0 +1,266 @@
+"""Local Laya GGUF decisions through the shared ducktape-laya C library.
+
+Calls block while the model runs and release the GIL, so threads and
+``asyncio.to_thread`` run other Python code meanwhile. Requests and results are
+JSON: pass a ``str`` to keep literal key order, or any JSON-serializable value.
+"""
+import asyncio
+import ctypes
+import enum
+import json
+import math
+import threading
+from typing import Any, Callable
+
+from . import _native
+
+__all__ = ['Engine', 'LayaError', 'Status', 'runtime_info']
+__version__ = '0.1.0'
+
+
+class Status(enum.IntEnum):
+    OK = 0
+    INVALID_ARGUMENT = 1
+    MODEL_ERROR = 2
+    INFERENCE_ERROR = 3
+    OUT_OF_MEMORY = 4
+    CANCELLED = 5
+    DEADLINE_EXCEEDED = 6
+    UNSUPPORTED_PLATFORM = 7
+
+
+class LayaError(Exception):
+    """A native failure; ``status`` is the C ABI status code."""
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+_lib = None
+_lib_lock = threading.Lock()
+
+
+def _library():
+    global _lib
+    with _lib_lock:
+        if _lib is None:
+            _lib = _native.load()
+        return _lib
+
+
+def _encode(text, what):
+    if not isinstance(text, str):
+        raise TypeError(f'{what} must be a str')
+    if '\0' in text:
+        raise LayaError(Status.INVALID_ARGUMENT, f'{what} contains a NUL character')
+    try:
+        return text.encode('utf-8')
+    except UnicodeEncodeError:
+        raise LayaError(Status.INVALID_ARGUMENT, f'{what} is not valid Unicode') from None
+
+
+def _take(lib, pointer):
+    """Copy and free a native string."""
+    if not pointer.value:
+        return None
+    try:
+        return ctypes.string_at(pointer.value).decode('utf-8', 'replace')
+    finally:
+        lib.dtl_free(pointer)
+
+
+def _check(lib, status, error):
+    message = _take(lib, error)
+    if status:
+        raise LayaError(status, message or 'Laya operation failed')
+
+
+def _info(lib, handle):
+    result, error = ctypes.c_void_p(), ctypes.c_void_p()
+    status = lib.dtl_info(handle, ctypes.byref(result), ctypes.byref(error))
+    text = _take(lib, result)
+    _check(lib, status, error)
+    return json.loads(text)
+
+
+def runtime_info():
+    """Runtime identity, limits and CPU compatibility, without loading a model."""
+    return _info(_library(), None)
+
+
+def _options(lib, threads):
+    if not isinstance(threads, int) or not 0 <= threads <= 256:
+        raise ValueError('threads must be 0..256 (0 = automatic)')
+    options = lib.dtl_default_options()
+    options.threads = threads
+    return options
+
+
+class Engine:
+    """One loaded model (``open``) or a lazy local model registry (``open_router``).
+
+    Safe to share between threads; native calls on one engine run one at a time.
+    Use it as a context manager or call ``close()``.
+    """
+    _lib: ctypes.CDLL
+    _handle: 'ctypes.c_void_p | None'
+    _closer: Callable[[Any], None]
+    _router: bool
+    _state: threading.Condition
+    _active: int
+    _closing: bool
+    _local: threading.local
+
+    def __init__(self, *_, **__):
+        raise TypeError('Use Engine.open() or Engine.open_router()')
+
+    @classmethod
+    def _create(cls, lib, router, argument, threads):
+        opener, closer = (lib.dtl_router_open, lib.dtl_router_close) if router else (lib.dtl_open, lib.dtl_close)
+        handle, error = ctypes.c_void_p(), ctypes.c_void_p()
+        status = opener(argument, ctypes.byref(_options(lib, threads)), ctypes.byref(handle), ctypes.byref(error))
+        _check(lib, status, error)
+        if not handle.value:
+            raise LayaError(Status.MODEL_ERROR, 'Native engine returned null')
+        engine = object.__new__(cls)
+        engine._lib, engine._handle, engine._closer = lib, handle, closer
+        engine._router = router
+        engine._state = threading.Condition()
+        engine._active, engine._closing = 0, False
+        engine._local = threading.local()
+        return engine
+
+    @classmethod
+    def open(cls, model_path, threads=0):
+        """Load a local GGUF. ``threads`` 0 selects automatically (at most 4)."""
+        lib = _library()
+        path = _encode(str(model_path), 'model path')
+        return cls._create(lib, False, path, threads)
+
+    @classmethod
+    def open_router(cls, config, threads=0):
+        """Open a bounded registry: ``{"models": {"id": "path.gguf"}, "max_loaded": 1}``."""
+        lib = _library()
+        text = config if isinstance(config, str) else json.dumps(config, ensure_ascii=False)
+        return cls._create(lib, True, _encode(text, 'router config'), threads)
+
+    def _enter(self):
+        with self._state:
+            if self._closing:
+                raise LayaError(Status.INVALID_ARGUMENT, 'Engine is closing or closed')
+            self._active += 1
+        self._local.depth = getattr(self._local, 'depth', 0) + 1
+
+    def _leave(self):
+        self._local.depth -= 1
+        with self._state:
+            self._active -= 1
+            if not self._active:
+                self._state.notify_all()
+
+    def info(self):
+        """Model metadata; routers report the common runtime capabilities."""
+        self._enter()
+        try:
+            return _info(self._lib, None if self._router else self._handle)
+        finally:
+            self._leave()
+
+    def decide(self, request, *, on_event=None, request_id=0, timeout=None, cancel=None):
+        """Primitive request with legacy semantics: unrelated top-level fields are ignored."""
+        return self._call(True, request, on_event, request_id, timeout, cancel)
+
+    def execute(self, request, *, on_event=None, request_id=0, timeout=None, cancel=None):
+        """One primitive or structured request, or a list of up to 32 requests.
+
+        ``on_event(event)`` receives start/end/error events on the calling thread.
+        ``timeout`` is in seconds. ``cancel`` is a ``threading.Event``; setting it
+        stops the call at the next safe point with status 5.
+        """
+        return self._call(False, request, on_event, request_id, timeout, cancel)
+
+    async def execute_async(self, request, **options):
+        """``execute`` on a worker thread; cancelling the task cancels the native call."""
+        return await self._run_async(self.execute, request, options)
+
+    async def decide_async(self, request, **options):
+        return await self._run_async(self.decide, request, options)
+
+    @staticmethod
+    async def _run_async(method, request, options):
+        cancel = options.pop('cancel', None) or threading.Event()
+        try:
+            return await asyncio.to_thread(method, request, cancel=cancel, **options)
+        except asyncio.CancelledError:
+            cancel.set()
+            raise
+
+    def _call(self, legacy, request, on_event, request_id, timeout, cancel):
+        text = request if isinstance(request, str) else json.dumps(request, ensure_ascii=False, allow_nan=False)
+        payload = _encode(text, 'request')
+        if on_event is not None and not callable(on_event):
+            raise TypeError('on_event must be callable')
+        if not isinstance(request_id, int) or not 0 <= request_id < 2 ** 64:
+            raise ValueError('request_id must be an unsigned 64-bit integer')
+        lib = self._lib
+        options = lib.dtl_default_call_options()
+        if timeout is not None:
+            milliseconds = math.ceil(timeout * 1000) if math.isfinite(timeout) else 0
+            if not 1 <= milliseconds <= 86400000:
+                raise ValueError('timeout must be positive and at most 86400 seconds')
+            options.timeout_ms = milliseconds
+        if cancel is not None:
+            def should_cancel(_):
+                try:
+                    return Status.CANCELLED if cancel.is_set() else 0
+                except BaseException:
+                    return Status.CANCELLED
+            # May run on native worker threads; ctypes takes the GIL for it.
+            options.should_cancel = _native.CANCEL_CALLBACK(should_cancel)
+        observer = _native.Observer(request_id=request_id)
+        if on_event is not None:
+            def notify(event, _):
+                try:
+                    on_event(json.loads(event.decode('utf-8', 'replace')))
+                except BaseException:
+                    pass  # Observer failures never change inference results.
+            observer.callback = _native.EVENT_CALLBACK(notify)
+        if self._router:
+            function = lib.dtl_router_execute_with_options
+        else:
+            function = lib.dtl_decide_with_options if legacy else lib.dtl_execute_with_options
+        result, error = ctypes.c_void_p(), ctypes.c_void_p()
+        self._enter()
+        try:
+            status = function(self._handle, payload, ctypes.byref(observer), ctypes.byref(options),
+                              ctypes.byref(result), ctypes.byref(error))
+        finally:
+            self._leave()
+        text = _take(lib, result)
+        _check(lib, status, error)
+        if text is None:
+            raise LayaError(Status.INFERENCE_ERROR, 'Native result was null')
+        return json.loads(text)
+
+    def close(self):
+        """Wait for running calls, then release the model. Idempotent."""
+        if getattr(self._local, 'depth', 0):
+            raise RuntimeError('close() called from inside an active call on this engine')
+        with self._state:
+            self._closing = True
+            while self._active:
+                self._state.wait()
+            handle, self._handle = self._handle, None
+        if handle is not None:
+            self._closer(handle)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def __del__(self):
+        if getattr(self, '_handle', None) is not None and not self._active:
+            self._closer(self._handle)
+            self._handle = None

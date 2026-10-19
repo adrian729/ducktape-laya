@@ -19,7 +19,8 @@ python3 scripts/check-reproducibility.py --output build-repro --jobs 2
 ```
 
 The native runner configures/builds the library and addon, checks required CTest
-registration, runs native/Rust/Node suites, and checks public exports. It also
+registration, runs native, Rust, Node, Python, Java, .NET and Go suites, and checks
+public exports. It also
 runs compiled C/C++/Rust ABI-layout checks, TypeScript consumers in CommonJS,
 ESM and bundler modes, artifact-identity and browser lifecycle/backend regressions.
 TypeScript test tools are development-only and installed explicitly with the
@@ -28,7 +29,7 @@ locked command above. `tests/typescript/check.py --node-package NPM_TARBALL
 Reused candidate
 source/revision overrides are cleared, and built runtime diagnostics must match
 the approved compatibility record before any test gate is accepted. With a model,
-it also compares C/C++/Rust/Node fixture outputs. `--packages` builds actual artifacts
+it also compares C, C++, Rust, Node, Python, Java, .NET and Go fixture outputs. `--packages` builds actual artifacts
 and exercises installed consumers outside the checkout. `--reproducibility` adds two
 independent builds; it is intentionally optional because it recompiles the runtime.
 

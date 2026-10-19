@@ -46,6 +46,15 @@ env = dict(os.environ)
 env['LD_LIBRARY_PATH'] = str(build) + ':' + env.get('LD_LIBRARY_PATH', '')
 env['DUCKTAPE_LAYA_LIB_DIR'] = str(build)
 env['DUCKTAPE_LAYA_ADDON'] = str(build / 'ducktape_laya.node')
+env['PYTHONPATH'] = str(root / 'bindings/python/src')
+env.update(DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
+# Compiled consumers are built once, outside the per-fixture loop and its timeout.
+subprocess.run(['bash', str(root / 'bindings/java/build.sh'), '--no-test'], check=True, env=env, capture_output=True)
+env.update(CGO_CFLAGS='-I' + str(root / 'include'), CGO_LDFLAGS='-L' + str(build), GOTOOLCHAIN='local')
+subprocess.run(['go', 'build', '-o', str(build / 'conformance-go'), '.'], cwd=root / 'tests/consumers/go',
+               check=True, env=env, capture_output=True)
+subprocess.run(['dotnet', 'build', str(root / 'tests/consumers/dotnet/Consumer.csproj'), '-c', 'Release', '-m:1',
+                '-o', str(build / 'conformance-dotnet')], check=True, env=env, capture_output=True)
 commands = {
     'C': [str(build / 'laya-conformance-c'), model],
     'C++': [str(build / 'laya-conformance-cpp'), model],
@@ -53,6 +62,11 @@ commands = {
              str(root / 'tests/consumers/rust/Cargo.toml'), '--target-dir',
              str(build / 'conformance-rust'), '--', model],
     'Node': ['node', str(root / 'tests/consumers/node.cjs'), model],
+    'Python': [sys.executable, str(root / 'tests/consumers/python/consumer.py'), model],
+    'Java': ['java', '--enable-native-access=ALL-UNNAMED', '-cp', str(root / 'bindings/java/target/ducktape-laya.jar'),
+             str(root / 'tests/consumers/java/Consumer.java'), model],
+    '.NET': ['dotnet', str(build / 'conformance-dotnet/Consumer.dll'), model],
+    'Go': [str(build / 'conformance-go'), model],
 }
 report = {'fixtures': {}, 'model_sha256': sha256(args.model),
           'fixture_hashes': {fixture.name: sha256(fixture) for fixture in fixtures},

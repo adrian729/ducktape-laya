@@ -1,9 +1,10 @@
 # Shared decision API
 
 All planning, validation, projection, inference and model caching run in C++.
-C++, Rust, Node/TypeScript and browser bindings adapt the same C ABI. Native
-inference performs no downloads and uses no server. Browser asset fetching is
-explicitly controlled by the host; see [BROWSER.md](BROWSER.md).
+C++, Rust, Node/TypeScript, Python, Go, Java, .NET and browser bindings adapt
+the same C ABI. Native inference performs no downloads and uses no server.
+Browser asset fetching is explicitly controlled by the host; see
+[BROWSER.md](BROWSER.md).
 
 The original ABI v1 functions and `dtl_options` layout remain available.
 `dtl_execute` adds the features below; `dtl_router_open`, `dtl_router_execute`
@@ -23,6 +24,10 @@ structured decisions or batches. Router methods always use the new strict API.
 | C++ | `engine.execute(json, observer_or_nullptr)` | `ducktape::router(config, options).execute(json)` |
 | Rust | `engine.execute(json)`; `execute_observed(json, id, callback)` | `Engine::open_router(config_json, threads)` |
 | Node/TS | `execute`, `decide`, `decideStructured`, `decideBatch` | `Laya.openRouter(config, options)` |
+| Python | `engine.execute(request, on_event=, timeout=, cancel=)`; `execute_async` | `Engine.open_router(config, threads)` |
+| Go | `engine.Execute(json)`; `ExecuteContext(ctx, json, &CallOptions{})` | `laya.OpenRouter(configJSON, threads)` |
+| Java | `laya.execute(json)`; `execute(json, CallOptions)` | `Laya.openRouter(configJson, threads)` |
+| .NET | `engine.Execute(json)`; `Execute(json, options, token)`; `ExecuteAsync` | `LayaEngine.OpenRouter(configJson, threads)` |
 | Browser | Same execution methods as Node/TS | `Laya.openRouter(modelAssets, options)`; explicit URLs and browser asset limits |
 
 ## Primitive requests and results

@@ -41,10 +41,17 @@ What each package needs on top:
 | Electron | `npm install ducktape-laya` | Tested with Electron 44. Keep the package and the model unpacked from ASAR. |
 | Rust | `cargo add ducktape-laya` | The native library from the [release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0), found through `pkg-config` or `DUCKTAPE_LAYA_LIB_DIR`. Tested with Rust 1.98. |
 | C/C++ | [release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0) | A C or C++ compiler; CMake 3.22+ or `pkg-config` to link. |
+| Python | From a checkout (unreleased) | Python 3.10+. The wheel bundles the native library; no compiler. See [bindings/python](bindings/python/README.md). |
+| Go | From a checkout (unreleased) | Go 1.22+, cgo with a C compiler, and the native library and header. See [bindings/go](bindings/go/README.md). |
+| Java/Kotlin | From a checkout (unreleased) | Java 22+ (FFM API), run with `--enable-native-access`. See [bindings/java](bindings/java/README.md). |
+| .NET | From a checkout (unreleased) | .NET 10. See [bindings/dotnet](bindings/dotnet/README.md). |
 | Browser (experimental) | `npm install ducktape-laya-browser` | Tested on Chromium 152 only. WASM SIMD in a module worker, secure context; WebGPU is optional. See the [browser guide](docs/BROWSER.md). |
 
 Building from source instead needs CMake 3.22+, a C/C++17 compiler and Git, plus
 Python 3.11+ for the setup wizard.
+
+The Python, Go, Java and .NET bindings are new and not yet published; each
+binding's README explains how to use it from a checkout.
 
 ## Optional setup wizard
 

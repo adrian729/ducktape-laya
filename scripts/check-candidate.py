@@ -63,7 +63,9 @@ LIBRARY_INPUTS = ['src/*', 'include/*', 'cmake/*', 'patches/*', 'CMakeLists.txt'
                   'models/*', 'third_party/*', '.gitmodules']
 NATIVE_TESTS = ['tests/*.cpp', 'tests/*.c', 'tests/consumers/*', 'tests/fixtures/*']
 # Binding code and build manifests; package metadata alone does not change behaviour.
-BINDING_CODE = ['bindings/*.cjs', 'bindings/*.mjs', 'bindings/*.cpp', 'bindings/*.rs', 'bindings/*.toml', 'bindings/*.lock']
+BINDING_CODE = ['bindings/*.cjs', 'bindings/*.mjs', 'bindings/*.cpp', 'bindings/*.rs', 'bindings/*.toml', 'bindings/*.lock',
+                'bindings/*.py', 'bindings/*.go', 'bindings/*.mod', 'bindings/*.java', 'bindings/*.xml', 'bindings/*.sh',
+                'bindings/*.cs', 'bindings/*.csproj', 'bindings/*.slnx']
 HARNESS = {
     'stress': ['tests/stress.cpp', 'scripts/check-stress.py'],
     'soak': ['tests/stress.cpp', 'scripts/check-stress.py'],

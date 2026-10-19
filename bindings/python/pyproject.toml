@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ducktape-laya"
+version = "0.1.0"
+description = "Local Laya GGUF decisions (choice, noul, score) through the ducktape-laya native library"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+classifiers = [
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Source = "https://github.com/adrian729/ducktape-laya"
+
+[tool.setuptools.package-data]
+ducktape_laya = ["_native/*.so"]

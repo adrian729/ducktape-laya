@@ -71,7 +71,7 @@ its original source-checkpoint revision remains unknown rather than inferred.
 Package publication, signing and broad production readiness remain separate
 release gates. Public source availability does not imply a published package release.
 
-## npm and Rust artifacts
+## npm, Rust and Python artifacts
 
 ```sh
 # Build with DUCKTAPE_BUILD_NODE=ON and NODE_INCLUDE_DIR first.
@@ -80,8 +80,8 @@ python3 tests/installed-packages.py build/packages-0.1.0 /path/to/approved.gguf
 ```
 
 The output contains a native installation tarball, an npm tarball with its own
-Node-API addon/shared library/worker/types, two normalized `.crate` files, and
-an inventory with SHA-256 checksums and source/runtime identity. Existing output
+Node-API addon/shared library/worker/types, two normalized `.crate` files, a
+`manylinux_2_38` Python wheel that bundles the shared library, and an inventory with SHA-256 checksums and source/runtime identity. Existing output
 directories are rejected. No script publishes anything or downloads a model.
 To use the local npm tarball in an application without the wizard:
 
@@ -137,7 +137,7 @@ or `pkg-config` when the variable is absent. It no longer assumes a monorepo
 published manifest. Before publication, the artifact consumer test uses a local
 Cargo patch to the extracted sys crate, never a path into this repository.
 
-Installed C/C++, pkg-config, npm and Rust consumers must perform real-model
+Installed C/C++, pkg-config, npm, Rust and Python wheel consumers must perform real-model
 inference outside the checkout and agree on outputs. Local development artifacts
 are unsigned and may include explicitly recorded dirty source inputs.
 

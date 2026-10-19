@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DucktapeLaya.Tests/DucktapeLaya.Tests.csproj" />
+  <Project Path="DucktapeLaya/DucktapeLaya.csproj" />
+</Solution>

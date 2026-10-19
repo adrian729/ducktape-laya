@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create local native/npm/Rust artifacts. Does not publish, sign or download."""
+"""Create local native/npm/Rust/Python artifacts. Does not publish, sign or download."""
 import argparse
 import sbom
 import json
@@ -11,6 +11,7 @@ import re
 import tempfile
 from release_support import ROOT, check_record, sha256, git, binary_info, source_identity, native_build_identity, require_runtime_identity, require_uninstrumented_binary
 from artifact_support import archive_tree
+import python_wheel
 
 p = argparse.ArgumentParser()
 p.add_argument('--build', type=pathlib.Path, default=ROOT / 'build')
@@ -73,6 +74,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         command += ['--config', f'patch.crates-io.ducktape-laya-sys.path="{ROOT / "bindings/rust/ducktape-laya-sys"}"']
         subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True)
         shutil.copy(ROOT / f'bindings/rust/target/package/{name}-{version}.crate', out)
+    python_wheel.build(out, version, installed_libdir / 'libducktape_laya.so', epoch)
     cache = {}
     for line in (build / 'CMakeCache.txt').read_text().splitlines():
         match = re.match(r'([^:#]+):[^=]+=(.*)', line)

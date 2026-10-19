@@ -37,7 +37,9 @@ out.mkdir(parents=True, exist_ok=False)
 headers = a.node_include or pathlib.Path(shutil.which('node')).resolve().parents[1] / 'include/node'
 if not (headers / 'node_api.h').is_file(): p.error('Supply --node-include pointing to node_api.h')
 env = dict(os.environ, LD_LIBRARY_PATH=str(build), DUCKTAPE_LAYA_LIB_DIR=str(build),
-           DUCKTAPE_LAYA_ADDON=str(build / 'ducktape_laya.node'))
+           DUCKTAPE_LAYA_ADDON=str(build / 'ducktape_laya.node'), PYTHONPATH=str(ROOT / 'bindings/python/src'),
+           DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1', GOTOOLCHAIN='local',
+           CGO_CFLAGS='-I' + str(ROOT / 'include'), CGO_LDFLAGS='-L' + str(build))
 env.pop('LAYA_MODEL', None)
 if model: env['LAYA_MODEL'] = str(model)
 report = {'schema_version': 1, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
@@ -52,6 +54,7 @@ report = {'schema_version': 1, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
                     'Historical evidence is not automatically accepted for a different source or binary.']}
 def save():
     (out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+BINDING_SUITES = {'rust', 'node', 'python', 'java', 'dotnet', 'go'}
 def run(label, command, gate=None):
     started = time.monotonic()
     command = list(map(str, command))
@@ -64,7 +67,7 @@ def run(label, command, gate=None):
     report['runs'][label] = {'command': command, 'exit_code': code, 'seconds': round(time.monotonic()-started, 3),
                              'log': label + '.log'}
     if gate: report['gates'][gate] = {'status': 'failed' if code else 'passed', 'run': label}
-    elif code and label in {'rust', 'node'}:
+    elif code and label in BINDING_SUITES:
         report['gates']['binding_conformance'] = {'status': 'failed', 'run': label}
     save()
     print(f'{label}: {"FAILED" if code else "passed"}', flush=True)
@@ -103,6 +106,10 @@ try:
     run('native', ['ctest', '--test-dir', build, '--output-on-failure'], 'native_contracts' if model else None)
     run('rust', ['cargo', 'test', '--locked', '--offline', '--manifest-path', ROOT / 'bindings/rust/Cargo.toml'])
     run('node', ['node', '--test', ROOT / 'bindings/node/test.cjs'])
+    run('python', [sys.executable, '-m', 'unittest', 'discover', '-s', ROOT / 'bindings/python/tests'])
+    run('java', ['bash', ROOT / 'bindings/java/build.sh'])
+    run('dotnet', ['dotnet', 'test', ROOT / 'bindings/dotnet/DucktapeLaya.slnx', '-m:1'])
+    run('go', ['go', '-C', ROOT / 'bindings/go', 'test', '-count=1', './...'])
     run('abi', [sys.executable, ROOT / 'scripts/check-abi.py', build / 'libducktape_laya.so'], 'abi')
     if model:
         run('bindings', [sys.executable, ROOT / 'tests/parity.py', model, '--build-dir', build,

@@ -20,6 +20,23 @@ def archive_tree(source, destination, prefix, epoch):
                     archive.add(path, arcname=prefix + '/' + path.relative_to(source).as_posix(), recursive=False, filter=normalize)
 
 
+def write_zip(destination, files, epoch):
+    """Deterministic zip: sorted entries, fixed timestamps and permissions.
+
+    files maps archive names to (bytes, executable)."""
+    import time
+    import zipfile
+    stamp = time.gmtime(max(epoch, 315532800))[:6]  # zip dates start in 1980
+    with zipfile.ZipFile(destination, 'w') as archive:
+        for name in sorted(files):
+            data, executable = files[name]
+            info = zipfile.ZipInfo(name, stamp)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = (0o100755 if executable else 0o100644) << 16
+            archive.writestr(info, data, compresslevel=9)
+
+
 def verify_inventory(directory):
     """Verify every declared artifact before an installed-consumer test uses it."""
     from release_support import read_json, sha256
