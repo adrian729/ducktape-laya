@@ -3,7 +3,9 @@
 This document defines the agreed product requirements and remaining release work.
 [ARCHITECTURE.md](ARCHITECTURE.md) defines implementation boundaries,
 [API.md](API.md) and [BROWSER.md](BROWSER.md) define behavior, and
-[RELEASE_CHECKS.md](RELEASE_CHECKS.md) defines acceptance checks. Implemented
+[RELEASE_CHECKS.md](RELEASE_CHECKS.md) defines acceptance checks, and
+[ROADMAP.md](ROADMAP.md) records unscheduled work and features deliberately not
+planned. Implemented
 contracts describe the current baseline; release requirements below must not be
 presented as completed capabilities until their gates are satisfied.
 
