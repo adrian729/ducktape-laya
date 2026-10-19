@@ -17,6 +17,35 @@ Q8_0 model are the validated native target. The browser build is
 [experimental](docs/BROWSER.md). This is a decision model; it does not generate
 chat text.
 
+## Requirements
+
+Native packages (C/C++, Rust, Node.js, Electron) need:
+
+- **CPU:** Linux x86-64 with AVX2, FMA, F16C, BMI2 and SSE4.2: Intel Haswell,
+  AMD Excavator/Zen or newer. Some low-power Atom, Celeron and Pentium chips lack
+  AVX2. On those, opening an engine fails with status 7
+  (`DTL_UNSUPPORTED_PLATFORM`) and names the missing feature.
+- **System libraries:** glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29`, as in
+  Ubuntu 24.04+, Debian 13+ and Fedora 39+. Tested on Ubuntu 24.04 and 26.04.
+  macOS, Windows and Arm are not supported.
+- **Memory:** about 0.5 GB per open engine (measured: 475 MiB after opening, 600 MiB
+  while deciding). Plan for 1 GB per engine.
+- **Disk:** 449 MB for the model, plus 15 MB for the library or npm package.
+- **Model:** `Laya-Q8_0.gguf`, downloaded separately (see below).
+
+What each package needs on top:
+
+| Package | Install | Also needs |
+| --- | --- | --- |
+| Node.js | `npm install ducktape-laya` | Node.js 20+ (tested on 24 and 26). The native addon is prebuilt; no compiler. |
+| Electron | `npm install ducktape-laya` | Tested with Electron 44. Keep the package and the model unpacked from ASAR. |
+| Rust | `cargo add ducktape-laya` | The native library from the [release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0), found through `pkg-config` or `DUCKTAPE_LAYA_LIB_DIR`. Tested with Rust 1.98. |
+| C/C++ | [release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0) | A C or C++ compiler; CMake 3.22+ or `pkg-config` to link. |
+| Browser (experimental) | `npm install ducktape-laya-browser` | Tested on Chromium 152 only. WASM SIMD in a module worker, secure context; WebGPU is optional. See the [browser guide](docs/BROWSER.md). |
+
+Building from source instead needs CMake 3.22+, a C/C++17 compiler and Git, plus
+Python 3.11+ for the setup wizard.
+
 ## Optional setup wizard
 
 From a clone with submodules (see below), run `python3 scripts/setup.py`. It asks
@@ -91,12 +120,12 @@ Set the normal shared-library loader path or bundle the library with your app.
 Relative model paths use the process working directory. See
 [packaging](docs/PACKAGING.md) for pkg-config, loader and distribution details.
 
-For Rust, add the checkout crate to your project's `Cargo.toml` and point it at
-the installed native library:
+For Rust, add the crate and point it at the installed native library (the
+release tarball's `lib` directory, or your own build's):
 
 ```toml
 [dependencies]
-ducktape-laya = { path = "/path/to/ducktape-laya/bindings/rust/ducktape-laya" }
+ducktape-laya = "0.1"
 ```
 
 ```sh
