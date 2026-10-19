@@ -59,6 +59,17 @@ enum Handle {
     Router(NonNull<ffi::Router>),
 }
 pub struct Engine(Handle);
+/// Native status codes (`dtl_status` in the C ABI), as carried by [`Error::status`].
+pub mod status {
+    pub const OK: i32 = 0;
+    pub const INVALID_ARGUMENT: i32 = 1;
+    pub const MODEL_ERROR: i32 = 2;
+    pub const INFERENCE_ERROR: i32 = 3;
+    pub const OUT_OF_MEMORY: i32 = 4;
+    pub const CANCELLED: i32 = 5;
+    pub const DEADLINE_EXCEEDED: i32 = 6;
+    pub const UNSUPPORTED_PLATFORM: i32 = 7;
+}
 #[derive(Default)]
 pub struct CallOptions<'a> {
     /// 0 disables the deadline; otherwise 1..86400000 milliseconds.
@@ -78,6 +89,8 @@ impl Engine {
             Handle::Router(_) => std::ptr::null_mut(),
         })
     }
+    /// Open a single GGUF model. `threads` 0 selects automatic threading
+    /// (capped at 4); otherwise it must be 1..=256.
     pub fn open(model_path: &str, threads: u32) -> Result<Self, Error> {
         let path = cstring(model_path)?;
         let mut options = unsafe { ffi::dtl_default_options() };
@@ -94,6 +107,7 @@ impl Engine {
             })
     }
     /// Open a bounded, lazy local model registry. See docs/API.md for config.
+    /// `threads` 0 selects automatic threading (capped at 4); otherwise 1..=256.
     pub fn open_router(config_json: &str, threads: u32) -> Result<Self, Error> {
         let config = cstring(config_json)?;
         let mut options = unsafe { ffi::dtl_default_options() };
@@ -110,6 +124,8 @@ impl Engine {
                 message: "Native router returned null".into(),
             })
     }
+    /// Decide one primitive request. On a router this is strict: the request
+    /// must name a configured model, as with [`Engine::execute`].
     pub fn decide(&self, request_json: &str) -> Result<String, Error> {
         self.execute_impl(request_json, 0, None, true, None)
     }
@@ -134,18 +150,40 @@ impl Engine {
         request_json: &str,
         options: &CallOptions<'_>,
     ) -> Result<String, Error> {
-        self.controlled(request_json, options, false)
+        self.controlled(request_json, 0, None, options, false)
     }
     pub fn decide_with_options(
         &self,
         request_json: &str,
         options: &CallOptions<'_>,
     ) -> Result<String, Error> {
-        self.controlled(request_json, options, true)
+        self.controlled(request_json, 0, None, options, true)
+    }
+    /// Like [`Engine::execute_observed`] and [`Engine::execute_with_options`] combined.
+    pub fn execute_observed_with_options(
+        &self,
+        request_json: &str,
+        request_id: u64,
+        callback: Option<&mut dyn FnMut(&str)>,
+        options: &CallOptions<'_>,
+    ) -> Result<String, Error> {
+        self.controlled(request_json, request_id, callback, options, false)
+    }
+    /// Like [`Engine::decide_with_options`] with an observer; strict on a router.
+    pub fn decide_observed_with_options(
+        &self,
+        request_json: &str,
+        request_id: u64,
+        callback: Option<&mut dyn FnMut(&str)>,
+        options: &CallOptions<'_>,
+    ) -> Result<String, Error> {
+        self.controlled(request_json, request_id, callback, options, true)
     }
     fn controlled(
         &self,
         request_json: &str,
+        request_id: u64,
+        callback: Option<&mut dyn FnMut(&str)>,
         options: &CallOptions<'_>,
         legacy: bool,
     ) -> Result<String, Error> {
@@ -165,7 +203,7 @@ impl Engine {
                 .cast_mut()
                 .cast();
         }
-        self.execute_impl(request_json, 0, None, legacy, Some(&native))
+        self.execute_impl(request_json, request_id, callback, legacy, Some(&native))
     }
     fn execute_impl(
         &self,
@@ -374,6 +412,74 @@ mod tests {
             engine.execute_with_options(request, &options).unwrap(),
             baseline
         );
+    }
+    #[test]
+    fn status_constants_match_header() {
+        assert_eq!(
+            [
+                status::OK,
+                status::INVALID_ARGUMENT,
+                status::MODEL_ERROR,
+                status::INFERENCE_ERROR,
+                status::OUT_OF_MEMORY,
+                status::CANCELLED,
+                status::DEADLINE_EXCEEDED,
+                status::UNSUPPORTED_PLATFORM
+            ],
+            [0, 1, 2, 3, 4, 5, 6, 7]
+        );
+    }
+    #[test]
+    fn observer_with_options() {
+        let router = Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#, 1).unwrap();
+        let flag = std::sync::atomic::AtomicBool::new(true);
+        let options = CallOptions {
+            timeout_ms: 0,
+            cancelled: Some(&flag),
+        };
+        // Strict decide on a router without a model: invalid argument, events still delivered.
+        let mut events = Vec::new();
+        let error = router
+            .decide_observed_with_options(
+                "{}",
+                5,
+                Some(&mut |e| events.push(e.to_owned())),
+                &options,
+            )
+            .unwrap_err();
+        assert!(matches!(error.status, 1 | 5));
+        assert!(!events.is_empty());
+        assert!(events.iter().all(|e| e.contains("\"request_id\":5")));
+        let Ok(path) = std::env::var("LAYA_MODEL") else {
+            return;
+        };
+        let engine = Engine::open(&path, 2).unwrap();
+        let request = r#"{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
+        let mut events = Vec::new();
+        let error = engine
+            .execute_observed_with_options(
+                request,
+                9,
+                Some(&mut |e| events.push(e.to_owned())),
+                &options,
+            )
+            .unwrap_err();
+        assert_eq!(error.status, status::CANCELLED);
+        assert!(events
+            .iter()
+            .any(|e| e.contains("\"event\":\"error\"") && e.contains("\"request_id\":9")));
+        flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        let mut events = Vec::new();
+        let result = engine
+            .decide_observed_with_options(
+                request,
+                10,
+                Some(&mut |e| events.push(e.to_owned())),
+                &options,
+            )
+            .unwrap();
+        assert_eq!(result, engine.execute(request).unwrap());
+        assert_eq!(events.len(), 2);
     }
     #[test]
     fn shared_across_threads() {

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { Laya } = require('./index.cjs');
+const { Laya, Status } = require('./index.cjs');
 test('missing model rejects asynchronously', async () => {
   await assert.rejects(Laya.open('/nonexistent/ducktape-laya.gguf'), error => error.status === 2);
 });
@@ -30,7 +30,7 @@ test('serialization reentry cannot bypass queue or close boundaries', async () =
     await assert.rejects(closing.execute({ toJSON() {
       closing.close();
       return {};
-    }}), /closing or closed/);
+    }}), error => error.code === 'ERR_LAYA_CLOSED');
   } finally { await closing.close(); }
 });
 test('inference, queue bound and drain on close', { skip: !process.env.LAYA_MODEL }, async () => {
@@ -41,7 +41,7 @@ test('inference, queue bound and drain on close', { skip: !process.env.LAYA_MODE
     const first = engine.decide(request);
     await assert.rejects(engine.decide(request), /queue is full/);
     const close = engine.close();
-    await assert.rejects(engine.decide(request), /closing or closed/);
+    await assert.rejects(engine.decide(request), error => error.code === 'ERR_LAYA_CLOSED');
     const result = await first;
     assert.equal(result.answers.department.choice, 'billing');
     assert.ok(result.answers.refund_requested.noul > 0.5);
@@ -149,5 +149,40 @@ test('runtime and model diagnostics share native identity', { skip: !process.env
     assert.ok(info.model.temperatures.noul > 0);
     delete info.model; assert.deepEqual(info, runtime);
   } finally { await engine.close(); }
+  await assert.rejects(engine.info());
+});
+
+test('Status is frozen and validation errors carry status and codes', async () => {
+  assert.ok(Object.isFrozen(Status));
+  assert.deepEqual(Status, { OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
+  await assert.rejects(Laya.open('x', { threads: -1 }), { name: 'RangeError', status: 1 });
+  await assert.rejects(Laya.open('x\0'), { name: 'TypeError', status: 1 });
+  const circular = {}; circular.self = circular;
+  await assert.rejects(Laya.openRouter(circular), { name: 'TypeError', status: 1 });
+  const engine = await Laya.openRouter({ models: { unused: __filename } }, { maxPending: 1 });
+  try {
+    await assert.rejects(engine.execute('\0'), { name: 'TypeError', status: 1 });
+    await assert.rejects(engine.execute('{}', { timeoutMs: -1 }), { name: 'RangeError', status: 1 });
+    const first = engine.execute('{}').catch(() => {});
+    await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_QUEUE_FULL', message: 'Laya queue is full' });
+    await first;
+  } finally { await engine.close(); }
+});
+
+test('close resolves after the worker has died and stays idempotent', async () => {
+  const threads = require('node:worker_threads');
+  const OriginalWorker = threads.Worker;
+  const workers = [];
+  threads.Worker = class extends OriginalWorker { constructor(...args) { super(...args); workers.push(this); } };
+  const indexPath = require.resolve('./index.cjs');
+  delete require.cache[indexPath];
+  let fresh;
+  try { fresh = require('./index.cjs'); } finally { threads.Worker = OriginalWorker; delete require.cache[indexPath]; }
+  const engine = await fresh.Laya.openRouter({ models: { unused: __filename } });
+  await workers[0].terminate();
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_WORKER_EXITED', message: 'Engine worker has exited' });
+  const close = engine.close();
+  assert.equal(engine.close(), close);
+  await close;
   await assert.rejects(engine.info());
 });

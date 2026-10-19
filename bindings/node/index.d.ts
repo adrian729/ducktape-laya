@@ -19,6 +19,7 @@ export class Laya {
   decideStructured(request: StructuredRequest, options?: CallOptions): Promise<StructuredResult>;
   decideBatch(requests: (Request | StructuredRequest)[], options?: CallOptions): Promise<(Result | StructuredResult)[]>;
   execute(request: Request | StructuredRequest | (Request | StructuredRequest)[] | string, options?: CallOptions): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
+  /** Required: the worker keeps the process alive until closed. Idempotent; resolves even if the worker already exited. */
   close(options?: { cancelPending?: boolean }): Promise<void>;
 }
 
@@ -45,4 +46,15 @@ export interface RuntimeInfo {
   required_cpu_features: string[]; missing_cpu_features: string[]; cpu_supported: boolean;
   decision_types: string[]; features: string[]; limits: Record<string, number>;
   model?: { architecture: string; name: string; decision_type: string; max_head_tokens: number; max_tokens: number; temperatures: Record<string, number> };
+}
+
+/** Native status codes carried on `error.status`. Mirrors the C ABI `dtl_status`. */
+export declare const Status: Readonly<{
+  OK: 0; INVALID_ARGUMENT: 1; MODEL_ERROR: 2; INFERENCE_ERROR: 3;
+  OUT_OF_MEMORY: 4; CANCELLED: 5; DEADLINE_EXCEEDED: 6; UNSUPPORTED_PLATFORM: 7;
+}>;
+/** Shape of errors thrown by this package; `status` is a `Status` value, `code` a stable string. */
+export interface LayaError extends Error {
+  status?: number;
+  code?: 'ERR_LAYA_CLOSED' | 'ERR_LAYA_QUEUE_FULL' | 'ERR_LAYA_WORKER_EXITED';
 }

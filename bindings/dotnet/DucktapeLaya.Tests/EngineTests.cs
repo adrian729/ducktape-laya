@@ -25,6 +25,38 @@ public class EngineTests
     }
 
     [Fact]
+    public void ValidatesArguments()
+    {
+        Assert.Throws<ArgumentNullException>(() => LayaEngine.Open(null!));
+        Assert.Throws<ArgumentNullException>(() => LayaEngine.OpenRouter(null!));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.Open("missing.gguf", -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.Open("missing.gguf", 257));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.OpenRouter("{}", 257));
+        // 256 is accepted by the binding; the missing file fails natively.
+        Assert.Throws<LayaException>(() => LayaEngine.Open("missing.gguf", 256));
+    }
+
+    [Fact]
+    public async Task AsyncSnapshotsOptions()
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            using var engine = LayaEngine.OpenRouter(Config(("unused", file)), 1);
+            var seen = new List<string>();
+            var options = new LayaCallOptions { RequestId = 7, OnEvent = seen.Add };
+            var task = engine.ExecuteAsync("{}", options);
+            options.OnEvent = _ => throw new Exception("must not be used");
+            options.RequestId = 8;
+            options.Timeout = TimeSpan.FromDays(9);
+            Assert.Equal(1, (await Assert.ThrowsAsync<LayaException>(() => task)).Status);
+            Assert.Equal(2, seen.Count);
+            Assert.All(seen, e => Assert.Contains("\"request_id\":7", e));
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
     public void RuntimeDiagnostics()
     {
         Assert.Contains("\"abi_version\":1", LayaEngine.RuntimeInfo());
@@ -80,8 +112,8 @@ public class EngineTests
         try
         {
             using var engine = LayaEngine.OpenRouter(Config(("unused", file)), 1);
-            var options = new LayaCallOptions { Timeout = TimeSpan.FromDays(2) };
-            Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute("{}", options)).Status);
+            Assert.Throws<ArgumentOutOfRangeException>(() => engine.Execute("{}", new LayaCallOptions { Timeout = TimeSpan.FromDays(2) }));
+            Assert.Throws<ArgumentOutOfRangeException>(() => engine.Execute("{}", new LayaCallOptions { Timeout = TimeSpan.FromSeconds(-1) }));
         }
         finally { File.Delete(file); }
     }
@@ -133,9 +165,17 @@ public class EngineTests
         var baseline = engine.Execute(Primitive);
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        Assert.Equal(5, Assert.Throws<LayaException>(() => engine.Execute(Primitive, null, cancelled.Token)).Status);
-        Assert.Equal(5, Assert.Throws<LayaException>(() => engine.Decide(Primitive, null, cancelled.Token)).Status);
-        Assert.Equal(5, (await Assert.ThrowsAsync<LayaException>(() => engine.ExecuteAsync(Primitive, null, cancelled.Token))).Status);
+        var sync = Assert.Throws<OperationCanceledException>(() => engine.Execute(Primitive, null, cancelled.Token));
+        Assert.Equal(5, Assert.IsType<LayaException>(sync.InnerException).Status);
+        Assert.Equal(cancelled.Token, sync.CancellationToken);
+        Assert.Throws<OperationCanceledException>(() => engine.Decide(Primitive, null, cancelled.Token));
+        var task = engine.ExecuteAsync(Primitive, null, cancelled.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+        Assert.True(task.IsCanceled);
+        // Cancelled while running (the token is only cancelled by the first event).
+        using var mid = new CancellationTokenSource();
+        var running = engine.ExecuteAsync(Primitive, new LayaCallOptions { OnEvent = _ => mid.Cancel() }, mid.Token);
+        try { await running; } catch (OperationCanceledException) { Assert.True(running.IsCanceled); }
         var timeout = new LayaCallOptions { Timeout = TimeSpan.FromMilliseconds(1) };
         Assert.Equal(6, Assert.Throws<LayaException>(() => engine.Execute(Primitive, timeout)).Status);
         Assert.Equal(baseline, engine.Execute(Primitive));
@@ -157,7 +197,7 @@ public class EngineTests
         var cancelled = Task.Run(() =>
         {
             try { return engine.Execute(Primitive, null, cts.Token); }
-            catch (LayaException e) { Assert.Equal(5, e.Status); return baseline; }
+            catch (OperationCanceledException e) { Assert.Equal(5, Assert.IsType<LayaException>(e.InnerException).Status); return baseline; }
         });
         cts.Cancel();
         foreach (var task in plain) Assert.Equal(baseline, await task);

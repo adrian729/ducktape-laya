@@ -360,6 +360,9 @@ dtl_status dtl_execute_with_options(dtl_engine *engine, const char *request, con
     });
 }
 dtl_call_options dtl_default_call_options(void) { return {sizeof(dtl_call_options), 0, 0, nullptr, nullptr}; }
+uint32_t dtl_cancel_flag(void *flag) {
+    return flag ? __atomic_load_n(static_cast<const uint32_t *>(flag), __ATOMIC_ACQUIRE) : 0;
+}
 dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_observer *observer, char **result, char **error) {
     return dtl_execute_with_options(engine, request, observer, nullptr, result, error);
 }

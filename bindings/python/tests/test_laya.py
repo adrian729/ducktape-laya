@@ -11,6 +11,7 @@ MODEL = os.environ.get('LAYA_MODEL')
 REQUEST = '{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}'
 STRUCTURED = ('{"state":"Please refund me.","schema":{"type":"object","properties":'
               '{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}')
+LONG = json.dumps([json.loads(STRUCTURED)] * 8)
 real = unittest.skipUnless(MODEL, 'LAYA_MODEL is not set')
 
 
@@ -43,12 +44,21 @@ class Basics(unittest.TestCase):
             self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
             self.assertEqual([event['event'] for event in calls], ['start', 'error'])
 
+    def test_explicit_library_dir_is_honoured(self):
+        import subprocess, sys
+        env = dict(os.environ, DUCKTAPE_LAYA_LIB_DIR='/nonexistent')
+        result = subprocess.run([sys.executable, '-c', 'import ducktape_laya; ducktape_laya.runtime_info()'],
+                                env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('DUCKTAPE_LAYA_LIB_DIR is set', result.stderr)
+
     def test_close_is_idempotent(self):
         router = laya.Engine.open_router({'models': {'unused': __file__}}, 1)
         router.close()
         router.close()
-        with self.assertRaises(laya.LayaError):
+        with self.assertRaises(laya.EngineClosedError) as caught:
             router.execute(REQUEST)
+        self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
 
 
 @real
@@ -89,7 +99,7 @@ class RealModel(unittest.TestCase):
         # The running call finishes; the model is released when it returns.
         self.assertEqual(engine.execute(REQUEST, on_event=lambda _: engine.close()), self.baseline)
         self.assertIsNone(engine._handle)
-        with self.assertRaises(laya.LayaError):
+        with self.assertRaises(laya.EngineClosedError):
             engine.execute(REQUEST)
         engine.close()
 
@@ -104,8 +114,8 @@ class RealModel(unittest.TestCase):
 
     def test_cancellation_and_deadline(self):
         engine = self.engine
-        cancelled = threading.Event()
-        cancelled.set()
+        cancelled = laya.CancelToken()
+        cancelled.cancel()
         for method in (engine.execute, engine.decide):
             with self.assertRaises(laya.LayaError) as caught:
                 method(REQUEST, cancel=cancelled)
@@ -114,9 +124,18 @@ class RealModel(unittest.TestCase):
             engine.execute(REQUEST, timeout=0.001)
         self.assertEqual(caught.exception.status, laya.Status.DEADLINE_EXCEEDED)
         self.assertEqual(engine.execute(REQUEST), self.baseline)
-        self.assertEqual(engine.execute(REQUEST, cancel=threading.Event()), self.baseline)
+        self.assertEqual(engine.execute(REQUEST, cancel=laya.CancelToken()), self.baseline)
         with self.assertRaises(ValueError):
             engine.execute(REQUEST, timeout=0)
+        with self.assertRaises(TypeError):
+            engine.execute(REQUEST, cancel=threading.Event())
+        # Cancelled from another thread while the call runs (or is about to).
+        token, started = laya.CancelToken(), threading.Event()
+        threading.Thread(target=lambda: (started.wait(), token.cancel())).start()
+        with self.assertRaises(laya.LayaError) as caught:
+            engine.execute(LONG, cancel=token, on_event=lambda _: started.set())
+        self.assertEqual(caught.exception.status, laya.Status.CANCELLED)
+        self.assertEqual(engine.execute(REQUEST), self.baseline)
 
     def test_threads_and_async(self):
         results, errors = [], []

@@ -55,6 +55,15 @@ public:
         check(status, message);
         return result;
     }
+    // Same as decide(request, options) with a passive observer (either may be null).
+    std::string decide(const std::string &request, const dtl_observer *observer, const dtl_call_options *options) const {
+        if (request.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Request contains a NUL byte");
+        char *result = nullptr, *message = nullptr;
+        auto status = dtl_decide_with_options(engine_.get(), request.c_str(), observer, options, &result, &message);
+        std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
+        check(status, message);
+        return result;
+    }
 };
 class router {
     std::unique_ptr<dtl_router, decltype(&dtl_router_close)> router_{nullptr, dtl_router_close};
@@ -66,6 +75,8 @@ public:
         auto status = dtl_router_open(config.c_str(), &options, &raw, &message);
         check(status, message); router_.reset(raw);
     }
+    // Runtime identity and capabilities; routers have no single model to describe.
+    std::string info() const { return ducktape::info(nullptr); }
     router(router &&) noexcept = default;
     router &operator=(router &&) noexcept = default;
     router(const router &) = delete;

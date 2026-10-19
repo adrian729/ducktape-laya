@@ -26,28 +26,26 @@ class CallOptions(ctypes.Structure):
                 ('user_data', ctypes.c_void_p)]
 
 
-def _candidates():
-    if os.environ.get('DUCKTAPE_LAYA_LIB_DIR'):
-        yield pathlib.Path(os.environ['DUCKTAPE_LAYA_LIB_DIR'], 'libducktape_laya.so')
+def _open():
+    explicit = os.environ.get('DUCKTAPE_LAYA_LIB_DIR')
+    if explicit:  # an explicit choice is honoured or fails; never a silent fallback
+        path = pathlib.Path(explicit, 'libducktape_laya.so')
+        try:
+            return ctypes.CDLL(str(path))
+        except OSError as error:
+            raise OSError(f'DUCKTAPE_LAYA_LIB_DIR is set but {path} could not be loaded: {error}') from None
+    if sys.platform != 'linux' or platform.machine() not in ('x86_64', 'AMD64'):
+        raise OSError(f'Unsupported platform {sys.platform}/{platform.machine()}; ducktape-laya ships Linux x86-64 only')
     bundled = pathlib.Path(__file__).with_name('_native') / 'libducktape_laya.so'
-    if bundled.is_file():
-        yield bundled
-    yield 'libducktape_laya.so.0'
+    try:
+        return ctypes.CDLL(str(bundled) if bundled.is_file() else 'libducktape_laya.so.0')
+    except OSError as error:
+        raise OSError('Native ducktape-laya library not found. Install a wheel that bundles it, '
+                      f'or set DUCKTAPE_LAYA_LIB_DIR to its library directory: {error}') from None
 
 
 def load():
-    if sys.platform != 'linux' or platform.machine() not in ('x86_64', 'AMD64'):
-        raise OSError(f'Unsupported platform {sys.platform}/{platform.machine()}; ducktape-laya ships Linux x86-64 only')
-    errors = []
-    for candidate in _candidates():
-        try:
-            lib = ctypes.CDLL(str(candidate))
-            break
-        except OSError as error:
-            errors.append(str(error))
-    else:
-        raise OSError('Native ducktape-laya library not found. Install a wheel that bundles it, '
-                      'or set DUCKTAPE_LAYA_LIB_DIR to its library directory: ' + '; '.join(errors))
+    lib = _open()
     handle = ctypes.c_void_p
     status = ctypes.c_int32
     signatures = {
@@ -64,8 +62,12 @@ def load():
     for name in ['dtl_execute_with_options', 'dtl_decide_with_options', 'dtl_router_execute_with_options']:
         signatures[name] = (status, [handle, ctypes.c_char_p, ctypes.POINTER(Observer),
                                      ctypes.POINTER(CallOptions), c_char_p_p, c_char_p_p])
+    signatures['dtl_cancel_flag'] = (ctypes.c_uint32, [ctypes.c_void_p])
     for name, (restype, argtypes) in signatures.items():
-        function = getattr(lib, name)
+        try:
+            function = getattr(lib, name)
+        except AttributeError:
+            raise OSError(f'Native ducktape-laya library {lib._name} lacks {name}; it is older than this package') from None
         function.restype, function.argtypes = restype, argtypes
     if lib.dtl_abi_version() != 1:
         raise OSError(f'Native ducktape-laya ABI {lib.dtl_abi_version()} is not supported (expected 1)')

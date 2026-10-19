@@ -12,6 +12,23 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--node-package', type=pathlib.Path)
 p.add_argument('--browser-package', type=pathlib.Path)
 a = p.parse_args()
+# The browser protocol declarations are a copy of the shared part of Node's.
+# Every declaration there must appear verbatim in Node's file.
+node_types = (ROOT / 'bindings/node/index.d.ts').read_text()
+browser_types = (ROOT / 'bindings/browser/protocol.d.ts').read_text()
+declarations, current = [], None
+for line in browser_types.splitlines():
+    if line.startswith('export '):
+        current = [line]
+        declarations.append(current)
+    elif line.startswith(('/', '*')) or not line.strip():
+        current = None  # comments between declarations are not compared
+    elif current is not None:
+        current.append(line)
+for declaration in map('\n'.join, declarations):
+    if declaration not in node_types:
+        raise SystemExit('bindings/browser/protocol.d.ts drifted from bindings/node/index.d.ts: '
+                         + declaration.splitlines()[0])
 compiler = HERE / 'node_modules/typescript/bin/tsc'
 if not compiler.is_file():
     p.error('Run npm ci --ignore-scripts --prefix tests/typescript first')

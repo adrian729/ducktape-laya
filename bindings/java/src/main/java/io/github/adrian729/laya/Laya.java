@@ -6,6 +6,8 @@ import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.ref.Cleaner;
+import java.util.Objects;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 
@@ -16,28 +18,48 @@ import java.util.function.Consumer;
  */
 public final class Laya implements AutoCloseable {
     private static final MethodHandle EVENT_TARGET;
-    private static final MethodHandle CANCEL_TARGET;
+    private static final Cleaner CLEANER = Cleaner.create();
 
     static {
         try {
-            var lookup = MethodHandles.lookup();
-            EVENT_TARGET = lookup.findStatic(Laya.class, "event",
+            EVENT_TARGET = MethodHandles.lookup().findStatic(Laya.class, "event",
                 MethodType.methodType(void.class, Consumer.class, MemorySegment.class, MemorySegment.class));
-            CANCEL_TARGET = lookup.findStatic(Laya.class, "cancelled",
-                MethodType.methodType(int.class, CancellationToken.class, MemorySegment.class));
         } catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
         }
     }
 
+    /** Owns the native handle; deliberately holds no reference to the Laya so the Cleaner can run. */
+    private static final class State implements Runnable {
+        private final MemorySegment handle;
+        private final MethodHandle close;
+
+        State(MemorySegment handle, MethodHandle close) {
+            this.handle = handle;
+            this.close = close;
+        }
+
+        @Override
+        public void run() {
+            try {
+                close.invokeExact(handle);
+            } catch (Throwable t) {
+                throw sneaky(t);
+            }
+        }
+    }
+
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private final boolean router;
-    private MemorySegment handle;
+    private final MemorySegment handle;
+    private final Cleaner.Cleanable cleanable;
     private volatile boolean closing;
+    private boolean released; // guarded by the write lock
 
-    private Laya(MemorySegment handle, boolean router) {
+    private Laya(MemorySegment handle, boolean router, MethodHandle close) {
         this.handle = handle;
         this.router = router;
+        this.cleanable = CLEANER.register(this, new State(handle, close));
     }
 
     /** Runtime identity/capabilities without loading a model. No telemetry or input data. */
@@ -45,13 +67,28 @@ public final class Laya implements AutoCloseable {
         return readInfo(MemorySegment.NULL);
     }
 
-    public static Laya open(String modelPath, int threads) {
-        return create(OPEN, modelPath, threads, false);
+    /** Opens a model with an automatic thread count. */
+    public static Laya open(String modelPath) {
+        return open(modelPath, 0);
     }
 
-    /** Opens a bounded, lazy local model registry; see docs/API.md for the config. */
+    /**
+     * Opens a model. {@code threads} is 0 (automatic) to 256, otherwise {@link IllegalArgumentException}.
+     * A null path throws {@link NullPointerException}. Call {@link #close()} to release it promptly;
+     * a Cleaner releases it if the object is dropped without closing.
+     */
+    public static Laya open(String modelPath, int threads) {
+        return create(false, modelPath, threads);
+    }
+
+    /** Opens a router with an automatic thread count. */
+    public static Laya openRouter(String configJson) {
+        return openRouter(configJson, 0);
+    }
+
+    /** Opens a bounded, lazy local model registry; see docs/API.md for the config. Arguments as for {@link #open(String, int)}. */
     public static Laya openRouter(String configJson, int threads) {
-        return create(ROUTER_OPEN, configJson, threads, true);
+        return create(true, configJson, threads);
     }
 
     /** Model metadata for a single model; routers report common runtime capabilities. */
@@ -59,7 +96,11 @@ public final class Laya implements AutoCloseable {
         return withHandle(h -> readInfo(router ? MemorySegment.NULL : h));
     }
 
-    /** Legacy primitive request semantics: unrelated top-level metadata is ignored. */
+    /**
+     * Legacy primitive request semantics: unrelated top-level metadata is ignored. On a router,
+     * {@code decide} uses the strict {@link #execute} semantics: it always requires {@code model}
+     * and rejects unrelated metadata. Null options mean {@link CallOptions#none()}.
+     */
     public String decide(String request) {
         return run(request, CallOptions.none(), true);
     }
@@ -68,7 +109,10 @@ public final class Laya implements AutoCloseable {
         return run(request, options, true);
     }
 
-    /** Executes one primitive/structured request or a bounded JSON array of them. */
+    /**
+     * Executes one primitive/structured request or a bounded JSON array of them. {@code onEvent}
+     * runs on the calling thread. Null options mean {@link CallOptions#none()}.
+     */
     public String execute(String request) {
         return run(request, CallOptions.none(), false);
     }
@@ -94,39 +138,36 @@ public final class Laya implements AutoCloseable {
     /** Called with the write lock held; unlocks it. */
     private void release() {
         try {
-            if (handle == null) return;
-            try {
-                (router ? ROUTER_CLOSE : CLOSE).invokeExact(handle);
-            } catch (Throwable t) {
-                throw sneaky(t);
-            } finally {
-                handle = null;
-            }
+            if (released) return;
+            released = true;
+            cleanable.clean();
         } finally {
             lock.writeLock().unlock();
         }
     }
 
-    private static Laya create(MethodHandle open, String input, int threads, boolean router) {
+    private static Laya create(boolean router, String input, int threads) {
+        Objects.requireNonNull(input, router ? "configJson" : "modelPath");
+        if (threads < 0 || threads > 256) throw new IllegalArgumentException("threads must be between 0 and 256");
         checkInput(input);
+        Native n = Native.get();
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment options = (MemorySegment) DEFAULT_OPTIONS.invoke((SegmentAllocator) arena);
+            MemorySegment options = (MemorySegment) n.DEFAULT_OPTIONS.invoke((SegmentAllocator) arena);
             options.set(ValueLayout.JAVA_INT, 8, threads);
             MemorySegment out = arena.allocate(PTR);
             MemorySegment error = arena.allocate(PTR);
-            int status = (int) open.invokeExact(arena.allocateFrom(input), options, out, error);
+            int status = (int) (router ? n.ROUTER_OPEN : n.OPEN).invokeExact(arena.allocateFrom(input), options, out, error);
             check(status, error);
             MemorySegment raw = out.get(PTR, 0);
             if (raw.equals(MemorySegment.NULL))
                 throw new LayaException(LayaException.MODEL_ERROR, "Native engine returned null");
-            return new Laya(raw, router);
+            return new Laya(raw, router, router ? n.ROUTER_CLOSE : n.CLOSE);
         } catch (Throwable t) {
             throw sneaky(t);
         }
     }
 
     private static void checkInput(String s) {
-        if (s == null) throw new LayaException(LayaException.INVALID_ARGUMENT, "Input is null");
         if (s.indexOf('\0') >= 0) throw new LayaException(LayaException.INVALID_ARGUMENT, "Input contains a NUL byte");
     }
 
@@ -137,7 +178,7 @@ public final class Laya implements AutoCloseable {
     private <T> T withHandle(Body<T> body) {
         lock.readLock().lock();
         try {
-            if (closing || handle == null) throw new LayaException(LayaException.INVALID_ARGUMENT, "Laya handle is closed");
+            if (closing || released) throw new LayaClosedException();
             return body.apply(handle);
         } catch (Throwable t) {
             throw sneaky(t);
@@ -149,29 +190,42 @@ public final class Laya implements AutoCloseable {
     }
 
     private String run(String request, CallOptions options, boolean legacy) {
+        Objects.requireNonNull(request, "request");
+        if (options == null) options = CallOptions.none();
         checkInput(request);
+        CallOptions opts = options;
+        Native n = Native.get();
         return withHandle(h -> {
-            try (Arena arena = Arena.ofConfined()) {
+            CancellationToken token = opts.cancellation();
+            try (Arena arena = Arena.ofShared()) {
+                MemorySegment flag = null;
                 MemorySegment observer = arena.allocate(OBSERVER_SIZE, 8);
-                observer.set(ValueLayout.JAVA_LONG, 0, options.requestId());
-                if (options.onEvent() != null)
+                observer.set(ValueLayout.JAVA_LONG, 0, opts.requestId());
+                if (opts.onEvent() != null)
                     observer.set(PTR, 8, Linker.nativeLinker().upcallStub(
-                        MethodHandles.insertArguments(EVENT_TARGET, 0, options.onEvent()),
+                        MethodHandles.insertArguments(EVENT_TARGET, 0, opts.onEvent()),
                         FunctionDescriptor.ofVoid(PTR, PTR), arena));
                 MemorySegment native_ = MemorySegment.NULL;
-                if (options.timeoutMillis() != 0 || options.cancellation() != null) {
-                    native_ = (MemorySegment) DEFAULT_CALL_OPTIONS.invoke((SegmentAllocator) arena);
-                    native_.set(ValueLayout.JAVA_LONG, 8, options.timeoutMillis());
-                    if (options.cancellation() != null)
-                        native_.set(PTR, 16, Linker.nativeLinker().upcallStub(
-                            MethodHandles.insertArguments(CANCEL_TARGET, 0, options.cancellation()),
-                            FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR), arena));
+                if (opts.timeoutMillis() != 0 || token != null) {
+                    native_ = (MemorySegment) n.DEFAULT_CALL_OPTIONS.invoke((SegmentAllocator) arena);
+                    native_.set(ValueLayout.JAVA_LONG, 8, opts.timeoutMillis());
+                    if (token != null) {
+                        flag = arena.allocate(4, 4);
+                        flag.set(ValueLayout.JAVA_INT, 0, 0);
+                        native_.set(PTR, 16, n.CANCEL_FLAG);
+                        native_.set(PTR, 24, flag);
+                        token.register(flag);
+                    }
                 }
                 MemorySegment result = arena.allocate(PTR);
                 MemorySegment error = arena.allocate(PTR);
-                MethodHandle target = router ? ROUTER_EXECUTE : legacy ? DECIDE : EXECUTE;
-                int status = (int) target.invokeExact(h, arena.allocateFrom(request), observer, native_, result, error);
-                return finish(status, result, error);
+                MethodHandle target = router ? n.ROUTER_EXECUTE : legacy ? n.DECIDE : n.EXECUTE;
+                try {
+                    int status = (int) target.invokeExact(h, arena.allocateFrom(request), observer, native_, result, error);
+                    return finish(status, result, error);
+                } finally {
+                    if (flag != null) token.unregister(flag); // before the arena frees it
+                }
             }
         });
     }
@@ -180,7 +234,7 @@ public final class Laya implements AutoCloseable {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment result = arena.allocate(PTR);
             MemorySegment error = arena.allocate(PTR);
-            int status = (int) INFO.invokeExact(engine, result, error);
+            int status = (int) Native.get().INFO.invokeExact(engine, result, error);
             return finish(status, result, error);
         } catch (Throwable t) {
             throw sneaky(t);
@@ -223,14 +277,6 @@ public final class Laya implements AutoCloseable {
             callback.accept(text(text));
         } catch (Throwable ignored) {
             // observer failures never change inference results
-        }
-    }
-
-    private static int cancelled(CancellationToken token, MemorySegment user) {
-        try {
-            return token.isCancelled() ? LayaException.CANCELLED : 0;
-        } catch (Throwable t) {
-            return LayaException.CANCELLED;
         }
     }
 }

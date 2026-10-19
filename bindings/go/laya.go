@@ -11,11 +11,7 @@ extern void goObserver(char *event, void *user);
 
 static void observe(const char *event, void *user) { goObserver((char *)event, user); }
 
-static uint32_t cancelled(void *user) {
-    return __atomic_load_n((uint32_t *)user, __ATOMIC_RELAXED) ? DTL_CANCELLED : 0;
-}
-
-static void set_flag(uint32_t *flag) { __atomic_store_n(flag, 1, __ATOMIC_RELAXED); }
+static void set_flag(uint32_t *flag, uint32_t value) { __atomic_store_n(flag, value, __ATOMIC_RELAXED); }
 
 static dtl_status open_model(const char *path, uint32_t threads, void **out, char **err) {
     dtl_options o = dtl_default_options();
@@ -37,7 +33,7 @@ static dtl_status run(int kind, void *handle, const char *request, uint64_t requ
     dtl_call_options co = dtl_default_call_options();
     co.timeout_ms = timeout_ms;
     if (flag) {
-        co.should_cancel = cancelled;
+        co.should_cancel = dtl_cancel_flag;
         co.user_data = flag;
     }
     switch (kind) {
@@ -57,6 +53,7 @@ import "C"
 import (
 	"context"
 	"errors"
+	"runtime"
 	"runtime/cgo"
 	"strings"
 	"sync"
@@ -85,7 +82,30 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Message }
 
+// Is lets errors.Is match status 5 with context.Canceled and status 6 with
+// context.DeadlineExceeded.
+func (e *Error) Is(target error) bool {
+	switch target {
+	case context.Canceled:
+		return e.Status == StatusCancelled
+	case context.DeadlineExceeded:
+		return e.Status == StatusDeadlineExceeded
+	}
+	return false
+}
+
+func ctxError(err error) *Error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &Error{StatusDeadlineExceeded, "Laya call deadline exceeded"}
+	}
+	return &Error{StatusCancelled, "Laya call cancelled"}
+}
+
 func invalid(msg string) *Error { return &Error{StatusInvalidArgument, msg} }
+
+// ErrClosed is returned by calls made after Close. Match it with errors.Is; it
+// is also an *Error with StatusInvalidArgument.
+var ErrClosed error = &Error{StatusInvalidArgument, "Engine is closed"}
 
 func cstring(s string) (*C.char, error) {
 	if strings.IndexByte(s, 0) >= 0 {
@@ -139,25 +159,29 @@ type CallOptions struct {
 }
 
 // Engine owns a native model engine or router. It is safe for concurrent use;
-// native calls on one handle are serialized.
+// native calls on one handle are serialized. Call Close (or CloseDeferred) for
+// prompt release; a finalizer releases the handle as a safety net if an Engine
+// becomes unreachable without being closed.
 type Engine struct {
-	mu          sync.Mutex
-	idle        *sync.Cond
-	active      int
-	dispatching int // OnEvent callbacks currently running
-	closed      bool
-	deferred    bool // Close ran during a callback; the last call releases
-	router      bool
-	handle      unsafe.Pointer
+	mu       sync.Mutex
+	idle     *sync.Cond
+	active   int
+	closed   bool
+	deferred bool // CloseDeferred: the last running call releases
+	router   bool
+	handle   unsafe.Pointer
+	done     chan struct{} // closed once the handle has been released
 }
 
 func newEngine(handle unsafe.Pointer, router bool) *Engine {
-	e := &Engine{handle: handle, router: router}
+	e := &Engine{handle: handle, router: router, done: make(chan struct{})}
 	e.idle = sync.NewCond(&e.mu)
+	runtime.SetFinalizer(e, (*Engine).release)
 	return e
 }
 
-// Open loads a local GGUF model. threads 0 selects automatically (capped at 4).
+// Open loads a local GGUF model. threads 0 selects automatically (capped at
+// 4); otherwise it must be 1..256.
 func Open(modelPath string, threads uint32) (*Engine, error) {
 	path, err := cstring(modelPath)
 	if err != nil {
@@ -176,6 +200,9 @@ func Open(modelPath string, threads uint32) (*Engine, error) {
 }
 
 // OpenRouter opens a bounded, lazy local model registry. See docs/API.md.
+// threads 0 selects automatically (capped at 4); otherwise it must be 1..256.
+// Decide and DecideContext on a router use strict Execute semantics: requests
+// require "model" and unrelated metadata is rejected.
 func OpenRouter(configJSON string, threads uint32) (*Engine, error) {
 	config, err := cstring(configJSON)
 	if err != nil {
@@ -197,55 +224,74 @@ func (e *Engine) begin() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return invalid("Engine is closed")
+		return ErrClosed
 	}
 	e.active++
 	return nil
 }
 
 func (e *Engine) end() {
-	var handle unsafe.Pointer
 	e.mu.Lock()
 	e.active--
+	release := e.active == 0 && e.deferred
 	if e.active == 0 {
 		e.idle.Broadcast()
-		if e.deferred {
-			handle, e.handle = e.handle, nil
-		}
 	}
 	e.mu.Unlock()
-	if handle != nil {
-		C.close_handle(boolInt(e.router), handle)
+	if release {
+		e.release()
 	}
 }
 
-// Close waits for in-flight calls, then releases the native handle. It is
-// idempotent; later calls on the engine fail with StatusInvalidArgument.
+// release frees the native handle exactly once and signals done. Callers must
+// ensure no call is running.
+func (e *Engine) release() {
+	e.mu.Lock()
+	handle := e.handle
+	e.handle = nil
+	e.closed = true
+	e.mu.Unlock()
+	if handle == nil {
+		return
+	}
+	runtime.SetFinalizer(e, nil)
+	C.close_handle(boolInt(e.router), handle)
+	close(e.done)
+}
+
+// Close rejects new calls (they fail with ErrClosed), waits for all in-flight
+// calls to finish, then releases the native handle. It is idempotent, and
+// concurrent Close calls all return only after the handle is released.
 //
-// Go cannot tell which goroutine calls Close, so while any OnEvent callback of
-// this engine is running (for example, Close called from inside one), Close
-// does not wait: it rejects new calls and returns, and the last running call
-// releases the handle when it finishes.
+// Close must not be called from inside an OnEvent callback of the same
+// engine: it would wait for its own call and deadlock. Use CloseDeferred
+// there.
 func (e *Engine) Close() error {
 	e.mu.Lock()
-	if e.closed {
-		e.mu.Unlock()
-		return nil
-	}
 	e.closed = true
-	if e.dispatching > 0 {
-		e.deferred = true
-		e.mu.Unlock()
-		return nil
-	}
 	for e.active > 0 {
 		e.idle.Wait()
 	}
-	handle := e.handle
-	e.handle = nil
 	e.mu.Unlock()
-	C.close_handle(boolInt(e.router), handle)
+	e.release()
+	<-e.done
 	return nil
+}
+
+// CloseDeferred marks the engine closed so new calls fail with ErrClosed and
+// returns immediately without waiting. The last running call releases the
+// handle (or it is released at once if none is running). It is the way to
+// close from inside an OnEvent callback, where Close would wait for its own
+// call and deadlock.
+func (e *Engine) CloseDeferred() {
+	e.mu.Lock()
+	e.closed = true
+	e.deferred = true
+	idle := e.active == 0
+	e.mu.Unlock()
+	if idle {
+		e.release()
+	}
 }
 
 func boolInt(b bool) C.int {
@@ -268,7 +314,9 @@ func (e *Engine) Info() (string, error) {
 	return readInfo(e.handle)
 }
 
-// Decide runs a legacy primitive request (unrelated top-level metadata is ignored).
+// Decide runs a legacy primitive request (unrelated top-level metadata is
+// ignored). On a router it uses strict Execute semantics: "model" is required
+// and unrelated metadata is rejected.
 func (e *Engine) Decide(request string) (string, error) {
 	return e.DecideContext(context.Background(), request, nil)
 }
@@ -278,9 +326,11 @@ func (e *Engine) Execute(request string) (string, error) {
 	return e.ExecuteContext(context.Background(), request, nil)
 }
 
-// ExecuteContext is Execute with cooperative cancellation and deadline: a
-// cancelled ctx yields StatusCancelled, an expired deadline StatusDeadlineExceeded
-// (clamped to 24 h). No partial result is returned.
+// ExecuteContext is Execute with cooperative cancellation and deadline. A
+// cancelled ctx yields an *Error with StatusCancelled (errors.Is
+// context.Canceled), an expired deadline StatusDeadlineExceeded (errors.Is
+// context.DeadlineExceeded). An already-done ctx returns immediately without
+// a native call. No partial result is returned.
 func (e *Engine) ExecuteContext(ctx context.Context, request string, opts *CallOptions) (string, error) {
 	return e.call(ctx, request, opts, 0)
 }
@@ -298,6 +348,12 @@ func goObserver(event *C.char, user unsafe.Pointer) {
 }
 
 func (e *Engine) call(ctx context.Context, request string, opts *CallOptions, kind C.int) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", ctxError(err)
+	}
 	req, err := cstring(request)
 	if err != nil {
 		return "", err
@@ -310,25 +366,12 @@ func (e *Engine) call(ctx context.Context, request string, opts *CallOptions, ki
 	if e.router {
 		kind = 2
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	var requestID uint64
 	var observer unsafe.Pointer
 	if opts != nil {
 		requestID = opts.RequestID
 		if onEvent := opts.OnEvent; onEvent != nil {
-			handle := cgo.NewHandle(func(event string) {
-				e.mu.Lock()
-				e.dispatching++
-				e.mu.Unlock()
-				defer func() {
-					e.mu.Lock()
-					e.dispatching--
-					e.mu.Unlock()
-				}()
-				onEvent(event)
-			})
+			handle := cgo.NewHandle(onEvent)
 			defer handle.Delete()
 			slot := (*C.uintptr_t)(C.malloc(C.size_t(unsafe.Sizeof(C.uintptr_t(0)))))
 			*slot = C.uintptr_t(handle)
@@ -339,13 +382,19 @@ func (e *Engine) call(ctx context.Context, request string, opts *CallOptions, ki
 	var timeout uint64
 	if deadline, ok := ctx.Deadline(); ok {
 		ms := time.Until(deadline).Milliseconds() + 1
-		timeout = uint64(min(max(ms, 1), maxTimeoutMs))
+		if ms <= maxTimeoutMs {
+			timeout = uint64(max(ms, 1))
+		} // beyond the native maximum: no native timeout; the watcher enforces it
 	}
 	var flag *C.uint32_t
 	if ctx.Done() != nil {
 		flag = (*C.uint32_t)(C.calloc(1, C.size_t(unsafe.Sizeof(C.uint32_t(0)))))
-		if errors.Is(ctx.Err(), context.Canceled) {
-			C.set_flag(flag)
+		stop := func() {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				C.set_flag(flag, C.DTL_DEADLINE_EXCEEDED)
+			} else {
+				C.set_flag(flag, C.DTL_CANCELLED)
+			}
 		}
 		done := make(chan struct{})
 		stopped := make(chan struct{})
@@ -353,9 +402,7 @@ func (e *Engine) call(ctx context.Context, request string, opts *CallOptions, ki
 			defer close(stopped)
 			select {
 			case <-ctx.Done():
-				if errors.Is(ctx.Err(), context.Canceled) {
-					C.set_flag(flag)
-				}
+				stop()
 			case <-done:
 			}
 		}()

@@ -12,11 +12,12 @@ and `dtl_router_close` add a local registry. The options still select CPU thread
 All results/errors use `dtl_free`. No partial result is returned on failure.
 
 The existing single-model `decide()` methods retain `dtl_decide` semantics:
-primitive requests only, with unrelated top-level metadata ignored. Node's
-optional hooks and controls use `dtl_decide_with_options`, preserving that
-validation behavior. `dtl_decide_observed` remains available to C callers.
-Use `execute` for strict validation,
-structured decisions or batches. Router methods always use the new strict API.
+primitive requests only, with unrelated top-level metadata ignored. Bindings
+with hooks or controls use `dtl_decide_with_options`, preserving that validation
+behavior. `dtl_decide_observed` remains available to C callers. Use `execute` for
+strict validation, structured decisions or batches. Router methods, including
+`decide` on a router, always use the strict API: requests need `model` and
+unrelated metadata is rejected.
 
 | Interface | Single, structured or batch request | Registry |
 |---|---|---|
@@ -30,6 +31,25 @@ structured decisions or batches. Router methods always use the new strict API.
 | .NET | `engine.Execute(json)`; `Execute(json, options, token)`; `ExecuteAsync` | `LayaEngine.OpenRouter(configJson, threads)` |
 | Browser | Same execution methods as Node/TS | `Laya.openRouter(modelAssets, options)`; explicit URLs and browser asset limits |
 
+The bindings differ only where their language has a convention:
+
+| Binding | Engine type | Threads | Results | Deadline | Cancellation | Events run on | Async | Closed engine |
+|---|---|---|---|---|---|---|---|---|
+| C++ | `ducktape::laya`, `ducktape::router` | `dtl_options` | JSON string | `timeout_ms` | `should_cancel` callback | calling thread | — | destructor |
+| Rust | `Engine` | required (0 = auto) | JSON string | `timeout_ms` | `&AtomicBool` | calling thread | — | ownership |
+| Node/TS | `Laya` | default 0 | parsed | `timeoutMs` | `AbortSignal` | host thread | promises | `code: 'ERR_LAYA_CLOSED'` |
+| Python | `Engine` | default 0 | parsed | `timeout` (seconds) | `CancelToken` | thread running the call | `execute_async` | `EngineClosedError` |
+| Go | `*Engine` | required (0 = auto) | JSON string | context deadline | context | calling goroutine | — | `ErrClosed` |
+| Java | `Laya` | default 0 | JSON string | `Duration` | `CancellationToken` | calling thread | — | `LayaClosedException` |
+| .NET | `LayaEngine` | default 0 | JSON string | `TimeSpan` | `CancellationToken` | calling thread (pool thread for `*Async`) | `ExecuteAsync` | `ObjectDisposedException` |
+
+Every binding reports native failures with the C status (`status`, `Status`
+constants), maps cancellation to 5 and deadlines to 6 (.NET raises the standard
+`OperationCanceledException` when its token cancels), waits for running calls on
+close, and allows closing from inside an event callback (the handle is released
+when the running call finishes; Go uses `CloseDeferred()` there). Arguments a
+binding checks itself (thread counts, timeout ranges) use the language's standard
+argument errors.
 ## Primitive requests and results
 
 A primitive request contains non-null `state` and 1–32 named `questions`.
@@ -69,7 +89,8 @@ Neither API supports top-level media `images` or `files`.
 Pass a JSON array of 1–32 requests; results are an array in the same order.
 Primitive and structured requests can be mixed. Limits apply to the entire
 call: 1 MiB UTF-8, 128 questions total, 32 questions per request, 512 tokens per
-question, depth 64. Existing model instruction/option limits still apply.
+question, depth 64. Existing model instruction/option limits still apply. In
+Node, `decideBatch` checks for an array; every binding's `execute` accepts one:
 
 ```js
 const results = await engine.decideBatch([requestA, requestB]);
@@ -133,8 +154,9 @@ await engine.decideStructured(request, {
 Native callbacks run synchronously on the caller's thread, outside the engine
 and router locks. A `dtl_observer` and its user data are borrowed until the call
 returns; each event string is borrowed only during the callback. Reentrant calls
-are allowed, but callbacks must not destroy the active handle or create circular
-waits. Keep callbacks short. Observer errors cannot change decision results:
+are allowed, but C/C++ callbacks must not destroy the active handle, and no
+callback may create circular waits. The other bindings defer a close requested
+from inside a callback until the running call returns. Keep callbacks short. Observer errors cannot change decision results:
 C++ exceptions are contained; C callbacks must never unwind; Rust catches
 unwinding panics (not process-aborting panics).
 If a Rust panic payload itself panics during destruction, that secondary payload
@@ -183,8 +205,8 @@ capacity. This avoids temporarily holding one extra model. A failed load can
 therefore evict a previously cached model. Failed loads are not cached.
 This is a model-count bound, not a byte-accurate RAM quota; size and runtime
 buffers vary with the artifact. Closing releases every cached model/context.
-Native close must never race an active call; Rust ownership and Node draining
-handle their respective lifetimes.
+Native close must never race an active call; every binding's close waits for
+running calls (Rust through ownership, JS by draining its queue).
 
 ## Cancellation and deadlines
 
@@ -210,7 +232,11 @@ Router cache mutations are not rolled back by a cancelled request.
 
 C++ `execute` accepts an optional third `dtl_call_options*`; `decide` accepts an
 optional second one. Rust `execute_with_options`/`decide_with_options` accept
-`CallOptions`, including a borrowed `AtomicBool` flag and `timeout_ms`.
+`CallOptions`, including a borrowed `AtomicBool` flag and `timeout_ms`, and the
+`*_observed_with_options` variants combine them with an event callback. Hosts
+whose own callbacks are costly on backend threads (interpreter locks, VM thread
+attachment) pass `dtl_cancel_flag` as `should_cancel` with a pointer to an aligned
+`uint32_t` they set; the Python, Java, .NET and Go bindings do this.
 
 Node calls accept `{ signal, timeoutMs }`. Their deadline starts at enqueue and
 includes time waiting in the worker queue. Abort/deadline rejects the promise
@@ -262,10 +288,11 @@ ends only that worker's WebAssembly instance (see BROWSER.md). Applications that
 must survive allocation failure inside ggml should run the engine in a separate
 process.
 
-C++ and Rust expose native statuses through their error types; JS rejects with
-an Error carrying native `status` when available. Binding-level validation,
-queue, transport and worker errors may have no native status. Error message
-wording is diagnostic, not a stable machine-readable contract.
+Every binding exposes native statuses through its error type, with named
+constants. JS rejects with an Error carrying `status`; binding-level validation
+errors carry status 1, and JS queue, closed and worker failures carry `code`
+(`ERR_LAYA_QUEUE_FULL`, `ERR_LAYA_CLOSED`, `ERR_LAYA_WORKER_EXITED`). Error
+message wording is diagnostic, not a stable machine-readable contract.
 
 ## Runtime and model diagnostics
 
@@ -279,8 +306,10 @@ model's hash/provenance; use the immutable manifest for that.
 
 C++ exposes `ducktape::info()` and `engine.info()`. Rust exposes `runtime_info()`
 and `Engine::info()`. Node exposes `Laya.runtimeInfo()` and async `engine.info()`;
-browser engines expose async `info()`. Routers in Rust/JS report common runtime
-capabilities, since models are loaded lazily. Inference and model identities are
+browser engines expose async `info()`. Python, Go, Java and .NET expose
+`runtime_info()`/`RuntimeInfo()`/`Laya.runtimeInfo()`/`LayaEngine.RuntimeInfo()`
+and `info()` on an engine. Routers report common runtime capabilities in every
+binding, since models are loaded lazily. Inference and model identities are
 shared C ABI results, not independently maintained binding constants.
 
 `numerical_profile` contains an `id` derived from the backend and required CPU

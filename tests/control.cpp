@@ -13,9 +13,22 @@ int main(int argc, char **argv) {
     options.reserved = 1;
     CHECK(dtl_execute_with_options(nullptr, "{}", nullptr, &options, &result, &error) == DTL_INVALID_ARGUMENT);
     CHECK(!result); dtl_free(error);
+    uint32_t flag = 0;
+    CHECK(dtl_cancel_flag(nullptr) == 0 && dtl_cancel_flag(&flag) == 0);
+    flag = DTL_DEADLINE_EXCEEDED;
+    CHECK(dtl_cancel_flag(&flag) == DTL_DEADLINE_EXCEEDED);
     if (argc != 2) return 0;
     ducktape::laya engine(argv[1]);
     const auto baseline = engine.execute(request);
+    // The ready-made flag callback cancels like a host callback.
+    flag = DTL_CANCELLED;
+    options = dtl_default_call_options();
+    options.should_cancel = dtl_cancel_flag;
+    options.user_data = &flag;
+    try { engine.execute(request, nullptr, &options); CHECK(false); }
+    catch (const ducktape::error &e) { CHECK(e.status == DTL_CANCELLED); }
+    flag = 0;
+    CHECK(engine.execute(request, nullptr, &options) == baseline);
     std::atomic<bool> cancel{true};
     options = dtl_default_call_options();
     options.should_cancel = [](void *data) -> uint32_t { return static_cast<std::atomic<bool> *>(data)->load() ? 5 : 0; };

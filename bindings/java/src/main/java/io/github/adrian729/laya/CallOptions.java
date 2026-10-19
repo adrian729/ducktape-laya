@@ -4,8 +4,8 @@ import java.time.Duration;
 import java.util.function.Consumer;
 
 /**
- * Per-call controls. {@code timeout} is zero for none, otherwise up to 24 hours (sub-millisecond
- * values round up to 1 ms). {@code onEvent} runs synchronously on the calling thread; exceptions
+ * Per-call controls. {@code timeout} is zero for none, otherwise up to 24 hours (rounded up to whole
+ * milliseconds, 1 ms minimum); negative or longer values throw {@link IllegalArgumentException}. {@code onEvent} runs synchronously on the calling thread; exceptions
  * it throws are discarded. Keep the token alive for the call.
  */
 public record CallOptions(long requestId, Duration timeout, CancellationToken cancellation, Consumer<String> onEvent) {
@@ -15,7 +15,7 @@ public record CallOptions(long requestId, Duration timeout, CancellationToken ca
     public CallOptions {
         if (timeout == null) timeout = Duration.ZERO;
         if (timeout.isNegative() || timeout.compareTo(Duration.ofMillis(MAX_TIMEOUT_MS)) > 0)
-            throw new LayaException(LayaException.INVALID_ARGUMENT, "timeout must be between 0 and 24 hours");
+            throw new IllegalArgumentException("timeout must be between 0 and 24 hours");
     }
 
     public static CallOptions none() {
@@ -40,7 +40,6 @@ public record CallOptions(long requestId, Duration timeout, CancellationToken ca
 
     long timeoutMillis() {
         if (timeout.isZero()) return 0;
-        long ms = timeout.toMillis();
-        return ms == 0 ? 1 : ms;
+        return Math.max(1, (timeout.toNanos() + 999_999) / 1_000_000);
     }
 }

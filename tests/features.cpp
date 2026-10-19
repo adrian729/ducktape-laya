@@ -59,11 +59,21 @@ int main(int argc, char **argv) {
                 invalid([&] { validator.execute(bad.dump()); });
             }
         }
+        {
+            ducktape::router meta(json({{"models", {{"unused", std::filesystem::absolute(argv[0]).string()}}}}).dump());
+            expect(json::parse(meta.info()).at("abi_version") == 1, "router info");
+        }
         if (argc < 2) return 0;
         auto options = dtl_default_options(); options.threads = 2;
         ducktape::laya engine(argv[1], options);
         json requests = json::array({primitive("Please refund the duplicate payment."),
             primitive("Settings crashes immediately! Fix this now."), primitive("What does the enterprise plan cost?")});
+        {
+            int events = 0;
+            dtl_observer counter{0, [](const char *, void *user) { ++*static_cast<int *>(user); }, &events};
+            const auto observed = engine.decide(requests[0].dump(), &counter, nullptr);
+            expect(events == 2 && observed == engine.decide(requests[0].dump()), "decide observer overload");
+        }
         // Exercise all primitive types across the batch. Routing and observer
         // assertions need one question per request, not three repeated forward
         // passes; multi-question primitives have separate conformance fixtures.

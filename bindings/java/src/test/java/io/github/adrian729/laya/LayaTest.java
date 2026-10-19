@@ -29,6 +29,11 @@ public final class LayaTest {
         if (!expected.equals(actual)) throw new AssertionError(what + ": expected <" + expected + "> but was <" + actual + ">");
     }
 
+    static Throwable thrown(Case c) {
+        try { c.run(); } catch (Throwable t) { return t; }
+        return null;
+    }
+
     static int statusOf(Case c) throws Exception {
         try {
             c.run();
@@ -94,6 +99,7 @@ public final class LayaTest {
             router.close();
             router.close();
             eq(1, statusOf(() -> router.execute("{}")), "closed execute");
+            check(thrown(() -> router.execute("{}")) instanceof LayaClosedException, "closed exception type");
             eq(1, statusOf(router::info), "closed info");
         } finally {
             Files.deleteIfExists(file);
@@ -138,7 +144,74 @@ public final class LayaTest {
             eq(baseline, laya.execute(REQUEST), "unchanged after stop");
             token.reset();
             eq(baseline, laya.execute(REQUEST, cancelled), "uncancelled token");
-            eq(1, statusOf(() -> CallOptions.none().withTimeout(Duration.ofDays(2))), "timeout range");
+            check(thrown(() -> CallOptions.none().withTimeout(Duration.ofDays(2))) instanceof IllegalArgumentException, "timeout range");
+            // Cancelled from another thread while the call is running (the start event fires first).
+            CancellationToken live = new CancellationToken();
+            CallOptions viaThread = CallOptions.none().withCancellation(live).withOnEvent(e -> {
+                Thread t = new Thread(live::cancel);
+                t.start();
+                try { t.join(); } catch (InterruptedException x) { Thread.currentThread().interrupt(); }
+            });
+            eq(5, statusOf(() -> laya.execute(REQUEST, viaThread)), "cancel from another thread");
+            check(live.isCancelled(), "token stays cancelled");
+            live.reset();
+            eq(baseline, laya.execute(REQUEST, CallOptions.none().withCancellation(live)), "reset token runs");
+        }
+    }
+
+    static void nullOptions() throws Exception {
+        try (Laya laya = Laya.open(MODEL)) {
+            String baseline = laya.execute(PRIMITIVE);
+            eq(baseline, laya.execute(PRIMITIVE, null), "null options execute");
+            eq(laya.decide(PRIMITIVE), laya.decide(PRIMITIVE, null), "null options decide");
+        }
+    }
+
+    static void argumentValidation() throws Exception {
+        eq(0L, CallOptions.none().timeoutMillis(), "none");
+        eq(1L, CallOptions.none().withTimeout(Duration.ofNanos(1)).timeoutMillis(), "1ns");
+        eq(1L, CallOptions.none().withTimeout(Duration.ofMillis(1)).timeoutMillis(), "1ms");
+        eq(2L, CallOptions.none().withTimeout(Duration.ofNanos(1_000_001)).timeoutMillis(), "1.000001ms");
+        eq(86_400_000L, CallOptions.none().withTimeout(Duration.ofHours(24)).timeoutMillis(), "24h");
+        check(thrown(() -> CallOptions.none().withTimeout(Duration.ofHours(24).plusNanos(1))) instanceof IllegalArgumentException, ">24h");
+        check(thrown(() -> CallOptions.none().withTimeout(Duration.ofMillis(-1))) instanceof IllegalArgumentException, "negative");
+        check(thrown(() -> Laya.open("x", -1)) instanceof IllegalArgumentException, "threads -1");
+        check(thrown(() -> Laya.open("x", 257)) instanceof IllegalArgumentException, "threads 257");
+        check(thrown(() -> Laya.openRouter("{}", 257)) instanceof IllegalArgumentException, "router threads 257");
+        check(thrown(() -> Laya.open(null)) instanceof NullPointerException, "null path");
+        check(thrown(() -> Laya.openRouter(null)) instanceof NullPointerException, "null config");
+        Path file = Files.createTempFile("laya", ".gguf");
+        try (Laya router = Laya.openRouter("{\"models\":{\"x\":\"" + json(file.toString()) + "\"}}")) {
+            check(thrown(() -> router.execute(null)) instanceof NullPointerException, "null request");
+            check(thrown(() -> router.execute("{}", null)) instanceof LayaException e && e.status() == 1, "null options accepted");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    /** Runs this class in a fresh JVM with a broken library selection; the child verifies the errors. */
+    static void loadFailure() throws Exception {
+        String java = ProcessHandle.current().info().command().orElse("java");
+        String cp = System.getProperty("java.class.path");
+        for (boolean viaProperty : new boolean[] {true, false}) {
+            List<String> cmd = new ArrayList<>(List.of(java, "--enable-native-access=ALL-UNNAMED"));
+            if (viaProperty) cmd.add("-Dducktape.laya.library=/nonexistent/libducktape_laya.so");
+            cmd.addAll(List.of("-cp", cp, "io.github.adrian729.laya.LayaTest", "--load-failure"));
+            ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+            pb.environment().put("DUCKTAPE_LAYA_LIB_DIR", viaProperty ? System.getenv().getOrDefault("DUCKTAPE_LAYA_LIB_DIR", "/x") : "/nonexistent");
+            Process p = pb.start();
+            String out = new String(p.getInputStream().readAllBytes());
+            eq(0, p.waitFor(), "child exit (viaProperty=" + viaProperty + "): " + out);
+        }
+    }
+
+    private static void loadFailureChild() {
+        for (int i = 0; i < 2; i++) {
+            LayaException e = null;
+            try { Laya.runtimeInfo(); } catch (LayaException x) { e = x; }
+            check(e != null && e.status() == LayaException.UNSUPPORTED_PLATFORM && e.getMessage().contains("nonexistent"), "runtimeInfo error " + e);
+            try { Laya.open("m.gguf", 1); e = null; } catch (LayaException x) { e = x; }
+            check(e != null && e.status() == LayaException.UNSUPPORTED_PLATFORM, "open error " + e);
         }
     }
 
@@ -184,9 +257,13 @@ public final class LayaTest {
     }
 
     public static void main(String[] args) {
-        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "containsObserverFailures", "closeIsIdempotent"};
+        if (args.length > 0 && args[0].equals("--load-failure")) {
+            loadFailureChild();
+            System.exit(0);
+        }
+        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "loadFailure"};
         Case[] cases = {LayaTest::diagnostics, LayaTest::rejectsBadPath, LayaTest::rejectsNul,
-            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent};
+            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::loadFailure};
         List<String> failed = new ArrayList<>();
         int ran = 0;
         for (int i = 0; i < cases.length; i++) ran += run(names[i], cases[i], failed);
@@ -195,6 +272,7 @@ public final class LayaTest {
             ran += run("realFeatures", LayaTest::realFeatures, failed);
             ran += run("cancellationAndDeadline", LayaTest::cancellationAndDeadline, failed);
             ran += run("sharedAcrossThreads", LayaTest::sharedAcrossThreads, failed);
+            ran += run("nullOptions", LayaTest::nullOptions, failed);
             ran += run("closeInsideCallback", LayaTest::closeInsideCallback, failed);
         }
         System.out.println(ran + " run, " + failed.size() + " failed");

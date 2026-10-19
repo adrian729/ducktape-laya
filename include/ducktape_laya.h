@@ -97,6 +97,12 @@ typedef struct dtl_call_options {
     void *user_data;
 } dtl_call_options;
 DTL_API dtl_call_options dtl_default_call_options(void);
+/* Ready-made should_cancel for hosts where running their own callback on
+ * backend threads is costly (interpreter locks, VM thread attachment).
+ * user_data points to an aligned uint32_t the host sets from any thread with an
+ * atomic or naturally aligned 32-bit store: 0 continues, DTL_DEADLINE_EXCEEDED
+ * reports a host deadline, any other value cancels. NULL reads as 0. */
+DTL_API uint32_t dtl_cancel_flag(void *user_data);
 DTL_API dtl_status dtl_execute_with_options(dtl_engine *engine, const char *request_json,
     const dtl_observer *observer, const dtl_call_options *options, char **result_json, char **error);
 DTL_API dtl_status dtl_decide_with_options(dtl_engine *engine, const char *request_json,

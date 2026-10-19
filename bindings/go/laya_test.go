@@ -96,8 +96,8 @@ func TestCloseIdempotent(t *testing.T) {
 		t.Fatal("close failed")
 	}
 	_, err = router.Execute("{}")
-	if status(t, err) != StatusInvalidArgument {
-		t.Fatal("want status 1 after close")
+	if status(t, err) != StatusInvalidArgument || !errors.Is(err, ErrClosed) {
+		t.Fatal("want ErrClosed (status 1) after close")
 	}
 	_, err = router.Info()
 	if status(t, err) != StatusInvalidArgument {
@@ -289,8 +289,8 @@ func TestCloseWaitsForActiveCalls(t *testing.T) {
 	default:
 		t.Fatal("Close returned before the running call finished")
 	}
-	if _, err := e.Execute(request); status(t, err) != StatusInvalidArgument {
-		t.Fatal("want closed error")
+	if _, err := e.Execute(request); !errors.Is(err, ErrClosed) {
+		t.Fatal("want ErrClosed")
 	}
 }
 
@@ -300,19 +300,87 @@ func TestCloseInsideCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var closeErr error
 	result, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(s string) {
 		if strings.Contains(s, `"event":"start"`) {
-			closeErr = e.Close()
+			e.CloseDeferred()
 		}
 	}})
-	if err != nil || closeErr != nil || result != baseline {
-		t.Fatalf("call %v, close %v, result changed %v", err, closeErr, result != baseline)
+	if err != nil || result != baseline {
+		t.Fatalf("call %v, result changed %v", err, result != baseline)
 	}
-	if _, err := e.Execute(request); status(t, err) != StatusInvalidArgument {
-		t.Fatal("want closed error")
+	if _, err := e.Execute(request); !errors.Is(err, ErrClosed) {
+		t.Fatal("want ErrClosed")
 	}
 	if err := e.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCloseFromOtherGoroutineWaitsDuringCallback(t *testing.T) {
+	e := open(t)
+	inCallback := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(string) {
+			once.Do(func() {
+				close(inCallback)
+				<-release
+			})
+		}})
+		callDone <- err
+	}()
+	<-inCallback
+	closed := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		go func() { e.Close(); closed <- struct{}{} }()
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a call was inside its callback")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := e.Execute(request); !errors.Is(err, ErrClosed) {
+		t.Fatal("want ErrClosed while closing")
+	}
+	close(release)
+	if err := <-callDone; err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-closed:
+		case <-time.After(30 * time.Second):
+			t.Fatal("Close did not return after the call finished")
+		}
+	}
+	select {
+	case <-e.done:
+	default:
+		t.Fatal("Close returned before release")
+	}
+}
+
+func TestContextErrorsMatch(t *testing.T) {
+	if !errors.Is(&Error{Status: StatusCancelled}, context.Canceled) ||
+		!errors.Is(&Error{Status: StatusDeadlineExceeded}, context.DeadlineExceeded) ||
+		errors.Is(&Error{Status: StatusCancelled}, context.DeadlineExceeded) {
+		t.Fatal("Is mapping wrong")
+	}
+	router, err := OpenRouter(`{"models":{"unused":"go.mod"}}`, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Close()
+	c, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := router.ExecuteContext(c, legacyReq, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want Canceled, got %v", err)
+	}
+	d, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
+	if _, err := router.ExecuteContext(d, legacyReq, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want DeadlineExceeded, got %v", err)
 	}
 }

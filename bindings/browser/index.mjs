@@ -1,14 +1,19 @@
 const internal = Symbol('Laya');
 const bytes = text => new TextEncoder().encode(text).byteLength;
 const absolute = url => new URL(url, globalThis.location?.href).href;
+const queueFullError = () => Object.assign(queueFullError(), { code: 'ERR_LAYA_QUEUE_FULL' });
+const exitedError = (message, status) => Object.assign(new Error(message), { code: 'ERR_LAYA_WORKER_EXITED', ...(status === undefined ? {} : { status }) });
+const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
+export const Status = Object.freeze({ OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
+const closedError = () => Object.assign(new Error('Laya is closing or closed'), { code: 'ERR_LAYA_CLOSED' });
 export class Laya {
-  #worker; #pending = new Map(); #next = 0; #closing = false; #dead = false; #limit; #close; #diagnostic;
+  #worker; #pending = new Map(); #next = 0; #closing = false; #dead = false; #failed = false; #limit; #close; #diagnostic;
   capabilities;
   constructor(token, worker, limit, diagnostic) {
     if (token !== internal) throw new TypeError('Use Laya.open() or Laya.openRouter()');
     this.#worker = worker; this.#limit = limit; this.#diagnostic = diagnostic;
     worker.onmessage = ({ data }) => {
-      if (data.fatal) { this.#fail(Object.assign(new Error(data.fatal), { status: 3 })); return; }
+      if (data.fatal) { this.#fail(exitedError(data.fatal, 3)); return; }
       if (data.diagnostic) { try { Promise.resolve(this.#diagnostic?.(data.diagnostic)).catch(() => {}); } catch {} return; }
       const pending = this.#pending.get(data.id);
       if (!pending) return;
@@ -18,11 +23,11 @@ export class Laya {
       if (data.error) pending.reject(Object.assign(new Error(data.error), { status: data.status }));
       else pending.resolve(data.result);
     };
-    worker.onerror = event => this.#fail(new Error(event.message || 'Laya worker failed'));
-    worker.onmessageerror = () => this.#fail(new Error('Laya worker message could not be decoded'));
+    worker.onerror = event => this.#fail(exitedError(event.message || 'Laya worker failed'));
+    worker.onmessageerror = () => this.#fail(exitedError('Laya worker message could not be decoded'));
   }
   #fail(error) {
-    this.#dead = true;
+    this.#dead = this.#failed = true;
     for (const entry of this.#pending.values()) { entry.cleanup?.(); entry.reject(error); }
     this.#pending.clear(); this.#worker.terminate();
   }
@@ -30,27 +35,27 @@ export class Laya {
   static openRouter(models, options) { return Laya.#open({ ...options, models }); }
   static async #open(options = {}) {
     const { maxPending = 16, maxModelBytes = 1073741824, initializationTimeoutMs = 120000, signal, backend = 'wasm', onDiagnostic } = options;
-    if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw new RangeError('maxPending must be 1..1024');
-    if (!Number.isSafeInteger(maxModelBytes) || maxModelBytes < 1) throw new RangeError('maxModelBytes must be positive');
-    if (!Number.isInteger(initializationTimeoutMs) || initializationTimeoutMs < 1 || initializationTimeoutMs > 86400000) throw new RangeError('initializationTimeoutMs must be 1..86400000');
-    if (!['wasm','webgpu','auto'].includes(backend)) throw new TypeError('Invalid backend');
-    if (onDiagnostic !== undefined && typeof onDiagnostic !== 'function') throw new TypeError('onDiagnostic must be a function');
-    if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw new TypeError('signal must be an AbortSignal');
+    if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw invalid(RangeError, 'maxPending must be 1..1024');
+    if (!Number.isSafeInteger(maxModelBytes) || maxModelBytes < 1) throw invalid(RangeError, 'maxModelBytes must be positive');
+    if (!Number.isInteger(initializationTimeoutMs) || initializationTimeoutMs < 1 || initializationTimeoutMs > 86400000) throw invalid(RangeError, 'initializationTimeoutMs must be 1..86400000');
+    if (!['wasm','webgpu','auto'].includes(backend)) throw invalid(TypeError, 'Invalid backend');
+    if (onDiagnostic !== undefined && typeof onDiagnostic !== 'function') throw invalid(TypeError, 'onDiagnostic must be a function');
+    if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
     if (signal?.aborted) throw new DOMException('Initialization aborted', 'AbortError');
     const models = options.models && Object.fromEntries(Object.entries(options.models).map(([id, model]) => {
-      if (!model || typeof model.url !== 'string' || !model.url) throw new TypeError('Each model requires a URL');
+      if (!model || typeof model.url !== 'string' || !model.url) throw invalid(TypeError, 'Each model requires a URL');
       return [id, { ...model, url: absolute(model.url) }];
     }));
-    if (models && (Object.keys(models).length < 1 || Object.keys(models).length > 16)) throw new RangeError('models must contain 1..16 entries');
+    if (models && (Object.keys(models).length < 1 || Object.keys(models).length > 16)) throw invalid(RangeError, 'models must contain 1..16 entries');
     for (const asset of models ? Object.values(models) : [{ url: options.modelUrl, sha256: options.sha256 }]) {
-      if (typeof asset.url !== 'string' || !asset.url) throw new TypeError('Model URL is required');
-      if (asset.sha256 !== undefined && !/^[a-fA-F0-9]{64}$/.test(asset.sha256)) throw new TypeError('sha256 must be 64 hexadecimal characters');
+      if (typeof asset.url !== 'string' || !asset.url) throw invalid(TypeError, 'Model URL is required');
+      if (asset.sha256 !== undefined && !/^[a-fA-F0-9]{64}$/.test(asset.sha256)) throw invalid(TypeError, 'sha256 must be 64 hexadecimal characters');
     }
     const attempts = backend === 'auto' ? ['webgpu','wasm'] : [backend];
     let last;
     for (const selected of attempts) {
       const moduleUrl = selected === 'webgpu' ? (options.webgpuModuleUrl || new URL('./webgpu/laya.mjs', import.meta.url).href) : (options.moduleUrl || new URL('./wasm/laya.mjs', import.meta.url).href);
-      if (!moduleUrl) throw new TypeError(`Missing ${selected} module URL`);
+      if (!moduleUrl) throw invalid(TypeError, `Missing ${selected} module URL`);
       const worker = new Worker(options.workerUrl || new URL('./worker.mjs', import.meta.url), { type: 'module' });
       const engine = new Laya(internal, worker, maxPending, onDiagnostic);
       const abort = () => engine.#fail(new DOMException('Initialization aborted', 'AbortError'));
@@ -73,8 +78,9 @@ export class Laya {
     throw last;
   }
   #send(kind, request, onEvent, options, { signal, timeoutMs = 0 } = {}) {
-    if (this.#dead || (this.#closing && kind !== 'close')) return Promise.reject(new Error('Laya is closing or closed'));
-    if (kind !== 'close' && this.#pending.size >= this.#limit) return Promise.reject(new Error('Laya queue is full'));
+    if (this.#closing && kind !== 'close') return Promise.reject(closedError());
+    if (this.#dead) return Promise.reject(exitedError('Laya is closing or closed'));
+    if (kind !== 'close' && this.#pending.size >= this.#limit) return Promise.reject(queueFullError());
     if (signal?.aborted) return Promise.reject(Object.assign(new Error('Request cancelled'), { status: 5 }));
     const id = ++this.#next;
     // Shared cancellation is optional: ordinary pages still run without isolation.
@@ -98,13 +104,14 @@ export class Laya {
     });
   }
   async #execute(kind, request, { onEvent, signal, timeoutMs = 0 } = {}) {
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw new RangeError('timeoutMs must be 0..86400000');
-    if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw new TypeError('signal must be an AbortSignal');
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw invalid(RangeError, 'timeoutMs must be 0..86400000');
+    if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
     if (signal?.aborted) throw Object.assign(new Error('Request cancelled'), { status: 5 });
-    if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('onEvent must be a function');
-    if (this.#closing || this.#dead) throw new Error('Laya is closing or closed');
+    if (onEvent !== undefined && typeof onEvent !== 'function') throw invalid(TypeError, 'onEvent must be a function');
+    if (this.#closing) throw closedError();
+    if (this.#dead) throw exitedError('Laya is closing or closed');
     const text = typeof request === 'string' ? request : JSON.stringify(request);
-    if (typeof text !== 'string' || bytes(text) > 1048576 || text.includes('\0')) throw new TypeError('Invalid or oversized request');
+    if (typeof text !== 'string' || bytes(text) > 1048576 || text.includes('\0')) throw invalid(TypeError, 'Invalid or oversized request');
     return JSON.parse(await this.#send(kind, text, onEvent, undefined, { signal, timeoutMs }));
   }
   info() { return this.#send('info').then(JSON.parse); }
@@ -112,12 +119,17 @@ export class Laya {
   decide(request, options) { return this.#execute('decide', request, options); }
   decideStructured(request, options) { return this.execute(request, options); }
   decideBatch(requests, options) {
-    if (!Array.isArray(requests)) return Promise.reject(new TypeError('Batch must be an array'));
+    if (!Array.isArray(requests)) return Promise.reject(invalid(TypeError, 'Batch must be an array'));
     return this.execute(requests, options);
   }
+  /**
+   * Terminates the worker and releases the model. Call it when done: the
+   * worker holds the model memory until close() runs. Idempotent, and resolves
+   * even if the worker has already failed (crash, WebGPU device loss, abort).
+   */
   close({ cancelPending = false } = {}) {
     if (cancelPending) for (const entry of this.#pending.values()) if (entry.kind !== 'close') entry.stop(5);
-    if (!this.#close) { this.#closing = true; this.#close = this.#send('close').finally(() => { this.#dead = true; this.#worker.terminate(); }); }
+    if (!this.#close) { this.#closing = true; this.#close = (this.#failed ? Promise.resolve() : this.#send('close')).catch(error => { if (!this.#failed) throw error; }).finally(() => { this.#dead = true; this.#worker.terminate(); }); }
     return this.#close;
   }
 }

@@ -24,7 +24,7 @@ async function harness(afterReady = () => {}) {
     initializeImportMeta(meta) { meta.url = 'https://example.test/index.mjs'; },
   });
   await module.link(() => {}); await module.evaluate();
-  return { Laya: module.namespace.Laya, workers };
+  return { Laya: module.namespace.Laya, Status: module.namespace.Status, workers };
 }
 
 test('abort during option normalization rejects and terminates the worker', async () => {
@@ -64,7 +64,7 @@ test('successful open stays usable and close terminates its worker', async () =>
   assert.equal(engine.close(), close);
   await close;
   assert.ok(workers[0].terminated);
-  await assert.rejects(engine.info(), /closed/);
+  await assert.rejects(engine.info(), error => error.code === 'ERR_LAYA_CLOSED');
 });
 
 test('throwing diagnostic option getters cannot leak a created worker', async () => {
@@ -81,4 +81,26 @@ test('throwing diagnostic option getters cannot leak a created worker', async ()
     if (engine) await engine.close();
     assert.ok(workers.every(worker => worker.terminated));
   }
+});
+
+test('close after worker failure resolves, is idempotent and terminates; errors are typed', async () => {
+  const { Laya, Status, workers } = await harness();
+  assert.equal(Status.INVALID_ARGUMENT, 1); assert.ok(Object.isFrozen(Status));
+  const engine = await Laya.open({ modelUrl: 'model.gguf' });
+  workers[0].onerror({ message: 'boom' });
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_WORKER_EXITED' });
+  const close = engine.close();
+  assert.equal(engine.close(), close);
+  await close;
+  assert.ok(workers[0].terminated);
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED' });
+});
+
+test('validation errors carry status 1 and queue-full carries a code', async () => {
+  const { Laya } = await harness();
+  await assert.rejects(Laya.open({ modelUrl: 'model.gguf', maxPending: 0 }), { name: 'RangeError', status: 1 });
+  const engine = await Laya.open({ modelUrl: 'model.gguf', maxPending: 1 });
+  await assert.rejects(engine.execute('\0'), { name: 'TypeError', status: 1 });
+  await assert.rejects(engine.execute('{}', { timeoutMs: -1 }), { name: 'RangeError', status: 1 });
+  await engine.close();
 });

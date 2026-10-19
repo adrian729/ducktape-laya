@@ -2,19 +2,26 @@
 
 Calls block while the model runs and release the GIL, so threads and
 ``asyncio.to_thread`` run other Python code meanwhile. Requests and results are
-JSON: pass a ``str`` to keep literal key order, or any JSON-serializable value.
+JSON: a ``str`` is sent as is, any other value is serialized with ``json.dumps``
+(dict insertion order is kept).
+
+Errors: native failures and invalid request text raise ``LayaError`` (with a C ABI
+``status``); calls after ``close()`` raise ``EngineClosedError``; arguments the
+binding checks itself (``threads``, ``timeout``, ``request_id``) raise
+``ValueError``/``TypeError``; a missing or incompatible library raises ``OSError``.
 """
 import asyncio
 import ctypes
 import enum
 import json
 import math
+import os
 import threading
 from typing import Any, Callable
 
 from . import _native
 
-__all__ = ['Engine', 'LayaError', 'Status', 'runtime_info']
+__all__ = ['CancelToken', 'Engine', 'EngineClosedError', 'LayaError', 'Status', 'runtime_info']
 __version__ = '0.1.0'
 
 
@@ -34,6 +41,45 @@ class LayaError(Exception):
     def __init__(self, status, message):
         super().__init__(message)
         self.status = status
+
+
+class EngineClosedError(LayaError):
+    """A call was made after ``close()``. Its ``status`` is ``INVALID_ARGUMENT``."""
+    def __init__(self):
+        super().__init__(Status.INVALID_ARGUMENT, 'Engine is closed')
+
+
+class CancelToken:
+    """Cancels the calls it is passed to (``cancel=``) from any thread.
+
+    Cancellation is cooperative: a running call stops at the next safe point and
+    raises ``LayaError`` with status ``CANCELLED``. A token stays cancelled; use a
+    new one for later calls.
+    """
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._flags = {}
+        self._cancelled = False
+
+    def cancel(self):
+        with self._lock:
+            self._cancelled = True
+            for flag in self._flags.values():
+                flag.value = Status.CANCELLED
+
+    @property
+    def cancelled(self):
+        return self._cancelled
+
+    def _attach(self, flag):
+        with self._lock:
+            self._flags[id(flag)] = flag
+            if self._cancelled:
+                flag.value = Status.CANCELLED
+
+    def _detach(self, flag):
+        with self._lock:
+            self._flags.pop(id(flag), None)
 
 
 _lib = None
@@ -135,7 +181,7 @@ class Engine:
     def open(cls, model_path, threads=0):
         """Load a local GGUF. ``threads`` 0 selects automatically (at most 4)."""
         lib = _library()
-        path = _encode(str(model_path), 'model path')
+        path = _encode(os.fspath(model_path), 'model path')
         return cls._create(lib, False, path, threads)
 
     @classmethod
@@ -148,21 +194,19 @@ class Engine:
     def _enter(self):
         with self._state:
             if self._closing:
-                raise LayaError(Status.INVALID_ARGUMENT, 'Engine is closing or closed')
+                raise EngineClosedError()
             self._active += 1
         self._local.depth = getattr(self._local, 'depth', 0) + 1
 
     def _leave(self):
         self._local.depth -= 1
-        handle = None
         with self._state:
             self._active -= 1
             if not self._active:
-                self._state.notify_all()
-                if self._deferred:
+                if self._deferred and self._handle is not None:
                     handle, self._handle = self._handle, None
-        if handle is not None:
-            self._closer(handle)
+                    self._closer(handle)
+                self._state.notify_all()
 
     def info(self):
         """Model metadata; routers report the common runtime capabilities."""
@@ -173,20 +217,28 @@ class Engine:
             self._leave()
 
     def decide(self, request, *, on_event=None, request_id=0, timeout=None, cancel=None):
-        """Primitive request with legacy semantics: unrelated top-level fields are ignored."""
+        """Primitive request with legacy semantics: unrelated top-level fields are ignored.
+
+        On a router, ``decide`` uses the strict ``execute`` semantics: requests need
+        ``model`` and unrelated fields are rejected.
+        """
         return self._call(True, request, on_event, request_id, timeout, cancel)
 
     def execute(self, request, *, on_event=None, request_id=0, timeout=None, cancel=None):
         """One primitive or structured request, or a list of up to 32 requests.
 
-        ``on_event(event)`` receives start/end/error events on the calling thread.
-        ``timeout`` is in seconds. ``cancel`` is a ``threading.Event``; setting it
-        stops the call at the next safe point with status 5.
+        ``on_event(event)`` receives start/end/error events on the thread running
+        the call. ``timeout`` is in seconds (``None`` for no deadline; status 6 when
+        it expires). ``cancel`` is a ``CancelToken``; cancelling it stops the call
+        at the next safe point with status 5.
         """
         return self._call(False, request, on_event, request_id, timeout, cancel)
 
     async def execute_async(self, request, **options):
-        """``execute`` on a worker thread; cancelling the task cancels the native call."""
+        """``execute`` on a worker thread; cancelling the task cancels the native call.
+
+        ``on_event`` then runs on that worker thread, not the event loop's.
+        """
         return await self._run_async(self.execute, request, options)
 
     async def decide_async(self, request, **options):
@@ -194,11 +246,12 @@ class Engine:
 
     @staticmethod
     async def _run_async(method, request, options):
-        cancel = options.pop('cancel', None) or threading.Event()
+        task = CancelToken()  # cancelling the task must not cancel a shared token
+        options['cancel'] = (options.get('cancel'), task)
         try:
-            return await asyncio.to_thread(method, request, cancel=cancel, **options)
+            return await asyncio.to_thread(method, request, **options)
         except asyncio.CancelledError:
-            cancel.set()
+            task.cancel()
             raise
 
     def _call(self, legacy, request, on_event, request_id, timeout, cancel):
@@ -215,20 +268,21 @@ class Engine:
             if not 1 <= milliseconds <= 86400000:
                 raise ValueError('timeout must be positive and at most 86400 seconds')
             options.timeout_ms = milliseconds
-        if cancel is not None:
-            def should_cancel(_):
-                try:
-                    return Status.CANCELLED if cancel.is_set() else 0
-                except BaseException:
-                    return Status.CANCELLED
-            # May run on native worker threads; ctypes takes the GIL for it.
-            options.should_cancel = _native.CANCEL_CALLBACK(should_cancel)
+        tokens = [token for token in (cancel if isinstance(cancel, tuple) else (cancel,)) if token is not None]
+        if not all(isinstance(token, CancelToken) for token in tokens):
+            raise TypeError('cancel must be a CancelToken')
+        flag = ctypes.c_uint32(0)
+        if tokens:
+            # A native flag read by the library itself: backend worker threads
+            # poll it without taking the GIL.
+            options.should_cancel = ctypes.cast(lib.dtl_cancel_flag, _native.CANCEL_CALLBACK)
+            options.user_data = ctypes.addressof(flag)
         observer = _native.Observer(request_id=request_id)
         if on_event is not None:
             def notify(event, _):
                 try:
                     on_event(json.loads(event.decode('utf-8', 'replace')))
-                except BaseException:
+                except Exception:
                     pass  # Observer failures never change inference results.
             observer.callback = _native.EVENT_CALLBACK(notify)
         if self._router:
@@ -237,10 +291,14 @@ class Engine:
             function = lib.dtl_decide_with_options if legacy else lib.dtl_execute_with_options
         result, error = ctypes.c_void_p(), ctypes.c_void_p()
         self._enter()
+        for token in tokens:
+            token._attach(flag)
         try:
             status = function(self._handle, payload, ctypes.byref(observer), ctypes.byref(options),
                               ctypes.byref(result), ctypes.byref(error))
         finally:
+            for token in tokens:
+                token._detach(flag)
             self._leave()
         text = _take(lib, result)
         _check(lib, status, error)
@@ -262,9 +320,10 @@ class Engine:
                 return
             while self._active:
                 self._state.wait()
+            # Released under the lock, so a concurrent close() also returns only after it.
             handle, self._handle = self._handle, None
-        if handle is not None:
-            self._closer(handle)
+            if handle is not None:
+                self._closer(handle)
 
     def __enter__(self):
         return self

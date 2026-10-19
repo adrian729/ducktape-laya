@@ -16,18 +16,21 @@ public sealed unsafe class LayaEngine : IDisposable
     // Recursion is supported so observers may reenter.
     readonly ReaderWriterLockSlim _lock = new(LockRecursionPolicy.SupportsRecursion);
     volatile bool _closing;
-    bool _released;
-
-    static LayaEngine() => Native.Init();
+    int _released;
 
     LayaEngine(void* handle, bool router) { _handle = handle; _router = router; }
 
     /// <summary>Runtime identity and CPU capabilities without loading a model.</summary>
-    public static string RuntimeInfo() => ReadInfo(null);
+    public static string RuntimeInfo() { Native.Ensure(); return ReadInfo(null); }
 
     /// <param name="threads">0 selects automatically; otherwise 1..256.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="modelPath"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="threads"/> is outside 0..256.</exception>
+    /// <exception cref="LayaException">Native failure, or the path contains a NUL character (status 1).</exception>
+    /// <exception cref="DllNotFoundException">The native library cannot be loaded.</exception>
     public static LayaEngine Open(string modelPath, int threads = 0)
     {
+        Native.Ensure();
         var path = Encode(modelPath);
         var options = Options(threads);
         void* raw = null; byte* error = null;
@@ -40,6 +43,7 @@ public sealed unsafe class LayaEngine : IDisposable
     /// <summary>Opens a bounded, lazy local model registry. See docs/API.md for the config.</summary>
     public static LayaEngine OpenRouter(string configJson, int threads = 0)
     {
+        Native.Ensure();
         var config = Encode(configJson);
         var options = Options(threads);
         void* raw = null; byte* error = null;
@@ -57,20 +61,42 @@ public sealed unsafe class LayaEngine : IDisposable
         finally { ExitRead(); }
     }
 
-    /// <summary>Legacy primitive request semantics (unrelated top-level metadata is ignored).</summary>
-    public string Decide(string request) => Run(request, null, default, true);
-    public string Decide(string request, LayaCallOptions? options, CancellationToken cancellationToken = default) => Run(request, options, cancellationToken, true);
+    /// <summary>Legacy primitive request semantics (unrelated top-level metadata is ignored).
+    /// On a router, <c>Decide</c> uses strict <see cref="Execute(string)"/> semantics: the request must name a <c>model</c> and unrelated metadata is rejected.</summary>
+    public string Decide(string request) => Run(request, 0, null, null, default, true);
+    /// <inheritdoc cref="Decide(string)"/>
+    /// <exception cref="OperationCanceledException">The token was cancelled and ended the call (native status 5); the inner exception is a <see cref="LayaException"/>.</exception>
+    public string Decide(string request, LayaCallOptions? options, CancellationToken cancellationToken = default) =>
+        options is null ? Run(request, 0, null, null, cancellationToken, true) : Run(request, options.RequestId, options.Timeout, options.OnEvent, cancellationToken, true);
 
     /// <summary>Executes one request or a bounded JSON array of requests.</summary>
-    public string Execute(string request) => Run(request, null, default, false);
-    public string Execute(string request, LayaCallOptions? options, CancellationToken cancellationToken = default) => Run(request, options, cancellationToken, false);
+    public string Execute(string request) => Run(request, 0, null, null, default, false);
+    /// <inheritdoc cref="Execute(string)"/>
+    /// <exception cref="OperationCanceledException">The token was cancelled and ended the call (native status 5); the inner exception is a <see cref="LayaException"/>. An exceeded <c>Timeout</c> is a <see cref="LayaException"/> with status 6.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><c>Timeout</c> is negative or over 24 hours.</exception>
+    public string Execute(string request, LayaCallOptions? options, CancellationToken cancellationToken = default) =>
+        options is null ? Run(request, 0, null, null, cancellationToken, false) : Run(request, options.RequestId, options.Timeout, options.OnEvent, cancellationToken, false);
 
-    /// <summary>Runs <see cref="Execute(string, LayaCallOptions?, CancellationToken)"/> on the thread pool. Cancellation surfaces as a LayaException with status 5.</summary>
-    public Task<string> ExecuteAsync(string request, LayaCallOptions? options = null, CancellationToken cancellationToken = default) =>
-        Task.Run(() => Run(request, options, cancellationToken, false), CancellationToken.None);
+    /// <summary>Runs <see cref="Execute(string, LayaCallOptions?, CancellationToken)"/> on a thread-pool thread, which the call occupies for the whole inference;
+    /// <c>OnEvent</c> runs on that thread. The options are snapshotted when called, so the object may be reused or changed afterwards.
+    /// Cancellation through the token yields a canceled task (<see cref="OperationCanceledException"/> wrapping the status-5 <see cref="LayaException"/>).</summary>
+    public Task<string> ExecuteAsync(string request, LayaCallOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var (id, timeout, onEvent) = Snapshot(options);
+        return Task.Run(() => Run(request, id, timeout, onEvent, cancellationToken, false), cancellationToken);
+    }
 
-    public Task<string> DecideAsync(string request, LayaCallOptions? options = null, CancellationToken cancellationToken = default) =>
-        Task.Run(() => Run(request, options, cancellationToken, true), CancellationToken.None);
+    /// <summary>Asynchronous <see cref="Decide(string, LayaCallOptions?, CancellationToken)"/>; same threading, snapshot and cancellation behavior as <see cref="ExecuteAsync"/>.</summary>
+    public Task<string> DecideAsync(string request, LayaCallOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var (id, timeout, onEvent) = Snapshot(options);
+        return Task.Run(() => Run(request, id, timeout, onEvent, cancellationToken, true), cancellationToken);
+    }
+
+    static (ulong, TimeSpan?, Action<string>?) Snapshot(LayaCallOptions? o) => o is null ? (0, null, null) : (o.RequestId, o.Timeout, o.OnEvent);
+
+    /// <summary>Releases the native handle if <see cref="Dispose"/> was never called. Dispose is still required for prompt release.</summary>
+    ~LayaEngine() => CloseNative();
 
     /// <summary>Idempotent; waits for in-flight calls. Later calls throw <see cref="ObjectDisposedException"/>.
     /// Called from inside one of this engine's own event callbacks, it cannot wait for that call: it
@@ -78,6 +104,7 @@ public sealed unsafe class LayaEngine : IDisposable
     public void Dispose()
     {
         _closing = true;
+        GC.SuppressFinalize(this);
         if (_lock.IsReadLockHeld) return;
         _lock.EnterWriteLock();
         Release();
@@ -88,11 +115,16 @@ public sealed unsafe class LayaEngine : IDisposable
     {
         try
         {
-            if (_released) return;
-            _released = true;
-            if (_router) Native.dtl_router_close(_handle); else Native.dtl_close(_handle);
+            CloseNative();
         }
         finally { _lock.ExitWriteLock(); }
+    }
+
+    // Exactly once, from Dispose or the finalizer.
+    void CloseNative()
+    {
+        if (Interlocked.Exchange(ref _released, 1) != 0) return;
+        if (_router) Native.dtl_router_close(_handle); else Native.dtl_close(_handle);
     }
 
     void EnterRead()
@@ -125,30 +157,19 @@ public sealed unsafe class LayaEngine : IDisposable
         catch { }
     }
 
-    [UnmanagedCallersOnly]
-    static uint ShouldCancel(void* flag)
-    {
-        try { return Volatile.Read(ref *(int*)flag) != 0 ? 5u : 0u; }
-        catch { return 5; }
-    }
-
-    string Run(string request, LayaCallOptions? options, CancellationToken token, bool legacy)
+    string Run(string request, ulong requestId, TimeSpan? timeout, Action<string>? onEvent, CancellationToken token, bool legacy)
     {
         var bytes = Encode(request);
         var native = Native.dtl_default_call_options();
-        var observer = new DtlObserver();
-        if (options is not null)
-        {
-            observer.RequestId = options.RequestId;
-            native.TimeoutMs = TimeoutMs(options.Timeout);
-        }
+        var observer = new DtlObserver { RequestId = requestId };
+        native.TimeoutMs = TimeoutMs(timeout);
         int* flag = null;
         CancellationTokenRegistration registration = default;
         GCHandle hook = default;
         EnterRead();
         try
         {
-            if (options?.OnEvent is { } onEvent)
+            if (onEvent is not null)
             {
                 hook = GCHandle.Alloc(new Hook { Callback = onEvent });
                 observer.Callback = &Notify;
@@ -156,9 +177,9 @@ public sealed unsafe class LayaEngine : IDisposable
             }
             if (token.CanBeCanceled)
             {
-                // Native memory: the callback may run on backend worker threads and must stay cheap and nonblocking.
+                // Native memory read by dtl_cancel_flag on backend worker threads, which never enter managed code.
                 flag = (int*)NativeMemory.AllocZeroed((nuint)sizeof(int));
-                native.ShouldCancel = &ShouldCancel;
+                native.ShouldCancel = Native.CancelFlag;
                 native.UserData = flag;
                 registration = token.UnsafeRegister(static state => ((FlagBox)state!).Set(), new FlagBox(flag));
             }
@@ -174,7 +195,11 @@ public sealed unsafe class LayaEngine : IDisposable
             }
             try
             {
-                Check(status, error);
+                try { Check(status, error); }
+                catch (LayaException ex) when (ex.Status == (int)LayaStatus.Cancelled && token.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException(ex.Message, ex, token);
+                }
                 if (result == null) throw new LayaException(3, "Native result was null");
                 return Marshal.PtrToStringUTF8((IntPtr)result) ?? "";
             }
@@ -182,6 +207,7 @@ public sealed unsafe class LayaEngine : IDisposable
         }
         finally
         {
+            GC.KeepAlive(this);
             ExitRead();
             registration.Dispose();
             if (flag != null) NativeMemory.Free(flag);
@@ -193,13 +219,14 @@ public sealed unsafe class LayaEngine : IDisposable
     {
         if (timeout is not { } t || t == TimeSpan.Zero) return 0;
         var ms = Math.Ceiling(t.TotalMilliseconds);
-        if (ms < 1 || ms > 86_400_000) throw new LayaException(1, "Timeout must be between 1 ms and 24 hours");
+        if (ms < 1 || ms > 86_400_000) throw new ArgumentOutOfRangeException(nameof(LayaCallOptions.Timeout), t, "Timeout must be between 1 ms and 24 hours");
         return (ulong)ms;
     }
 
     static DtlOptions Options(int threads)
     {
-        if (threads < 0) throw new LayaException(1, "Thread count must not be negative");
+        ArgumentOutOfRangeException.ThrowIfNegative(threads);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(threads, 256);
         var options = Native.dtl_default_options();
         options.Threads = (uint)threads;
         return options;

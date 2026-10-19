@@ -1,7 +1,7 @@
 package io.github.adrian729.laya;
 
 /** Failure reported by the native library (or rejected before reaching it). */
-public final class LayaException extends RuntimeException {
+public class LayaException extends RuntimeException {
     public static final int INVALID_ARGUMENT = 1;
     public static final int MODEL_ERROR = 2;
     public static final int INFERENCE_ERROR = 3;

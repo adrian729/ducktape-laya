@@ -26,7 +26,9 @@ out, err := engine.Execute(`{"state":"Please refund me.","schema":{"type":"objec
 ```
 
 Inference is blocking, so call it from goroutines. An `*Engine` is safe for concurrent use; native calls on one handle serialize.
-`Close` waits for in-flight calls and is idempotent; later calls fail with status 1. Called from an `OnEvent` callback (or while one is running), `Close` returns at once and the engine is released when the running calls finish.
-`ExecuteContext` and `DecideContext` map context cancellation to status 5 and a deadline to the native timeout (status 6, at most 24 hours).
+`Close` rejects new calls with `laya.ErrClosed` (status 1), waits for all in-flight calls, releases the handle, and is idempotent; concurrent `Close` calls all return after release. Never call `Close` from inside an `OnEvent` callback of the same engine, because it would wait for its own call and deadlock. Use the non-blocking `CloseDeferred()` there: it marks the engine closed and the last running call releases the handle.
+A finalizer releases the native handle if an `Engine` is dropped without `Close`; it is only a safety net, so still call `Close` for prompt release.
+`threads` is 0 for automatic (capped at 4) or 1..256. On a router, `Decide`/`DecideContext` use strict `Execute` semantics (`model` required, unrelated metadata rejected).
+`ExecuteContext` and `DecideContext` return an `*laya.Error` that matches `context.Canceled` (status 5) or `context.DeadlineExceeded` (status 6) with `errors.Is`; an already-done context returns at once with no native call. Deadlines beyond the native 24 hour maximum are enforced by the context watcher instead of being clamped.
 Cancellation is cooperative and returns no partial result. `CallOptions.OnEvent` receives observer events synchronously on the calling thread; panics in it are contained.
 `OpenRouter` opens a bounded lazy model registry (see `docs/API.md`). Errors are `*laya.Error` with a `Status` matching `ducktape_laya.h`.

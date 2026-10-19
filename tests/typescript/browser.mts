@@ -1,4 +1,4 @@
-import { Laya, Request, StructuredRequest } from 'ducktape-laya-browser';
+import { Laya, Status, Request, StructuredRequest, LayaError } from 'ducktape-laya-browser';
 
 const request: Request = { state: 'Refund please', questions: {
   refund: { type: 'noul', instructions: 'Is a refund requested?' },
@@ -26,3 +26,6 @@ async function consumer() {
   void backend;
 }
 void consumer;
+const cancelled: 5 = Status.CANCELLED;
+const typed = (e: LayaError) => e.code === 'ERR_LAYA_WORKER_EXITED' || e.status === Status.INVALID_ARGUMENT;
+void cancelled; void typed;

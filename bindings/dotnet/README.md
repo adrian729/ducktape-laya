@@ -6,9 +6,11 @@ No model or runtime download occurs. Model files are application-owned resources
 
 ## Library resolution
 
-1. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`
+1. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`. When this variable is set it is authoritative: if that file cannot be loaded, a `DllNotFoundException` naming the path is thrown and nothing else is tried.
 2. `runtimes/linux-x64/native/libducktape_laya.so` next to the application (the NuGet layout)
 3. The system loader: `libducktape_laya.so`, then `libducktape_laya.so.0`
+
+After loading, the binding requires `dtl_abi_version() == 1` and the `dtl_cancel_flag` export; an incompatible or too old library fails with `LayaException` (`UnsupportedPlatform`). Load failures are reported on every call, not just the first.
 
 To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project.
 
@@ -26,8 +28,12 @@ string result = engine.Execute(requestJson, options, cancellationToken);
 
 ## Threading and cancellation
 
-A `LayaEngine` may be shared across threads; native calls on one handle serialize. `Dispose` is idempotent, waits for in-flight calls, and later calls throw `ObjectDisposedException`. Disposed from inside its own event callback, the engine returns at once and is released when the running call finishes.
+A `LayaEngine` may be shared across threads; native calls on one handle serialize. `Dispose` is idempotent, waits for in-flight calls, and later calls throw `ObjectDisposedException`. Disposed from inside its own event callback, the engine returns at once and is released when the running call finishes. A finalizer releases the native handle if an engine is never disposed, but it is only a safety net: always dispose (`using`) so memory is freed promptly.
 
-Inference blocks. `ExecuteAsync` and `DecideAsync` run the call on the thread pool. A cancelled token or an exceeded `Timeout` ends the call cooperatively with a `LayaException` whose `Status` is 5 (`LayaStatus.Cancelled`) or 6 (`LayaStatus.DeadlineExceeded`); no partial result is returned.
+Inference blocks. `ExecuteAsync` and `DecideAsync` run the call on a thread-pool thread, which stays occupied for the whole inference; the options (`RequestId`, `Timeout`, `OnEvent`) are snapshotted when the method is called. `OnEvent` runs on the calling thread for sync calls and on that pool thread for the Async variants; exceptions it throws are swallowed and never change results.
 
-`OnEvent` runs synchronously on the calling thread; exceptions it throws are swallowed and never change results. Native errors surface as `LayaException` with the native `Status`; inputs containing NUL characters fail with status 1.
+Cancellation is cooperative and no partial result is returned. The native cancel check is `dtl_cancel_flag` reading a per-call flag, so backend worker threads never call into managed code. A cancelled `CancellationToken` throws `OperationCanceledException` (inner `LayaException` with status 5; async calls return a canceled task). An exceeded `Timeout` throws `LayaException` with status 6 (`LayaStatus.DeadlineExceeded`).
+
+## Errors
+
+Argument mistakes the binding validates itself use standard .NET exceptions: `ArgumentNullException` for null strings, `ArgumentOutOfRangeException` for `threads` outside 0..256 and for a `Timeout` that is negative or over 24 hours (sub-millisecond values round up to 1 ms). Everything else is a `LayaException` carrying the native `Status`, including inputs containing NUL characters (status 1). `Decide` on a router uses strict `Execute` semantics (a `model` is required and unrelated metadata is rejected).
