@@ -133,7 +133,7 @@ type CallOptions struct {
 	RequestID uint64
 	// OnEvent receives passive observer events synchronously on the calling
 	// goroutine's thread, outside native locks. Panics are contained. It may
-	// reenter the engine, but must not Close it or wait for a call that waits
+	// reenter the engine or Close it, but must not wait for a call that waits
 	// on this one.
 	OnEvent func(eventJSON string)
 }
@@ -141,12 +141,14 @@ type CallOptions struct {
 // Engine owns a native model engine or router. It is safe for concurrent use;
 // native calls on one handle are serialized.
 type Engine struct {
-	mu     sync.Mutex
-	idle   *sync.Cond
-	active int
-	closed bool
-	router bool
-	handle unsafe.Pointer
+	mu          sync.Mutex
+	idle        *sync.Cond
+	active      int
+	dispatching int // OnEvent callbacks currently running
+	closed      bool
+	deferred    bool // Close ran during a callback; the last call releases
+	router      bool
+	handle      unsafe.Pointer
 }
 
 func newEngine(handle unsafe.Pointer, router bool) *Engine {
@@ -202,17 +204,28 @@ func (e *Engine) begin() error {
 }
 
 func (e *Engine) end() {
+	var handle unsafe.Pointer
 	e.mu.Lock()
 	e.active--
 	if e.active == 0 {
 		e.idle.Broadcast()
+		if e.deferred {
+			handle, e.handle = e.handle, nil
+		}
 	}
 	e.mu.Unlock()
+	if handle != nil {
+		C.close_handle(boolInt(e.router), handle)
+	}
 }
 
 // Close waits for in-flight calls, then releases the native handle. It is
 // idempotent; later calls on the engine fail with StatusInvalidArgument.
-// Calling Close from an OnEvent callback of the same engine deadlocks.
+//
+// Go cannot tell which goroutine calls Close, so while any OnEvent callback of
+// this engine is running (for example, Close called from inside one), Close
+// does not wait: it rejects new calls and returns, and the last running call
+// releases the handle when it finishes.
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {
@@ -220,6 +233,11 @@ func (e *Engine) Close() error {
 		return nil
 	}
 	e.closed = true
+	if e.dispatching > 0 {
+		e.deferred = true
+		e.mu.Unlock()
+		return nil
+	}
 	for e.active > 0 {
 		e.idle.Wait()
 	}
@@ -299,8 +317,18 @@ func (e *Engine) call(ctx context.Context, request string, opts *CallOptions, ki
 	var observer unsafe.Pointer
 	if opts != nil {
 		requestID = opts.RequestID
-		if opts.OnEvent != nil {
-			handle := cgo.NewHandle(opts.OnEvent)
+		if onEvent := opts.OnEvent; onEvent != nil {
+			handle := cgo.NewHandle(func(event string) {
+				e.mu.Lock()
+				e.dispatching++
+				e.mu.Unlock()
+				defer func() {
+					e.mu.Lock()
+					e.dispatching--
+					e.mu.Unlock()
+				}()
+				onEvent(event)
+			})
 			defer handle.Delete()
 			slot := (*C.uintptr_t)(C.malloc(C.size_t(unsafe.Sizeof(C.uintptr_t(0)))))
 			*slot = C.uintptr_t(handle)

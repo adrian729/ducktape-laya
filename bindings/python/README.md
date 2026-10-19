@@ -34,5 +34,6 @@ inference. `execute_async` and `decide_async` run the call on a worker thread,
 and cancelling the task cancels the native call. Per call, `timeout` (seconds)
 sets a deadline (status 6), `cancel` takes a `threading.Event` (status 5), and
 `on_event` receives start/end/error events on the calling thread. `close()`
-waits for running calls. `Engine.open_router` opens a lazy registry of several
-local models; see [the API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).
+waits for running calls; called from an `on_event` callback, it returns at once
+and the model is released when the running call finishes. `Engine.open_router`
+opens a lazy registry of several local models; see [the API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).

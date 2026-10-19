@@ -13,9 +13,10 @@ public sealed unsafe class LayaEngine : IDisposable
     readonly void* _handle;
     readonly bool _router;
     // Calls hold the read lock; Dispose takes the write lock and so waits for in-flight calls.
-    // Recursion is supported so observers may reenter. Do not dispose from inside a callback.
+    // Recursion is supported so observers may reenter.
     readonly ReaderWriterLockSlim _lock = new(LockRecursionPolicy.SupportsRecursion);
-    bool _disposed;
+    volatile bool _closing;
+    bool _released;
 
     static LayaEngine() => Native.Init();
 
@@ -53,7 +54,7 @@ public sealed unsafe class LayaEngine : IDisposable
     {
         EnterRead();
         try { return ReadInfo(_router ? null : _handle); }
-        finally { _lock.ExitReadLock(); }
+        finally { ExitRead(); }
     }
 
     /// <summary>Legacy primitive request semantics (unrelated top-level metadata is ignored).</summary>
@@ -72,16 +73,23 @@ public sealed unsafe class LayaEngine : IDisposable
         Task.Run(() => Run(request, options, cancellationToken, true), CancellationToken.None);
 
     /// <summary>Idempotent; waits for in-flight calls. Later calls throw <see cref="ObjectDisposedException"/>.
-    /// Disposing from inside one of this engine's own event callbacks throws <see cref="InvalidOperationException"/>.</summary>
+    /// Called from inside one of this engine's own event callbacks, it cannot wait for that call: it
+    /// rejects new calls and returns, and the last running call releases the engine when it finishes.</summary>
     public void Dispose()
     {
-        if (_lock.IsReadLockHeld)
-            throw new InvalidOperationException("Dispose() called from inside an active call on this engine");
+        _closing = true;
+        if (_lock.IsReadLockHeld) return;
         _lock.EnterWriteLock();
+        Release();
+    }
+
+    // Called with the write lock held; exits it.
+    void Release()
+    {
         try
         {
-            if (_disposed) return;
-            _disposed = true;
+            if (_released) return;
+            _released = true;
             if (_router) Native.dtl_router_close(_handle); else Native.dtl_close(_handle);
         }
         finally { _lock.ExitWriteLock(); }
@@ -90,9 +98,16 @@ public sealed unsafe class LayaEngine : IDisposable
     void EnterRead()
     {
         _lock.EnterReadLock();
-        if (!_disposed) return;
-        _lock.ExitReadLock();
+        if (!_closing) return;
+        ExitRead();
         throw new ObjectDisposedException(nameof(LayaEngine));
+    }
+
+    void ExitRead()
+    {
+        _lock.ExitReadLock();
+        // A Dispose deferred from inside a callback is completed by whichever call exits last.
+        if (_closing && !_lock.IsReadLockHeld && _lock.TryEnterWriteLock(0)) Release();
     }
 
     sealed class FlagBox(int* flag) { public void Set() => Volatile.Write(ref *flag, 1); }
@@ -167,7 +182,7 @@ public sealed unsafe class LayaEngine : IDisposable
         }
         finally
         {
-            _lock.ExitReadLock();
+            ExitRead();
             registration.Dispose();
             if (flag != null) NativeMemory.Free(flag);
             if (hook.IsAllocated) hook.Free();

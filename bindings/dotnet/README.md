@@ -26,7 +26,7 @@ string result = engine.Execute(requestJson, options, cancellationToken);
 
 ## Threading and cancellation
 
-A `LayaEngine` may be shared across threads; native calls on one handle serialize. `Dispose` is idempotent, waits for in-flight calls, and later calls throw `ObjectDisposedException`. Disposing from inside the engine's own event callback throws `InvalidOperationException`.
+A `LayaEngine` may be shared across threads; native calls on one handle serialize. `Dispose` is idempotent, waits for in-flight calls, and later calls throw `ObjectDisposedException`. Disposed from inside its own event callback, the engine returns at once and is released when the running call finishes.
 
 Inference blocks. `ExecuteAsync` and `DecideAsync` run the call on the thread pool. A cancelled token or an exceeded `Timeout` ends the call cooperatively with a `LayaException` whose `Status` is 5 (`LayaStatus.Cancelled`) or 6 (`LayaStatus.DeadlineExceeded`); no partial result is returned.
 

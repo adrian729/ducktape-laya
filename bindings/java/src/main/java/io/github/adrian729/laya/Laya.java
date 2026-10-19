@@ -12,7 +12,7 @@ import java.util.function.Consumer;
 /**
  * A loaded Laya model or a bounded local model router. Thread-safe: native calls on one handle
  * serialize, and {@link #close()} waits for in-flight calls. Inference blocks the calling thread.
- * Closing a handle from inside its own event callback throws {@link IllegalStateException}.
+ * Closing a handle from inside its own event callback releases it once the running call finishes.
  */
 public final class Laya implements AutoCloseable {
     private static final MethodHandle EVENT_TARGET;
@@ -33,6 +33,7 @@ public final class Laya implements AutoCloseable {
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private final boolean router;
     private MemorySegment handle;
+    private volatile boolean closing;
 
     private Laya(MemorySegment handle, boolean router) {
         this.handle = handle;
@@ -76,12 +77,22 @@ public final class Laya implements AutoCloseable {
         return run(request, options, false);
     }
 
+    /**
+     * Waits for in-flight calls, then releases the native handle. Idempotent. Called from inside one
+     * of this handle's own calls (an event callback), it cannot wait for that call: it rejects new
+     * calls and returns, and the last running call releases the handle when it finishes.
+     */
     @Override
     public void close() {
+        closing = true;
         // The write lock waits for every read hold, including this thread's own.
-        if (lock.getReadHoldCount() > 0)
-            throw new IllegalStateException("close() called from inside an active call on this handle");
+        if (lock.getReadHoldCount() > 0) return;
         lock.writeLock().lock();
+        release();
+    }
+
+    /** Called with the write lock held; unlocks it. */
+    private void release() {
         try {
             if (handle == null) return;
             try {
@@ -126,12 +137,14 @@ public final class Laya implements AutoCloseable {
     private <T> T withHandle(Body<T> body) {
         lock.readLock().lock();
         try {
-            if (handle == null) throw new LayaException(LayaException.INVALID_ARGUMENT, "Laya handle is closed");
+            if (closing || handle == null) throw new LayaException(LayaException.INVALID_ARGUMENT, "Laya handle is closed");
             return body.apply(handle);
         } catch (Throwable t) {
             throw sneaky(t);
         } finally {
             lock.readLock().unlock();
+            // A close() deferred from inside a callback is completed by whichever call exits last.
+            if (closing && lock.getReadHoldCount() == 0 && lock.writeLock().tryLock()) release();
         }
     }
 

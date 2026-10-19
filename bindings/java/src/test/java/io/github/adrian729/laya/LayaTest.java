@@ -73,13 +73,15 @@ public final class LayaTest {
             });
             eq(1, statusOf(() -> router.execute("{}", options)), "invalid request status");
             eq(2, calls[0], "observer calls");
-            int[] refused = {0};
+            int[] nested = {-1};
             CallOptions closing = CallOptions.none().withOnEvent(e -> {
-                try { router.close(); } catch (IllegalStateException expected) { refused[0]++; }
+                router.close();
+                try { router.info(); } catch (LayaException x) { nested[0] = x.status(); }
             });
             eq(1, statusOf(() -> router.execute("{}", closing)), "close-in-callback request status");
-            eq(2, refused[0], "close refused inside callbacks");
-            eq(1, statusOf(() -> router.execute("{}")), "handle still open");
+            eq(1, nested[0], "calls rejected after close inside callback");
+            eq(1, statusOf(() -> router.execute("{}")), "closed after the call returned");
+            router.close();
         } finally {
             Files.deleteIfExists(file);
         }
@@ -171,6 +173,16 @@ public final class LayaTest {
         }
     }
 
+    @SuppressWarnings("try") // closes the resource inside its own callback on purpose
+    static void closeInsideCallback() throws Exception {
+        try (Laya laya = Laya.open(MODEL, 2)) {
+            String baseline = laya.execute(PRIMITIVE);
+            // The running call finishes; the handle is released when it returns.
+            eq(baseline, laya.execute(PRIMITIVE, CallOptions.none().withOnEvent(e -> laya.close())), "call completes");
+            eq(1, statusOf(() -> laya.execute(PRIMITIVE)), "closed after the call returned");
+        }
+    }
+
     public static void main(String[] args) {
         String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "containsObserverFailures", "closeIsIdempotent"};
         Case[] cases = {LayaTest::diagnostics, LayaTest::rejectsBadPath, LayaTest::rejectsNul,
@@ -183,6 +195,7 @@ public final class LayaTest {
             ran += run("realFeatures", LayaTest::realFeatures, failed);
             ran += run("cancellationAndDeadline", LayaTest::cancellationAndDeadline, failed);
             ran += run("sharedAcrossThreads", LayaTest::sharedAcrossThreads, failed);
+            ran += run("closeInsideCallback", LayaTest::closeInsideCallback, failed);
         }
         System.out.println(ran + " run, " + failed.size() + " failed");
         System.exit(failed.isEmpty() ? 0 : 1);

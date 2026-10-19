@@ -46,14 +46,14 @@ public class EngineTests
             var options = new LayaCallOptions { RequestId = 1, OnEvent = _ => { calls++; throw new InvalidOperationException("boom"); } };
             Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute("{}", options)).Status);
             Assert.Equal(2, calls);
-            var refused = 0;
+            var nested = false;
             var closing = new LayaCallOptions
             {
-                OnEvent = _ => { try { engine.Dispose(); } catch (InvalidOperationException) { refused++; } }
+                OnEvent = _ => { engine.Dispose(); nested = Assert.Throws<ObjectDisposedException>(() => engine.Info()) != null; }
             };
             Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute("{}", closing)).Status);
-            Assert.Equal(2, refused);
-            Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute("{}")).Status);
+            Assert.True(nested);
+            Assert.Throws<ObjectDisposedException>(() => engine.Execute("{}"));
         }
         finally { File.Delete(file); }
     }
@@ -84,6 +84,18 @@ public class EngineTests
             Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute("{}", options)).Status);
         }
         finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public void DisposeInsideCallback()
+    {
+        if (Model is not { } path) return;
+        var engine = LayaEngine.Open(path, 2);
+        var baseline = engine.Execute(Primitive);
+        // The running call finishes; the engine is released when it returns.
+        Assert.Equal(baseline, engine.Execute(Primitive, new LayaCallOptions { OnEvent = _ => engine.Dispose() }));
+        Assert.Throws<ObjectDisposedException>(() => engine.Execute(Primitive));
+        engine.Dispose();
     }
 
     [Fact]

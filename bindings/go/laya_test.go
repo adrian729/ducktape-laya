@@ -274,17 +274,45 @@ func TestCloseWaitsForActiveCalls(t *testing.T) {
 		_, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(s string) {
 			if strings.Contains(s, `"event":"start"`) {
 				close(entered)
-				time.Sleep(50 * time.Millisecond)
 			}
 		}})
 		done <- err
 	}()
 	<-entered
+	time.Sleep(10 * time.Millisecond) // let the callback return; inference is still running
 	e.Close()
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("Close returned before the running call finished")
 	}
 	if _, err := e.Execute(request); status(t, err) != StatusInvalidArgument {
 		t.Fatal("want closed error")
+	}
+}
+
+func TestCloseInsideCallback(t *testing.T) {
+	e := open(t)
+	baseline, err := e.Execute(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var closeErr error
+	result, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(s string) {
+		if strings.Contains(s, `"event":"start"`) {
+			closeErr = e.Close()
+		}
+	}})
+	if err != nil || closeErr != nil || result != baseline {
+		t.Fatalf("call %v, close %v, result changed %v", err, closeErr, result != baseline)
+	}
+	if _, err := e.Execute(request); status(t, err) != StatusInvalidArgument {
+		t.Fatal("want closed error")
+	}
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

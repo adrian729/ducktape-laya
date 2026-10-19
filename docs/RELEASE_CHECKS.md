@@ -153,9 +153,11 @@ retain the prior artifacts for rollback. Publication is an explicit maintainer
 action. After the GitHub release exists, run the `attest-release` workflow with its
 tag: it checks the assets against `SHA256SUMS` and a `release_ready` `gates.json`,
 then signs a release-qualification attestation for each asset. It is not build
-provenance; the assets are built and qualified locally. Each numerical profile must pass strict same-backend upstream
-checks. Cross-profile comparisons report probability and decision drift and must
-not be described as probability equivalence.
+provenance; the assets are built and qualified locally. Registry status, missing
+publishing work and the release-day order are in [PUBLISHING.md](PUBLISHING.md).
+Each numerical profile must pass strict same-backend upstream checks.
+Cross-profile comparisons report probability and decision drift and must not be
+described as probability equivalence.
 
 Exact native results on a second physical CPU are checked with one unchanged
 binary. A manually dispatched real-model CI run bundles its built library and C

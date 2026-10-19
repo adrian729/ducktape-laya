@@ -109,6 +109,7 @@ class Engine:
     _state: threading.Condition
     _active: int
     _closing: bool
+    _deferred: bool
     _local: threading.local
 
     def __init__(self, *_, **__):
@@ -126,7 +127,7 @@ class Engine:
         engine._lib, engine._handle, engine._closer = lib, handle, closer
         engine._router = router
         engine._state = threading.Condition()
-        engine._active, engine._closing = 0, False
+        engine._active, engine._closing, engine._deferred = 0, False, False
         engine._local = threading.local()
         return engine
 
@@ -153,10 +154,15 @@ class Engine:
 
     def _leave(self):
         self._local.depth -= 1
+        handle = None
         with self._state:
             self._active -= 1
             if not self._active:
                 self._state.notify_all()
+                if self._deferred:
+                    handle, self._handle = self._handle, None
+        if handle is not None:
+            self._closer(handle)
 
     def info(self):
         """Model metadata; routers report the common runtime capabilities."""
@@ -243,11 +249,17 @@ class Engine:
         return json.loads(text)
 
     def close(self):
-        """Wait for running calls, then release the model. Idempotent."""
-        if getattr(self._local, 'depth', 0):
-            raise RuntimeError('close() called from inside an active call on this engine')
+        """Wait for running calls, then release the model. Idempotent.
+
+        Called from inside one of this engine's own calls (an ``on_event``
+        callback), it cannot wait for that call: it rejects new calls and
+        returns, and the model is released when the running calls finish.
+        """
         with self._state:
             self._closing = True
+            if getattr(self._local, 'depth', 0):
+                self._deferred = True
+                return
             while self._active:
                 self._state.wait()
             handle, self._handle = self._handle, None

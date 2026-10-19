@@ -29,7 +29,7 @@ Laya.open("Laya-Q8_0.gguf", 4).use { laya ->
 
 `Laya.openRouter(configJson, threads)` opens a bounded local model registry; requests then carry `"model": "id"`. `decide` keeps the legacy primitive semantics where unrelated top-level metadata is ignored.
 
-A `Laya` is thread-safe. Native calls on one handle serialize, inference blocks the calling thread, and `close()` waits for in-flight calls and is idempotent; later calls throw `LayaException` with status 1. Closing a handle from inside its own event callback throws `IllegalStateException`.
+A `Laya` is thread-safe. Native calls on one handle serialize, inference blocks the calling thread, and `close()` waits for in-flight calls and is idempotent; later calls throw `LayaException` with status 1. Closed from inside its own event callback, `close()` returns at once and the handle is released when the running call finishes.
 
 `CallOptions` carries a `requestId`, a `timeout` (zero for none, at most 24 hours), a `CancellationToken` and an `onEvent` consumer. Cancellation is cooperative and checked by native worker threads; a cancelled call throws status 5 and an expired one status 6, with no partial result. Event callbacks run on the calling thread, and exceptions they throw are discarded.
 

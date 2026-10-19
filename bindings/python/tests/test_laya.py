@@ -82,15 +82,16 @@ class RealModel(unittest.TestCase):
         engine.execute(STRUCTURED, request_id=23, on_event=lambda _: nested.append(engine.execute(STRUCTURED)))
         self.assertEqual(nested, [single, single])
         self.assertEqual(engine.info()['model']['decision_type'], 'laya')
-        refused = []
-        def close_inside(_):
-            try:
-                engine.close()
-            except RuntimeError as error:
-                refused.append(error)
-        engine.execute(REQUEST, on_event=close_inside)
-        self.assertEqual(len(refused), 2)
         self.assertEqual(engine.execute(REQUEST), self.baseline)
+
+    def test_close_inside_callback(self):
+        engine = laya.Engine.open(MODEL, 2)
+        # The running call finishes; the model is released when it returns.
+        self.assertEqual(engine.execute(REQUEST, on_event=lambda _: engine.close()), self.baseline)
+        self.assertIsNone(engine._handle)
+        with self.assertRaises(laya.LayaError):
+            engine.execute(REQUEST)
+        engine.close()
 
     def test_router(self):
         with laya.Engine.open_router({'models': {'english': MODEL}, 'max_loaded': 1}, 2) as router:
