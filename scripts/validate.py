@@ -114,6 +114,9 @@ try:
     if model:
         run('bindings', [sys.executable, ROOT / 'tests/parity.py', model, '--build-dir', build,
                          '--report', out / 'outputs.json'], 'binding_conformance')
+    if model:
+        run('original-reference', [sys.executable, ROOT / 'tests/original-reference.py', model, '--build-dir', build,
+                                   '--report', out / 'original-reference.json'], 'original_reference')
     if a.upstream_reference:
         run('upstream-reference', [sys.executable, ROOT / 'tests/compare-native-reference.py', model,
             '--build', build, '--report', out / 'upstream-reference.json'], 'upstream_reference')

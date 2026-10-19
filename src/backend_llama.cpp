@@ -1,6 +1,7 @@
 // Laya prompt layout and result formulas adapted from llama.cpp b11540
 // tools/server/server-decision.cpp (MIT). See THIRD_PARTY_NOTICES.md.
 #include "backend.hpp"
+#include "python_json.hpp"
 #include "decision.hpp"
 #include "errors.hpp"
 #include "execution.hpp"
@@ -128,6 +129,12 @@ struct backend::impl {
         prepared.column = q.type == "score" ? 1 : q.type == "noul" ? 2 : 0;
         json input = {{"id",q.id}, {"type",q.type}, {"instructions",q.instructions},
                       {"state",state}, {"options",q.options}, {"images",json::array()}};
+        // Structured values are serialized here, as the original Laya does, so the
+        // template takes its string path; null descriptions stay null (no description).
+        auto as_text = [](json &value) { if (!value.is_string() && !value.is_null()) value = python_json(value); };
+        as_text(input["state"]);
+        as_text(input["instructions"]);
+        for (auto &option : input["options"]) as_text(option["description"]);
         sanitize(input, marker_text);
         jinja::context jc(source);
         jinja::global_from_json(jc, common_json::parse(input.dump()), false);

@@ -41,8 +41,17 @@ processing and compares every fixture request, including batch members, without 
 HTTP server. It never links that processor into the product library. Structured
 requests are compared through their schema-derived primitive questions
 (`tests/reference_requests.py`); value projection remains covered by the
-shared-core contracts. Without this option,
-the upstream-reference gate stays not run.
+shared-core contracts. Both sides receive structured values already serialized the
+way the original Laya writes them, so they render identical prompts. Without this
+option, the upstream-reference gate stays not run.
+
+With a model, `tests/original-reference.py` also runs the original Laya
+implementation's recorded cases (`tests/original-reference/`, Apache-2.0, with
+provenance) through the C consumer: the `original_reference` gate. Input token
+counts must match exactly, probabilities must stay within 0.05, and a decision may
+differ only on a near tie (the original's top two within 0.05). Cases for
+features the core does not support yet must still be refused; when one starts
+passing, it moves into the supported set.
 Sanitizer, stress, browser and platform evidence remain separate;
 the runner does not silently transplant historical results to a different binary.
 `--require-release` exits unsuccessfully if any required gate is failed or unrun.

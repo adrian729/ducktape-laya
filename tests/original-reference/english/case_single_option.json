@@ -1,0 +1,38 @@
+{
+ "name": "single_option",
+ "state": "Anything at all.",
+ "questions": {
+  "only": {
+   "type": "choice",
+   "instructions": "There is exactly one option.",
+   "criteria": {
+    "solo": "the only choice"
+   }
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "only": {
+    "type": "choice",
+    "choice": "solo",
+    "probabilities": {
+     "solo": 1.0
+    },
+    "confidence": 1.0,
+    "answer_confidence": 1.0,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 23,
+   "output_tokens": 0,
+   "state_tokens": 4,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

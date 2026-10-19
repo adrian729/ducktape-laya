@@ -44,6 +44,7 @@
     "native_contracts",
     "binding_conformance",
     "upstream_reference",
+    "original_reference",
     "abi",
     "installed_packages",
     "sanitizers",

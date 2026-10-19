@@ -1,0 +1,61 @@
+{
+ "name": "nonstring_instructions",
+ "state": "Le client demande un remboursement immédiat.",
+ "questions": {
+  "structured_ins": {
+   "type": "choice",
+   "instructions": {
+    "task": "route",
+    "hint": "Müller & co <urgent>",
+    "n": 2.0
+   },
+   "criteria": {
+    "a": "first",
+    "b": "second"
+   }
+  },
+  "list_ins": {
+   "type": "noul",
+   "instructions": [
+    "step one",
+    "step two",
+    3
+   ]
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "structured_ins": {
+    "type": "choice",
+    "choice": "a",
+    "probabilities": {
+     "a": 0.5638,
+     "b": 0.4362
+    },
+    "confidence": 0.0118,
+    "answer_confidence": 0.5638,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "list_ins": {
+    "type": "noul",
+    "noul": 0.126,
+    "confidence": 0.874,
+    "answer_confidence": 0.874,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 104,
+   "output_tokens": 0,
+   "state_tokens": 14,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

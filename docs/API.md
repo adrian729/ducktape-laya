@@ -55,6 +55,11 @@ argument errors.
 A primitive request contains non-null `state` and 1–32 named `questions`.
 Each question requires a supported `type` and non-null `instructions`; state,
 instructions and criterion descriptions may be text or structured JSON.
+Structured values enter the prompt as the original Laya writes them, the format
+the model was trained on: one-line JSON with `", "` and `": "` separators,
+non-ASCII text kept, and numbers at full precision (`149.0` stays `149.0`).
+A criterion description that is `null` or `""` means no description; `0` and
+`false` are descriptions.
 
 | Type | Criteria | Answer |
 | --- | --- | --- |

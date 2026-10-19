@@ -66,9 +66,11 @@ binding, for Rails and Laravel backends. Add one when a user asks.
 ## Research questions
 
 - **The original Laya's `act_probability`:** a second "act" output alongside
-  the decisions. The GGUF and llama.cpp path don't carry it; supporting it would
-  need converter and llama.cpp changes. First find out what it means and
-  whether the authors treat it as public.
+  the decisions. The original's config prices an `escalate` action (`act_costs`),
+  so it appears to be the probability that the answer should be acted on rather
+  than escalated. The GGUF and llama.cpp path don't carry it; supporting it would
+  need converter and llama.cpp changes. First confirm its meaning and whether the
+  authors treat it as public.
 - **Loading a model from memory:** llama.cpp has no public load-from-buffer API.
   Workarounds (memfd, temporary files) add little real protection for encrypted
   assets. Revisit with mobile.

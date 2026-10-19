@@ -110,6 +110,18 @@
       ],
       "acceptance": "Same-model/backend upstream agreement within declared tolerance; prompt and calibration semantics preserved."
     },
+    "original_reference": {
+      "implementation": [
+        "src/backend_llama.cpp",
+        "src/python_json.hpp",
+        "src/decision.hpp"
+      ],
+      "checks": [
+        "tests/original-reference.py",
+        "tests/original-reference"
+      ],
+      "acceptance": "Results agree with the original Laya implementation's recorded outputs: identical input token counts, probabilities within 0.05, no changed decision except near ties (top two within 0.05); unsupported cases are still refused."
+    },
     "abi": {
       "implementation": [
         "include/ducktape_laya.h"

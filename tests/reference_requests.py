@@ -30,6 +30,26 @@ def primitive_request(request):
     return {'state': request['state'], 'questions': questions}
 
 
+def as_text(value):
+    """The core serializes structured values the way the original Laya does
+    (json.dumps with default separators) before rendering; give upstream the
+    same text so both sides render identical prompts."""
+    return value if value is None or isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def trained_text(request):
+    questions = {}
+    for name, question in request['questions'].items():
+        question = dict(question, instructions=as_text(question['instructions']))
+        criteria = question.get('criteria')
+        if isinstance(criteria, dict):
+            question['criteria'] = {key: as_text(value) for key, value in criteria.items()}
+        elif isinstance(criteria, list):
+            question['criteria'] = [as_text(value) for value in criteria]
+        questions[name] = question
+    return dict(request, state=as_text(request['state']), questions=questions)
+
+
 def reference_requests(fixtures=FIXTURES):
     """Return {key: (fixture name, primitive request)} with insertion order preserved."""
     requests = {}
@@ -37,5 +57,5 @@ def reference_requests(fixtures=FIXTURES):
         body = json.loads(fixture.read_text())
         items = enumerate(body) if isinstance(body, list) else [(None, body)]
         for index, request in items:
-            requests[reference_key(fixture.stem, index)] = (fixture.name, primitive_request(request))
+            requests[reference_key(fixture.stem, index)] = (fixture.name, trained_text(primitive_request(request)))
     return requests

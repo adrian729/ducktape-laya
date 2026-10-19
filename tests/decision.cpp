@@ -1,6 +1,7 @@
 // Model-free decision rules: calibration buckets, probabilities, confidence and the
 // documented tie rule (first option or level) for choices, scores and integer values.
 #include "decision.hpp"
+#include "python_json.hpp"
 #include <iostream>
 #include <stdexcept>
 using dtl::json;
@@ -13,6 +14,19 @@ static json options(std::initializer_list<const char *> keys) {
 }
 int main() {
     try {
+        // Structured values are serialized exactly as Python's json.dumps(v, ensure_ascii=False).
+        const std::pair<double, const char *> floats[] = {{149.0, "149.0"}, {3.14159265358979, "3.14159265358979"},
+            {1e21, "1e+21"}, {1e-07, "1e-07"}, {-0.125, "-0.125"}, {1.0 / 3, "0.3333333333333333"}, {-0.0, "-0.0"},
+            {0.0, "0.0"}, {1e16, "1e+16"}, {9999999999999998.0, "9999999999999998.0"}, {0.0001, "0.0001"},
+            {0.00001234, "1.234e-05"}, {12345678.9, "12345678.9"}, {2.5e-300, "2.5e-300"},
+            {1.7976931348623157e308, "1.7976931348623157e+308"}, {5e-324, "5e-324"}, {100.0, "100.0"},
+            {123456789012345678.0, "1.2345678901234568e+17"}, {0.1 + 0.2, "0.30000000000000004"}};
+        for (auto [value, text] : floats) expect(dtl::python_float(value) == text, text);
+        auto mixed = json::parse(R"({"s":"Tom \"x\" / \\ \n\t\b\f\r\u0001\u007f\u2028 na\u00efve","n":null,"t":true,)"
+                                 R"("f":false,"l":[1,2.0,{}],"e":{},"i":-17,"u":18446744073709551615})");
+        expect(dtl::python_json(mixed) == "{\"s\": \"Tom \\\"x\\\" / \\\\ \\n\\t\\b\\f\\r\\u0001\x7f\u2028 na\u00efve\", "
+               "\"n\": null, \"t\": true, \"f\": false, \"l\": [1, 2.0, {}], \"e\": {}, \"i\": -17, "
+               "\"u\": 18446744073709551615}", "python_json object, escaping and separators");
         const std::map<std::string, float> temperatures{{"choice.2", 2}, {"choice.3_5", 3}, {"choice.6_10", 6},
             {"choice.11", 11}, {"score", 4}, {"score.3_5", 5}, {"noul.2", 7}};
         expect(dtl::temperature_for("choice", 2, temperatures) == 2 && dtl::temperature_for("choice", 3, temperatures) == 3 &&
