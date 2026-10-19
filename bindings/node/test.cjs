@@ -207,6 +207,20 @@ test('open options contextTokens and temperatures are validated and serialized',
   await (await Laya.openRouter({ models: { m: { path: __filename, config: { context_tokens: 64, temperatures: { choice: 1.2 } } } } })).close();
 });
 
+test('open option overflow is validated', async () => {
+  for (const overflow of ['', 'bogus', null, 1, 'TRUNCATE_END']) await assert.rejects(Laya.open('x', { overflow }), { name: 'RangeError', status: 1 });
+});
+
+test('open option overflow reaches the model', { skip: !process.env.LAYA_MODEL }, async () => {
+  const request = { state: 'refund '.repeat(800), questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
+  const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2, overflow: 'truncate_end' });
+  try {
+    assert.ok((await engine.execute(request)).usage.state_tokens_dropped > 0);
+    await assert.rejects(engine.execute({ ...request, overflow: 'reject' }), { status: 1 });
+  } finally { await engine.close(); }
+  await assert.rejects(Laya.open(process.env.LAYA_MODEL, { threads: 2, overflow: 'bogus' }), { status: 1 });
+});
+
 test('context tokens, temperatures and max_tokens reach the model', { skip: !process.env.LAYA_MODEL }, async () => {
   const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
   const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2, contextTokens: 256, temperatures: { 'noul.2': 2 } });

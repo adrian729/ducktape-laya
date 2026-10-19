@@ -91,6 +91,8 @@ test('worker passes ABI 2 open config and the wasm32 call-options layout', async
   await worker.namespace.call('dtl_execute', '{}', { id: 4, observe: false, deadline: 0 });
   const second = calls.filter(call => call.name === 'dtl_execute')[1];
   assert.deepEqual(second.words.slice(2, 4), [4, 0]); assert.equal(second.words[6], 0);
+  await worker.namespace.init({ ...base, modelUrl: 'https://example.test/m.gguf', overflow: 'scan' });
+  assert.deepEqual(JSON.parse(calls.filter(call => call.name === 'dtl_open')[1].args[1]), { threads: 1, overflow: 'scan' });
 });
 
 test('worker serializes per-route router config', async () => {

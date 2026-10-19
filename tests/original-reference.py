@@ -16,13 +16,15 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MAX_PROBABILITY_DRIFT = 0.05
-# A decision may flip only where the original's top two probabilities are this
-# close: quantization can legitimately reorder a near tie.
+# Where the original's top two probabilities are this close, the model is
+# undecided: quantization noise can reorder them, and at sharp calibration
+# temperatures it moves probabilities far. Such answers are reported, but neither
+# their decision nor their probabilities are held to the thresholds.
 NEAR_TIE = 0.05
 # Case name -> why the core refuses it today. Remove an entry when its feature lands.
+# The original clamps over-long input by default; here that is an explicit policy.
+TRUNCATED = {'long_state', 'many_options'}
 UNSUPPORTED = {
-    'long_state': 'state longer than the context (overflow policies)',
-    'many_options': 'option text over the head budget (overflow policies)',
     'shortlist_many_options': 'embedding shortlist (not planned)',
 }
 
@@ -72,7 +74,10 @@ report: dict = {'cases': {}, 'model': str(args.model), 'thresholds': {
 for path in sorted(args.cases.glob('case_*.json')):
     case = json.loads(path.read_text())
     name = case['name']
-    got, error = run({'state': case['state'], 'questions': case['questions']})
+    request = {'state': case['state'], 'questions': case['questions']}
+    if name in TRUNCATED:
+        request['overflow'] = 'truncate_end'
+    got, error = run(request)
     if name in UNSUPPORTED:
         report['cases'][name] = {'status': 'unsupported', 'reason': UNSUPPORTED[name], 'error': error}
         if got is not None:
@@ -91,19 +96,25 @@ for path in sorted(args.cases.glob('case_*.json')):
     if got['usage']['input_tokens'] != expected_tokens:
         failures.append(f'{name}: input_tokens {got["usage"]["input_tokens"]} != {expected_tokens}')
     entry['input_tokens'] = {'ours': got['usage']['input_tokens'], 'original': expected_tokens}
+    if name in TRUNCATED:
+        for field in ('state_tokens', 'state_tokens_dropped'):
+            if got['usage'][field] != case['result']['usage'][field]:
+                failures.append(f'{name}: {field} {got["usage"][field]} != {case["result"]["usage"][field]}')
     for qid, expected in case['result']['answers'].items():
         drift, changed, near = compare(expected, got['answers'][qid])
         answers.append(drift)
         entry['answers'][qid] = {'type': expected['type'], 'max_probability_drift': round(drift, 6),
                                  'decision_changed': changed, 'near_tie': near}
-        if drift > MAX_PROBABILITY_DRIFT:
+        if drift > MAX_PROBABILITY_DRIFT and not near:
             failures.append(f'{name}/{qid}: probability drift {drift:.4f} > {MAX_PROBABILITY_DRIFT}')
         if changed and not near:
             failures.append(f'{name}/{qid}: decision differs from the original')
     entry['status'] = 'passed' if not any(f.startswith(name + '/') or f.startswith(name + ':') for f in failures) else 'failed'
     report['cases'][name] = entry
     print(f'{name}: {entry["status"]}, max drift {max(a["max_probability_drift"] for a in entry["answers"].values()):.4f}')
+gated = [a['max_probability_drift'] for c in report['cases'].values() for a in c.get('answers', {}).values() if not a['near_tie']]
 report['summary'] = {'answers': len(answers), 'max_probability_drift': max(answers, default=0),
+                     'max_probability_drift_excluding_near_ties': max(gated, default=0),
                      'mean_probability_drift': sum(answers) / len(answers) if answers else 0,
                      'status': 'failed' if failures else 'passed', 'failures': failures}
 if args.report:

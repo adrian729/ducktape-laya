@@ -401,6 +401,27 @@ func TestConfigRejected(t *testing.T) {
 	}
 }
 
+func TestOverflowPolicy(t *testing.T) {
+	path := model(t)
+	ok := mustOK(t)
+	long := `{"state":"` + strings.Repeat("refund ", 800) + `","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}`
+	e, err := Open(path, &Config{Threads: 2, Overflow: "truncate_end"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	out := ok(e.Execute(long))
+	if !strings.Contains(out, `"state_tokens_dropped":`) || strings.Contains(out, `"state_tokens_dropped":0`) {
+		t.Fatal(out)
+	}
+	if _, err := e.Execute(strings.Replace(long, "{", `{"overflow":"reject",`, 1)); status(t, err) != 1 {
+		t.Fatal("request overflow reject must win")
+	}
+	if _, err := Open(path, &Config{Threads: 2, Overflow: "bogus"}); status(t, err) != 1 {
+		t.Fatal("invalid overflow accepted")
+	}
+}
+
 func TestConfigApplied(t *testing.T) {
 	path := model(t)
 	ok := mustOK(t)

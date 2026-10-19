@@ -5,13 +5,13 @@ import java.util.TreeMap;
 
 /**
  * Immutable open configuration, serialized to the native config JSON. Unset fields are omitted so
- * the library defaults apply; keys are written in a fixed order (threads, context_tokens, then
- * temperatures sorted by key). {@code threads} is 0 (automatic) to 256, {@code contextTokens} is
+ * the library defaults apply; keys are written in a fixed order (threads, context_tokens, overflow,
+ * then temperatures sorted by key). {@code threads} is 0 (automatic) to 256, {@code contextTokens} is
  * positive (the library enforces its own minimum and the model's trained length, status 1), and
  * each temperature is finite and positive; violations throw {@link IllegalArgumentException}.
  */
-public record Config(Integer threads, Integer contextTokens, Map<String, Double> temperatures) {
-    private static final Config NONE = new Config(null, null, Map.of());
+public record Config(Integer threads, Integer contextTokens, String overflow, Map<String, Double> temperatures) {
+    private static final Config NONE = new Config(null, null, null, Map.of());
 
     public Config {
         if (threads != null && (threads < 0 || threads > 256))
@@ -38,16 +38,21 @@ public record Config(Integer threads, Integer contextTokens, Map<String, Double>
     }
 
     public Config withThreads(int value) {
-        return new Config(value, contextTokens, temperatures);
+        return new Config(value, contextTokens, overflow, temperatures);
     }
 
     public Config withContextTokens(int value) {
-        return new Config(threads, value, temperatures);
+        return new Config(threads, value, overflow, temperatures);
+    }
+
+    /** Engine-wide overflow policy: reject, truncate_end, truncate_start or scan (null = unset). The library validates it. */
+    public Config withOverflow(String value) {
+        return new Config(threads, contextTokens, value, temperatures);
     }
 
     /** Replaces the temperature overrides, keyed like the GGUF metadata (for example {@code "choice.3_5"}). */
     public Config withTemperatures(Map<String, Double> value) {
-        return new Config(threads, contextTokens, value);
+        return new Config(threads, contextTokens, overflow, value);
     }
 
     /** The config JSON object, or {@code null} when nothing is set. */
@@ -55,6 +60,10 @@ public record Config(Integer threads, Integer contextTokens, Map<String, Double>
         StringBuilder sb = new StringBuilder("{");
         if (threads != null) sb.append("\"threads\":").append(threads);
         if (contextTokens != null) sb.append(sb.length() > 1 ? "," : "").append("\"context_tokens\":").append(contextTokens);
+        if (overflow != null) {
+            sb.append(sb.length() > 1 ? "," : "").append("\"overflow\":");
+            quote(sb, overflow);
+        }
         if (!temperatures.isEmpty()) {
             sb.append(sb.length() > 1 ? "," : "").append("\"temperatures\":{");
             boolean first = true;

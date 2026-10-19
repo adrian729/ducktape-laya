@@ -106,6 +106,7 @@ async function init(options) {
     // Single-threaded worker; no COOP/COEP requirement.
     const config = { threads: 1 };
     if (options.contextTokens !== undefined) config.context_tokens = options.contextTokens;
+    if (options.overflow !== undefined) config.overflow = options.overflow;
     if (options.temperatures !== undefined) config.temperatures = options.temperatures;
     const routes = Object.create(null);
     for (const [id, path] of Object.entries(models)) {

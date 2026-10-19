@@ -39,6 +39,7 @@ export class Laya {
     if (!Number.isSafeInteger(maxModelBytes) || maxModelBytes < 1) throw invalid(RangeError, 'maxModelBytes must be positive');
     if (!Number.isInteger(initializationTimeoutMs) || initializationTimeoutMs < 1 || initializationTimeoutMs > 86400000) throw invalid(RangeError, 'initializationTimeoutMs must be 1..86400000');
     if (options.contextTokens !== undefined && (!Number.isSafeInteger(options.contextTokens) || options.contextTokens < 1)) throw invalid(RangeError, 'contextTokens must be a positive integer');
+    if (options.overflow !== undefined && !['reject', 'truncate_end', 'truncate_start', 'scan'].includes(options.overflow)) throw invalid(RangeError, 'overflow must be reject, truncate_end, truncate_start or scan');
     const temperatureError = value => value !== undefined && (value === null || typeof value !== 'object' || Array.isArray(value) ||
       Object.values(value).some(t => typeof t !== 'number' || !Number.isFinite(t) || t <= 0));
     if (temperatureError(options.temperatures)) throw invalid(TypeError, 'temperatures must map names to finite positive numbers');

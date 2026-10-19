@@ -133,6 +133,18 @@ class RealModel(unittest.TestCase):
             with self.assertRaises(ValueError):
                 laya.Engine.open(MODEL, threads=threads)
 
+    def test_open_overflow(self):
+        long_request = {'state': 'refund ' * 800, 'questions': {'refund': {
+            'type': 'noul', 'instructions': 'Is a refund requested?'}}}
+        with laya.Engine.open(MODEL, threads=2, overflow='truncate_end') as engine:
+            result = engine.execute(long_request)
+            self.assertGreater(result['usage']['state_tokens_dropped'], 0)
+            with self.assertRaises(laya.LayaError) as caught:
+                engine.execute(dict(long_request, overflow='reject'))
+            self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+        with self.assertRaises(ValueError):
+            laya.Engine.open(MODEL, threads=2, overflow='bogus')
+
     def test_request_temperatures(self):
         request = json.loads(REQUEST)
         hot = self.engine.execute(dict(request, temperatures={'noul': 3.0}))

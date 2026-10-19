@@ -20,7 +20,7 @@ class Laya {
     }
     return Laya.#open(text, options, true);
   }
-  static async #open(modelPath, { threads, contextTokens, temperatures, maxPending = 16, addonPath } = {}, router) {
+  static async #open(modelPath, { threads, contextTokens, overflow, temperatures, maxPending = 16, addonPath } = {}, router) {
     if (typeof modelPath !== 'string' || modelPath.includes('\0') || Buffer.byteLength(modelPath) > 1048576) throw invalid(TypeError, 'Invalid model path');
     const config = {};
     if (threads !== undefined) {
@@ -30,6 +30,10 @@ class Laya {
     if (contextTokens !== undefined) {
       if (!Number.isSafeInteger(contextTokens) || contextTokens < 1) throw invalid(RangeError, 'contextTokens must be a positive integer');
       config.context_tokens = contextTokens;
+    }
+    if (overflow !== undefined) {
+      if (!['reject', 'truncate_end', 'truncate_start', 'scan'].includes(overflow)) throw invalid(RangeError, 'overflow must be reject, truncate_end, truncate_start or scan');
+      config.overflow = overflow;
     }
     if (temperatures !== undefined) {
       if (temperatures === null || typeof temperatures !== 'object' || Array.isArray(temperatures)) throw invalid(TypeError, 'temperatures must be an object');

@@ -74,6 +74,22 @@ public class EngineTests
             Temperatures = new Dictionary<string, double> { ["noul.2"] = 2, ["choice"] = 1.5, ["choice.3_5"] = 1.7 },
         };
         Assert.Equal("""{"threads":3,"context_tokens":256,"temperatures":{"choice":1.5,"choice.3_5":1.7,"noul.2":2}}""", config.ToJson());
+        Assert.Equal("""{"threads":3,"context_tokens":256,"overflow":"scan"}""", new LayaConfig { Threads = 3, ContextTokens = 256, Overflow = "scan" }.ToJson());
+    }
+
+    [Fact]
+    public void OverflowPolicyAppliesAndIsValidated()
+    {
+        if (Model is not { } path) return;
+        var request = "{\"state\":\"" + string.Concat(Enumerable.Repeat("refund ", 800)) + "\",\"questions\":{\"refund\":{\"type\":\"noul\",\"instructions\":\"Is a refund requested?\"}}}";
+        using (var engine = LayaEngine.Open(path, new LayaConfig { Threads = 2, Overflow = "truncate_end" }))
+        {
+            var result = engine.Execute(request);
+            Assert.Matches("\"state_tokens_dropped\":[1-9]", result);
+            var rejected = Assert.Throws<LayaException>(() => engine.Execute(request.Insert(1, "\"overflow\":\"reject\",")));
+            Assert.Equal(1, rejected.Status);
+        }
+        Assert.Equal(1, Assert.Throws<LayaException>(() => LayaEngine.Open(path, new LayaConfig { Threads = 2, Overflow = "bogus" })).Status);
     }
 
     [Fact]

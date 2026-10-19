@@ -133,6 +133,58 @@ int main(int argc, char **argv) {
         long_head["questions"]["refund"]["instructions"] = repeated("refund ", 400);
         expect(rejected(long_head.dump(), "instructions exceed"), "long instructions rejected");
         checkpoint("token and head budgets");
+        {   // Overflow policies. Expected counts come from a fitting prompt's own report:
+            // head = input tokens minus state tokens, so a cut keeps 512 - head tokens.
+            const size_t room = 512 - base, words = room + 300;
+            auto over = [&](const std::string &policy, size_t n) {
+                json r = json::parse(sized(n)); r["overflow"] = policy;
+                return json::parse(engine.execute(r.dump()));
+            };
+            const auto fit = json::parse(engine.execute(sized(room)));
+            const auto fits = over("scan", room);
+            expect(fits["answers"] == fit["answers"] && fits["usage"]["state_tokens_dropped"] == 0, "a fitting state reads as before");
+            const size_t head = fits["usage"]["input_tokens"].get<size_t>() - fits["usage"]["state_tokens"].get<size_t>();
+            const size_t kept = 512 - head, state_tokens = fits["usage"]["state_tokens"].get<size_t>() + (words - room);
+            for (const char *policy : {"truncate_end", "truncate_start"}) {
+                auto r = over(policy, words);
+                expect(r["answers"]["refund"].contains("noul") && !r["answers"]["refund"].contains("window") &&
+                       r["usage"]["input_tokens"] == 512 && r["usage"]["state_tokens"] == state_tokens &&
+                       r["usage"]["state_tokens_dropped"] == state_tokens - kept &&
+                       r["usage"]["truncated_questions"] == json::array({"refund"}), policy);
+            }
+            const size_t stride = kept / 2, windows = 1 + (state_tokens - kept + stride - 1) / stride;
+            auto scanned = over("scan", words);
+            auto answer = scanned["answers"]["refund"];
+            expect(answer["window"]["count"] == windows && answer["window"]["token_end"].get<size_t>() -
+                   answer["window"]["token_start"].get<size_t>() == kept && scanned["usage"]["input_tokens"] == 512 * windows &&
+                   scanned["usage"]["state_tokens_dropped"] == 0 && scanned["usage"]["truncated_questions"].empty(),
+                   "scan reads every window");
+            json all = json::parse(sized(words));
+            all["overflow"] = "scan"; all["questions"]["refund"]["aggregate"] = "all";
+            auto minimum = json::parse(engine.execute(all.dump()))["answers"]["refund"];
+            expect(minimum["noul"] <= answer["noul"] && minimum["window"]["count"] == windows, "aggregate all is the minimum");
+            expect(rejected([&] { json r = json::parse(sized(words)); r["overflow"] = "scan"; r["max_windows"] = 1; return r.dump(); }(),
+                            "max_windows"), "too many windows rejected");
+            for (json bad : {json({{"overflow", "clip"}}), json({{"max_windows", 0}}), json({{"overflow", 1}})}) {
+                json r = json::parse(sized(1));
+                for (auto &[k, v] : bad.items()) r[k] = v;
+                invalid([&] { engine.execute(r.dump()); });
+            }
+            json wrong_aggregate = primitive("Please refund me.");
+            wrong_aggregate["questions"]["department"]["aggregate"] = "all";
+            invalid([&] { engine.execute(wrong_aggregate.dump()); });
+            // Head shortening as llama.cpp's decision server does, reported per question.
+            json shortened = long_option; shortened["overflow"] = "truncate_end";
+            auto cut = json::parse(engine.execute(shortened.dump()));
+            expect(cut["usage"]["truncated_questions"] == json::array({"department"}) && cut["usage"]["state_tokens_dropped"] == 0,
+                   "long option shortened and reported");
+            // The engine default applies unless a request names a policy.
+            auto lenient = ducktape::engine::open(argv[1], R"({"threads":2,"overflow":"truncate_end"})");
+            expect(json::parse(lenient.execute(sized(words))) == over("truncate_end", words), "engine default overflow");
+            invalid([&] { json r = json::parse(sized(words)); r["overflow"] = "reject"; lenient.execute(r.dump()); });
+            invalid([&] { ducktape::engine::open(argv[1], R"({"overflow":"clip"})"); });
+        }
+        checkpoint("overflow policies");
         auto schema = json::parse(R"({"state":"Please refund me.","schema":{"type":"object","properties":{
           "department":{"type":"string","enum":["billing","technical","sales"],"description":"Which department should handle this?"},
           "refund":{"type":"boolean","description":"Does the customer request a refund?"},

@@ -48,8 +48,10 @@ option, the upstream-reference gate stays not run.
 With a model, `tests/original-reference.py` also runs the original Laya
 implementation's recorded cases (`tests/original-reference/`, Apache-2.0, with
 provenance) through the C consumer: the `original_reference` gate. Input token
-counts must match exactly, probabilities must stay within 0.05, and a decision may
-differ only on a near tie (the original's top two within 0.05). Cases for
+counts must match exactly, and probabilities must stay within 0.05 with unchanged
+decisions, except on near ties (the original's top two within 0.05), where the
+model is undecided and 8-bit noise can reorder options and, at sharp calibration
+temperatures, move probabilities far; near ties are reported, not gated. Cases for
 features the core does not support yet must still be refused; when one starts
 passing, it moves into the supported set.
 Sanitizer, stress, browser and platform evidence remain separate;

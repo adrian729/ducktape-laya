@@ -13,6 +13,8 @@ public sealed class LayaConfig
     public int Threads { get; init; }
     /// <summary>Prompt capacity; must be positive here. The native range (at least 32, at most the model's trained length) is checked on open (status 1).</summary>
     public int? ContextTokens { get; init; }
+    /// <summary>Engine-wide policy for prompts over the token limit: <c>reject</c> (default), <c>truncate_end</c>, <c>truncate_start</c> or <c>scan</c>; validated natively (status 1).</summary>
+    public string? Overflow { get; init; }
     /// <summary>Calibration overrides keyed like the GGUF metadata, e.g. <c>"choice.3_5"</c>; each value finite and greater than 0.</summary>
     public IReadOnlyDictionary<string, double>? Temperatures { get; init; }
 
@@ -27,6 +29,7 @@ public sealed class LayaConfig
             w.WriteStartObject();
             if (Threads != 0) w.WriteNumber("threads", Threads);
             if (ContextTokens is { } ct) w.WriteNumber("context_tokens", ct);
+            if (Overflow is { } ov) w.WriteString("overflow", ov);
             if (Temperatures is { } temps)
             {
                 w.WriteStartObject("temperatures");

@@ -1,4 +1,4 @@
-import type { Request, StructuredRequest, Result, StructuredResult, ExecuteOptions, RuntimeInfo } from './protocol.js';
+import type { Overflow, Request, StructuredRequest, Result, StructuredResult, ExecuteOptions, RuntimeInfo } from './protocol.js';
 export type { Json, Question, Answer, Request, Result, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, ExecuteOptions, RuntimeInfo, LayaError } from './protocol.js';
 /** contextTokens/temperatures override the open options for this route only. */
 export interface ModelAsset { url: string; sha256?: string; contextTokens?: number; temperatures?: Record<string, number> }
@@ -8,7 +8,7 @@ export interface BrowserOptions {
   backend?: 'wasm' | 'webgpu' | 'auto'; webgpuModuleUrl?: string; webgpuWasmUrl?: string;
   onDiagnostic?: (message: string) => void;
   /** Native open config: prompt capacity (default 512, max the model's trained length) and calibration overrides. */
-  contextTokens?: number; temperatures?: Record<string, number>;
+  contextTokens?: number; overflow?: Overflow; temperatures?: Record<string, number>;
   maxPending?: number; maxModelBytes?: number; maxLoaded?: number;
   initializationTimeoutMs?: number; signal?: AbortSignal;
 }

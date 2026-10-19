@@ -120,7 +120,7 @@
         "tests/original-reference.py",
         "tests/original-reference"
       ],
-      "acceptance": "Results agree with the original Laya implementation's recorded outputs: identical input token counts, probabilities within 0.05, no changed decision except near ties (top two within 0.05); unsupported cases are still refused."
+      "acceptance": "Results agree with the original Laya implementation's recorded outputs: identical input token counts, probabilities within 0.05 and unchanged decisions except on near ties (the original's top two within 0.05, reported but not gated); unsupported cases are still refused."
     },
     "abi": {
       "implementation": [

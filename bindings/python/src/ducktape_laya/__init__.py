@@ -133,7 +133,10 @@ def runtime_info():
     return _info(_library(), None)
 
 
-def _open_config(threads, context_tokens, temperatures):
+_OVERFLOW = ('reject', 'truncate_end', 'truncate_start', 'scan')
+
+
+def _open_config(threads, context_tokens, temperatures, overflow=None):
     """Serialize the set open options to config JSON (``None`` when none are set)."""
     config = {}
     if threads != 0:
@@ -144,6 +147,10 @@ def _open_config(threads, context_tokens, temperatures):
         if isinstance(context_tokens, bool) or not isinstance(context_tokens, int):
             raise TypeError('context_tokens must be an int')
         config['context_tokens'] = context_tokens
+    if overflow is not None:
+        if overflow not in _OVERFLOW:
+            raise ValueError('overflow must be one of ' + ', '.join(_OVERFLOW))
+        config['overflow'] = overflow
     if temperatures is not None:
         config['temperatures'] = dict(temperatures)
     if not config:
@@ -184,21 +191,24 @@ class Engine:
         return engine
 
     @classmethod
-    def open(cls, model_path, *, threads=0, context_tokens=None, temperatures=None):
+    def open(cls, model_path, *, threads=0, context_tokens=None, temperatures=None, overflow=None):
         """Load a local GGUF.
 
         ``threads`` 0 selects automatically (at most 4). ``context_tokens`` is the
         prompt capacity (default 512, at most the model's trained length).
         ``temperatures`` maps calibration keys such as ``"choice"`` or
-        ``"noul.2"`` to positive overrides. Unset options use the library defaults.
+        ``"noul.2"`` to positive overrides. ``overflow`` is the engine-wide policy for
+        prompts over the token limit (``"reject"`` (default), ``"truncate_end"``,
+        ``"truncate_start"`` or ``"scan"``; a request's own ``overflow`` wins).
+        Unset options use the library defaults.
         """
         lib = _library()
-        config = _open_config(threads, context_tokens, temperatures)
+        config = _open_config(threads, context_tokens, temperatures, overflow)
         path = _encode(os.fspath(model_path), 'model path')
         return cls._create(lib, False, path, config)
 
     @classmethod
-    def open_router(cls, config, *, threads=0, context_tokens=None, temperatures=None):
+    def open_router(cls, config, *, threads=0, context_tokens=None, temperatures=None, overflow=None):
         """Open a bounded registry of local models.
 
         ``config`` is a dict or JSON string:
@@ -209,7 +219,7 @@ class Engine:
         lib = _library()
         text = config if isinstance(config, str) else json.dumps(config, ensure_ascii=False)
         return cls._create(lib, True, _encode(text, 'router config'),
-                           _open_config(threads, context_tokens, temperatures))
+                           _open_config(threads, context_tokens, temperatures, overflow))
 
     def _enter(self):
         with self._state:

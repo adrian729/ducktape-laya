@@ -71,6 +71,8 @@ public final class LayaTest {
         eq("{\"threads\":0}", Config.none().withThreads(0).toJson(), "threads only");
         eq("{\"threads\":2,\"context_tokens\":64,\"temperatures\":{\"choice\":1.5,\"noul.2\":2.0}}",
             Config.none().withTemperatures(Map.of("noul.2", 2.0, "choice", 1.5)).withContextTokens(64).withThreads(2).toJson(), "full config");
+        eq("{\"threads\":2,\"context_tokens\":64,\"overflow\":\"scan\",\"temperatures\":{\"choice\":1.5}}",
+            Config.none().withTemperatures(Map.of("choice", 1.5)).withOverflow("scan").withContextTokens(64).withThreads(2).toJson(), "overflow position");
         eq("{\"temperatures\":{\"a\\\"b\":1.0}}", Config.none().withTemperatures(Map.of("a\"b", 1.0)).toJson(), "escaped key");
     }
 
@@ -168,6 +170,13 @@ public final class LayaTest {
             check(!laya.execute(choice).equals(baseline), "open temperatures change the result");
         }
         eq(1, statusOf(() -> Laya.open(MODEL, TWO.withContextTokens(1))), "context_tokens below minimum");
+        eq(1, statusOf(() -> Laya.open(MODEL, TWO.withOverflow("bogus"))), "invalid overflow");
+        String longRequest = "{\"state\":\"" + "refund ".repeat(800) + "\",\"questions\":{\"refund\":{\"type\":\"noul\",\"instructions\":\"Is a refund requested?\"}}}";
+        try (Laya laya = Laya.open(MODEL, TWO.withOverflow("truncate_end"))) {
+            String out = laya.execute(longRequest);
+            check(out.contains("\"state_tokens_dropped\":") && !out.contains("\"state_tokens_dropped\":0"), "truncate_end drops tokens " + out);
+            eq(1, statusOf(() -> laya.execute(longRequest.replaceFirst("\\{", "{\"overflow\":\"reject\","))), "request overflow reject wins");
+        }
         eq(1, statusOf(() -> Laya.open(MODEL, TWO.withTemperatures(Map.of("bogus.key", 1.5)))), "unknown temperature key");
         // Router: the open config applies to every route; a route's own config overrides it.
         String hotRoute = "{\"models\":{\"plain\":\"" + json(MODEL) + "\",\"hot\":{\"path\":\"" + json(MODEL)

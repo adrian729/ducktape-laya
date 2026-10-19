@@ -178,6 +178,10 @@ type Config struct {
 	// ContextTokens is the capacity reserved for one prompt (32 up to the
 	// model's trained length; default 512). 0 keeps the default.
 	ContextTokens uint32
+	// Overflow is the engine-wide policy for prompts over the token limit:
+	// "reject" (default), "truncate_end", "truncate_start" or "scan". A
+	// request's own "overflow" wins. Empty keeps the default.
+	Overflow string
 	// Temperatures overrides calibration temperatures keyed like the GGUF
 	// metadata, e.g. "choice", "choice.3_5", "noul.2". Values must be finite
 	// and > 0.
@@ -193,9 +197,10 @@ func configJSON(c *Config) (*C.char, error) {
 	var body struct {
 		Threads       uint32             `json:"threads,omitempty"`
 		ContextTokens uint32             `json:"context_tokens,omitempty"`
+		Overflow      string             `json:"overflow,omitempty"`
 		Temperatures  map[string]float64 `json:"temperatures,omitempty"`
 	}
-	body.Threads, body.ContextTokens, body.Temperatures = c.Threads, c.ContextTokens, c.Temperatures
+	body.Threads, body.ContextTokens, body.Overflow, body.Temperatures = c.Threads, c.ContextTokens, c.Overflow, c.Temperatures
 	data, err := json.Marshal(body) // map keys are emitted sorted
 	if err != nil {
 		return nil, invalid("Invalid config: " + err.Error())

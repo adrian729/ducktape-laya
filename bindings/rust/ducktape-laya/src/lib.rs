@@ -77,6 +77,7 @@ pub mod status {
 pub struct Config {
     threads: Option<u32>,
     context_tokens: Option<u32>,
+    overflow: Option<String>,
     temperatures: BTreeMap<String, f64>,
 }
 impl Config {
@@ -88,6 +89,12 @@ impl Config {
     /// Prompt capacity in tokens, up to the model's trained length (default 512).
     pub fn context_tokens(mut self, tokens: u32) -> Self {
         self.context_tokens = Some(tokens);
+        self
+    }
+    /// Engine-wide policy for prompts over the token limit: `"reject"`
+    /// (default), `"truncate_end"`, `"truncate_start"` or `"scan"`.
+    pub fn overflow(mut self, policy: &str) -> Self {
+        self.overflow = Some(policy.to_owned());
         self
     }
     /// Calibration override keyed like the GGUF metadata, e.g. `"choice"`,
@@ -104,6 +111,9 @@ impl Config {
         }
         if let Some(tokens) = self.context_tokens {
             parts.push(format!("\"context_tokens\":{tokens}"));
+        }
+        if let Some(policy) = &self.overflow {
+            parts.push(format!("\"overflow\":{}", json_string(policy)));
         }
         if !self.temperatures.is_empty() {
             let mut items = Vec::new();
@@ -393,6 +403,25 @@ mod tests {
             .unwrap()
             .contains("\"model\":\"english\""));
         assert_eq!(router.execute(request).unwrap_err().status, 1);
+    }
+    #[test]
+    fn overflow_policy_applies_and_is_validated() {
+        let Some(path) = model() else { return };
+        let config = two().context_tokens(64).overflow("scan");
+        assert_eq!(
+            config.to_json().unwrap().unwrap().to_str().unwrap(),
+            r#"{"threads":2,"context_tokens":64,"overflow":"scan"}"#
+        );
+        let long = format!(
+            r#"{{"state":"{}","questions":{{"refund":{{"type":"noul","instructions":"Is a refund requested?"}}}}}}"#,
+            "refund ".repeat(800)
+        );
+        let engine = Engine::open(&path, &two().overflow("truncate_end")).unwrap();
+        let out = engine.execute(&long).unwrap();
+        assert!(out.contains("\"state_tokens_dropped\":") && !out.contains("\"state_tokens_dropped\":0"), "{out}");
+        let rejected = long.replacen('{', "{\"overflow\":\"reject\",", 1);
+        assert_eq!(engine.execute(&rejected).unwrap_err().status, 1);
+        assert_eq!(Engine::open(&path, &two().overflow("bogus")).err().unwrap().status, 1);
     }
     #[test]
     fn config_and_per_request_settings() {

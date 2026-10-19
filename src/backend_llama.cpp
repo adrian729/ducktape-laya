@@ -38,10 +38,16 @@ void sanitize(json &value, const std::string &marker) {
     }
 }
 }
-struct prepared_question {
-    int column = 0;
+struct prepared_window {
     std::vector<llama_token> tokens;
     std::vector<size_t> markers;
+    size_t state_start = 0, state_end = 0; // span of the state tokens this window reads
+};
+struct prepared_question {
+    int column = 0;
+    std::vector<prepared_window> windows;
+    size_t state_tokens = 0, state_dropped = 0;
+    bool head_shortened = false;
 };
 question::question(std::string id_, std::string type_, json instructions_, json options_)
     : id(std::move(id_)), type(std::move(type_)), instructions(std::move(instructions_)),
@@ -49,7 +55,16 @@ question::question(std::string id_, std::string type_, json instructions_, json 
 question::~question() = default;
 question::question(question &&) noexcept = default;
 question &question::operator=(question &&) noexcept = default;
-size_t question::token_count() const { return prepared ? prepared->tokens.size() : 0; }
+size_t question::token_count() const {
+    size_t n = 0;
+    if (prepared) for (const auto &w : prepared->windows) n += w.tokens.size();
+    return n;
+}
+json question::overflow_report() const {
+    if (!prepared) return json::object();
+    return {{"state_tokens", prepared->state_tokens}, {"state_tokens_dropped", prepared->state_dropped},
+            {"head_shortened", prepared->head_shortened}, {"windows", prepared->windows.size()}};
+}
 
 struct backend::impl {
     std::unique_ptr<llama_model, decltype(&llama_model_free)> model{nullptr, llama_model_free};
@@ -131,6 +146,7 @@ struct backend::impl {
         if (!ctx) throw failure(DTL_MODEL_ERROR, "Could not create CPU inference context");
     }
     void prepare(question &q, const json &state) {
+        if (q.overflow.empty()) q.overflow = "reject";
         if (q.options.size() == 1) return; // answered without inference; uses no tokens
         q.prepared = std::make_unique<prepared_question>();
         auto &prepared = *q.prepared;
@@ -152,30 +168,84 @@ struct backend::impl {
         require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
         const size_t limit = q.max_tokens ? q.max_tokens : capacity;
         int n = llama_tokenize(vocab, rendered.data(), static_cast<int32_t>(rendered.size()), nullptr, 0, false, true);
-        require(n < 0 && static_cast<size_t>(-n) <= limit, q.id + ": prompt exceeds the " + std::to_string(limit) + "-token limit");
-        prepared.tokens.resize(-n);
-        n = llama_tokenize(vocab, rendered.data(), static_cast<int32_t>(rendered.size()), prepared.tokens.data(), prepared.tokens.size(), false, true);
+        if (n >= 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
+        std::vector<llama_token> tokens(-n);
+        n = llama_tokenize(vocab, rendered.data(), static_cast<int32_t>(rendered.size()), tokens.data(), tokens.size(), false, true);
         if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-        prepared.tokens.resize(n);
-        for (size_t i = 0; i < prepared.tokens.size(); ++i) if (prepared.tokens[i] == marker) prepared.markers.push_back(i);
-        require(prepared.markers.size() == q.options.size() && !prepared.markers.empty() && prepared.markers[0] >= 2 &&
-                prepared.tokens[prepared.markers[0]-1] == sep && prepared.tokens.back() == sep, "Invalid decision prompt layout");
-        size_t opts_end = std::find(prepared.tokens.begin() + prepared.markers.back(), prepared.tokens.end(), sep) - prepared.tokens.begin();
-        require(opts_end + 1 < prepared.tokens.size(), "Invalid option separator");
-        size_t total = opts_end - prepared.markers[0];
-        size_t cap = total + 16 > max_head ? std::max(size_t(4), (max_head - std::min(max_head, size_t(16))) / q.options.size()) : 49;
-        // Reject where upstream would truncate; otherwise the prompt is identical.
-        for (size_t i = 0; i < prepared.markers.size(); ++i) {
-            size_t end = i + 1 < prepared.markers.size() ? prepared.markers[i+1] : opts_end;
-            require(end - prepared.markers[i] <= std::min(size_t(49), cap), q.id + ": option text exceeds the model's head budget");
+        tokens.resize(n);
+        // Layout: [CLS] question [SEP] ([MASK] option)* [SEP] state [SEP]. Special
+        // tokens split the text, so each piece is tokenized on its own and can be
+        // cut at token level without re-tokenizing.
+        std::vector<size_t> markers;
+        for (size_t i = 0; i < tokens.size(); ++i) if (tokens[i] == marker) markers.push_back(i);
+        require(markers.size() == q.options.size() && !markers.empty() && markers[0] >= 2 &&
+                tokens[markers[0]-1] == sep && tokens.back() == sep, "Invalid decision prompt layout");
+        const size_t head_end = markers[0] - 1;
+        const size_t opts_end = std::find(tokens.begin() + markers.back(), tokens.end(), sep) - tokens.begin();
+        require(opts_end + 1 < tokens.size(), "Invalid option separator");
+        // The head (question and options) is cut to the model's head budget exactly as
+        // llama.cpp's decision server does, the way the model was trained.
+        std::vector<std::vector<llama_token>> options;
+        size_t option_tokens = 0;
+        auto cap = [&](size_t n_max) {
+            option_tokens = 0;
+            for (auto &o : options) { o.resize(std::min(o.size(), n_max)); option_tokens += o.size(); }
+        };
+        size_t original_option_tokens = 0;
+        for (size_t i = 0; i < markers.size(); ++i) {
+            const size_t end = i + 1 < markers.size() ? markers[i + 1] : opts_end;
+            options.emplace_back(tokens.begin() + markers[i], tokens.begin() + end);
+            original_option_tokens += end - markers[i];
         }
-        size_t head_length = prepared.markers[0] - 2;
-        require(head_length <= std::max(size_t(8), max_head - std::min(max_head, total)),
-                q.id + ": instructions exceed the model's head budget");
+        cap(49);
+        if (option_tokens + 16 > max_head) cap(std::max(size_t(4), (max_head - std::min(max_head, size_t(16))) / options.size()));
+        const size_t question_max = std::max(size_t(8), max_head - std::min(max_head, option_tokens));
+        const size_t question_tokens = head_end - 1, kept_question = std::min(question_tokens, question_max);
+        const bool head_cut = option_tokens != original_option_tokens || kept_question != question_tokens;
+        const bool reject = q.overflow == "reject";
+        if (reject && option_tokens != original_option_tokens)
+            throw failure(DTL_INVALID_ARGUMENT, q.id + ": option text exceeds the model's head budget");
+        if (reject && kept_question != question_tokens)
+            throw failure(DTL_INVALID_ARGUMENT, q.id + ": instructions exceed the model's head budget");
+        std::vector<llama_token> head{tokens[0]};
+        head.insert(head.end(), tokens.begin() + 1, tokens.begin() + 1 + kept_question);
+        head.push_back(sep);
+        std::vector<size_t> head_markers;
+        for (const auto &o : options) { head_markers.push_back(head.size()); head.insert(head.end(), o.begin(), o.end()); }
+        head.push_back(sep);
+        const std::vector<llama_token> state_tokens(tokens.begin() + opts_end + 1, tokens.end() - 1);
+        prepared.state_tokens = state_tokens.size();
+        prepared.head_shortened = head_cut;
+        const size_t room = limit > head.size() + 1 ? limit - head.size() - 1 : 0;
+        if (reject) require(state_tokens.size() <= room, q.id + ": prompt exceeds the " + std::to_string(limit) + "-token limit");
+        require(room > 0 || state_tokens.empty(),
+                q.id + ": the question and options leave no room for the state within " + std::to_string(limit) + " tokens");
+        auto add = [&](size_t start, size_t end) {
+            prepared_window w{head, head_markers, start, end};
+            w.tokens.insert(w.tokens.end(), state_tokens.begin() + start, state_tokens.begin() + end);
+            w.tokens.push_back(sep);
+            prepared.windows.push_back(std::move(w));
+        };
+        if (state_tokens.size() <= room) {
+            add(0, state_tokens.size());
+        } else if (q.overflow == "truncate_end") {
+            add(0, room); prepared.state_dropped = state_tokens.size() - room;
+        } else if (q.overflow == "truncate_start") {
+            add(state_tokens.size() - room, state_tokens.size()); prepared.state_dropped = state_tokens.size() - room;
+        } else {  // scan: windows of the full room, half overlapping; the last one ends at the state's end
+            const size_t stride = std::max<size_t>(1, room / 2);
+            const size_t count = 1 + (state_tokens.size() - room + stride - 1) / stride;
+            require(count <= q.max_windows, q.id + ": the state needs " + std::to_string(count) +
+                    " windows; max_windows is " + std::to_string(q.max_windows));
+            for (size_t i = 0; i < count; ++i) {
+                const size_t start = std::min(i * stride, state_tokens.size() - room);
+                add(start, start + room);
+            }
+        }
     }
-    json run(const question &q, const execution *control) {
+    // One forward pass over one window; the question type's column at each marker.
+    std::vector<float> encode(const prepared_window &w, int column, const execution *control) {
         if (control) control->check();
-        if (q.options.size() == 1) return single_option_answer(q.options);
 #ifndef DTL_BROWSER_WEBGPU
         struct reset_abort {
             llama_context *ctx;
@@ -186,11 +256,10 @@ struct backend::impl {
         }, const_cast<execution *>(control));
         if (!control || !control->enabled()) llama_set_abort_callback(ctx.get(), nullptr, nullptr);
 #endif
-        const auto &prepared = *q.prepared;
         if (auto memory = llama_get_memory(ctx.get())) llama_memory_clear(memory, true);
         // Own the batch arrays: llama_batch_init does not check its malloc results.
-        const auto n = prepared.tokens.size();
-        std::vector<llama_token> tokens(prepared.tokens.begin(), prepared.tokens.end());
+        const auto n = w.tokens.size();
+        std::vector<llama_token> tokens(w.tokens.begin(), w.tokens.end());
         std::vector<llama_pos> positions(n);
         std::vector<int32_t> seq_counts(n, 1);
         llama_seq_id sequence = 0;
@@ -204,15 +273,39 @@ struct backend::impl {
         if (status == -2) throw std::bad_alloc(); // llama_encode: allocation failed
         if (status != 0) throw failure(DTL_INFERENCE_ERROR, "Laya forward pass failed: " + std::to_string(status));
         std::vector<float> scores;
-        for (size_t index : prepared.markers) {
-            const float *v = llama_get_embeddings_ith(ctx.get(), index);
-            if (!v || !std::isfinite(v[prepared.column])) throw failure(DTL_INFERENCE_ERROR, "Missing/nonfinite decision output");
-            scores.push_back(v[prepared.column]);
+        for (size_t index : w.markers) {
+            const float *v = llama_get_embeddings_ith(ctx.get(), static_cast<int32_t>(index));
+            if (!v || !std::isfinite(v[column])) throw failure(DTL_INFERENCE_ERROR, "Missing/nonfinite decision output");
+            scores.push_back(v[column]);
         }
+        return scores;
+    }
+    json answer(const question &q, const std::vector<float> &scores) const {
         if (!q.temperatures) return answer_from_scores(q.type, q.options, scores, temperature_for(q.type, scores.size(), temperatures));
         auto merged = temperatures;
         for (const auto &[key, t] : *q.temperatures) merged[key] = t;
         return answer_from_scores(q.type, q.options, scores, temperature_for(q.type, scores.size(), merged));
+    }
+    json run(const question &q, const execution *control) {
+        if (control) control->check();
+        if (q.options.size() == 1) return single_option_answer(q.options);
+        const auto &prepared = *q.prepared;
+        if (prepared.windows.size() == 1) return answer(q, encode(prepared.windows[0], prepared.column, control));
+        // Scanned windows: noul takes the maximum (or, with aggregate "all", the
+        // minimum) over windows; choice and score take the most confident window.
+        json best;
+        size_t best_index = 0;
+        for (size_t i = 0; i < prepared.windows.size(); ++i) {
+            auto a = answer(q, encode(prepared.windows[i], prepared.column, control));
+            bool better = i == 0;
+            if (!better && q.type == "noul") better = q.aggregate_all ? a["noul"] < best["noul"] : a["noul"] > best["noul"];
+            else if (!better) better = a["answer_confidence"] > best["answer_confidence"];
+            if (better) { best = std::move(a); best_index = i; }
+        }
+        const auto &w = prepared.windows[best_index];
+        best["window"] = {{"index", best_index}, {"count", prepared.windows.size()},
+                          {"token_start", w.state_start}, {"token_end", w.state_end}};
+        return best;
     }
 };
 backend::backend(const char *path, const engine_config &config) : impl_(std::make_unique<impl>(path, config)) {}

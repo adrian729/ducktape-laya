@@ -52,6 +52,7 @@ native options. Unknown keys are rejected.
 |---|---|
 | `threads` | 0 (automatic, at most 4) or 1–256 CPU threads |
 | `context_tokens` | The longest prompt the engine reserves memory for: 32 up to the model's trained length. Default 512. Compute follows each prompt's real length; only memory grows with this value. The pinned English model's file allows 8,192, but the original Laya uses it with 512 tokens, so longer prompts are untested for accuracy |
+| `overflow` | Default policy for prompts over their limit; see [Long input](#long-input) |
 | `temperatures` | Calibration overrides, keyed like the model's metadata: a type (`choice`, `score`, `noul`) or a type and option-count bucket (`choice.2`, `choice.3_5`, `choice.6_10`, `choice.11`, `score.3_5`, `noul.2`, ...). Values must be finite and greater than 0 |
 
 A temperature is looked up most specific first: the bucket key, then the type
@@ -69,6 +70,37 @@ Each request may add `max_tokens` (a prompt limit up to the engine's
 `context_tokens`) and `temperatures` (overrides for that request only, merged over
 the engine's). A prompt over its limit is rejected with status 1. `info()` on a
 single-model engine reports `context_tokens` and `trained_context_tokens`.
+
+## Long input
+
+A prompt longer than its limit (the request's `max_tokens`, at most the engine's
+`context_tokens`) is handled by the request's `overflow` policy. The engine's
+config can set a default `overflow`; a request's own value wins.
+
+| `overflow` | What happens |
+|---|---|
+| `reject` (default) | The request fails with status 1. Nothing is decided from partial text |
+| `truncate_end` | Keeps the beginning of the state and drops the rest |
+| `truncate_start` | Keeps the end of the state and drops the beginning |
+| `scan` | Reads the whole state in overlapping windows (each the room the question leaves, stepping by half a window) and combines them per question |
+
+Under every policy except `reject`, option texts and instructions over the
+model's head budget are shortened exactly as llama.cpp's decision server does
+(the model was trained that way); `reject` refuses such questions instead.
+`usage` then always reports `state_tokens`, `state_tokens_dropped` (the most
+any question dropped) and `truncated_questions` (questions whose state or head
+was cut).
+
+With `scan`, a `noul` answer is the maximum over windows ("does any part say
+this?"), or the minimum with `"aggregate": "all"` on the question ("does the whole
+text say this?"). `choice` and `score` answers come from the window with the
+highest `answer_confidence`. A scanned answer carries `window`: the deciding
+window's `index`, the window `count`, and its `token_start`/`token_end` in the
+tokenized state. Its probabilities are that window's, not a calibrated
+statement about the whole document. A state that fits is read once, exactly as
+without `scan`. `max_windows` (1–1024, default 32) caps the windows per
+question; a state needing more fails with status 1. `input_tokens` counts every
+window.
 
 ## Primitive requests and results
 

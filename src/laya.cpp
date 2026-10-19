@@ -82,6 +82,11 @@ std::vector<question> parse(const json &body) {
             for (const char *key : {"false", "true"})
                 add(key, criteria.is_object() ? criteria.value(key, json()) : json());
         } else require(false, id + ": supported types are choice, score, noul");
+        if (q.contains("aggregate")) {
+            require(out.type == "noul" && (q["aggregate"] == "any" || q["aggregate"] == "all"),
+                    id + ": aggregate is any or all, for noul questions");
+            out.aggregate_all = q["aggregate"] == "all";
+        }
         result.push_back(std::move(out));
     }
     return result;
@@ -132,8 +137,14 @@ dtl::temperature_map temperatures(const json &value, const std::string &where) {
     }
     return out;
 }
+std::string overflow_policy(const json &value, const std::string &where) {
+    require(value.is_string() && (value == "reject" || value == "truncate_end" || value == "truncate_start" || value == "scan"),
+            where + " must be reject, truncate_end, truncate_start or scan");
+    return value.get<std::string>();
+}
 planned plan(json body, bool routed) {
-    keys(body, {"state", "questions", "schema", "boolean_threshold", "model", "max_tokens", "temperatures"}, "request");
+    keys(body, {"state", "questions", "schema", "boolean_threshold", "model", "max_tokens", "temperatures",
+                "overflow", "max_windows"}, "request");
     require(routed || !body.contains("model"), "model is only supported by a router");
     require(body.contains("questions") != body.contains("schema"), "Supply exactly one of questions or schema");
     planned out;
@@ -210,7 +221,17 @@ planned plan(json body, bool routed) {
     std::shared_ptr<const dtl::temperature_map> overrides;
     if (body.contains("temperatures"))
         overrides = std::make_shared<const dtl::temperature_map>(temperatures(body["temperatures"], "temperatures"));
-    for (auto &q : out.questions) { q.max_tokens = max_tokens; q.temperatures = overrides; }
+    std::string overflow;
+    if (body.contains("overflow")) overflow = overflow_policy(body["overflow"], "overflow");
+    size_t max_windows = 32;
+    if (body.contains("max_windows")) {
+        require(body["max_windows"].is_number_unsigned() && body["max_windows"] >= 1 && body["max_windows"] <= 1024,
+                "max_windows must be 1..1024");
+        max_windows = body["max_windows"].get<size_t>();
+    }
+    for (auto &q : out.questions) {
+        q.max_tokens = max_tokens; q.temperatures = overrides; q.overflow = overflow; q.max_windows = max_windows;
+    }
     out.body = std::move(body);
     return out;
 }
@@ -229,13 +250,33 @@ std::vector<planned> plans(const json &body, bool routed) {
 struct model_engine {
     dtl::backend runtime;
     std::mutex mutex;
-    model_engine(const char *path, const dtl::engine_config &config) : runtime(path, config) {}
+    std::string overflow;  // default policy for requests that don't name one
+    model_engine(const char *path, const dtl::engine_config &config) : runtime(path, config), overflow(config.overflow) {}
+    void prepare(question &q, const json &state) {
+        if (q.overflow.empty()) q.overflow = overflow;
+        runtime.prepare(q, state);
+    }
 };
 json evaluate(model_engine &engine, planned &p, const dtl::execution &control) {
     json answers = json::object();
     size_t tokens = 0;
     for (const auto &q : p.questions) { answers[q.id] = engine.runtime.run(q, &control); tokens += q.token_count(); }
     json result = {{"answers", answers}, {"usage", {{"input_tokens", tokens}, {"output_tokens", 0}}}};
+    // Callers who allowed overflow handling always learn what it did.
+    if (!p.questions.empty() && p.questions.front().overflow != "reject") {
+        size_t state_tokens = 0, dropped = 0;
+        json shortened = json::array();
+        for (const auto &q : p.questions) {
+            auto report = q.overflow_report();
+            if (report.empty()) continue;
+            state_tokens = std::max(state_tokens, report["state_tokens"].get<size_t>());
+            dropped = std::max(dropped, report["state_tokens_dropped"].get<size_t>());
+            if (report["state_tokens_dropped"].get<size_t>() > 0 || report["head_shortened"].get<bool>()) shortened.push_back(q.id);
+        }
+        result["usage"]["state_tokens"] = state_tokens;
+        result["usage"]["state_tokens_dropped"] = dropped;
+        result["usage"]["truncated_questions"] = std::move(shortened);
+    }
     if (!p.fields.empty()) {
         json values = json::object();
         for (auto &[name, field] : p.fields.items()) {
@@ -280,7 +321,8 @@ template<class F> dtl_status observed(const dtl_call_options *options, char **re
 }
 dtl::engine_config engine_config(const json &value, dtl::engine_config base = {}) {
     if (value.is_null()) return base;
-    keys(value, {"threads", "context_tokens", "temperatures"}, "config");
+    keys(value, {"threads", "context_tokens", "temperatures", "overflow"}, "config");
+    if (value.contains("overflow")) base.overflow = overflow_policy(value["overflow"], "config.overflow");
     if (value.contains("threads")) {
         require(value["threads"].is_number_unsigned() && value["threads"] <= 256, "threads must be 0..256");
         base.threads = value["threads"].get<uint32_t>();
@@ -371,7 +413,7 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
                 throw failure(DTL_MODEL_ERROR, "Model path is not a local regular file: " + id);
             router_state::route route{canonical.string(), {}, engine_config(config, shared)};
             json key = {{"path", route.path}, {"threads", route.config.threads}, {"context_tokens", route.config.context_tokens},
-                        {"temperatures", route.config.temperatures}};
+                        {"temperatures", route.config.temperatures}};  // overflow is applied per request, not per model
             route.cache_key = key.dump();
             r->routes[id] = std::move(route);
         }
@@ -409,7 +451,7 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
         if (!routed) {
             auto &single = *engine->single;
             auto lock = control.lock(single.mutex);
-            for (auto &p : work) for (auto &q : p.questions) { control.check(); single.runtime.prepare(q, p.body["state"]); }
+            for (auto &p : work) for (auto &q : p.questions) { control.check(); single.prepare(q, p.body["state"]); }
             for (auto &p : work) results.push_back(evaluate(single, p, control));
         } else {
             auto &router = *engine->router;
@@ -422,7 +464,7 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
                 auto id = p.body["model"].get<std::string>();
                 control.check();
                 auto &model = router.load(router.routes.at(id));
-                for (auto &q : p.questions) { control.check(); model.runtime.prepare(q, p.body["state"]); }
+                for (auto &q : p.questions) { control.check(); model.prepare(q, p.body["state"]); }
                 auto answer = evaluate(model, p, control); answer["model"] = id;
                 results.push_back(std::move(answer));
             }
