@@ -50,15 +50,13 @@ public final class Laya implements AutoCloseable {
     }
 
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
-    private final boolean router;
     private final MemorySegment handle;
     private final Cleaner.Cleanable cleanable;
     private volatile boolean closing;
     private boolean released; // guarded by the write lock
 
-    private Laya(MemorySegment handle, boolean router, MethodHandle close) {
+    private Laya(MemorySegment handle, MethodHandle close) {
         this.handle = handle;
-        this.router = router;
         this.cleanable = CLEANER.register(this, new State(handle, close));
     }
 
@@ -67,58 +65,47 @@ public final class Laya implements AutoCloseable {
         return readInfo(MemorySegment.NULL);
     }
 
-    /** Opens a model with an automatic thread count. */
+    /** Opens a model with the library defaults. */
     public static Laya open(String modelPath) {
-        return open(modelPath, 0);
+        return open(modelPath, Config.none());
     }
 
     /**
-     * Opens a model. {@code threads} is 0 (automatic) to 256, otherwise {@link IllegalArgumentException}.
-     * A null path throws {@link NullPointerException}. Call {@link #close()} to release it promptly;
-     * a Cleaner releases it if the object is dropped without closing.
+     * Opens a model. A null path or config throws {@link NullPointerException}. Call {@link #close()}
+     * to release it promptly; a Cleaner releases it if the object is dropped without closing.
      */
-    public static Laya open(String modelPath, int threads) {
-        return create(false, modelPath, threads);
+    public static Laya open(String modelPath, Config config) {
+        return create(false, modelPath, config);
     }
 
-    /** Opens a router with an automatic thread count. */
-    public static Laya openRouter(String configJson) {
-        return openRouter(configJson, 0);
+    /** Opens a router with the library defaults. */
+    public static Laya openRouter(String routerJson) {
+        return openRouter(routerJson, Config.none());
     }
 
-    /** Opens a bounded, lazy local model registry; see docs/API.md for the config. Arguments as for {@link #open(String, int)}. */
-    public static Laya openRouter(String configJson, int threads) {
-        return create(true, configJson, threads);
+    /**
+     * Opens a bounded, lazy local model registry; see docs/API.md for the router JSON. The config
+     * applies to every route; a route's own "config" overrides it key by key.
+     */
+    public static Laya openRouter(String routerJson, Config config) {
+        return create(true, routerJson, config);
     }
 
-    /** Model metadata for a single model; routers report common runtime capabilities. */
+    /** Model metadata for a single model; a router reports the runtime only. */
     public String info() {
-        return withHandle(h -> readInfo(router ? MemorySegment.NULL : h));
+        return withHandle(h -> readInfo(h));
     }
 
     /**
-     * Legacy primitive request semantics: unrelated top-level metadata is ignored. On a router,
-     * {@code decide} uses the strict {@link #execute} semantics: it always requires {@code model}
-     * and rejects unrelated metadata. Null options mean {@link CallOptions#none()}.
-     */
-    public String decide(String request) {
-        return run(request, CallOptions.none(), true);
-    }
-
-    public String decide(String request, CallOptions options) {
-        return run(request, options, true);
-    }
-
-    /**
-     * Executes one primitive/structured request or a bounded JSON array of them. {@code onEvent}
-     * runs on the calling thread. Null options mean {@link CallOptions#none()}.
+     * Executes one request or a bounded JSON array of them (per-request "max_tokens" and
+     * "temperatures" go in the request JSON). {@code onEvent} runs on the calling thread. Null options mean {@link CallOptions#none()}.
      */
     public String execute(String request) {
-        return run(request, CallOptions.none(), false);
+        return run(request, CallOptions.none());
     }
 
     public String execute(String request, CallOptions options) {
-        return run(request, options, false);
+        return run(request, options);
     }
 
     /**
@@ -146,22 +133,24 @@ public final class Laya implements AutoCloseable {
         }
     }
 
-    private static Laya create(boolean router, String input, int threads) {
-        Objects.requireNonNull(input, router ? "configJson" : "modelPath");
-        if (threads < 0 || threads > 256) throw new IllegalArgumentException("threads must be between 0 and 256");
+    private static Laya create(boolean router, String input, Config config) {
+        Objects.requireNonNull(input, router ? "routerJson" : "modelPath");
+        Objects.requireNonNull(config, "config");
         checkInput(input);
         Native n = Native.get();
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment options = (MemorySegment) n.DEFAULT_OPTIONS.invoke((SegmentAllocator) arena);
-            options.set(ValueLayout.JAVA_INT, 8, threads);
+            String configJson = config.toJson();
             MemorySegment out = arena.allocate(PTR);
             MemorySegment error = arena.allocate(PTR);
-            int status = (int) (router ? n.ROUTER_OPEN : n.OPEN).invokeExact(arena.allocateFrom(input), options, out, error);
+            MemorySegment cfg = configJson == null ? MemorySegment.NULL : arena.allocateFrom(configJson);
+            MemorySegment in = arena.allocateFrom(input);
+            int status = router ? (int) n.ROUTER_OPEN.invokeExact(in, cfg, out, error)
+                                : (int) n.OPEN.invokeExact(in, cfg, out, error);
             check(status, error);
             MemorySegment raw = out.get(PTR, 0);
             if (raw.equals(MemorySegment.NULL))
                 throw new LayaException(LayaException.MODEL_ERROR, "Native engine returned null");
-            return new Laya(raw, router, router ? n.ROUTER_CLOSE : n.CLOSE);
+            return new Laya(raw, n.CLOSE);
         } catch (Throwable t) {
             throw sneaky(t);
         }
@@ -189,7 +178,7 @@ public final class Laya implements AutoCloseable {
         }
     }
 
-    private String run(String request, CallOptions options, boolean legacy) {
+    private String run(String request, CallOptions options) {
         Objects.requireNonNull(request, "request");
         if (options == null) options = CallOptions.none();
         checkInput(request);
@@ -199,29 +188,24 @@ public final class Laya implements AutoCloseable {
             CancellationToken token = opts.cancellation();
             try (Arena arena = Arena.ofShared()) {
                 MemorySegment flag = null;
-                MemorySegment observer = arena.allocate(OBSERVER_SIZE, 8);
-                observer.set(ValueLayout.JAVA_LONG, 0, opts.requestId());
+                MemorySegment call = (MemorySegment) n.DEFAULT_CALL_OPTIONS.invoke((SegmentAllocator) arena);
+                call.set(ValueLayout.JAVA_LONG, REQUEST_ID, opts.requestId());
+                call.set(ValueLayout.JAVA_LONG, TIMEOUT_MS, opts.timeoutMillis());
                 if (opts.onEvent() != null)
-                    observer.set(PTR, 8, Linker.nativeLinker().upcallStub(
+                    call.set(PTR, ON_EVENT, Linker.nativeLinker().upcallStub(
                         MethodHandles.insertArguments(EVENT_TARGET, 0, opts.onEvent()),
                         FunctionDescriptor.ofVoid(PTR, PTR), arena));
-                MemorySegment native_ = MemorySegment.NULL;
-                if (opts.timeoutMillis() != 0 || token != null) {
-                    native_ = (MemorySegment) n.DEFAULT_CALL_OPTIONS.invoke((SegmentAllocator) arena);
-                    native_.set(ValueLayout.JAVA_LONG, 8, opts.timeoutMillis());
-                    if (token != null) {
-                        flag = arena.allocate(4, 4);
-                        flag.set(ValueLayout.JAVA_INT, 0, 0);
-                        native_.set(PTR, 16, n.CANCEL_FLAG);
-                        native_.set(PTR, 24, flag);
-                        token.register(flag);
-                    }
+                if (token != null) {
+                    flag = arena.allocate(4, 4);
+                    flag.set(ValueLayout.JAVA_INT, 0, 0);
+                    call.set(PTR, SHOULD_CANCEL, n.CANCEL_FLAG);
+                    call.set(PTR, CANCEL_USER_DATA, flag);
+                    token.register(flag);
                 }
                 MemorySegment result = arena.allocate(PTR);
                 MemorySegment error = arena.allocate(PTR);
-                MethodHandle target = router ? n.ROUTER_EXECUTE : legacy ? n.DECIDE : n.EXECUTE;
                 try {
-                    int status = (int) target.invokeExact(h, arena.allocateFrom(request), observer, native_, result, error);
+                    int status = (int) n.EXECUTE.invokeExact(h, arena.allocateFrom(request), call, result, error);
                     return finish(status, result, error);
                 } finally {
                     if (flag != null) token.unregister(flag); // before the arena frees it

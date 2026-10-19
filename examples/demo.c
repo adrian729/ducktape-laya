@@ -12,7 +12,7 @@ int main(int argc, char **argv) {
     char *result = NULL, *error = NULL;
     puts("Running Laya...");
     dtl_status status = dtl_open(model, NULL, &engine, &error);
-    if (!status) status = dtl_decide(engine, request, &result, &error);
+    if (!status) status = dtl_execute(engine, request, NULL, &result, &error);
     int failed = status != DTL_OK;
     if (failed) fprintf(stderr, "Error: %s\n", error ? error : "Laya failed");
     else failed = demo_print(result);

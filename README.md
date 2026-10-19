@@ -117,7 +117,7 @@ target_link_libraries(my_application PRIVATE ducktape::laya)
 
 ```cpp
 #include <ducktape_laya.hpp>
-ducktape::laya engine("/absolute/path/to/Laya-Q8_0.gguf");
+auto engine = ducktape::engine::open("/absolute/path/to/Laya-Q8_0.gguf");
 std::string result = engine.execute(request_json);
 ```
 
@@ -141,7 +141,7 @@ export LD_LIBRARY_PATH="$DUCKTAPE_LAYA_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PA
 ```
 
 ```rust
-let engine = ducktape_laya::Engine::open("/absolute/path/to/Laya-Q8_0.gguf", 2)?;
+let engine = ducktape_laya::Engine::open("/absolute/path/to/Laya-Q8_0.gguf", &ducktape_laya::Config::default())?;
 let result_json = engine.execute(&request_json)?;
 ```
 
@@ -162,7 +162,7 @@ const { Laya } = require('./bindings/node/index.cjs');
 async function main() {
   const engine = await Laya.open(process.env.LAYA_MODEL);
   try {
-    const result = await engine.decide({
+    const result = await engine.execute({
       state: 'Please refund the duplicate charge.',
       questions: {
         refund: { type: 'noul', instructions: 'Does the customer request a refund?' }

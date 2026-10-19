@@ -5,6 +5,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 
 /** JUnit-free test runner: exits non-zero on failure. Real-model tests need LAYA_MODEL. */
@@ -16,6 +17,9 @@ public final class LayaTest {
         "{\"state\":\"Please refund me.\",\"questions\":{\"refund\":{\"type\":\"noul\",\"instructions\":\"Is a refund requested?\"}}}";
     private static final String SCHEMA =
         "{\"state\":\"Please refund me.\",\"schema\":{\"type\":\"object\",\"properties\":{\"refund\":{\"type\":\"boolean\",\"description\":\"Is a refund requested?\"}}}}";
+
+    private static final Config ONE = Config.none().withThreads(1);
+    private static final Config TWO = Config.none().withThreads(2);
 
     interface Case {
         void run() throws Exception;
@@ -52,25 +56,37 @@ public final class LayaTest {
     }
 
     static void diagnostics() {
-        check(Laya.runtimeInfo().contains("\"abi_version\":1"), "runtime info");
-        if (MODEL != null) try (Laya laya = Laya.open(MODEL, 2)) {
-            check(laya.info().contains("\"decision_type\":\"laya\""), "model info");
+        check(Laya.runtimeInfo().contains("\"abi_version\":2"), "runtime info");
+        if (MODEL != null) try (Laya laya = Laya.open(MODEL, TWO)) {
+            String info = laya.info();
+            check(info.contains("\"decision_type\":\"laya\""), "model info");
+            check(info.contains("\"context_tokens\":") && info.contains("\"trained_context_tokens\":"), "context fields " + info);
+            check(!info.contains("\"max_tokens\""), "no max_tokens in info");
+            check(Laya.runtimeInfo().contains("\"default_context_tokens\""), "runtime default_context_tokens");
         }
     }
 
+    static void configJson() {
+        check(Config.none().toJson() == null, "empty config");
+        eq("{\"threads\":0}", Config.none().withThreads(0).toJson(), "threads only");
+        eq("{\"threads\":2,\"context_tokens\":64,\"temperatures\":{\"choice\":1.5,\"noul.2\":2.0}}",
+            Config.none().withTemperatures(Map.of("noul.2", 2.0, "choice", 1.5)).withContextTokens(64).withThreads(2).toJson(), "full config");
+        eq("{\"temperatures\":{\"a\\\"b\":1.0}}", Config.none().withTemperatures(Map.of("a\"b", 1.0)).toJson(), "escaped key");
+    }
+
     static void rejectsBadPath() throws Exception {
-        check(statusOf(() -> Laya.open("missing.gguf", 2)) != 0, "bad path");
+        check(statusOf(() -> Laya.open("missing.gguf", TWO)) != 0, "bad path");
     }
 
     static void rejectsNul() throws Exception {
-        eq(1, statusOf(() -> Laya.open("a\0b", 2)), "open NUL");
-        eq(1, statusOf(() -> Laya.openRouter("{\0}", 1)), "router NUL");
+        eq(1, statusOf(() -> Laya.open("a\0b", TWO)), "open NUL");
+        eq(1, statusOf(() -> Laya.openRouter("{\0}", ONE)), "router NUL");
     }
 
     @SuppressWarnings("try") // closes the resource inside its own callback on purpose
     static void containsObserverFailures() throws Exception {
         Path file = Files.createTempFile("laya", ".gguf");
-        try (Laya router = Laya.openRouter("{\"models\":{\"unused\":\"" + json(file.toString()) + "\"}}", 1)) {
+        try (Laya router = Laya.openRouter("{\"models\":{\"unused\":\"" + json(file.toString()) + "\"}}", ONE)) {
             int[] calls = {0};
             CallOptions options = CallOptions.none().withRequestId(1).withOnEvent(e -> {
                 calls[0]++;
@@ -95,7 +111,7 @@ public final class LayaTest {
     static void closeIsIdempotent() throws Exception {
         Path file = Files.createTempFile("laya", ".gguf");
         try {
-            Laya router = Laya.openRouter("{\"models\":{\"x\":\"" + json(file.toString()) + "\"}}", 1);
+            Laya router = Laya.openRouter("{\"models\":{\"x\":\"" + json(file.toString()) + "\"}}", ONE);
             router.close();
             router.close();
             eq(1, statusOf(() -> router.execute("{}")), "closed execute");
@@ -107,9 +123,8 @@ public final class LayaTest {
     }
 
     static void realFeatures() throws Exception {
-        try (Laya laya = Laya.open(MODEL, 2)) {
+        try (Laya laya = Laya.open(MODEL, TWO)) {
             String tagged = PRIMITIVE.replaceFirst("\\{", "{\"metadata\":\"caller tag\",");
-            eq(laya.decide(PRIMITIVE), laya.decide(tagged), "legacy metadata ignored");
             eq(1, statusOf(() -> laya.execute(tagged)), "execute rejects metadata");
             String single = laya.execute(SCHEMA);
             check(single.contains("\"values\":{\"refund\":true}"), "schema result " + single);
@@ -125,21 +140,54 @@ public final class LayaTest {
             }))) != 0, "failing observer on invalid request");
             laya.execute(SCHEMA, CallOptions.none().withRequestId(23).withOnEvent(e -> laya.execute(SCHEMA)));
 
-            try (Laya router = Laya.openRouter("{\"models\":{\"english\":\"" + json(MODEL) + "\"},\"max_loaded\":1}", 2)) {
+            try (Laya router = Laya.openRouter("{\"models\":{\"english\":\"" + json(MODEL) + "\"},\"max_loaded\":1}", TWO)) {
                 check(router.execute(withModel(SCHEMA, "english")).contains("\"model\":\"english\""), "routed");
                 eq(1, statusOf(() -> router.execute(SCHEMA)), "router needs model");
             }
         }
     }
 
+    static void configAndPerRequestSettings() throws Exception {
+        String choice = "{\"state\":\"Please refund me.\",\"questions\":{\"q\":{\"type\":\"choice\",\"instructions\":\"Is a refund requested?\",\"criteria\":[\"yes\",\"no\"]}}}";
+        String baseline;
+        try (Laya laya = Laya.open(MODEL, TWO)) {
+            baseline = laya.execute(choice);
+            check(baseline.contains("\"answer_confidence\""), "answer_confidence " + baseline);
+            check(baseline.contains("\"confidence\""), "confidence " + baseline);
+            String hot = choice.replaceFirst("\\{", "{\"temperatures\":{\"choice.2\":3.0},");
+            String hotResult = laya.execute(hot);
+            check(!hotResult.equals(baseline), "per-request temperature changes the result: " + baseline + " vs " + hotResult);
+            eq(baseline, laya.execute(choice), "per-request settings do not persist");
+            eq(1, statusOf(() -> laya.execute(choice.replaceFirst("\\{", "{\"max_tokens\":0,"))), "max_tokens 0");
+            eq(1, statusOf(() -> laya.execute(choice.replaceFirst("\\{", "{\"max_tokens\":100000000,"))), "max_tokens above context");
+            laya.execute(choice.replaceFirst("\\{", "{\"max_tokens\":512,"));
+        }
+        Config hot = TWO.withContextTokens(128).withTemperatures(Map.of("choice.2", 3.0));
+        try (Laya laya = Laya.open(MODEL, hot)) {
+            check(laya.info().contains("\"context_tokens\":128"), "configured context tokens");
+            check(!laya.execute(choice).equals(baseline), "open temperatures change the result");
+        }
+        eq(1, statusOf(() -> Laya.open(MODEL, TWO.withContextTokens(1))), "context_tokens below minimum");
+        eq(1, statusOf(() -> Laya.open(MODEL, TWO.withTemperatures(Map.of("bogus.key", 1.5)))), "unknown temperature key");
+        // Router: the open config applies to every route; a route's own config overrides it.
+        String hotRoute = "{\"models\":{\"plain\":\"" + json(MODEL) + "\",\"hot\":{\"path\":\"" + json(MODEL)
+            + "\",\"config\":{\"temperatures\":{\"choice.2\":3.0}}}},\"max_loaded\":1}";
+        try (Laya router = Laya.openRouter(hotRoute, TWO)) {
+            String plain = router.execute(withModel(choice, "plain"));
+            check(plain.contains("\"model\":\"plain\""), "plain route");
+            String modelHot = router.execute(withModel(choice, "hot"));
+            check(!modelHot.replace("\"hot\"", "\"plain\"").equals(plain), "route config overrides: " + plain + " vs " + modelHot);
+            check(router.info().contains("\"default_context_tokens\""), "router info is runtime only");
+        }
+    }
+
     static void cancellationAndDeadline() throws Exception {
-        try (Laya laya = Laya.open(MODEL, 2)) {
+        try (Laya laya = Laya.open(MODEL, TWO)) {
             String baseline = laya.execute(REQUEST);
             CancellationToken token = new CancellationToken();
             token.cancel();
             CallOptions cancelled = CallOptions.none().withCancellation(token);
             eq(5, statusOf(() -> laya.execute(REQUEST, cancelled)), "pre-cancelled execute");
-            eq(5, statusOf(() -> laya.decide(REQUEST, cancelled)), "pre-cancelled decide");
             eq(6, statusOf(() -> laya.execute(REQUEST, CallOptions.none().withTimeout(Duration.ofMillis(1)))), "deadline");
             eq(baseline, laya.execute(REQUEST), "unchanged after stop");
             token.reset();
@@ -163,7 +211,6 @@ public final class LayaTest {
         try (Laya laya = Laya.open(MODEL)) {
             String baseline = laya.execute(PRIMITIVE);
             eq(baseline, laya.execute(PRIMITIVE, null), "null options execute");
-            eq(laya.decide(PRIMITIVE), laya.decide(PRIMITIVE, null), "null options decide");
         }
     }
 
@@ -175,9 +222,13 @@ public final class LayaTest {
         eq(86_400_000L, CallOptions.none().withTimeout(Duration.ofHours(24)).timeoutMillis(), "24h");
         check(thrown(() -> CallOptions.none().withTimeout(Duration.ofHours(24).plusNanos(1))) instanceof IllegalArgumentException, ">24h");
         check(thrown(() -> CallOptions.none().withTimeout(Duration.ofMillis(-1))) instanceof IllegalArgumentException, "negative");
-        check(thrown(() -> Laya.open("x", -1)) instanceof IllegalArgumentException, "threads -1");
-        check(thrown(() -> Laya.open("x", 257)) instanceof IllegalArgumentException, "threads 257");
-        check(thrown(() -> Laya.openRouter("{}", 257)) instanceof IllegalArgumentException, "router threads 257");
+        check(thrown(() -> Config.none().withThreads(-1)) instanceof IllegalArgumentException, "threads -1");
+        check(thrown(() -> Config.none().withThreads(257)) instanceof IllegalArgumentException, "threads 257");
+        check(thrown(() -> Config.none().withContextTokens(0)) instanceof IllegalArgumentException, "context 0");
+        check(thrown(() -> Config.none().withTemperatures(Map.of("choice", 0.0))) instanceof IllegalArgumentException, "temp 0");
+        check(thrown(() -> Config.none().withTemperatures(Map.of("choice", Double.NaN))) instanceof IllegalArgumentException, "temp NaN");
+        check(thrown(() -> Config.none().withTemperatures(Map.of("", 1.0))) instanceof IllegalArgumentException, "temp empty key");
+        check(thrown(() -> Laya.open("x", null)) instanceof NullPointerException, "null config");
         check(thrown(() -> Laya.open(null)) instanceof NullPointerException, "null path");
         check(thrown(() -> Laya.openRouter(null)) instanceof NullPointerException, "null config");
         Path file = Files.createTempFile("laya", ".gguf");
@@ -210,16 +261,16 @@ public final class LayaTest {
             LayaException e = null;
             try { Laya.runtimeInfo(); } catch (LayaException x) { e = x; }
             check(e != null && e.status() == LayaException.UNSUPPORTED_PLATFORM && e.getMessage().contains("nonexistent"), "runtimeInfo error " + e);
-            try { Laya.open("m.gguf", 1); e = null; } catch (LayaException x) { e = x; }
+            try { Laya.open("m.gguf", ONE); e = null; } catch (LayaException x) { e = x; }
             check(e != null && e.status() == LayaException.UNSUPPORTED_PLATFORM, "open error " + e);
         }
     }
 
     static void sharedAcrossThreads() throws Exception {
-        Laya laya = Laya.open(MODEL, 2);
+        Laya laya = Laya.open(MODEL, TWO);
         String baseline = laya.execute(REQUEST);
         // Two names for one file with one slot: concurrent calls evict each other.
-        Laya router = Laya.openRouter("{\"models\":{\"a\":\"" + json(MODEL) + "\",\"b\":\"" + json(MODEL) + "\"},\"max_loaded\":1}", 2);
+        Laya router = Laya.openRouter("{\"models\":{\"a\":\"" + json(MODEL) + "\",\"b\":\"" + json(MODEL) + "\"},\"max_loaded\":1}", TWO);
         CancellationToken token = new CancellationToken();
         ExecutorService pool = Executors.newFixedThreadPool(6);
         try {
@@ -248,7 +299,7 @@ public final class LayaTest {
 
     @SuppressWarnings("try") // closes the resource inside its own callback on purpose
     static void closeInsideCallback() throws Exception {
-        try (Laya laya = Laya.open(MODEL, 2)) {
+        try (Laya laya = Laya.open(MODEL, TWO)) {
             String baseline = laya.execute(PRIMITIVE);
             // The running call finishes; the handle is released when it returns.
             eq(baseline, laya.execute(PRIMITIVE, CallOptions.none().withOnEvent(e -> laya.close())), "call completes");
@@ -261,15 +312,16 @@ public final class LayaTest {
             loadFailureChild();
             System.exit(0);
         }
-        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "loadFailure"};
+        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "configJson", "loadFailure"};
         Case[] cases = {LayaTest::diagnostics, LayaTest::rejectsBadPath, LayaTest::rejectsNul,
-            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::loadFailure};
+            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::configJson, LayaTest::loadFailure};
         List<String> failed = new ArrayList<>();
         int ran = 0;
         for (int i = 0; i < cases.length; i++) ran += run(names[i], cases[i], failed);
         if (MODEL == null) System.out.println("SKIP real-model tests (LAYA_MODEL unset)");
         else {
             ran += run("realFeatures", LayaTest::realFeatures, failed);
+            ran += run("configAndPerRequestSettings", LayaTest::configAndPerRequestSettings, failed);
             ran += run("cancellationAndDeadline", LayaTest::cancellationAndDeadline, failed);
             ran += run("sharedAcrossThreads", LayaTest::sharedAcrossThreads, failed);
             ran += run("nullOptions", LayaTest::nullOptions, failed);

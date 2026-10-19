@@ -1,4 +1,4 @@
-use ducktape_laya::Engine;
+use ducktape_laya::{Config, Engine};
 use serde_json::{json, Map, Value};
 use std::io::{self, Write};
 
@@ -39,8 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "type": "choice", "instructions": question, "criteria": criteria
     }}});
     println!("Running Laya...");
-    let engine = Engine::open(&model, 2)?;
-    let result: Value = serde_json::from_str(&engine.decide(&request.to_string())?)?;
+    let engine = Engine::open(&model, &Config::default().threads(2))?;
+    let result: Value = serde_json::from_str(&engine.execute(&request.to_string())?)?;
     let answer = &result["answers"]["decision"];
     println!(
         "\nBest answer: {}\nProbabilities:",

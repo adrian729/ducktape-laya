@@ -38,27 +38,23 @@ model, build = a.model.resolve(), a.build.resolve()
 manifest = read_json(ROOT / 'models/manifest.json')
 verify_model(model, manifest)
 library = c.CDLL(str(build / 'libducktape_laya.so'))
-class Options(c.Structure):
-    _fields_ = [(name, c.c_uint32) for name in ['struct_size', 'abi_version', 'threads', 'reserved']]
 CANCEL = c.CFUNCTYPE(c.c_uint32, c.c_void_p)
+EVENT = c.CFUNCTYPE(None, c.c_char_p, c.c_void_p)
 class CallOptions(c.Structure):
-    _fields_ = [('struct_size', c.c_uint32), ('reserved', c.c_uint32), ('timeout_ms', c.c_uint64),
-                ('should_cancel', CANCEL), ('user_data', c.c_void_p)]
-library.dtl_default_options.restype = Options
+    _fields_ = [('struct_size', c.c_uint32), ('reserved', c.c_uint32), ('request_id', c.c_uint64),
+                ('timeout_ms', c.c_uint64), ('on_event', EVENT), ('event_user_data', c.c_void_p),
+                ('should_cancel', CANCEL), ('cancel_user_data', c.c_void_p)]
 library.dtl_default_call_options.restype = CallOptions
 out = [c.POINTER(c.c_void_p), c.POINTER(c.c_void_p)]
-for name, args in {'dtl_open': [c.c_char_p, c.POINTER(Options), *out],
-                   'dtl_execute': [c.c_void_p, c.c_char_p, c.c_void_p, *out],
-                   'dtl_execute_with_options': [c.c_void_p, c.c_char_p, c.c_void_p, c.POINTER(CallOptions), *out],
-                   'dtl_router_open': [c.c_char_p, c.POINTER(Options), *out],
-                   'dtl_router_execute': [c.c_void_p, c.c_char_p, c.c_void_p, *out]}.items():
+for name, args in {'dtl_open': [c.c_char_p, c.c_char_p, *out],
+                   'dtl_execute': [c.c_void_p, c.c_char_p, c.POINTER(CallOptions), *out],
+                   'dtl_open_router': [c.c_char_p, c.c_char_p, *out]}.items():
     getattr(library, name).argtypes = args
     getattr(library, name).restype = c.c_int32
-for name in ['dtl_close', 'dtl_router_close', 'dtl_free']:
+for name in ['dtl_close', 'dtl_free']:
     getattr(library, name).argtypes = [c.c_void_p]
     getattr(library, name).restype = None
-options = library.dtl_default_options()
-options.threads = a.threads
+config_json = json.dumps({"threads": a.threads}).encode()
 
 def fixture(name):
     return json.loads((ROOT / 'tests/fixtures' / name).read_text())
@@ -76,10 +72,10 @@ def questions(request):
 def check(status, error):
     if status: raise RuntimeError(c.string_at(error).decode() if error.value else f'status {status}')
 
-def call(function, handle, request, *extra):
+def call(function, handle, request, options=None):
     result, error = c.c_void_p(), c.c_void_p()
     started = time.perf_counter()
-    status = function(handle, request, None, *extra, c.byref(result), c.byref(error))
+    status = function(handle, request, options, c.byref(result), c.byref(error))
     elapsed = time.perf_counter() - started
     try:
         return status, elapsed, c.string_at(result) if result.value else None, c.string_at(error).decode() if error.value else ''
@@ -89,7 +85,7 @@ def call(function, handle, request, *extra):
 def open_engine():
     engine, error = c.c_void_p(), c.c_void_p()
     started = time.perf_counter()
-    status = library.dtl_open(os.fsencode(model), c.byref(options), c.byref(engine), c.byref(error))
+    status = library.dtl_open(os.fsencode(model), config_json, c.byref(engine), c.byref(error))
     elapsed = time.perf_counter() - started
     try: check(status, error)
     finally: library.dtl_free(error)
@@ -155,13 +151,13 @@ try:
             return 0
         callback = CANCEL(should_cancel)
         control = library.dtl_default_call_options()
-        control.should_cancel, control.user_data = callback, None
-        status, elapsed, _, error = call(library.dtl_execute_with_options, engine, body, c.byref(control))
+        control.should_cancel, control.cancel_user_data = callback, None
+        status, elapsed, _, error = call(library.dtl_execute, engine, body, c.byref(control))
         if status != 5: raise AssertionError(f'cancellation returned {status}: {error}')
         delays.append(time.perf_counter() - trigger['at'])
         control = library.dtl_default_call_options()
         control.timeout_ms = 50
-        status, elapsed, _, error = call(library.dtl_execute_with_options, engine, body, c.byref(control))
+        status, elapsed, _, error = call(library.dtl_execute, engine, body, c.byref(control))
         if status != 6: raise AssertionError(f'deadline returned {status}: {error}')
         overshoots.append(elapsed - 0.05)
     report['cancellation'] = {'requested_after_seconds': 0.05, 'response_max_seconds': max(delays),
@@ -207,24 +203,24 @@ try:
     for name in 'ab':
         try: os.link(model, links / f'{name}.gguf')
         except OSError: shutil.copyfile(model, links / f'{name}.gguf')
-    config = json.dumps({'models': {name: str(links / f'{name}.gguf') for name in 'ab'}, 'max_loaded': 1}).encode()
+    router_config = json.dumps({'models': {name: str(links / f'{name}.gguf') for name in 'ab'}, 'max_loaded': 1}).encode()
     router, error = c.c_void_p(), c.c_void_p()
-    check(library.dtl_router_open(config, c.byref(options), c.byref(router), c.byref(error)), error)
+    check(library.dtl_open_router(router_config, config_json, c.byref(router), c.byref(error)), error)
     library.dtl_free(error)
     try:
         cold, warm = [], []
         for name in 'ababab':
             body = json.dumps({**WORKLOADS['small'], 'model': name}).encode()
-            status, elapsed, _, error = call(library.dtl_router_execute, router, body)
+            status, elapsed, _, error = call(library.dtl_execute, router, body)
             if status: raise RuntimeError(error)
             cold.append(elapsed)
-            status, elapsed, _, error = call(library.dtl_router_execute, router, body)
+            status, elapsed, _, error = call(library.dtl_execute, router, body)
             if status: raise RuntimeError(error)
             warm.append(elapsed)
         report['router'] = {'cold_load_call_median_seconds': statistics.median(cold), 'cold_load_call_max_seconds': max(cold),
                             'warm_call_median_seconds': statistics.median(warm), 'switches': len(cold)}
     finally:
-        library.dtl_router_close(router)
+        library.dtl_close(router)
 finally:
     shutil.rmtree(links, ignore_errors=True)
 report['resources_final'] = resources()

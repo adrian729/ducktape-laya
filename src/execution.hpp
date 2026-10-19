@@ -25,7 +25,7 @@ public:
         if (status) return status;
         uint32_t reason = 0;
         if (options_.should_cancel) {
-            try { reason = options_.should_cancel(options_.user_data); }
+            try { reason = options_.should_cancel(options_.cancel_user_data); }
             catch (...) { reason = DTL_CANCELLED; }
         }
         if (reason) status = reason == DTL_DEADLINE_EXCEEDED ? DTL_DEADLINE_EXCEEDED : DTL_CANCELLED;

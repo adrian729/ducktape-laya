@@ -12,24 +12,20 @@ final class Native {
     static final String LIB = "libducktape_laya.so";
     static final String BUNDLED = "/native/linux-x64/" + LIB;
     static final AddressLayout PTR = ValueLayout.ADDRESS;
-    static final StructLayout OPTIONS = MemoryLayout.structLayout(
-        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT);
+    /** dtl_call_options: struct_size, reserved, request_id, timeout_ms, on_event, event_user_data, should_cancel, cancel_user_data. */
     static final StructLayout CALL_OPTIONS = MemoryLayout.structLayout(
-        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, PTR, PTR);
-    static final long OBSERVER_SIZE = 24;
+        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
+        PTR, PTR, PTR, PTR);
+    static final long REQUEST_ID = 8, TIMEOUT_MS = 16, ON_EVENT = 24, EVENT_USER_DATA = 32, SHOULD_CANCEL = 40, CANCEL_USER_DATA = 48;
 
     private static final Linker LINKER = Linker.nativeLinker();
 
-    final MethodHandle DEFAULT_OPTIONS;
     final MethodHandle DEFAULT_CALL_OPTIONS;
     final MethodHandle INFO;
     final MethodHandle OPEN;
     final MethodHandle ROUTER_OPEN;
     final MethodHandle EXECUTE;
-    final MethodHandle DECIDE;
-    final MethodHandle ROUTER_EXECUTE;
     final MethodHandle CLOSE;
-    final MethodHandle ROUTER_CLOSE;
     final MethodHandle FREE;
     /** Address of dtl_cancel_flag, used as the should_cancel callback. */
     final MemorySegment CANCEL_FLAG;
@@ -60,25 +56,17 @@ final class Native {
     }
 
     private Native(SymbolLookup lookup) throws Throwable {
-        DEFAULT_OPTIONS = bind(lookup, "dtl_default_options", FunctionDescriptor.of(OPTIONS));
         DEFAULT_CALL_OPTIONS = bind(lookup, "dtl_default_call_options", FunctionDescriptor.of(CALL_OPTIONS));
         INFO = bind(lookup, "dtl_info", FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR, PTR, PTR));
         OPEN = bind(lookup, "dtl_open", FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR, PTR, PTR, PTR));
-        ROUTER_OPEN = bind(lookup, "dtl_router_open", FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR, PTR, PTR, PTR));
-        EXECUTE = bind(lookup, "dtl_execute_with_options", call());
-        DECIDE = bind(lookup, "dtl_decide_with_options", call());
-        ROUTER_EXECUTE = bind(lookup, "dtl_router_execute_with_options", call());
+        ROUTER_OPEN = bind(lookup, "dtl_open_router", FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR, PTR, PTR, PTR));
+        EXECUTE = bind(lookup, "dtl_execute", FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR, PTR, PTR, PTR, PTR));
         CLOSE = bind(lookup, "dtl_close", FunctionDescriptor.ofVoid(PTR));
-        ROUTER_CLOSE = bind(lookup, "dtl_router_close", FunctionDescriptor.ofVoid(PTR));
         FREE = bind(lookup, "dtl_free", FunctionDescriptor.ofVoid(PTR));
         CANCEL_FLAG = lookup.find("dtl_cancel_flag").orElseThrow(() -> incompatible("lacks dtl_cancel_flag"));
         MethodHandle abi = bind(lookup, "dtl_abi_version", FunctionDescriptor.of(ValueLayout.JAVA_INT));
         int version = (int) abi.invokeExact();
-        if (version != 1) throw incompatible("reports ABI version " + version + ", expected 1");
-    }
-
-    private static FunctionDescriptor call() {
-        return FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR, PTR, PTR, PTR, PTR, PTR);
+        if (version != 2) throw incompatible("reports ABI version " + version + ", expected 2");
     }
 
     private static LayaException incompatible(String why) {
@@ -105,7 +93,7 @@ final class Native {
         Path bundled = extractBundled();
         if (bundled != null) return open(bundled, global);
         RuntimeException last = null;
-        for (String name : new String[] {LIB + ".0", System.mapLibraryName("ducktape_laya")}) {
+        for (String name : new String[] {LIB + ".1", System.mapLibraryName("ducktape_laya")}) {
             try {
                 return SymbolLookup.libraryLookup(name, global);
             } catch (RuntimeException e) {

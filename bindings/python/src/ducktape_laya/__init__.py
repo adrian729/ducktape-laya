@@ -17,7 +17,6 @@ import json
 import math
 import os
 import threading
-from typing import Any, Callable
 
 from . import _native
 
@@ -134,12 +133,22 @@ def runtime_info():
     return _info(_library(), None)
 
 
-def _options(lib, threads):
-    if not isinstance(threads, int) or not 0 <= threads <= 256:
-        raise ValueError('threads must be 0..256 (0 = automatic)')
-    options = lib.dtl_default_options()
-    options.threads = threads
-    return options
+def _open_config(threads, context_tokens, temperatures):
+    """Serialize the set open options to config JSON (``None`` when none are set)."""
+    config = {}
+    if threads != 0:
+        if isinstance(threads, bool) or not isinstance(threads, int) or not 0 <= threads <= 256:
+            raise ValueError('threads must be 0..256 (0 = automatic)')
+        config['threads'] = threads
+    if context_tokens is not None:
+        if isinstance(context_tokens, bool) or not isinstance(context_tokens, int):
+            raise TypeError('context_tokens must be an int')
+        config['context_tokens'] = context_tokens
+    if temperatures is not None:
+        config['temperatures'] = dict(temperatures)
+    if not config:
+        return None
+    return _encode(json.dumps(config, ensure_ascii=False, allow_nan=False), 'open config')
 
 
 class Engine:
@@ -150,8 +159,6 @@ class Engine:
     """
     _lib: ctypes.CDLL
     _handle: 'ctypes.c_void_p | None'
-    _closer: Callable[[Any], None]
-    _router: bool
     _state: threading.Condition
     _active: int
     _closing: bool
@@ -162,34 +169,47 @@ class Engine:
         raise TypeError('Use Engine.open() or Engine.open_router()')
 
     @classmethod
-    def _create(cls, lib, router, argument, threads):
-        opener, closer = (lib.dtl_router_open, lib.dtl_router_close) if router else (lib.dtl_open, lib.dtl_close)
+    def _create(cls, lib, router, argument, config):
+        opener = lib.dtl_open_router if router else lib.dtl_open
         handle, error = ctypes.c_void_p(), ctypes.c_void_p()
-        status = opener(argument, ctypes.byref(_options(lib, threads)), ctypes.byref(handle), ctypes.byref(error))
+        status = opener(argument, config, ctypes.byref(handle), ctypes.byref(error))
         _check(lib, status, error)
         if not handle.value:
             raise LayaError(Status.MODEL_ERROR, 'Native engine returned null')
         engine = object.__new__(cls)
-        engine._lib, engine._handle, engine._closer = lib, handle, closer
-        engine._router = router
+        engine._lib, engine._handle = lib, handle
         engine._state = threading.Condition()
         engine._active, engine._closing, engine._deferred = 0, False, False
         engine._local = threading.local()
         return engine
 
     @classmethod
-    def open(cls, model_path, threads=0):
-        """Load a local GGUF. ``threads`` 0 selects automatically (at most 4)."""
+    def open(cls, model_path, *, threads=0, context_tokens=None, temperatures=None):
+        """Load a local GGUF.
+
+        ``threads`` 0 selects automatically (at most 4). ``context_tokens`` is the
+        prompt capacity (default 512, at most the model's trained length).
+        ``temperatures`` maps calibration keys such as ``"choice"`` or
+        ``"noul.2"`` to positive overrides. Unset options use the library defaults.
+        """
         lib = _library()
+        config = _open_config(threads, context_tokens, temperatures)
         path = _encode(os.fspath(model_path), 'model path')
-        return cls._create(lib, False, path, threads)
+        return cls._create(lib, False, path, config)
 
     @classmethod
-    def open_router(cls, config, threads=0):
-        """Open a bounded registry: ``{"models": {"id": "path.gguf"}, "max_loaded": 1}``."""
+    def open_router(cls, config, *, threads=0, context_tokens=None, temperatures=None):
+        """Open a bounded registry of local models.
+
+        ``config`` is a dict or JSON string:
+        ``{"models": {"id": "path.gguf" | {"path": ..., "config": {...}}}, "max_loaded": 1}``.
+        The open options apply to every route; a route's own ``config`` overrides
+        them key by key.
+        """
         lib = _library()
         text = config if isinstance(config, str) else json.dumps(config, ensure_ascii=False)
-        return cls._create(lib, True, _encode(text, 'router config'), threads)
+        return cls._create(lib, True, _encode(text, 'router config'),
+                           _open_config(threads, context_tokens, temperatures))
 
     def _enter(self):
         with self._state:
@@ -205,24 +225,16 @@ class Engine:
             if not self._active:
                 if self._deferred and self._handle is not None:
                     handle, self._handle = self._handle, None
-                    self._closer(handle)
+                    self._lib.dtl_close(handle)
                 self._state.notify_all()
 
     def info(self):
-        """Model metadata; routers report the common runtime capabilities."""
+        """Model metadata and calibration; routers report the runtime only."""
         self._enter()
         try:
-            return _info(self._lib, None if self._router else self._handle)
+            return _info(self._lib, self._handle)
         finally:
             self._leave()
-
-    def decide(self, request, *, on_event=None, request_id=0, timeout=None, cancel=None):
-        """Primitive request with legacy semantics: unrelated top-level fields are ignored.
-
-        On a router, ``decide`` uses the strict ``execute`` semantics: requests need
-        ``model`` and unrelated fields are rejected.
-        """
-        return self._call(True, request, on_event, request_id, timeout, cancel)
 
     def execute(self, request, *, on_event=None, request_id=0, timeout=None, cancel=None):
         """One primitive or structured request, or a list of up to 32 requests.
@@ -232,7 +244,7 @@ class Engine:
         it expires). ``cancel`` is a ``CancelToken``; cancelling it stops the call
         at the next safe point with status 5.
         """
-        return self._call(False, request, on_event, request_id, timeout, cancel)
+        return self._call(request, on_event, request_id, timeout, cancel)
 
     async def execute_async(self, request, **options):
         """``execute`` on a worker thread; cancelling the task cancels the native call.
@@ -240,9 +252,6 @@ class Engine:
         ``on_event`` then runs on that worker thread, not the event loop's.
         """
         return await self._run_async(self.execute, request, options)
-
-    async def decide_async(self, request, **options):
-        return await self._run_async(self.decide, request, options)
 
     @staticmethod
     async def _run_async(method, request, options):
@@ -254,7 +263,7 @@ class Engine:
             task.cancel()
             raise
 
-    def _call(self, legacy, request, on_event, request_id, timeout, cancel):
+    def _call(self, request, on_event, request_id, timeout, cancel):
         text = request if isinstance(request, str) else json.dumps(request, ensure_ascii=False, allow_nan=False)
         payload = _encode(text, 'request')
         if on_event is not None and not callable(on_event):
@@ -276,26 +285,23 @@ class Engine:
             # A native flag read by the library itself: backend worker threads
             # poll it without taking the GIL.
             options.should_cancel = ctypes.cast(lib.dtl_cancel_flag, _native.CANCEL_CALLBACK)
-            options.user_data = ctypes.addressof(flag)
-        observer = _native.Observer(request_id=request_id)
+            options.cancel_user_data = ctypes.addressof(flag)
+        options.request_id = request_id
         if on_event is not None:
             def notify(event, _):
                 try:
                     on_event(json.loads(event.decode('utf-8', 'replace')))
                 except Exception:
                     pass  # Observer failures never change inference results.
-            observer.callback = _native.EVENT_CALLBACK(notify)
-        if self._router:
-            function = lib.dtl_router_execute_with_options
-        else:
-            function = lib.dtl_decide_with_options if legacy else lib.dtl_execute_with_options
+            callback = _native.EVENT_CALLBACK(notify)  # kept alive until the call returns
+            options.on_event = callback
         result, error = ctypes.c_void_p(), ctypes.c_void_p()
         self._enter()
         for token in tokens:
             token._attach(flag)
         try:
-            status = function(self._handle, payload, ctypes.byref(observer), ctypes.byref(options),
-                              ctypes.byref(result), ctypes.byref(error))
+            status = lib.dtl_execute(self._handle, payload, ctypes.byref(options),
+                                     ctypes.byref(result), ctypes.byref(error))
         finally:
             for token in tokens:
                 token._detach(flag)
@@ -323,7 +329,7 @@ class Engine:
             # Released under the lock, so a concurrent close() also returns only after it.
             handle, self._handle = self._handle, None
             if handle is not None:
-                self._closer(handle)
+                self._lib.dtl_close(handle)
 
     def __enter__(self):
         return self
@@ -333,5 +339,5 @@ class Engine:
 
     def __del__(self):
         if getattr(self, '_handle', None) is not None and not self._active:
-            self._closer(self._handle)
+            self._lib.dtl_close(self._handle)
             self._handle = None

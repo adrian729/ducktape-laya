@@ -17,16 +17,16 @@ real = unittest.skipUnless(MODEL, 'LAYA_MODEL is not set')
 
 class Basics(unittest.TestCase):
     def test_runtime_info(self):
-        self.assertEqual(laya.runtime_info()['abi_version'], 1)
+        self.assertEqual(laya.runtime_info()['abi_version'], 2)
 
     def test_rejects_bad_path(self):
         with self.assertRaises(laya.LayaError) as caught:
-            laya.Engine.open('missing.gguf', 2)
+            laya.Engine.open('missing.gguf', threads=2)
         self.assertNotEqual(caught.exception.status, 0)
 
     def test_rejects_nul(self):
         with self.assertRaises(laya.LayaError) as caught:
-            laya.Engine.open('a\0b', 2)
+            laya.Engine.open('a\0b', threads=2)
         self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
 
     def test_constructor_is_private(self):
@@ -34,7 +34,7 @@ class Basics(unittest.TestCase):
             laya.Engine()
 
     def test_observer_failures_are_contained(self):
-        with laya.Engine.open_router({'models': {'unused': __file__}}, 1) as router:
+        with laya.Engine.open_router({'models': {'unused': __file__}}, threads=1) as router:
             calls = []
             def explode(event):
                 calls.append(event)
@@ -52,8 +52,18 @@ class Basics(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('DUCKTAPE_LAYA_LIB_DIR is set', result.stderr)
 
+    def test_invalid_open_options(self):
+        for kwargs in ({'threads': -1}, {'threads': 257}, {'threads': True}):
+            with self.assertRaises(ValueError):
+                laya.Engine.open('x.gguf', **kwargs)
+        with self.assertRaises(TypeError):
+            laya.Engine.open('x.gguf', context_tokens='64')
+        with self.assertRaises(laya.LayaError) as caught:  # unknown config key
+            laya.Engine.open_router({'models': {'unused': __file__}}, temperatures={'x': 'y'})
+        self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+
     def test_close_is_idempotent(self):
-        router = laya.Engine.open_router({'models': {'unused': __file__}}, 1)
+        router = laya.Engine.open_router({'models': {'unused': __file__}}, threads=1)
         router.close()
         router.close()
         with self.assertRaises(laya.EngineClosedError) as caught:
@@ -65,7 +75,7 @@ class Basics(unittest.TestCase):
 class RealModel(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.engine = laya.Engine.open(MODEL, 2)
+        cls.engine = laya.Engine.open(MODEL, threads=2)
         cls.baseline = cls.engine.execute(REQUEST)
 
     @classmethod
@@ -75,7 +85,6 @@ class RealModel(unittest.TestCase):
     def test_features(self):
         engine = self.engine
         tagged = REQUEST.replace('{', '{"metadata":"caller tag",', 1)
-        self.assertEqual(engine.decide(tagged), engine.decide(REQUEST))
         with self.assertRaises(laya.LayaError) as caught:
             engine.execute(tagged)
         self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
@@ -91,11 +100,61 @@ class RealModel(unittest.TestCase):
         nested = []
         engine.execute(STRUCTURED, request_id=23, on_event=lambda _: nested.append(engine.execute(STRUCTURED)))
         self.assertEqual(nested, [single, single])
-        self.assertEqual(engine.info()['model']['decision_type'], 'laya')
+        info = engine.info()
+        self.assertEqual(info['model']['decision_type'], 'laya')
+        self.assertIn('context_tokens', info['model'])
+        self.assertIn('trained_context_tokens', info['model'])
+        self.assertNotIn('max_tokens', info['model'])
+        self.assertIn('default_context_tokens', info['limits'])
+        answer = self.baseline['answers']['refund']
+        self.assertIn('answer_confidence', answer)
+        self.assertIn('confidence', answer)
         self.assertEqual(engine.execute(REQUEST), self.baseline)
 
+    def test_open_options(self):
+        with laya.Engine.open(MODEL, threads=1, context_tokens=64,
+                              temperatures={'noul': 1.0}) as engine:
+            self.assertEqual(engine.info()['model']['context_tokens'], 64)
+            self.assertIn('answers', engine.execute(REQUEST))
+            # Per-request max_tokens is bounded by the engine's context_tokens.
+            self.assertIn('answers', engine.execute(dict(json.loads(REQUEST), max_tokens=64)))
+            with self.assertRaises(laya.LayaError) as caught:
+                engine.execute(dict(json.loads(REQUEST), max_tokens=65))
+            self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+        for kwargs in ({'context_tokens': 1}, {'temperatures': {'noul': -1.0}},
+                       {'temperatures': {'bogus': 1.0}}):
+            with self.assertRaises(laya.LayaError) as caught:
+                laya.Engine.open(MODEL, threads=1, **kwargs)
+            self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT, kwargs)
+        with self.assertRaises(laya.LayaError) as caught:
+            laya.Engine.open(MODEL, threads=1, context_tokens=10 ** 9)
+        self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+        for threads in (-1, 257):
+            with self.assertRaises(ValueError):
+                laya.Engine.open(MODEL, threads=threads)
+
+    def test_request_temperatures(self):
+        request = json.loads(REQUEST)
+        hot = self.engine.execute(dict(request, temperatures={'noul': 3.0}))
+        self.assertIn('answers', hot)
+        with self.assertRaises(laya.LayaError) as caught:
+            self.engine.execute(dict(request, temperatures={'noul': 0}))
+        self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+        self.assertEqual(self.engine.execute(REQUEST), self.baseline)
+
+    def test_router_route_config(self):
+        config = {'models': {'small': {'path': MODEL, 'config': {'context_tokens': 64}},
+                             'plain': MODEL}, 'max_loaded': 1}
+        with laya.Engine.open_router(config, threads=2, context_tokens=128) as router:
+            request = dict(json.loads(STRUCTURED), model='small', max_tokens=100)
+            with self.assertRaises(laya.LayaError) as caught:  # route override (64) beats open option (128)
+                router.execute(request)
+            self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+            request['model'] = 'plain'
+            self.assertEqual(router.execute(request)['model'], 'plain')
+
     def test_close_inside_callback(self):
-        engine = laya.Engine.open(MODEL, 2)
+        engine = laya.Engine.open(MODEL, threads=2)
         # The running call finishes; the model is released when it returns.
         self.assertEqual(engine.execute(REQUEST, on_event=lambda _: engine.close()), self.baseline)
         self.assertIsNone(engine._handle)
@@ -104,22 +163,21 @@ class RealModel(unittest.TestCase):
         engine.close()
 
     def test_router(self):
-        with laya.Engine.open_router({'models': {'english': MODEL}, 'max_loaded': 1}, 2) as router:
+        with laya.Engine.open_router({'models': {'english': MODEL}, 'max_loaded': 1}, threads=2) as router:
             routed = router.execute(STRUCTURED.replace('{', '{"model":"english",', 1))
             self.assertEqual(routed['model'], 'english')
             with self.assertRaises(laya.LayaError) as caught:
                 router.execute(STRUCTURED)
             self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
-            self.assertEqual(router.info()['abi_version'], 1)
+            self.assertEqual(router.info()['abi_version'], 2)
 
     def test_cancellation_and_deadline(self):
         engine = self.engine
         cancelled = laya.CancelToken()
         cancelled.cancel()
-        for method in (engine.execute, engine.decide):
-            with self.assertRaises(laya.LayaError) as caught:
-                method(REQUEST, cancel=cancelled)
-            self.assertEqual(caught.exception.status, laya.Status.CANCELLED)
+        with self.assertRaises(laya.LayaError) as caught:
+            engine.execute(REQUEST, cancel=cancelled)
+        self.assertEqual(caught.exception.status, laya.Status.CANCELLED)
         with self.assertRaises(laya.LayaError) as caught:
             engine.execute(REQUEST, timeout=0.001)
         self.assertEqual(caught.exception.status, laya.Status.DEADLINE_EXCEEDED)
@@ -163,7 +221,7 @@ class RealModel(unittest.TestCase):
         self.assertEqual(self.engine.execute(REQUEST), self.baseline)
 
     def test_close_waits_for_running_calls(self):
-        engine = laya.Engine.open(MODEL, 2)
+        engine = laya.Engine.open(MODEL, threads=2)
         started, results = threading.Event(), []
         worker = threading.Thread(target=lambda: results.append(
             engine.execute(REQUEST, on_event=lambda _: started.set())))

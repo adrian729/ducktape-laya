@@ -5,6 +5,7 @@
 #error "Build must use the patched nlohmann/json.hpp (patches/llama.cpp/nlohmann-nothrow-destroy.patch)"
 #endif
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -12,9 +13,18 @@ namespace dtl {
 using json = nlohmann::ordered_json;
 class execution;
 struct prepared_question;
+using temperature_map = std::map<std::string, float>;
+// Engine settings from the open config (dtl_open, router routes).
+struct engine_config {
+    uint32_t threads = 0;
+    size_t context_tokens = 0;      // 0: 512, capped by the trained length
+    temperature_map temperatures;   // overrides the GGUF calibration, key by key
+};
 struct question {
     std::string id, type;
     json instructions, options;
+    size_t max_tokens = 0;          // per-request prompt limit; 0: the engine capacity
+    std::shared_ptr<const temperature_map> temperatures; // per-request overrides
     question(std::string id, std::string type, json instructions, json options);
     ~question();
     question(question &&) noexcept;
@@ -28,7 +38,7 @@ private:
 // consumed by the same backend that prepared them, before that backend closes.
 class backend {
 public:
-    backend(const char *path, uint32_t threads);
+    backend(const char *path, const engine_config &config);
     ~backend();
     json info() const;
     void prepare(question &q, const json &state);

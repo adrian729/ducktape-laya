@@ -4,7 +4,7 @@ namespace Ducktape.Laya;
 
 public sealed class LayaCallOptions
 {
-    /// <summary>Identifier reported in observer events.</summary>
+    /// <summary>Identifier reported in events.</summary>
     public ulong RequestId { get; set; }
     /// <summary>Deadline from execution setup; null or zero disables it, otherwise up to 24 hours (rounded up to whole milliseconds); negative or longer values throw ArgumentOutOfRangeException.</summary>
     public TimeSpan? Timeout { get; set; }

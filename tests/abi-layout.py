@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile C, C++ and Rust layout probes against frozen Linux x86-64 ABI 1."""
+"""Compile C, C++ and Rust layout probes against frozen Linux x86-64 ABI 2."""
 import json
 import os
 import pathlib
@@ -8,17 +8,10 @@ import subprocess
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-STRUCTS = {
-    'Options': ('dtl_options', ['struct_size', 'abi_version', 'threads', 'reserved']),
-    'Observer': ('dtl_observer', ['request_id', 'callback', 'user_data']),
-    'CallOptions': ('dtl_call_options', ['struct_size', 'reserved', 'timeout_ms', 'should_cancel', 'user_data']),
-}
+FIELDS = ['struct_size', 'reserved', 'request_id', 'timeout_ms', 'on_event', 'event_user_data', 'should_cancel', 'cancel_user_data']
+STRUCTS = {'CallOptions': ('dtl_call_options', FIELDS)}
 # Changing these requires an intentional ABI decision, not a regenerated golden.
-EXPECTED = {
-    'Options': [16, 4, 0, 4, 8, 12],
-    'Observer': [24, 8, 0, 8, 16],
-    'CallOptions': [32, 8, 0, 4, 8, 16, 24],
-}
+EXPECTED = {'CallOptions': [56, 8, 0, 4, 8, 16, 24, 32, 40, 48]}
 
 with tempfile.TemporaryDirectory(prefix='ducktape-abi-layout-') as directory:
     tmp = pathlib.Path(directory)
@@ -46,5 +39,5 @@ with tempfile.TemporaryDirectory(prefix='ducktape-abi-layout-') as directory:
         output = subprocess.check_output([binary], text=True)
         actual = {line.split()[0]: list(map(int, line.split()[1:])) for line in output.splitlines()}
         if actual != EXPECTED:
-            raise RuntimeError(f'{language} layout differs from ABI 1: {actual}')
-        print(f'{language}: frozen ABI 1 sizes, alignments and field offsets match')
+            raise RuntimeError(f'{language} layout differs from ABI 2: {actual}')
+        print(f'{language}: frozen ABI 2 sizes, alignments and field offsets match')

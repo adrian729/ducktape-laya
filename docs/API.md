@@ -6,42 +6,34 @@ the same C ABI. Native inference performs no downloads and uses no server.
 Browser asset fetching is explicitly controlled by the host; see
 [BROWSER.md](BROWSER.md).
 
-The original ABI v1 functions and `dtl_options` layout remain available.
-`dtl_execute` adds the features below; `dtl_router_open`, `dtl_router_execute`
-and `dtl_router_close` add a local registry. The options still select CPU threads.
-All results/errors use `dtl_free`. No partial result is returned on failure.
+The C ABI (version 2) has one handle type for a single model or a router, one
+call function and JSON for configuration and requests. All results/errors use
+`dtl_free`. No partial result is returned on failure. Requests are strict:
+unsupported fields are rejected.
 
-The existing single-model `decide()` methods retain `dtl_decide` semantics:
-primitive requests only, with unrelated top-level metadata ignored. Bindings
-with hooks or controls use `dtl_decide_with_options`, preserving that validation
-behavior. `dtl_decide_observed` remains available to C callers. Use `execute` for
-strict validation, structured decisions or batches. Router methods, including
-`decide` on a router, always use the strict API: requests need `model` and
-unrelated metadata is rejected.
-
-| Interface | Single, structured or batch request | Registry |
-|---|---|---|
-| C | `dtl_execute(engine, json, observer_or_NULL, &result, &error)` | `dtl_router_open(config, options, &router, &error)`; `dtl_router_execute` |
-| C++ | `engine.execute(json, observer_or_nullptr)` | `ducktape::router(config, options).execute(json)` |
-| Rust | `engine.execute(json)`; `execute_observed(json, id, callback)` | `Engine::open_router(config_json, threads)` |
-| Node/TS | `execute`, `decide`, `decideStructured`, `decideBatch` | `Laya.openRouter(config, options)` |
-| Python | `engine.execute(request, on_event=, timeout=, cancel=)`; `execute_async` | `Engine.open_router(config, threads)` |
-| Go | `engine.Execute(json)`; `ExecuteContext(ctx, json, &CallOptions{})` | `laya.OpenRouter(configJSON, threads)` |
-| Java | `laya.execute(json)`; `execute(json, CallOptions)` | `Laya.openRouter(configJson, threads)` |
-| .NET | `engine.Execute(json)`; `Execute(json, options, token)`; `ExecuteAsync` | `LayaEngine.OpenRouter(configJson, threads)` |
-| Browser | Same execution methods as Node/TS | `Laya.openRouter(modelAssets, options)`; explicit URLs and browser asset limits |
+| Interface | Open | Call | Router |
+|---|---|---|---|
+| C | `dtl_open(path, config_json, &engine, &error)` | `dtl_execute(engine, json, call_options, &result, &error)` | `dtl_open_router(router_json, config_json, &engine, &error)` |
+| C++ | `ducktape::engine::open(path, config_json)` | `engine.execute(json, call_options)` | `ducktape::engine::open_router(router_json, config_json)` |
+| Rust | `Engine::open(path, &Config)` | `engine.execute(json)`; `execute_with(json, CallOptions)` | `Engine::open_router(router_json, &Config)` |
+| Node/TS | `Laya.open(path, options)` | `execute(request, options)` | `Laya.openRouter(config, options)` |
+| Python | `Engine.open(path, threads=, context_tokens=, temperatures=)` | `execute(request, on_event=, request_id=, timeout=, cancel=)`; `execute_async` | `Engine.open_router(config, ...)` |
+| Go | `laya.Open(path, *Config)` | `Execute(json)`; `ExecuteContext(ctx, json, *CallOptions)` | `laya.OpenRouter(routerJSON, *Config)` |
+| Java | `Laya.open(path, Config)` | `execute(json)`; `execute(json, CallOptions)` | `Laya.openRouter(routerJson, Config)` |
+| .NET | `LayaEngine.Open(path, LayaConfig)` | `Execute(json, options, token)`; `ExecuteAsync` | `LayaEngine.OpenRouter(routerJson, LayaConfig)` |
+| Browser | `Laya.open(assets, options)` | Same as Node/TS | `Laya.openRouter(modelAssets, options)`; explicit URLs and browser asset limits |
 
 The bindings differ only where their language has a convention:
 
-| Binding | Engine type | Threads | Results | Deadline | Cancellation | Events run on | Async | Closed engine |
-|---|---|---|---|---|---|---|---|---|
-| C++ | `ducktape::laya`, `ducktape::router` | `dtl_options` | JSON string | `timeout_ms` | `should_cancel` callback | calling thread | — | destructor |
-| Rust | `Engine` | required (0 = auto) | JSON string | `timeout_ms` | `&AtomicBool` | calling thread | — | ownership |
-| Node/TS | `Laya` | default 0 | parsed | `timeoutMs` | `AbortSignal` | host thread | promises | `code: 'ERR_LAYA_CLOSED'` |
-| Python | `Engine` | default 0 | parsed | `timeout` (seconds) | `CancelToken` | thread running the call | `execute_async` | `EngineClosedError` |
-| Go | `*Engine` | required (0 = auto) | JSON string | context deadline | context | calling goroutine | — | `ErrClosed` |
-| Java | `Laya` | default 0 | JSON string | `Duration` | `CancellationToken` | calling thread | — | `LayaClosedException` |
-| .NET | `LayaEngine` | default 0 | JSON string | `TimeSpan` | `CancellationToken` | calling thread (pool thread for `*Async`) | `ExecuteAsync` | `ObjectDisposedException` |
+| Binding | Engine type | Results | Deadline | Cancellation | Events run on | Async | Closed engine |
+|---|---|---|---|---|---|---|---|
+| C++ | `ducktape::engine` | JSON string | `timeout_ms` | `should_cancel` callback | calling thread | — | destructor |
+| Rust | `Engine` | JSON string | `timeout_ms` | `&AtomicU32` flag | calling thread | — | ownership |
+| Node/TS | `Laya` | parsed | `timeoutMs` | `AbortSignal` | host thread | promises | `code: 'ERR_LAYA_CLOSED'` |
+| Python | `Engine` | parsed | `timeout` (seconds) | `CancelToken` | thread running the call | `execute_async` | `EngineClosedError` |
+| Go | `*Engine` | JSON string | context deadline | context | calling goroutine | — | `ErrClosed` |
+| Java | `Laya` | JSON string | `Duration` | `CancellationToken` | calling thread | — | `LayaClosedException` |
+| .NET | `LayaEngine` | JSON string | `TimeSpan` | `CancellationToken` | calling thread (pool thread for `*Async`) | `ExecuteAsync` | `ObjectDisposedException` |
 
 Every binding reports native failures with the C status (`status`, `Status`
 constants), maps cancellation to 5 and deadlines to 6 (.NET raises the standard
@@ -50,6 +42,34 @@ close, and allows closing from inside an event callback (the handle is released
 when the running call finishes; Go uses `CloseDeferred()` there). Arguments a
 binding checks itself (thread counts, timeout ranges) use the language's standard
 argument errors.
+
+## Engine configuration
+
+Opening takes an optional JSON config; each binding exposes the same keys as
+native options. Unknown keys are rejected.
+
+| Key | Meaning |
+|---|---|
+| `threads` | 0 (automatic, at most 4) or 1–256 CPU threads |
+| `context_tokens` | The longest prompt the engine reserves memory for: 32 up to the model's trained length. Default 512. Compute follows each prompt's real length; only memory grows with this value. The pinned English model's file allows 8,192, but the original Laya uses it with 512 tokens, so longer prompts are untested for accuracy |
+| `temperatures` | Calibration overrides, keyed like the model's metadata: a type (`choice`, `score`, `noul`) or a type and option-count bucket (`choice.2`, `choice.3_5`, `choice.6_10`, `choice.11`, `score.3_5`, `noul.2`, ...). Values must be finite and greater than 0 |
+
+A temperature is looked up most specific first: the bucket key, then the type
+key, then 1. An override replaces only the keys it names, so to change a
+two-option `choice` when the model defines `choice.2`, override `choice.2`; an
+override of plain `choice` applies only to buckets the model leaves undefined.
+Fit temperatures on your own data with the original Laya's calibration tools and
+pass them here.
+
+A router's config applies to every route; a route given as
+`{"path": "...", "config": {...}}` overrides it key by key. Routes with the same
+file and the same effective config share one loaded model.
+
+Each request may add `max_tokens` (a prompt limit up to the engine's
+`context_tokens`) and `temperatures` (overrides for that request only, merged over
+the engine's). A prompt over its limit is rejected with status 1. `info()` on a
+single-model engine reports `context_tokens` and `trained_context_tokens`.
+
 ## Primitive requests and results
 
 A primitive request contains non-null `state` and 1–32 named `questions`.
@@ -118,12 +138,13 @@ probability across the copies. Each copy costs one more model pass.
 
 Pass a JSON array of 1–32 requests; results are an array in the same order.
 Primitive and structured requests can be mixed. Limits apply to the entire
-call: 1 MiB UTF-8, 128 questions total, 32 questions per request, 512 tokens per
-question, depth 64. Existing model instruction/option limits still apply. In
-Node, `decideBatch` checks for an array; every binding's `execute` accepts one:
+call: 1 MiB UTF-8, 128 questions total, 32 questions per request, depth 64; each
+prompt must fit its token limit (`max_tokens`, at most the engine's
+`context_tokens`). Existing model instruction/option limits still apply. Every
+binding's `execute` accepts an array:
 
 ```js
-const results = await engine.decideBatch([requestA, requestB]);
+const results = await engine.execute([requestA, requestB]);
 ```
 
 On a single engine, every request is planned and tokenized before any inference.
@@ -176,14 +197,14 @@ loading, lock waits and inference; native observer execution can affect elapsed
 time. There is no promise that observers provide precise inference benchmarks.
 
 ```js
-await engine.decideStructured(request, {
+await engine.execute(request, {
   onEvent(event) { console.log(event.event, event.request_id); }
 });
 ```
 
 Native callbacks run synchronously on the caller's thread, outside the engine
-and router locks. A `dtl_observer` and its user data are borrowed until the call
-returns; each event string is borrowed only during the callback. Reentrant calls
+and router locks. The observer fields of `dtl_call_options` (`request_id`,
+`on_event`, `event_user_data`) are borrowed until the call returns; each event string is borrowed only during the callback. Reentrant calls
 are allowed, but C/C++ callbacks must not destroy the active handle, and no
 callback may create circular waits. The other bindings defer a close requested
 from inside a callback until the running call returns. Keep callbacks short. Observer errors cannot change decision results:
@@ -207,7 +228,7 @@ const router = await Laya.openRouter({
   max_loaded: 1
 }, { threads: 2, maxPending: 16 });
 try {
-  const result = await router.decide({ ...request, model: 'english' });
+  const result = await router.execute({ ...request, model: 'english' });
   console.log(result.model, result.answers);
 } finally { await router.close(); }
 ```
@@ -240,10 +261,8 @@ running calls (Rust through ownership, JS by draining its queue).
 
 ## Cancellation and deadlines
 
-The additive C APIs `dtl_execute_with_options`, `dtl_decide_with_options` and
-`dtl_router_execute_with_options` take a borrowed `dtl_call_options`. Initialize
-it with `dtl_default_call_options()`. Existing entry points retain their behavior.
-`timeout_ms` is zero (disabled) or 1..86400000. The native deadline begins during
+`dtl_execute` takes an optional borrowed `dtl_call_options`. Initialize it with
+`dtl_default_call_options()`. `timeout_ms` is zero (disabled) or 1..86400000. The native deadline begins during
 execution setup after the start observer, and includes validation, waiting for
 the handle lock and inference. Cancellation callbacks must be nonblocking and
 thread-safe, may run on backend threads, and must not reenter the active handle.
@@ -252,7 +271,7 @@ Return zero to continue, `DTL_DEADLINE_EXCEEDED` for a host deadline, or another
 nonzero value to cancel. The first observed stop is latched even if a caller
 subsequently resets its flag. C++ callback exceptions count as cancellation.
 
-New statuses: `DTL_CANCELLED` (5) and `DTL_DEADLINE_EXCEEDED` (6). Failure returns
+Statuses: `DTL_CANCELLED` (5) and `DTL_DEADLINE_EXCEEDED` (6). Failure returns
 no partial result. Waiting calls check controls while acquiring the mutex;
 preparation and question boundaries check them too. CPU execution uses the
 upstream abort callback and resets it before releasing the inference lock.
@@ -260,13 +279,12 @@ Cancellation is cooperative, not a thread kill or a hard wall-clock guarantee.
 Model loading and template execution may finish before the next safe check.
 Router cache mutations are not rolled back by a cancelled request.
 
-C++ `execute` accepts an optional third `dtl_call_options*`; `decide` accepts an
-optional second one. Rust `execute_with_options`/`decide_with_options` accept
-`CallOptions`, including a borrowed `AtomicBool` flag and `timeout_ms`, and the
-`*_observed_with_options` variants combine them with an event callback. Hosts
+C++ `execute` takes a `call_options` with `timeout_ms`, `should_cancel` and
+`on_event`. Rust `execute_with` takes `CallOptions` with `timeout_ms`, a borrowed
+`AtomicU32` cancel flag and an event callback. Hosts
 whose own callbacks are costly on backend threads (interpreter locks, VM thread
 attachment) pass `dtl_cancel_flag` as `should_cancel` with a pointer to an aligned
-`uint32_t` they set; the Python, Java, .NET and Go bindings do this.
+`uint32_t` they set; the Rust, Python, Java, .NET and Go bindings do this.
 
 Node calls accept `{ signal, timeoutMs }`. Their deadline starts at enqueue and
 includes time waiting in the worker queue. Abort/deadline rejects the promise

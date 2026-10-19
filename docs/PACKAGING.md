@@ -26,7 +26,7 @@ The installed tree includes versioned shared libraries, C/C++ headers, licenses,
 model/runtime identity records, relocatable CMake targets and pkg-config metadata.
 It also includes `share/ducktape-laya/download-model.py`. To provision a model
 for an application, explicitly run the helper with the application's resource
-directory, then pass the resulting file path to `dtl_open` or `ducktape::laya`:
+directory, then pass the resulting file path to `dtl_open` or `ducktape::engine::open`:
 
 ```sh
 python3 build/staging/share/ducktape-laya/download-model.py /path/to/app/resources

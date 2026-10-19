@@ -8,19 +8,22 @@ public class EngineTests
     const string Primitive = """{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}""";
     const string Schema = """{"state":"Please refund me.","schema":{"type":"object","properties":{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}""";
 
+    static readonly LayaConfig Two = new() { Threads = 2 };
+    static readonly LayaConfig One = new() { Threads = 1 };
     static string? Model => Environment.GetEnvironmentVariable("LAYA_MODEL") is { Length: > 0 } m ? m : null;
     static string Quote(string path) => path.Replace("\\", "\\\\").Replace("\"", "\\\"");
     static string Config(params (string Name, string Path)[] models) =>
         "{\"models\":{" + string.Join(",", models.Select(m => $"\"{m.Name}\":\"{Quote(m.Path)}\"")) + "},\"max_loaded\":1}";
+    static string WithRaw(string json, string members) => "{" + members + "," + json[1..];
     static string WithKey(string json, string key, string value) => "{" + $"\"{key}\":\"{value}\"," + json[1..];
 
     [Fact]
-    public void RejectsBadPath() => Assert.Throws<LayaException>(() => LayaEngine.Open("missing.gguf", 2));
+    public void RejectsBadPath() => Assert.Throws<LayaException>(() => LayaEngine.Open("missing.gguf", Two));
 
     [Fact]
     public void RejectsNul()
     {
-        Assert.Equal(1, Assert.Throws<LayaException>(() => LayaEngine.Open("a\0b", 2)).Status);
+        Assert.Equal(1, Assert.Throws<LayaException>(() => LayaEngine.Open("a\0b", Two)).Status);
         Assert.Equal(LayaStatus.InvalidArgument, Assert.Throws<LayaException>(() => LayaEngine.OpenRouter("{\0}")).Code);
     }
 
@@ -29,11 +32,15 @@ public class EngineTests
     {
         Assert.Throws<ArgumentNullException>(() => LayaEngine.Open(null!));
         Assert.Throws<ArgumentNullException>(() => LayaEngine.OpenRouter(null!));
-        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.Open("missing.gguf", -1));
-        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.Open("missing.gguf", 257));
-        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.OpenRouter("{}", 257));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.Open("missing.gguf", new LayaConfig { Threads = -1 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.Open("missing.gguf", new LayaConfig { Threads = 257 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.OpenRouter("{}", new LayaConfig { Threads = 257 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.Open("missing.gguf", new LayaConfig { ContextTokens = 0 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.Open("missing.gguf", new LayaConfig { ContextTokens = -5 }));
+        foreach (var bad in new[] { 0.0, -1.0, double.NaN, double.PositiveInfinity })
+            Assert.Throws<ArgumentOutOfRangeException>(() => LayaEngine.Open("missing.gguf", new LayaConfig { Temperatures = new Dictionary<string, double> { ["choice"] = bad } }));
         // 256 is accepted by the binding; the missing file fails natively.
-        Assert.Throws<LayaException>(() => LayaEngine.Open("missing.gguf", 256));
+        Assert.Throws<LayaException>(() => LayaEngine.Open("missing.gguf", new LayaConfig { Threads = 256 }));
     }
 
     [Fact]
@@ -42,7 +49,7 @@ public class EngineTests
         var file = Path.GetTempFileName();
         try
         {
-            using var engine = LayaEngine.OpenRouter(Config(("unused", file)), 1);
+            using var engine = LayaEngine.OpenRouter(Config(("unused", file)), One);
             var seen = new List<string>();
             var options = new LayaCallOptions { RequestId = 7, OnEvent = seen.Add };
             var task = engine.ExecuteAsync("{}", options);
@@ -57,13 +64,43 @@ public class EngineTests
     }
 
     [Fact]
+    public void ConfigSerializesDeterministically()
+    {
+        Assert.Equal("{}", new LayaConfig().ToJson());
+        var config = new LayaConfig
+        {
+            Threads = 3,
+            ContextTokens = 256,
+            Temperatures = new Dictionary<string, double> { ["noul.2"] = 2, ["choice"] = 1.5, ["choice.3_5"] = 1.7 },
+        };
+        Assert.Equal("""{"threads":3,"context_tokens":256,"temperatures":{"choice":1.5,"choice.3_5":1.7,"noul.2":2}}""", config.ToJson());
+    }
+
+    [Fact]
+    public void NativeRejectsBadConfig()
+    {
+        if (Model is not { } path) return;
+        // Below the native minimum of 32.
+        Assert.Equal(1, Assert.Throws<LayaException>(() => LayaEngine.Open(path, new LayaConfig { Threads = 2, ContextTokens = 16 })).Status);
+        // Not a valid temperature key.
+        Assert.Equal(1, Assert.Throws<LayaException>(() => LayaEngine.Open(path, new LayaConfig { Threads = 2, Temperatures = new Dictionary<string, double> { ["bogus"] = 1.5 } })).Status);
+    }
+
+    [Fact]
     public void RuntimeDiagnostics()
     {
-        Assert.Contains("\"abi_version\":1", LayaEngine.RuntimeInfo());
+        Assert.Contains("\"abi_version\":2", LayaEngine.RuntimeInfo());
         if (Model is { } model)
         {
-            using var engine = LayaEngine.Open(model, 2);
-            Assert.Contains("\"decision_type\":\"laya\"", engine.Info());
+            using var engine = LayaEngine.Open(model, Two);
+            var info = engine.Info();
+            Assert.Contains("\"decision_type\":\"laya\"", info);
+            Assert.Contains("\"context_tokens\":", info);
+            Assert.Contains("\"trained_context_tokens\":", info);
+            Assert.DoesNotContain("\"max_tokens\":", info);
+            using var custom = LayaEngine.Open(model, new LayaConfig { Threads = 2, ContextTokens = 128 });
+            Assert.Contains("\"context_tokens\":128", custom.Info());
+            Assert.Contains("\"default_context_tokens\":", LayaEngine.RuntimeInfo());
         }
     }
 
@@ -73,7 +110,7 @@ public class EngineTests
         var file = Path.GetTempFileName();
         try
         {
-            using var engine = LayaEngine.OpenRouter(Config(("unused", file)), 1);
+            using var engine = LayaEngine.OpenRouter(Config(("unused", file)), One);
             var calls = 0;
             var options = new LayaCallOptions { RequestId = 1, OnEvent = _ => { calls++; throw new InvalidOperationException("boom"); } };
             Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute("{}", options)).Status);
@@ -96,7 +133,7 @@ public class EngineTests
         var file = Path.GetTempFileName();
         try
         {
-            var engine = LayaEngine.OpenRouter(Config(("unused", file)), 1);
+            var engine = LayaEngine.OpenRouter(Config(("unused", file)), One);
             engine.Dispose();
             engine.Dispose();
             Assert.Throws<ObjectDisposedException>(() => engine.Execute("{}"));
@@ -111,7 +148,7 @@ public class EngineTests
         var file = Path.GetTempFileName();
         try
         {
-            using var engine = LayaEngine.OpenRouter(Config(("unused", file)), 1);
+            using var engine = LayaEngine.OpenRouter(Config(("unused", file)), One);
             Assert.Throws<ArgumentOutOfRangeException>(() => engine.Execute("{}", new LayaCallOptions { Timeout = TimeSpan.FromDays(2) }));
             Assert.Throws<ArgumentOutOfRangeException>(() => engine.Execute("{}", new LayaCallOptions { Timeout = TimeSpan.FromSeconds(-1) }));
         }
@@ -122,7 +159,7 @@ public class EngineTests
     public void DisposeInsideCallback()
     {
         if (Model is not { } path) return;
-        var engine = LayaEngine.Open(path, 2);
+        var engine = LayaEngine.Open(path, Two);
         var baseline = engine.Execute(Primitive);
         // The running call finishes; the engine is released when it returns.
         Assert.Equal(baseline, engine.Execute(Primitive, new LayaCallOptions { OnEvent = _ => engine.Dispose() }));
@@ -134,9 +171,8 @@ public class EngineTests
     public void RealFeatures()
     {
         if (Model is not { } path) return;
-        using var engine = LayaEngine.Open(path, 2);
+        using var engine = LayaEngine.Open(path, Two);
         var tagged = WithKey(Primitive, "metadata", "caller tag");
-        Assert.Equal(engine.Decide(Primitive), engine.Decide(tagged));
         Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute(tagged)).Status);
 
         var single = engine.Execute(Schema);
@@ -152,7 +188,15 @@ public class EngineTests
         // Reentry on the same engine from an observer.
         engine.Execute(Schema, new LayaCallOptions { RequestId = 23, OnEvent = _ => engine.Execute(Schema) });
 
-        using var router = LayaEngine.OpenRouter(Config(("english", path)), 2);
+        // Per-request settings pass straight through; answers carry both confidence fields.
+        var limited = engine.Execute(WithRaw(Primitive, "\"max_tokens\":64,\"temperatures\":{\"noul\":1.5}"));
+        Assert.Contains("\"answer_confidence\":", limited);
+        Assert.Contains("\"confidence\":", limited);
+        Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute(WithRaw(Primitive, "\"max_tokens\":0"))).Status);
+        Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute(WithRaw(Primitive, "\"max_tokens\":100000"))).Status);
+        Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute(WithRaw(Primitive, "\"temperatures\":{\"noul\":-1}"))).Status);
+
+        using var router = LayaEngine.OpenRouter(Config(("english", path)), Two);
         Assert.Contains("\"model\":\"english\"", router.Execute(WithKey(Schema, "model", "english")));
         Assert.Equal(1, Assert.Throws<LayaException>(() => router.Execute(Schema)).Status);
     }
@@ -161,14 +205,13 @@ public class EngineTests
     public async Task CancellationAndDeadline()
     {
         if (Model is not { } path) return;
-        using var engine = LayaEngine.Open(path, 2);
+        using var engine = LayaEngine.Open(path, Two);
         var baseline = engine.Execute(Primitive);
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
         var sync = Assert.Throws<OperationCanceledException>(() => engine.Execute(Primitive, null, cancelled.Token));
         Assert.Equal(5, Assert.IsType<LayaException>(sync.InnerException).Status);
         Assert.Equal(cancelled.Token, sync.CancellationToken);
-        Assert.Throws<OperationCanceledException>(() => engine.Decide(Primitive, null, cancelled.Token));
         var task = engine.ExecuteAsync(Primitive, null, cancelled.Token);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
         Assert.True(task.IsCanceled);
@@ -187,10 +230,10 @@ public class EngineTests
     public async Task SharedAcrossThreads()
     {
         if (Model is not { } path) return;
-        var engine = LayaEngine.Open(path, 2);
+        var engine = LayaEngine.Open(path, Two);
         var baseline = engine.Execute(Primitive);
         // Two names for one file with one slot: concurrent calls evict each other.
-        var router = LayaEngine.OpenRouter(Config(("a", path), ("b", path)), 2);
+        var router = LayaEngine.OpenRouter(Config(("a", path), ("b", path)), Two);
         using var cts = new CancellationTokenSource();
         var plain = Enumerable.Range(0, 3).Select(_ => Task.Run(() => engine.Execute(Primitive))).ToArray();
         var routed = new[] { "a", "b" }.Select(name => Task.Run(() => (name, router.Execute(WithKey(Primitive, "model", name))))).ToArray();
@@ -209,5 +252,19 @@ public class EngineTests
         Assert.Equal(baseline, await cancelled);
         // Dispose from another thread waits for nothing in flight and is safe to repeat.
         await Task.Run(() => { engine.Dispose(); router.Dispose(); engine.Dispose(); });
+    }
+
+    [Fact]
+    public void RouterRouteConfig()
+    {
+        if (Model is not { } path) return;
+        var q = Quote(path);
+        var json = "{\"models\":{\"small\":{\"path\":\"" + q + "\",\"config\":{\"context_tokens\":64}},\"plain\":\"" + q + "\"},\"max_loaded\":1}";
+        using var router = LayaEngine.OpenRouter(json, new LayaConfig { Threads = 2, ContextTokens = 256 });
+        // The route's own context_tokens (64) overrides the open config (256), so 100 tokens exceed it.
+        var request = WithRaw(Primitive, "\"max_tokens\":100");
+        Assert.Equal(1, Assert.Throws<LayaException>(() => router.Execute(WithKey(request, "model", "small"))).Status);
+        Assert.Contains("\"model\":\"plain\"", router.Execute(WithKey(request, "model", "plain")));
+        Assert.Contains("\"model\":\"small\"", router.Execute(WithKey(WithRaw(Primitive, "\"max_tokens\":60"), "model", "small")));
     }
 }

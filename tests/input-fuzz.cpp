@@ -18,9 +18,9 @@ int main(int argc, char **argv) {
     }
     seeds.push_back(std::string(66, '[') + "0" + std::string(66, ']'));
     seeds.push_back(std::string(1024 * 1024 + 1, ' '));
-    dtl_router *router = nullptr;
+    dtl_engine *router = nullptr;
     char *error = nullptr;
-    auto status = dtl_router_open("{\"models\":{\"fuzz\":\"/proc/self/exe\"}}", nullptr, &router, &error);
+    auto status = dtl_open_router("{\"models\":{\"fuzz\":\"/proc/self/exe\"}}", nullptr, &router, &error);
     dtl_free(error);
     if (status || !router) return 1;
     constexpr unsigned rounds = 20000;
@@ -46,22 +46,22 @@ int main(int argc, char **argv) {
             }
             char *result = nullptr;
             error = nullptr;
-            status = dtl_router_execute(router, input.c_str(), nullptr, &result, &error);
+            status = dtl_execute(router, input.c_str(), nullptr, &result, &error);
             // No fixture is a model. Parsing may succeed, inference must not.
             if (status == DTL_OK || result || status < DTL_INVALID_ARGUMENT || status > DTL_UNSUPPORTED_PLATFORM)
                 throw std::runtime_error("Unexpected execution status/result");
             dtl_free(result); dtl_free(error); ++executions;
-            dtl_router *candidate = nullptr;
+            dtl_engine *candidate = nullptr;
             error = nullptr;
-            status = dtl_router_open(input.c_str(), nullptr, &candidate, &error);
+            status = dtl_open_router(input.c_str(), nullptr, &candidate, &error);
             if ((status == DTL_OK) != (candidate != nullptr))
                 throw std::runtime_error("Router output/status disagreement");
-            dtl_router_close(candidate); dtl_free(error); ++configurations;
+            dtl_close(candidate); dtl_free(error); ++configurations;
         }
-        dtl_router_close(router);
+        dtl_close(router);
     } catch (const std::exception &exception) {
         std::cerr << exception.what() << '\n';
-        dtl_router_close(router);
+        dtl_close(router);
         return 1;
     }
     std::cout << "{\"seed\":\"0x1a7a2026\",\"request_cases\":" << executions

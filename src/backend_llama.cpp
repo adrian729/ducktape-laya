@@ -58,10 +58,10 @@ struct backend::impl {
     std::string source, marker_text;
     jinja::program program;
     llama_token marker, sep;
-    size_t max_head;
-    std::map<std::string, float> temperatures;
+    size_t max_head, capacity, trained;
+    temperature_map temperatures;
 
-    impl(const char *path, uint32_t threads) {
+    impl(const char *path, const engine_config &config) {
         static std::once_flag once;
         ensure_cpu_supported();
         std::call_once(once, [] {
@@ -98,8 +98,13 @@ struct backend::impl {
         if (n <= 0 || n > static_cast<int>(sizeof(piece)))
             throw failure(DTL_MODEL_ERROR, "Invalid mask token");
         marker_text.assign(piece, n);
+        trained = static_cast<size_t>(std::max<int32_t>(0, llama_model_n_ctx_train(model.get())));
+        if (!trained) throw failure(DTL_MODEL_ERROR, "Missing trained context length");
         max_head = std::stoul(meta(model.get(), prefix + "max_head_tokens"));
-        if (!max_head || max_head > 512) throw failure(DTL_MODEL_ERROR, "Invalid head token budget");
+        if (!max_head || max_head > trained) throw failure(DTL_MODEL_ERROR, "Invalid head token budget");
+        capacity = config.context_tokens ? config.context_tokens : std::min<size_t>(512, trained);
+        require(capacity >= 32 && capacity <= trained,
+                "context_tokens must be 32.." + std::to_string(trained) + " for this model");
         prefix += "temperature.";
         for (int32_t i = 0; i < llama_model_meta_count(model.get()); ++i) {
             char key[256];
@@ -110,8 +115,10 @@ struct backend::impl {
             if (!(t > 0) || !std::isfinite(t)) throw failure(DTL_MODEL_ERROR, "Invalid temperature");
             temperatures[std::string(key).substr(prefix.size())] = t;
         }
+        for (const auto &[key, t] : config.temperatures) temperatures[key] = t;
         auto cp = llama_context_default_params();
-        cp.n_ctx = 512; cp.n_batch = 512; cp.n_ubatch = 512; cp.n_seq_max = 1;
+        cp.n_ctx = cp.n_batch = cp.n_ubatch = static_cast<uint32_t>(capacity); cp.n_seq_max = 1;
+        const uint32_t threads = config.threads;
         cp.n_threads = cp.n_threads_batch = threads ? threads : std::max(1u, std::min(4u, std::thread::hardware_concurrency()));
         cp.embeddings = true; cp.pooling_type = LLAMA_POOLING_TYPE_NONE;
         cp.attention_type = LLAMA_ATTENTION_TYPE_NON_CAUSAL;
@@ -142,8 +149,10 @@ struct backend::impl {
         jinja::runtime runtime(jc);
         auto rendered = jinja::runtime::gather_string_parts(runtime.execute(program))->as_string().str();
         require(rendered.size() <= max_request * 2, "Rendered prompt is too large");
+        require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
+        const size_t limit = q.max_tokens ? q.max_tokens : capacity;
         int n = llama_tokenize(vocab, rendered.data(), static_cast<int32_t>(rendered.size()), nullptr, 0, false, true);
-        require(n < 0 && -n <= 512, q.id + ": prompt exceeds the 512-token budget");
+        require(n < 0 && static_cast<size_t>(-n) <= limit, q.id + ": prompt exceeds the " + std::to_string(limit) + "-token limit");
         prepared.tokens.resize(-n);
         n = llama_tokenize(vocab, rendered.data(), static_cast<int32_t>(rendered.size()), prepared.tokens.data(), prepared.tokens.size(), false, true);
         if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
@@ -200,15 +209,19 @@ struct backend::impl {
             if (!v || !std::isfinite(v[prepared.column])) throw failure(DTL_INFERENCE_ERROR, "Missing/nonfinite decision output");
             scores.push_back(v[prepared.column]);
         }
-        return answer_from_scores(q.type, q.options, scores, temperature_for(q.type, scores.size(), temperatures));
+        if (!q.temperatures) return answer_from_scores(q.type, q.options, scores, temperature_for(q.type, scores.size(), temperatures));
+        auto merged = temperatures;
+        for (const auto &[key, t] : *q.temperatures) merged[key] = t;
+        return answer_from_scores(q.type, q.options, scores, temperature_for(q.type, scores.size(), merged));
     }
 };
-backend::backend(const char *path, uint32_t threads) : impl_(std::make_unique<impl>(path, threads)) {}
+backend::backend(const char *path, const engine_config &config) : impl_(std::make_unique<impl>(path, config)) {}
 backend::~backend() = default;
 json backend::info() const {
     return {{"architecture", meta(impl_->model.get(), "general.architecture")},
             {"name", meta(impl_->model.get(), "general.name")}, {"decision_type", "laya"},
-            {"max_head_tokens", impl_->max_head}, {"max_tokens", 512},
+            {"max_head_tokens", impl_->max_head}, {"context_tokens", impl_->capacity},
+            {"trained_context_tokens", impl_->trained},
             {"temperatures", impl_->temperatures}};
 }
 void backend::prepare(question &q, const json &state) { impl_->prepare(q, state); }

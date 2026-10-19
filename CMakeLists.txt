@@ -104,7 +104,7 @@ if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     endif()
   endforeach()
 endif()
-set_target_properties(ducktape_laya PROPERTIES EXPORT_NAME laya VERSION ${PROJECT_VERSION} SOVERSION 0
+set_target_properties(ducktape_laya PROPERTIES EXPORT_NAME laya VERSION ${PROJECT_VERSION} SOVERSION 1
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 if(NOT EMSCRIPTEN)
   dtl_record_native_build(ducktape_laya)
@@ -285,7 +285,7 @@ if(EMSCRIPTEN)
     "-DMODULE=$<TARGET_FILE:ducktape_laya_wasm>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/browser_identity.cmake")
   if(GGML_WEBGPU)
-    target_link_options(ducktape_laya_wasm PRIVATE "-sJSPI_EXPORTS=['dtl_open','dtl_execute','dtl_decide','dtl_decide_observed','dtl_router_open','dtl_router_execute','dtl_close','dtl_router_close','dtl_execute_with_options','dtl_decide_with_options','dtl_router_execute_with_options']")
+    target_link_options(ducktape_laya_wasm PRIVATE "-sJSPI_EXPORTS=['dtl_open','dtl_open_router','dtl_execute','dtl_close']")
   endif()
   set(DUCKTAPE_WASM_OPTIMIZATION "2" CACHE STRING "WASM link optimization: 0, 1, 2, 3, s or z")
   if(NOT DUCKTAPE_WASM_OPTIMIZATION MATCHES "^[0123sz]$")
@@ -296,7 +296,7 @@ if(EMSCRIPTEN)
     "-sALLOW_MEMORY_GROWTH=1" "-sMAXIMUM_MEMORY=${DUCKTAPE_WASM_MAXIMUM_MEMORY}" "-sINITIAL_MEMORY=67108864"
     "-sSTACK_SIZE=2097152" "-sFORCE_FILESYSTEM=1"
     "$<$<NOT:$<BOOL:${GGML_WEBGPU}>>:-sDISABLE_EXCEPTION_CATCHING=0>"
-    "-sEXPORTED_FUNCTIONS=['_malloc','_free','_dtl_abi_version','_dtl_open','_dtl_close','_dtl_free','_dtl_decide','_dtl_decide_observed','_dtl_execute','_dtl_router_open','_dtl_router_execute','_dtl_router_close','_dtl_execute_with_options','_dtl_decide_with_options','_dtl_router_execute_with_options','_dtl_info']"
+    "-sEXPORTED_FUNCTIONS=['_malloc','_free','_dtl_abi_version','_dtl_open','_dtl_open_router','_dtl_info','_dtl_default_call_options','_dtl_cancel_flag','_dtl_execute','_dtl_close','_dtl_free']"
     "-sALLOW_TABLE_GROWTH=1"
     "-sEXPORTED_RUNTIME_METHODS=['HEAPU32','addFunction','removeFunction','ccall','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']")
 endif()

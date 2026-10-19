@@ -1,8 +1,10 @@
 //! Safe ownership over the shared CPU Laya engine. Inference is blocking;
 //! async applications should use their runtime's blocking worker pool.
 use ducktape_laya_sys as ffi;
+use std::collections::BTreeMap;
 use std::ffi::{c_char, CStr, CString};
 use std::ptr::NonNull;
+use std::sync::atomic::AtomicU32;
 #[derive(Debug)]
 pub struct Error {
     pub status: i32,
@@ -14,11 +16,14 @@ impl std::fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+fn invalid(message: impl Into<String>) -> Error {
+    Error {
+        status: status::INVALID_ARGUMENT,
+        message: message.into(),
+    }
+}
 fn cstring(s: &str) -> Result<CString, Error> {
-    CString::new(s).map_err(|_| Error {
-        status: 1,
-        message: "Input contains a NUL byte".into(),
-    })
+    CString::new(s).map_err(|_| invalid("Input contains a NUL byte"))
 }
 struct Buffer(*mut c_char);
 impl Drop for Buffer {
@@ -54,11 +59,6 @@ fn read_info(engine: *mut ffi::Engine) -> Result<String, Error> {
 pub fn runtime_info() -> Result<String, Error> {
     read_info(std::ptr::null_mut())
 }
-enum Handle {
-    Model(NonNull<ffi::Engine>),
-    Router(NonNull<ffi::Router>),
-}
-pub struct Engine(Handle);
 /// Native status codes (`dtl_status` in the C ABI), as carried by [`Error::status`].
 pub mod status {
     pub const OK: i32 = 0;
@@ -70,148 +70,161 @@ pub mod status {
     pub const DEADLINE_EXCEEDED: i32 = 6;
     pub const UNSUPPORTED_PLATFORM: i32 = 7;
 }
+/// Open-time settings. Unset values keep the native defaults; the native
+/// library validates ranges and rejects bad values with `INVALID_ARGUMENT`.
+/// For a router the config applies to every route, which may override it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Config {
+    threads: Option<u32>,
+    context_tokens: Option<u32>,
+    temperatures: BTreeMap<String, f64>,
+}
+impl Config {
+    /// 0 selects automatic threading (capped at 4); otherwise 1..=256.
+    pub fn threads(mut self, threads: u32) -> Self {
+        self.threads = Some(threads);
+        self
+    }
+    /// Prompt capacity in tokens, up to the model's trained length (default 512).
+    pub fn context_tokens(mut self, tokens: u32) -> Self {
+        self.context_tokens = Some(tokens);
+        self
+    }
+    /// Calibration override keyed like the GGUF metadata, e.g. `"choice"`,
+    /// `"choice.3_5"` or `"noul.2"`. The value must be finite and positive.
+    pub fn temperature(mut self, key: impl Into<String>, value: f64) -> Self {
+        self.temperatures.insert(key.into(), value);
+        self
+    }
+    /// `None` when nothing is set, so the native defaults apply.
+    fn to_json(&self) -> Result<Option<CString>, Error> {
+        let mut parts = Vec::new();
+        if let Some(threads) = self.threads {
+            parts.push(format!("\"threads\":{threads}"));
+        }
+        if let Some(tokens) = self.context_tokens {
+            parts.push(format!("\"context_tokens\":{tokens}"));
+        }
+        if !self.temperatures.is_empty() {
+            let mut items = Vec::new();
+            for (key, value) in &self.temperatures {
+                if !value.is_finite() {
+                    return Err(invalid("Temperature must be finite"));
+                }
+                items.push(format!("{}:{value}", json_string(key)));
+            }
+            parts.push(format!("\"temperatures\":{{{}}}", items.join(",")));
+        }
+        if parts.is_empty() {
+            return Ok(None);
+        }
+        cstring(&format!("{{{}}}", parts.join(","))).map(Some)
+    }
+}
+fn json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+/// Per-call controls for [`Engine::execute_with`].
 #[derive(Default)]
 pub struct CallOptions<'a> {
-    /// 0 disables the deadline; otherwise 1..86400000 milliseconds.
-    pub timeout_ms: u64,
-    /// Cancellation is latched when observed; keep this flag alive for the call.
-    pub cancelled: Option<&'a std::sync::atomic::AtomicBool>,
+    request_id: u64,
+    timeout_ms: u64,
+    cancelled: Option<&'a AtomicU32>,
+    on_event: Option<&'a mut dyn FnMut(&str)>,
 }
+impl<'a> CallOptions<'a> {
+    /// Caller-chosen id echoed in every event of the call.
+    pub fn request_id(mut self, id: u64) -> Self {
+        self.request_id = id;
+        self
+    }
+    /// 0 disables the deadline; otherwise 1..=86400000 milliseconds.
+    pub fn timeout_ms(mut self, ms: u64) -> Self {
+        self.timeout_ms = ms;
+        self
+    }
+    /// Cooperative cancellation: store 0 to continue, `status::DEADLINE_EXCEEDED`
+    /// to report a host deadline, any other value to cancel. The native side
+    /// reads it with `dtl_cancel_flag`, so no Rust code runs on worker threads.
+    /// Keep the flag alive for the call.
+    pub fn cancel_flag(mut self, flag: &'a AtomicU32) -> Self {
+        self.cancelled = Some(flag);
+        self
+    }
+    /// Passive "start" then "end"/"error" events, run synchronously on the
+    /// calling thread outside native locks. Panics are contained (with
+    /// panic=unwind); abort panics cannot be. Callbacks may reenter the engine
+    /// but must not drop it.
+    pub fn on_event(mut self, callback: &'a mut dyn FnMut(&str)) -> Self {
+        self.on_event = Some(callback);
+        self
+    }
+}
+/// A single GGUF model or a router over several; both are used identically.
+pub struct Engine(NonNull<ffi::Engine>);
 // SAFETY: the native ABI serializes inference on each handle. Rust borrows
-// prevent Drop racing with decide; the pointer is never exposed publicly.
+// prevent Drop racing with execute; the pointer is never exposed publicly.
 unsafe impl Send for Engine {}
 unsafe impl Sync for Engine {}
 impl Engine {
     /// Model metadata for a single engine; routers report common runtime capabilities.
     pub fn info(&self) -> Result<String, Error> {
-        read_info(match &self.0 {
-            Handle::Model(p) => p.as_ptr(),
-            Handle::Router(_) => std::ptr::null_mut(),
+        read_info(self.0.as_ptr())
+    }
+    /// Open a single GGUF model.
+    pub fn open(model_path: &str, config: &Config) -> Result<Self, Error> {
+        let path = cstring(model_path)?;
+        Self::open_with(config, |config, out, error| unsafe {
+            ffi::dtl_open(path.as_ptr(), config, out, error)
         })
     }
-    /// Open a single GGUF model. `threads` 0 selects automatic threading
-    /// (capped at 4); otherwise it must be 1..=256.
-    pub fn open(model_path: &str, threads: u32) -> Result<Self, Error> {
-        let path = cstring(model_path)?;
-        let mut options = unsafe { ffi::dtl_default_options() };
-        options.threads = threads;
+    /// Open a bounded, lazy local model registry. See docs/API.md for the JSON.
+    /// Requests must name a route in `model`.
+    pub fn open_router(router_json: &str, config: &Config) -> Result<Self, Error> {
+        let router = cstring(router_json)?;
+        Self::open_with(config, |config, out, error| unsafe {
+            ffi::dtl_open_router(router.as_ptr(), config, out, error)
+        })
+    }
+    fn open_with(
+        config: &Config,
+        open: impl FnOnce(*const c_char, *mut *mut ffi::Engine, *mut *mut c_char) -> i32,
+    ) -> Result<Self, Error> {
+        let config = config.to_json()?;
         let mut raw = std::ptr::null_mut();
         let mut error = std::ptr::null_mut();
-        let status = unsafe { ffi::dtl_open(path.as_ptr(), &options, &mut raw, &mut error) };
+        let status = open(
+            config.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+            &mut raw,
+            &mut error,
+        );
         check(status, error)?;
-        NonNull::new(raw)
-            .map(|p| Self(Handle::Model(p)))
-            .ok_or_else(|| Error {
-                status: 2,
-                message: "Native engine returned null".into(),
-            })
+        NonNull::new(raw).map(Self).ok_or_else(|| Error {
+            status: status::MODEL_ERROR,
+            message: "Native engine returned null".into(),
+        })
     }
-    /// Open a bounded, lazy local model registry. See docs/API.md for config.
-    /// `threads` 0 selects automatic threading (capped at 4); otherwise 1..=256.
-    pub fn open_router(config_json: &str, threads: u32) -> Result<Self, Error> {
-        let config = cstring(config_json)?;
-        let mut options = unsafe { ffi::dtl_default_options() };
-        options.threads = threads;
-        let mut raw = std::ptr::null_mut();
-        let mut error = std::ptr::null_mut();
-        let status =
-            unsafe { ffi::dtl_router_open(config.as_ptr(), &options, &mut raw, &mut error) };
-        check(status, error)?;
-        NonNull::new(raw)
-            .map(|p| Self(Handle::Router(p)))
-            .ok_or_else(|| Error {
-                status: 2,
-                message: "Native router returned null".into(),
-            })
-    }
-    /// Decide one primitive request. On a router this is strict: the request
-    /// must name a configured model, as with [`Engine::execute`].
-    pub fn decide(&self, request_json: &str) -> Result<String, Error> {
-        self.execute_impl(request_json, 0, None, true, None)
-    }
-    /// Execute one primitive/structured request or a bounded JSON array.
+    /// Execute one request object or an array of requests with default options.
     pub fn execute(&self, request_json: &str) -> Result<String, Error> {
-        self.execute_observed(request_json, 0, None)
+        self.execute_with(request_json, CallOptions::default())
     }
-    /// Passive events run synchronously on this thread, outside native locks.
-    /// Callback panics are contained (with panic=unwind); abort panics cannot be.
-    /// Callbacks may reenter; do not wait for another call that waits on yours.
-    pub fn execute_observed(
+    /// Execute with a request id, deadline, cancellation flag and/or event
+    /// callback. Takes the options by value because they own the exclusive
+    /// borrow of the event callback.
+    pub fn execute_with(
         &self,
         request_json: &str,
-        request_id: u64,
-        callback: Option<&mut dyn FnMut(&str)>,
-    ) -> Result<String, Error> {
-        self.execute_impl(request_json, request_id, callback, false, None)
-    }
-    /// Execute with shared native cooperative cancellation/deadline controls.
-    pub fn execute_with_options(
-        &self,
-        request_json: &str,
-        options: &CallOptions<'_>,
-    ) -> Result<String, Error> {
-        self.controlled(request_json, 0, None, options, false)
-    }
-    pub fn decide_with_options(
-        &self,
-        request_json: &str,
-        options: &CallOptions<'_>,
-    ) -> Result<String, Error> {
-        self.controlled(request_json, 0, None, options, true)
-    }
-    /// Like [`Engine::execute_observed`] and [`Engine::execute_with_options`] combined.
-    pub fn execute_observed_with_options(
-        &self,
-        request_json: &str,
-        request_id: u64,
-        callback: Option<&mut dyn FnMut(&str)>,
-        options: &CallOptions<'_>,
-    ) -> Result<String, Error> {
-        self.controlled(request_json, request_id, callback, options, false)
-    }
-    /// Like [`Engine::decide_with_options`] with an observer; strict on a router.
-    pub fn decide_observed_with_options(
-        &self,
-        request_json: &str,
-        request_id: u64,
-        callback: Option<&mut dyn FnMut(&str)>,
-        options: &CallOptions<'_>,
-    ) -> Result<String, Error> {
-        self.controlled(request_json, request_id, callback, options, true)
-    }
-    fn controlled(
-        &self,
-        request_json: &str,
-        request_id: u64,
-        callback: Option<&mut dyn FnMut(&str)>,
-        options: &CallOptions<'_>,
-        legacy: bool,
-    ) -> Result<String, Error> {
-        unsafe extern "C" fn cancelled(data: *mut std::ffi::c_void) -> u32 {
-            let flag = unsafe { &*data.cast::<std::sync::atomic::AtomicBool>() };
-            if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                5
-            } else {
-                0
-            }
-        }
-        let mut native = unsafe { ffi::dtl_default_call_options() };
-        native.timeout_ms = options.timeout_ms;
-        if let Some(flag) = options.cancelled {
-            native.should_cancel = Some(cancelled);
-            native.user_data = (flag as *const std::sync::atomic::AtomicBool)
-                .cast_mut()
-                .cast();
-        }
-        self.execute_impl(request_json, request_id, callback, legacy, Some(&native))
-    }
-    fn execute_impl(
-        &self,
-        request_json: &str,
-        request_id: u64,
-        callback: Option<&mut dyn FnMut(&str)>,
-        legacy: bool,
-        options: Option<&ffi::CallOptions>,
+        mut options: CallOptions<'_>,
     ) -> Result<String, Error> {
         struct Hook<'a> {
             callback: &'a mut dyn FnMut(&str),
@@ -233,49 +246,34 @@ impl Engine {
             }
         }
         let request = cstring(request_json)?;
-        let mut hook = callback.map(|callback| Hook { callback });
-        let observer = ffi::Observer {
-            request_id,
-            callback: hook.as_ref().map(|_| notify as unsafe extern "C" fn(_, _)),
-            user_data: hook
-                .as_mut()
-                .map_or(std::ptr::null_mut(), |h| (h as *mut Hook<'_>).cast()),
-        };
+        let mut hook = options.on_event.take().map(|callback| Hook { callback });
+        let mut native = unsafe { ffi::dtl_default_call_options() };
+        native.request_id = options.request_id;
+        native.timeout_ms = options.timeout_ms;
+        if let Some(hook) = hook.as_mut() {
+            native.on_event = Some(notify);
+            native.event_user_data = (hook as *mut Hook<'_>).cast();
+        }
+        if let Some(flag) = options.cancelled {
+            native.should_cancel = Some(ffi::dtl_cancel_flag);
+            native.cancel_user_data = (flag as *const AtomicU32).cast_mut().cast();
+        }
         let mut result = std::ptr::null_mut();
         let mut error = std::ptr::null_mut();
         let status = unsafe {
-            match self.0 {
-                Handle::Model(p) if legacy => ffi::dtl_decide_with_options(
-                    p.as_ptr(),
-                    request.as_ptr(),
-                    &observer,
-                    options.map_or(std::ptr::null(), |value| value),
-                    &mut result,
-                    &mut error,
-                ),
-                Handle::Model(p) => ffi::dtl_execute_with_options(
-                    p.as_ptr(),
-                    request.as_ptr(),
-                    &observer,
-                    options.map_or(std::ptr::null(), |value| value),
-                    &mut result,
-                    &mut error,
-                ),
-                Handle::Router(p) => ffi::dtl_router_execute_with_options(
-                    p.as_ptr(),
-                    request.as_ptr(),
-                    &observer,
-                    options.map_or(std::ptr::null(), |value| value),
-                    &mut result,
-                    &mut error,
-                ),
-            }
+            ffi::dtl_execute(
+                self.0.as_ptr(),
+                request.as_ptr(),
+                &native,
+                &mut result,
+                &mut error,
+            )
         };
         let output = Buffer(result);
         check(status, error)?;
         if output.0.is_null() {
             return Err(Error {
-                status: 3,
+                status: status::INFERENCE_ERROR,
                 message: "Native result was null".into(),
             });
         }
@@ -286,17 +284,42 @@ impl Engine {
 }
 impl Drop for Engine {
     fn drop(&mut self) {
-        unsafe {
-            match self.0 {
-                Handle::Model(p) => ffi::dtl_close(p.as_ptr()),
-                Handle::Router(p) => ffi::dtl_router_close(p.as_ptr()),
-            }
-        }
+        unsafe { ffi::dtl_close(self.0.as_ptr()) }
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
+    const NOUL: &str = r#"{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
+    fn model() -> Option<String> {
+        std::env::var("LAYA_MODEL").ok()
+    }
+    fn two() -> Config {
+        Config::default().threads(2)
+    }
+    fn escape(path: &str) -> String {
+        path.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+    fn with_model(request: &str, name: &str) -> String {
+        request.replacen('{', &format!("{{\"model\":\"{name}\","), 1)
+    }
+    #[test]
+    fn config_json_is_deterministic_and_sparse() {
+        assert!(Config::default().to_json().unwrap().is_none());
+        let config = Config::default()
+            .threads(2)
+            .context_tokens(1024)
+            .temperature("noul.2", 2.0)
+            .temperature("choice", 1.5)
+            .temperature("we\"ird", 1.0);
+        assert_eq!(
+            config.to_json().unwrap().unwrap().to_str().unwrap(),
+            r#"{"threads":2,"context_tokens":1024,"temperatures":{"choice":1.5,"noul.2":2,"we\"ird":1}}"#
+        );
+        let bad = Config::default().temperature("choice", f64::NAN);
+        assert_eq!(bad.to_json().unwrap_err().status, 1);
+    }
     #[test]
     fn contains_panicking_payload_destructors() {
         struct Bomb;
@@ -305,113 +328,188 @@ mod tests {
                 std::panic::panic_any(Bomb);
             }
         }
-        let engine = Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#, 1).unwrap();
+        let engine = Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#, &two()).unwrap();
         let mut calls = 0;
         let mut callback = |_: &str| {
             calls += 1;
             std::panic::panic_any(Bomb);
         };
-        let result = engine.execute_observed("{}", 1, Some(&mut callback));
+        let result = engine.execute_with("{}", CallOptions::default().on_event(&mut callback));
         assert_eq!(result.unwrap_err().status, 1);
         assert_eq!(calls, 2);
     }
     #[test]
     fn real_features() {
-        let Ok(path) = std::env::var("LAYA_MODEL") else {
-            return;
-        };
-        let engine = Engine::open(&path, 2).unwrap();
-        let primitive = r#"{"state":"Refund me","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
-        let tagged = primitive.replacen('{', "{\"metadata\":\"caller tag\",", 1);
-        assert_eq!(
-            engine.decide(&tagged).unwrap(),
-            engine.decide(primitive).unwrap()
-        );
+        let Some(path) = model() else { return };
+        let engine = Engine::open(&path, &two()).unwrap();
+        // Unknown top-level keys are rejected.
+        let tagged = NOUL.replacen('{', "{\"metadata\":\"caller tag\",", 1);
         assert_eq!(engine.execute(&tagged).unwrap_err().status, 1);
         let request = r#"{"state":"Please refund me.","schema":{"type":"object","properties":{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}"#;
         let single = engine.execute(request).unwrap();
         assert!(single.contains("\"values\":{\"refund\":true}"));
         let batch = format!("[{request},{request}]");
         let mut events = Vec::new();
+        let mut on_event = |e: &str| events.push(e.to_owned());
         let result = engine
-            .execute_observed(&batch, 21, Some(&mut |e| events.push(e.to_owned())))
+            .execute_with(
+                &batch,
+                CallOptions::default()
+                    .request_id(21)
+                    .on_event(&mut on_event),
+            )
             .unwrap();
         assert_eq!(result, format!("[{single},{single}]"));
         assert_eq!(events.len(), 2);
         assert!(events[0].contains("\"event\":\"start\""));
         assert!(events[1].contains("\"request_id\":21"));
         assert!(engine
-            .execute_observed("{}", 22, Some(&mut |_| panic!("contained observer")))
+            .execute_with(
+                "{}",
+                CallOptions::default()
+                    .request_id(22)
+                    .on_event(&mut |_| panic!("contained observer"))
+            )
             .is_err());
         // Reentry uses a distinct borrowed callback and the same native engine.
         engine
-            .execute_observed(
+            .execute_with(
                 request,
-                23,
-                Some(&mut |_| {
+                CallOptions::default().request_id(23).on_event(&mut |_| {
                     engine.execute(request).unwrap();
                 }),
             )
             .unwrap();
-        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
         let router = Engine::open_router(
-            &format!(r#"{{"models":{{"english":"{escaped}"}},"max_loaded":1}}"#),
-            2,
+            &format!(
+                r#"{{"models":{{"english":"{}"}},"max_loaded":1}}"#,
+                escape(&path)
+            ),
+            &two(),
         )
         .unwrap();
-        let routed = request.replacen('{', "{\"model\":\"english\",", 1);
         assert!(router
-            .execute(&routed)
+            .execute(&with_model(request, "english"))
             .unwrap()
             .contains("\"model\":\"english\""));
         assert_eq!(router.execute(request).unwrap_err().status, 1);
     }
     #[test]
-    fn cancellation_and_deadline() {
-        let Ok(path) = std::env::var("LAYA_MODEL") else {
-            return;
-        };
-        let engine = Engine::open(&path, 2).unwrap();
-        let request = r#"{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
-        let baseline = engine.execute(request).unwrap();
-        let flag = std::sync::atomic::AtomicBool::new(true);
-        let options = CallOptions {
-            timeout_ms: 0,
-            cancelled: Some(&flag),
-        };
+    fn config_and_per_request_settings() {
+        let Some(path) = model() else { return };
+        let engine = Engine::open(&path, &two().context_tokens(1024)).unwrap();
+        let info = engine.info().unwrap();
+        assert!(info.contains("\"context_tokens\":1024"), "{info}");
+        // max_tokens is bounded by the engine's context_tokens.
+        let with = |extra: &str| NOUL.replacen('{', &format!("{{{extra},"), 1);
+        let baseline = engine.execute(NOUL).unwrap();
         assert_eq!(
-            engine
-                .execute_with_options(request, &options)
-                .unwrap_err()
-                .status,
-            5
-        );
-        assert_eq!(
-            engine
-                .decide_with_options(request, &options)
-                .unwrap_err()
-                .status,
-            5
-        );
-        assert_eq!(
-            engine
-                .execute_with_options(
-                    request,
-                    &CallOptions {
-                        timeout_ms: 1,
-                        cancelled: None
-                    }
-                )
-                .unwrap_err()
-                .status,
-            6
-        );
-        assert_eq!(engine.execute(request).unwrap(), baseline);
-        flag.store(false, std::sync::atomic::Ordering::Relaxed);
-        assert_eq!(
-            engine.execute_with_options(request, &options).unwrap(),
+            engine.execute(&with("\"max_tokens\":1024")).unwrap(),
             baseline
         );
+        assert_eq!(
+            engine
+                .execute(&with("\"max_tokens\":1025"))
+                .unwrap_err()
+                .status,
+            1
+        );
+        assert_eq!(
+            engine
+                .execute(&with("\"max_tokens\":0"))
+                .unwrap_err()
+                .status,
+            1
+        );
+        // Calibration temperatures change confidence; per-request overrides config.
+        let hot = Engine::open(&path, &two().temperature("noul.2", 4.0)).unwrap();
+        assert_ne!(hot.execute(NOUL).unwrap(), baseline);
+        assert_eq!(
+            hot.execute(&with("\"temperatures\":{\"noul.2\":1.0}"))
+                .unwrap(),
+            engine
+                .execute(&with("\"temperatures\":{\"noul.2\":1.0}"))
+                .unwrap()
+        );
+        assert_eq!(
+            engine
+                .execute(&with("\"temperatures\":{\"noul.2\":-1}"))
+                .unwrap_err()
+                .status,
+            1
+        );
+    }
+    #[test]
+    fn invalid_config_is_rejected() {
+        let Some(path) = model() else { return };
+        for config in [
+            two().threads(257),
+            two().context_tokens(8),
+            two().context_tokens(u32::MAX),
+            two().temperature("choice", 0.0),
+            two().temperature("choice", -1.0),
+        ] {
+            assert_eq!(Engine::open(&path, &config).err().unwrap().status, 1);
+        }
+        let router = format!(r#"{{"models":{{"a":"{}"}}}}"#, escape(&path));
+        assert_eq!(
+            Engine::open_router(&router, &two().threads(257))
+                .err()
+                .unwrap()
+                .status,
+            1
+        );
+    }
+    #[test]
+    fn router_per_route_config() {
+        let Some(path) = model() else { return };
+        let p = escape(&path);
+        let router = Engine::open_router(
+            &format!(
+                r#"{{"models":{{"small":{{"path":"{p}","config":{{"context_tokens":64}}}},"plain":"{p}"}},"max_loaded":1}}"#
+            ),
+            &two().context_tokens(1024),
+        )
+        .unwrap();
+        let big = format!("\"max_tokens\":{}", 512);
+        let ask = |model: &str| {
+            router.execute(&with_model(
+                &NOUL.replacen('{', &format!("{{{big},"), 1),
+                model,
+            ))
+        };
+        // The route override wins for "small"; "plain" inherits the open config.
+        assert_eq!(ask("small").unwrap_err().status, 1);
+        assert!(ask("plain").is_ok());
+        let bad = format!(r#"{{"models":{{"a":{{"path":"{p}","config":{{"threads":999}}}}}}}}"#);
+        assert!(Engine::open_router(&bad, &two()).is_err());
+    }
+    #[test]
+    fn cancellation_and_deadline() {
+        let Some(path) = model() else { return };
+        let engine = Engine::open(&path, &two()).unwrap();
+        let baseline = engine.execute(NOUL).unwrap();
+        let flag = AtomicU32::new(status::CANCELLED as u32);
+        let cancelled = || CallOptions::default().cancel_flag(&flag);
+        assert_eq!(
+            engine.execute_with(NOUL, cancelled()).unwrap_err().status,
+            status::CANCELLED
+        );
+        flag.store(status::DEADLINE_EXCEEDED as u32, Ordering::Relaxed);
+        assert_eq!(
+            engine.execute_with(NOUL, cancelled()).unwrap_err().status,
+            status::DEADLINE_EXCEEDED
+        );
+        assert_eq!(
+            engine
+                .execute_with(NOUL, CallOptions::default().timeout_ms(1))
+                .unwrap_err()
+                .status,
+            status::DEADLINE_EXCEEDED
+        );
+        assert_eq!(engine.execute(NOUL).unwrap(), baseline);
+        flag.store(0, Ordering::Relaxed);
+        assert_eq!(engine.execute_with(NOUL, cancelled()).unwrap(), baseline);
     }
     #[test]
     fn status_constants_match_header() {
@@ -430,96 +528,86 @@ mod tests {
         );
     }
     #[test]
-    fn observer_with_options() {
-        let router = Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#, 1).unwrap();
-        let flag = std::sync::atomic::AtomicBool::new(true);
-        let options = CallOptions {
-            timeout_ms: 0,
-            cancelled: Some(&flag),
-        };
-        // Strict decide on a router without a model: invalid argument, events still delivered.
+    fn events_carry_request_id() {
+        let router = Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#, &two()).unwrap();
+        let flag = AtomicU32::new(1);
+        // A request without a route is invalid; events are still delivered.
         let mut events = Vec::new();
+        let mut on_event = |e: &str| events.push(e.to_owned());
         let error = router
-            .decide_observed_with_options(
+            .execute_with(
                 "{}",
-                5,
-                Some(&mut |e| events.push(e.to_owned())),
-                &options,
+                CallOptions::default()
+                    .request_id(5)
+                    .cancel_flag(&flag)
+                    .on_event(&mut on_event),
             )
             .unwrap_err();
         assert!(matches!(error.status, 1 | 5));
         assert!(!events.is_empty());
         assert!(events.iter().all(|e| e.contains("\"request_id\":5")));
-        let Ok(path) = std::env::var("LAYA_MODEL") else {
-            return;
-        };
-        let engine = Engine::open(&path, 2).unwrap();
-        let request = r#"{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
+        let Some(path) = model() else { return };
+        let engine = Engine::open(&path, &two()).unwrap();
         let mut events = Vec::new();
+        let mut on_event = |e: &str| events.push(e.to_owned());
         let error = engine
-            .execute_observed_with_options(
-                request,
-                9,
-                Some(&mut |e| events.push(e.to_owned())),
-                &options,
+            .execute_with(
+                NOUL,
+                CallOptions::default()
+                    .request_id(9)
+                    .cancel_flag(&flag)
+                    .on_event(&mut on_event),
             )
             .unwrap_err();
         assert_eq!(error.status, status::CANCELLED);
         assert!(events
             .iter()
             .any(|e| e.contains("\"event\":\"error\"") && e.contains("\"request_id\":9")));
-        flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        flag.store(0, Ordering::Relaxed);
         let mut events = Vec::new();
+        let mut on_event = |e: &str| events.push(e.to_owned());
         let result = engine
-            .decide_observed_with_options(
-                request,
-                10,
-                Some(&mut |e| events.push(e.to_owned())),
-                &options,
+            .execute_with(
+                NOUL,
+                CallOptions::default()
+                    .request_id(10)
+                    .cancel_flag(&flag)
+                    .on_event(&mut on_event),
             )
             .unwrap();
-        assert_eq!(result, engine.execute(request).unwrap());
+        assert_eq!(result, engine.execute(NOUL).unwrap());
         assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.contains("\"request_id\":10")));
     }
     #[test]
     fn shared_across_threads() {
-        let Ok(path) = std::env::var("LAYA_MODEL") else {
-            return;
-        };
-        let engine = Engine::open(&path, 2).unwrap();
-        let request = r#"{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
-        let baseline = engine.execute(request).unwrap();
-        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+        let Some(path) = model() else { return };
+        let engine = Engine::open(&path, &two()).unwrap();
+        let baseline = engine.execute(NOUL).unwrap();
         // Two names for one file with one slot: concurrent calls evict each other.
+        let p = escape(&path);
         let router = Engine::open_router(
-            &format!(r#"{{"models":{{"a":"{escaped}","b":"{escaped}"}},"max_loaded":1}}"#),
-            2,
+            &format!(r#"{{"models":{{"a":"{p}","b":"{p}"}},"max_loaded":1}}"#),
+            &two(),
         )
         .unwrap();
-        let flag = std::sync::atomic::AtomicBool::new(false);
+        let flag = AtomicU32::new(0);
         std::thread::scope(|scope| {
             let callers: Vec<_> = (0..3)
-                .map(|_| scope.spawn(|| engine.execute(request).unwrap()))
+                .map(|_| scope.spawn(|| engine.execute(NOUL).unwrap()))
                 .collect();
             let routed: Vec<_> = ["a", "b"]
                 .map(|name| {
-                    let request = request.replacen('{', &format!("{{\"model\":\"{name}\","), 1);
+                    let request = with_model(NOUL, name);
                     let router = &router;
                     scope.spawn(move || (name, router.execute(&request).unwrap()))
                 })
                 .into_iter()
                 .collect();
             // Cancellation is requested from another thread while the call waits or runs.
-            let cancelled = scope.spawn(|| {
-                engine.execute_with_options(
-                    request,
-                    &CallOptions {
-                        timeout_ms: 0,
-                        cancelled: Some(&flag),
-                    },
-                )
-            });
-            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            let cancelled = scope
+                .spawn(|| engine.execute_with(NOUL, CallOptions::default().cancel_flag(&flag)));
+            flag.store(status::CANCELLED as u32, Ordering::Relaxed);
             for caller in callers {
                 assert_eq!(caller.join().unwrap(), baseline);
             }
@@ -531,7 +619,7 @@ mod tests {
             }
             match cancelled.join().unwrap() {
                 Ok(result) => assert_eq!(result, baseline),
-                Err(error) => assert_eq!(error.status, 5),
+                Err(error) => assert_eq!(error.status, status::CANCELLED),
             }
         });
         // Engines may be closed on a thread other than the one that opened them.
@@ -542,9 +630,9 @@ mod tests {
     #[test]
     fn diagnostics() {
         let runtime = runtime_info().unwrap();
-        assert!(runtime.contains("\"abi_version\":1"));
-        if let Ok(model) = std::env::var("LAYA_MODEL") {
-            let engine = Engine::open(&model, 2).unwrap();
+        assert!(runtime.contains("\"abi_version\":2"));
+        if let Some(model) = model() {
+            let engine = Engine::open(&model, &two()).unwrap();
             assert!(engine
                 .info()
                 .unwrap()
@@ -553,10 +641,13 @@ mod tests {
     }
     #[test]
     fn rejects_bad_path() {
-        assert!(Engine::open("missing.gguf", 2).is_err());
+        assert!(Engine::open("missing.gguf", &two()).is_err());
     }
     #[test]
     fn rejects_nul() {
-        assert_eq!(Engine::open("a\0b", 2).err().unwrap().status, 1);
+        assert_eq!(
+            Engine::open("a\0b", &two()).err().unwrap().status,
+            status::INVALID_ARGUMENT
+        );
     }
 }

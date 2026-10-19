@@ -11,8 +11,7 @@ int main(int argc, char **argv) {
     input[n] = 0;
     dtl_engine *engine = NULL;
     char *error = NULL, *result = NULL;
-    dtl_options options = dtl_default_options(); options.threads = 4;
-    dtl_status status = dtl_open(argv[1], &options, &engine, &error);
+    dtl_status status = dtl_open(argv[1], "{\"threads\":4}", &engine, &error);
     if (!status) status = dtl_execute(engine, input, NULL, &result, &error);
     if (status) fprintf(stderr, "%s\n", error ? error : "Laya failed");
     else puts(result);

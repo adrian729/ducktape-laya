@@ -11,13 +11,13 @@ async function example(model: string) {
     }, additionalProperties: false
   }};
   const events: ObserverEvent[] = [];
-  const result = await engine.decideStructured(structured, { onEvent: e => { events.push(e); } });
+  const result = await engine.execute(structured, { onEvent: e => { events.push(e); } });
   const value: string | number | boolean = result.values.refund;
-  await engine.decideBatch([primitive, structured]);
+  await engine.execute([primitive, structured]);
   await engine.close();
   const config: RouterConfig = { models: { english: model }, max_loaded: 1 };
   const router = await Laya.openRouter(config);
-  await router.decide({ ...primitive, model: 'english' });
+  await router.execute({ ...primitive, model: 'english' });
   await router.close();
   // @ts-expect-error Free text is outside the supported schema subset.
   const bad: StructuredRequest = { state: 'x', schema: { type: 'object', properties: { x: { type: 'string' } } } };

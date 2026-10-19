@@ -54,7 +54,7 @@ def stage_node_package(prefix, libdir):
     addon = package / 'native/linux-x64'
     addon.mkdir(parents=True, exist_ok=True)
     shutil.copy2(libdir / 'ducktape-laya/node/ducktape_laya.node', addon / 'ducktape_laya.node')
-    for name in ('libducktape_laya.so', 'libducktape_laya.so.0'):
+    for name in ('libducktape_laya.so', 'libducktape_laya.so.1'):
         shutil.copy2(libdir / 'libducktape_laya.so', addon / name)
     return package
 
@@ -74,7 +74,7 @@ def notes(prefix, model_dir, libdir, node_package, download_requested, dry_run):
     print('  target_link_libraries(your_target PRIVATE ducktape::laya)')
     print('  In your C++ source:')
     print('  #include <ducktape_laya.hpp>')
-    print(f'  ducktape::laya engine({json.dumps(str(model))});')
+    print(f'  auto engine = ducktape::engine::open({json.dumps(str(model))});')
     print('  For C, include <ducktape_laya.h> and pass the model path to dtl_open().')
     print('\nOther native builds:')
     print(f'  export PKG_CONFIG_PATH={q(str(libdir / "pkgconfig"))}"${{PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}}"')
