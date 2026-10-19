@@ -71,6 +71,13 @@ binding, for Rails and Laravel backends. Add one when a user asks.
   than escalated. The GGUF and llama.cpp path don't carry it; supporting it would
   need converter and llama.cpp changes. First confirm its meaning and whether the
   authors treat it as public.
+- **Batching questions into one forward pass:** measured 2026-10-20 on CPU
+  (4 cores), questions packed as separate sequences in one `llama_encode` were
+  only 1.15× faster on a 4-question request, and results changed with the batch
+  composition: the same question got different probabilities depending on its
+  position and neighbours (up to 0.04 on the fixtures), most likely because
+  matrix kernels tile rows differently. Not adopted. Revisit for GPU backends,
+  where batching pays more, and only with results independent of the batch.
 - **Loading a model from memory:** llama.cpp has no public load-from-buffer API.
   Workarounds (memfd, temporary files) add little real protection for encrypted
   assets. Revisit with mobile.
