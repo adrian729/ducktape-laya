@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "package_version": "0.1.0",
-  "abi_version": 1,
+  "abi_version": 2,
   "runtime": {
     "repository": "https://github.com/ggml-org/llama.cpp.git",
     "path": "third_party/llama.cpp",
