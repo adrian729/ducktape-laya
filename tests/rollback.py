@@ -43,6 +43,8 @@ report = {'schema_version': 1, 'status': 'running', 'model_sha256': manifest['sh
 try:
     inventories = {'previous': verify_inventory(a.previous), 'candidate': verify_inventory(a.candidate)}
     report['previous_source_commit'] = inventories['previous']['packaging_source_commit']
+    report['previous_version'] = inventories['previous']['package_version']
+    report['candidate_version'] = inventories['candidate']['package_version']
     report['candidate_source_commit'] = inventories['candidate']['packaging_source_commit']
     with tempfile.TemporaryDirectory(prefix='ducktape-rollback-') as temp:
         temp = pathlib.Path(temp)

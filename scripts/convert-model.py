@@ -53,6 +53,7 @@ if conversion.get('quantize') and not args.quantize:
 if args.output.exists():
     raise SystemExit(f'{args.output} exists; choose a new path')
 
+args.output.parent.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(dir=args.output.parent) as scratch:
     scratch = pathlib.Path(scratch)
     source = args.source or scratch / 'checkpoint'

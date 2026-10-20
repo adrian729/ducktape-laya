@@ -56,6 +56,7 @@ version = "0.0.0"
 edition = "2021"
 [dependencies]
 ducktape-laya = {{ path = "{safe}" }}
+serde_json = "1"
 [patch.crates-io]
 ducktape-laya-sys = {{ path = "{sys_crate}" }}
 ''')

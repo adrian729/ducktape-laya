@@ -133,6 +133,10 @@ configure_package_config_file(cmake/ducktape_laya-config.cmake.in
   INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ducktape_laya)
 write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/ducktape_laya-config-version.cmake
   VERSION ${PROJECT_VERSION} COMPATIBILITY SameMinorVersion)
+# The .pc file sits in <libdir>/pkgconfig; find the prefix relative to it, so a
+# multiarch libdir (lib/x86_64-linux-gnu) resolves correctly.
+file(RELATIVE_PATH DTL_PC_PREFIX "/prefix/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "/prefix")
+string(REGEX REPLACE "/$" "" DTL_PC_PREFIX "${DTL_PC_PREFIX}")
 configure_file(cmake/ducktape-laya.pc.in ${CMAKE_CURRENT_BINARY_DIR}/ducktape-laya.pc @ONLY)
 install(EXPORT ducktape_laya-targets NAMESPACE ducktape:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ducktape_laya)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ducktape_laya-config.cmake
@@ -270,6 +274,17 @@ if(EMSCRIPTEN)
     message(FATAL_ERROR "DUCKTAPE_WASM_MAXIMUM_MEMORY must be a multiple of 65536")
   endif()
   string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" maximum_memory "${DUCKTAPE_WASM_MAXIMUM_MEMORY}")
+  set(DUCKTAPE_WASM_OPTIMIZATION "2" CACHE STRING "WASM link optimization: 0, 1, 2, 3, s or z")
+  if(NOT DUCKTAPE_WASM_OPTIMIZATION MATCHES "^[0123sz]$")
+    message(FATAL_ERROR "Invalid DUCKTAPE_WASM_OPTIMIZATION")
+  endif()
+  # Build switches that change the shipped assets; packaging accepts only product values.
+  string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" optimization "\"${DUCKTAPE_WASM_OPTIMIZATION}\"")
+  if(GGML_WEBGPU_DEBUG)
+    string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" webgpu_debug true)
+  else()
+    string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" webgpu_debug false)
+  endif()
   file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json" CONTENT "${DTL_BROWSER_IDENTITY}")
   set_property(TARGET ducktape_laya_wasm APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json")
   add_custom_command(TARGET ducktape_laya_wasm POST_BUILD COMMAND ${CMAKE_COMMAND}
@@ -278,10 +293,6 @@ if(EMSCRIPTEN)
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/browser_identity.cmake")
   if(GGML_WEBGPU)
     target_link_options(ducktape_laya_wasm PRIVATE "-sJSPI_EXPORTS=['dtl_open','dtl_open_router','dtl_execute','dtl_close']")
-  endif()
-  set(DUCKTAPE_WASM_OPTIMIZATION "2" CACHE STRING "WASM link optimization: 0, 1, 2, 3, s or z")
-  if(NOT DUCKTAPE_WASM_OPTIMIZATION MATCHES "^[0123sz]$")
-    message(FATAL_ERROR "Invalid DUCKTAPE_WASM_OPTIMIZATION")
   endif()
   target_link_options(ducktape_laya_wasm PRIVATE "-O${DUCKTAPE_WASM_OPTIMIZATION}"
     "-sMODULARIZE=1" "-sEXPORT_ES6=1" "-sENVIRONMENT=web,worker"

@@ -50,6 +50,11 @@ report = {'schema_version': 1, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'additional_models': [m for _, m in extra_models], 'additional_model_gates': {},
           'mode': 'real_model' if model else 'model_free', 'release_ready': False,
           'node_version': subprocess.check_output(['node', '--version'], text=True).strip(),
+          'toolchains': {name: (subprocess.run(command, capture_output=True, text=True).stdout or '').strip().splitlines()[:1]
+                         if shutil.which(command[0]) else []
+                         for name, command in {'rustc': ['rustc', '--version'], 'go': ['go', 'version'],
+                                               'java': ['java', '--version'], 'dotnet': ['dotnet', '--version'],
+                                               'python': [sys.executable, '--version']}.items()},
           'source_files_sha256': source_files(),
           'gates': {key: {'status': 'not_run'} for key in record['required_release_gates']}, 'runs': {},
           'fixtures_sha256': {x.name: sha256(x) for x in sorted((ROOT / 'tests/fixtures').glob('*.json'))},
@@ -85,6 +90,7 @@ try:
     run('browser-backend-identities', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-backend.mjs'])
     run('browser-lifecycle', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-lifecycle.mjs'])
     run('browser-binding', ['node', '--experimental-vm-modules', '--test', ROOT / 'bindings/browser/test.mjs'])
+    run('model-download', [sys.executable, ROOT / 'tests/download-model.py'])
     run('configure', ['cmake', '-S', ROOT, '-B', build, '-DCMAKE_BUILD_TYPE=Release',
         # Validation is for the approved checkout, even if this cache previously
         # built a candidate runtime. Candidate evaluation has its own runner.
@@ -103,7 +109,7 @@ try:
         line.startswith(('CMAKE_C_COMPILER:', 'CMAKE_CXX_COMPILER:', 'CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS', 'CMAKE_BUILD_TYPE:', 'GGML_'))}
     # Assert model-dependent tests were registered; an empty green suite is not evidence.
     registered = json.loads(subprocess.check_output(['ctest', '--test-dir', build, '--show-only=json-v1'], env=env))
-    required = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules'}
+    required = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing'}
     if model: required |= {'real-model', 'real-features', 'real-control', 'real-faults', 'real-c-faults', 'cpu-guard'}
     if not required <= {test['name'] for test in registered['tests']}:
         raise RuntimeError('Required native tests are missing')

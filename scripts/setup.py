@@ -44,7 +44,7 @@ def stage_node_package(prefix, libdir):
     """Create a local npm-installable package; no npm publish or install hook."""
     package = prefix / 'share/ducktape-laya/npm'
     package.mkdir(parents=True, exist_ok=True)
-    for name in ('package.json', 'index.cjs', 'index.d.ts', 'worker.cjs', 'resolve-addon.cjs'):
+    for name in ('package.json', 'README.md', 'index.cjs', 'index.d.ts', 'worker.cjs', 'resolve-addon.cjs'):
         shutil.copy2(ROOT / 'bindings/node' / name, package / name)
     for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
         shutil.copy2(ROOT / name, package / name)

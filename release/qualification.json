@@ -161,7 +161,8 @@
         "tests/input-libfuzzer.cpp",
         "tests/fuzz-corpus.py",
         "scripts/check-sanitizers.py",
-        "tests/faults.cpp"
+        "tests/faults.cpp",
+        "scripts/check-fuzz.py"
       ],
       "acceptance": "Strict ASan/UBSan/leak checks cover real-model and model-free paths; concurrency tooling coverage explicitly recorded."
     },

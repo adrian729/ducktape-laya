@@ -190,6 +190,9 @@ def browser_build_identity(build, backend, record, toolchain, expected_source):
     require_build_source(identity, expected_source, backend)
     if identity.get('maximum_memory') != 4294967296:
         raise ValueError(backend + ': not the product WebAssembly memory ceiling (test build); rebuild first')
+    # scripts/build-browser.py builds the product at -O1 without GPU tracing.
+    if identity.get('optimization') != '1' or identity.get('webgpu_debug') is not False:
+        raise ValueError(backend + ': not a product build (optimization or GPU tracing differs); rebuild with scripts/build-browser.py')
     if (identity.get('package_version') != record['package_version'] or
         identity.get('llama_cpp_commit') != record['runtime']['commit'] or
         identity.get('runtime_patches') != record['runtime']['patches'] or

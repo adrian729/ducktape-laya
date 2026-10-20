@@ -10,6 +10,9 @@ def archive_tree(source, destination, prefix, epoch):
         info.uname = info.gname = ''
         info.mtime = epoch
         info.pax_headers = {}
+        # Modes come from the host umask; keep only whether a file is executable.
+        if info.isdir() or (info.isfile() and info.mode & 0o111): info.mode = 0o755
+        elif info.isfile(): info.mode = 0o644
         return info
     # A fixed gzip header and normalized tar metadata remove host/time variance.
     with open(destination, 'wb') as stream:
