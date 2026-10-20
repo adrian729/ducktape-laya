@@ -19,25 +19,44 @@
 namespace dtl {
 namespace {
 std::string meta(llama_model *m, const std::string &key) {
-    char buf[256];
-    int n = llama_model_meta_val_str(m, key.c_str(), buf, sizeof(buf));
-    if (n < 0 || n >= static_cast<int>(sizeof(buf)))
+    int n = llama_model_meta_val_str(m, key.c_str(), nullptr, 0);
+    if (n < 0) throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
+    std::string value(static_cast<size_t>(n) + 1, '\0');
+    if (llama_model_meta_val_str(m, key.c_str(), value.data(), value.size()) != n)
         throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
-    return std::string(buf, n);
+    value.resize(static_cast<size_t>(n));
+    return value;
 }
 void sanitize(json &value, const std::string &marker) {
     if (value.is_string()) {
-        auto s = value.get<std::string>();
-        size_t at = 0;
-        while ((at = s.find(marker, at)) != std::string::npos) {
-            s.replace(at, marker.size(), " ");
-            ++at; // Progress even if a custom model's mask token is a space.
+        // One pass: replacing in place would shift the tail once per marker.
+        const auto &s = value.get_ref<const std::string &>();
+        if (s.find(marker) == std::string::npos) return;
+        std::string out;
+        out.reserve(s.size());
+        for (size_t at = 0;;) {
+            const size_t next = s.find(marker, at);
+            out.append(s, at, next == std::string::npos ? std::string::npos : next - at);
+            if (next == std::string::npos) break;
+            out += ' ';
+            at = next + marker.size();
         }
-        value = s;
+        value = std::move(out);
     } else if (value.is_structured()) {
         for (auto &child : value) sanitize(child, marker);
     }
 }
+}
+// llama.cpp's BPE is quadratic in the length of one run of ASCII spaces (800k
+// spaces take about 30 s and cannot be cancelled), so such runs are bounded.
+constexpr size_t max_space_run = 4096;
+void require_space_runs(std::string_view text, const std::string &what) {
+    size_t run = 0;
+    for (char c : text) {
+        run = c == ' ' ? run + 1 : 0;
+        if (run > max_space_run)
+            throw failure(DTL_INVALID_ARGUMENT, what + " has more than " + std::to_string(max_space_run) + " consecutive spaces");
+    }
 }
 struct prepared_window {
     std::vector<llama_token> tokens;
@@ -165,6 +184,7 @@ struct backend::impl {
     }
     void prepare(question &q, const json &state) {
         if (q.overflow.empty()) q.overflow = "reject";
+        require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
         if (q.options.size() == 1) return; // answered without inference; uses no tokens
         q.prepared = std::make_unique<prepared_question>();
         auto &prepared = *q.prepared;
@@ -188,7 +208,8 @@ struct backend::impl {
         jinja::runtime runtime(jc);
         auto rendered = jinja::runtime::gather_string_parts(runtime.execute(program))->as_string().str();
         require(rendered.size() <= max_request * 2, "Rendered prompt is too large");
-        require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
+        require_space_runs(rendered, q.id + ": the question");
+        require_space_runs(state_text, "state");
         const size_t limit = q.max_tokens ? q.max_tokens : capacity;
         // The text between mask tokens is tokenized on its own, as the model was
         // trained: some vocabularies (mmBERT) mark the mask as left-stripping, which
@@ -245,8 +266,10 @@ struct backend::impl {
         head.push_back(sep);
         require(!separate_state || opts_end + 2 == tokens.size(), "Invalid decision prompt layout");
         if (separate_state && state_text != cached_state_text) {
-            cached_state_tokens.clear();
-            tokenize_into(cached_state_tokens, state_text);
+            // Replace the cache only once tokenization succeeded.
+            std::vector<llama_token> fresh;
+            tokenize_into(fresh, state_text);
+            cached_state_tokens = std::move(fresh);
             cached_state_text = std::move(state_text);
         }
         const std::vector<llama_token> state_tokens = separate_state ? cached_state_tokens

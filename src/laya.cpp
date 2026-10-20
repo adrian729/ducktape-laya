@@ -23,6 +23,8 @@ using dtl::question;
 using dtl::failure;
 using dtl::require;
 using dtl::max_request;
+using dtl::max_object_members;
+using dtl::max_call_windows;
 namespace {
 char *copy(const std::string &s) {
     auto *p = static_cast<char *>(std::malloc(s.size() + 1));
@@ -53,6 +55,9 @@ std::vector<question> parse(const json &body) {
     for (auto &[id, q] : body["questions"].items()) {
         require(q.is_object() && q.contains("instructions") && !q["instructions"].is_null(),
                 id + ": instructions are required");
+        for (const auto &[key, ignored] : q.items())
+            require(key == "type" || key == "instructions" || key == "criteria" || key == "aggregate",
+                    id + ": unsupported key " + key);
         require(q.contains("type") && q["type"].is_string(), id + ": type is required");
         question out{id, q["type"].get<std::string>(), q["instructions"], json::array()};
         json criteria = q.value("criteria", json());
@@ -75,7 +80,10 @@ std::vector<question> parse(const json &body) {
         } else if (out.type == "score") {
             require(criteria.is_array() && criteria.size() >= 2 && criteria.size() <= 10,
                     id + ": score criteria must be an array of 2..10 levels");
-            for (size_t i = 0; i < criteria.size(); ++i) add(std::to_string(i), criteria[i]);
+            for (size_t i = 0; i < criteria.size(); ++i) {
+                require(!criteria[i].is_null(), id + ": score levels need a description");
+                add(std::to_string(i), criteria[i]);
+            }
         } else if (out.type == "noul") {
             require(criteria.is_null() || criteria.is_object(), id + ": noul criteria must be an object");
             if (criteria.is_object()) for (auto &[key, ignored] : criteria.items())
@@ -94,14 +102,33 @@ std::vector<question> parse(const json &body) {
 }
 }
 namespace {
+// An unsigned JSON integer in [low, high]. Compared as uint64: nlohmann compares an
+// unsigned value above 2^63 with a signed literal as negative.
+bool unsigned_in(const json &value, uint64_t low, uint64_t high) {
+    return value.is_number_unsigned() && value.get<uint64_t>() >= low && value.get<uint64_t>() <= high;
+}
+// Bounds the forward passes one call plans: 128 questions with 1024 scan windows
+// each would otherwise be accepted from a small request.
+void count_windows(size_t &total, const question &q) {
+    total += q.overflow_report().value("windows", size_t(0));
+    require(total <= max_call_windows, "the call needs more than " + std::to_string(max_call_windows) + " forward passes");
+}
 json read_json(const char *text) {
     require(text, "JSON input is required");
     size_t n = 0;
     while (n <= max_request && text[n]) ++n;
     require(n <= max_request, "Request exceeds 1 MiB");
     try {
-        return json::parse(text, [](int depth, json::parse_event_t, json &) {
+        // Objects keep insertion order with a linear key search, so parsing one object
+        // costs O(members^2): bound the members per object.
+        std::vector<size_t> members;
+        return json::parse(text, [&members](int depth, json::parse_event_t event, json &) {
             require(depth <= 64, "JSON nesting exceeds 64 levels");
+            if (event == json::parse_event_t::object_start) members.push_back(0);
+            else if (event == json::parse_event_t::object_end) members.pop_back();
+            else if (event == json::parse_event_t::key)
+                require(++members.back() <= max_object_members, "JSON objects are limited to " +
+                        std::to_string(max_object_members) + " members");
             return true;
         });
     } catch (const json::exception &e) { throw failure(DTL_INVALID_ARGUMENT, e.what()); }
@@ -222,7 +249,7 @@ planned plan(json body, bool routed) {
     out.questions = parse(body);
     size_t max_tokens = 0;
     if (body.contains("max_tokens")) {
-        require(body["max_tokens"].is_number_unsigned() && body["max_tokens"] >= 1, "max_tokens must be a positive integer");
+        require(unsigned_in(body["max_tokens"], 1, UINT32_MAX), "max_tokens must be a positive integer");
         max_tokens = body["max_tokens"].get<size_t>();
     }
     std::shared_ptr<const dtl::temperature_map> overrides;
@@ -232,7 +259,7 @@ planned plan(json body, bool routed) {
     if (body.contains("overflow")) overflow = overflow_policy(body["overflow"], "overflow");
     size_t max_windows = 32;
     if (body.contains("max_windows")) {
-        require(body["max_windows"].is_number_unsigned() && body["max_windows"] >= 1 && body["max_windows"] <= 1024,
+        require(unsigned_in(body["max_windows"], 1, 1024),
                 "max_windows must be 1..1024");
         max_windows = body["max_windows"].get<size_t>();
     }
@@ -272,18 +299,20 @@ json evaluate(model_engine &engine, planned &p, const dtl::execution &control) {
     json result = {{"answers", answers}, {"usage", {{"input_tokens", tokens}, {"output_tokens", 0}}}};
     // Callers who allowed overflow handling always learn what it did.
     if (!p.questions.empty() && p.questions.front().overflow != "reject") {
-        size_t state_tokens = 0, dropped = 0;
+        size_t state_tokens = 0, dropped = 0, windows = 0;
         json shortened = json::array();
         for (const auto &q : p.questions) {
             auto report = q.overflow_report();
             if (report.empty()) continue;
             state_tokens = std::max(state_tokens, report["state_tokens"].get<size_t>());
             dropped = std::max(dropped, report["state_tokens_dropped"].get<size_t>());
+            windows = std::max(windows, report["windows"].get<size_t>());
             if (report["state_tokens_dropped"].get<size_t>() > 0 || report["head_shortened"].get<bool>()) shortened.push_back(q.id);
         }
         result["usage"]["state_tokens"] = state_tokens;
         result["usage"]["state_tokens_dropped"] = dropped;
         result["usage"]["truncated_questions"] = std::move(shortened);
+        result["usage"]["windows"] = windows; // the most state windows any question used (1 when it fitted)
     }
     if (!p.fields.empty()) {
         json values = json::object();
@@ -332,11 +361,12 @@ dtl::engine_config engine_config(const json &value, dtl::engine_config base = {}
     keys(value, {"threads", "context_tokens", "temperatures", "overflow"}, "config");
     if (value.contains("overflow")) base.overflow = overflow_policy(value["overflow"], "config.overflow");
     if (value.contains("threads")) {
-        require(value["threads"].is_number_unsigned() && value["threads"] <= 256, "threads must be 0..256");
+        require(unsigned_in(value["threads"], 0, 256), "threads must be 0..256");
         base.threads = value["threads"].get<uint32_t>();
     }
     if (value.contains("context_tokens")) {
-        require(value["context_tokens"].is_number_unsigned() && value["context_tokens"] >= 1, "context_tokens must be a positive integer");
+        // The model's trained length bounds it from above when the model loads.
+        require(unsigned_in(value["context_tokens"], 32, UINT32_MAX), "context_tokens must be an integer of at least 32");
         base.context_tokens = value["context_tokens"].get<size_t>();
     }
     if (value.contains("temperatures"))
@@ -403,7 +433,7 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
                 body["models"].size() <= 16, "models must contain 1..16 routes");
         auto r = std::make_unique<router_state>();
         if (body.contains("max_loaded")) {
-            require(body["max_loaded"].is_number_integer() && body["max_loaded"] >= 1 && body["max_loaded"] <= 4,
+            require(unsigned_in(body["max_loaded"], 1, 4),
                     "max_loaded must be 1..4");
             r->max_loaded = body["max_loaded"].get<size_t>();
         }
@@ -424,9 +454,10 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
             if (ec || !std::filesystem::is_regular_file(canonical, ec) || ec)
                 throw failure(DTL_MODEL_ERROR, "Model path is not a local regular file: " + id);
             router_state::route route{canonical.string(), {}, engine_config(config, shared)};
-            json key = {{"path", route.path}, {"threads", route.config.threads}, {"context_tokens", route.config.context_tokens},
+            // The path is raw bytes (not necessarily UTF-8), so it is not put into JSON.
+            json key = {{"threads", route.config.threads}, {"context_tokens", route.config.context_tokens},
                         {"temperatures", route.config.temperatures}};  // overflow is applied per call, not per loaded model
-            route.cache_key = key.dump();
+            route.cache_key = route.path + '\0' + key.dump();
             r->routes[id] = std::move(route);
         }
         if (body.contains("auto")) {
@@ -452,7 +483,8 @@ dtl_status dtl_info(dtl_engine *engine, char **result, char **error) {
             std::lock_guard<std::mutex> lock(engine->single->mutex);
             info["model"] = engine->single->runtime.info();
         }
-        *result = copy(info.dump());
+        // Model metadata strings are not guaranteed to be UTF-8.
+        *result = copy(info.dump(-1, ' ', false, json::error_handler_t::replace));
     });
 }
 dtl_call_options dtl_default_call_options(void) {
@@ -472,7 +504,12 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
         if (!routed) {
             auto &single = *engine->single;
             auto lock = control.lock(single.mutex);
-            for (auto &p : work) for (auto &q : p.questions) { control.check(); single.prepare(q, p.body["state"], engine->overflow); }
+            size_t windows = 0;
+            for (auto &p : work) for (auto &q : p.questions) {
+                control.check();
+                single.prepare(q, p.body["state"], engine->overflow);
+                count_windows(windows, q);
+            }
             for (auto &p : work) results.push_back(evaluate(single, p, control));
         } else {
             auto &router = *engine->router;
@@ -501,13 +538,18 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
                 chosen.emplace_back(english ? router.auto_english : router.auto_default, std::move(routing));
             }
             auto lock = control.lock(router.mutex);
+            size_t windows = 0;
             for (size_t i = 0; i < work.size(); ++i) {
                 auto &p = work[i];
                 const auto &id = chosen[i].first;
                 control.check();
                 const auto &route = router.routes.at(id);
                 auto &model = router.load(route);
-                for (auto &q : p.questions) { control.check(); model.prepare(q, p.body["state"], route.config.overflow); }
+                for (auto &q : p.questions) {
+                    control.check();
+                    model.prepare(q, p.body["state"], route.config.overflow);
+                    count_windows(windows, q);
+                }
                 auto answer = evaluate(model, p, control); answer["model"] = id;
                 if (!chosen[i].second.is_null()) answer["usage"]["routing"] = chosen[i].second;
                 results.push_back(std::move(answer));

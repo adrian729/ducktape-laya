@@ -53,7 +53,7 @@ int main() {
         expect(near(scaled["probabilities"]["b"].get<double>(), pb) && near(scaled["answer_confidence"].get<double>(), pb) &&
                near(scaled["confidence"].get<double>(), 1 - entropy / std::log(2.0)), "temperature, answer_confidence and concentration");
 
-        // Ordinal score: expectation over levels; distance is measured from the first most probable level.
+        // Ordinal score: the expected level over the probabilities.
         auto score = dtl::answer_from_scores("score", options({"0", "1", "2"}), {2, 0, 2}, 1);
         const double edge = 1 / (2 + std::exp(-2.0)), middle = std::exp(-2.0) * edge;
         expect(near(score["score"].get<double>(), middle + 2 * edge), "expected level");

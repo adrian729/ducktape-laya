@@ -164,6 +164,32 @@ int main(int argc, char **argv) {
             all["overflow"] = "scan"; all["questions"]["refund"]["aggregate"] = "all";
             auto minimum = json::parse(engine.execute(all.dump()))["answers"]["refund"];
             expect(minimum["noul"] <= answer["noul"] && minimum["window"]["count"] == windows, "aggregate all is the minimum");
+            {   // Which tokens each policy keeps, by value: a state whose start and end differ.
+                const size_t tail = 100; // words; their token count comes from the engine
+                auto mixed = [&](size_t refunds, size_t others, const char *policy) {
+                    json r = {{"state", repeated("refund ", refunds) + repeated("weather ", others)},
+                              {"questions", {{"refund", requests[0]["questions"]["refund"]}}}};
+                    if (policy) r["overflow"] = policy;
+                    return json::parse(engine.execute(r.dump()));
+                };
+                auto end_cut = mixed(kept, tail, "truncate_end"), start_cut = mixed(kept, tail, "truncate_start");
+                const size_t tail_tokens = end_cut["usage"]["state_tokens"].get<size_t>() - kept;
+                expect(tail_tokens >= tail && tail_tokens < kept, "the tail is cut off by truncate_end");
+                // A longer state of the same words cut the same way keeps the same tokens: the
+                // first `kept` refunds, or the tail preceded by refunds.
+                expect(end_cut["answers"] == mixed(kept + 50, 0, "truncate_end")["answers"], "truncate_end keeps the start");
+                expect(start_cut["answers"] == mixed(kept + 50, tail, "truncate_start")["answers"], "truncate_start keeps the end");
+                expect(end_cut["answers"] != start_cut["answers"], "the two cuts read different text");
+                // Scan reads both of those windows: "any" is at least, "all" at most, either one.
+                const double first = end_cut["answers"]["refund"]["noul"], last = start_cut["answers"]["refund"]["noul"];
+                auto any = mixed(kept, tail, "scan")["answers"]["refund"];
+                json every = {{"state", repeated("refund ", kept) + repeated("weather ", tail)}, {"overflow", "scan"},
+                              {"questions", {{"refund", requests[0]["questions"]["refund"]}}}};
+                every["questions"]["refund"]["aggregate"] = "all";
+                auto all_windows = json::parse(engine.execute(every.dump()))["answers"]["refund"];
+                expect(any["noul"].get<double>() >= std::max(first, last) && all_windows["noul"].get<double>() <= std::min(first, last),
+                       "scan any is the maximum and all the minimum over windows");
+            }
             expect(rejected([&] { json r = json::parse(sized(words)); r["overflow"] = "scan"; r["max_windows"] = 1; return r.dump(); }(),
                             "max_windows"), "too many windows rejected");
             for (json bad : {json({{"overflow", "clip"}}), json({{"max_windows", 0}}), json({{"overflow", 1}})}) {
