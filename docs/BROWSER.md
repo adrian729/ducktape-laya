@@ -14,8 +14,11 @@ separate requirements.
 
 ## Build and package
 
-`release/browser-toolchain.json` pins emsdk/Emscripten and its Dawn port. Install
-that SDK in a local directory, without requiring a global shell profile change:
+`release/browser-toolchain.json` pins the emsdk commit, SDK version and Emscripten
+commit, which `scripts/build-browser.py` checks before building; the Dawn WebGPU
+port's version, revision and hash are recorded there but not verified by the
+script. Install that SDK in a local directory, without requiring a global shell
+profile change:
 
 ```sh
 git clone https://github.com/emscripten-core/emsdk.git .research/emsdk
@@ -31,6 +34,13 @@ Browser builds select ggml's WASM SIMD CPU kernels
 (`EMSCRIPTEN_SYSTEM_PROCESSOR=wasm32`; configuration fails otherwise) with the
 recorded rounding patch described in [patches/README.md](../patches/README.md).
 This applies to CPU operations of both backends.
+
+The product build is what `scripts/build-browser.py` configures: link optimization
+`-O1` (`DUCKTAPE_WASM_OPTIMIZATION=1`), no GPU operation tracing (`--trace-gpu`
+off) and the 4 GiB memory ceiling. Each build records these values, and
+`scripts/package-browser.py` rejects a build with any other value, before
+creating its output directory. `--trace-gpu` and `--maximum-memory` exist for
+validation builds only.
 
 The resulting npm tarball contains loader, worker, shared protocol declarations,
 WASM and WebGPU assets, pinned toolchain metadata and license notices. It excludes
@@ -79,7 +89,9 @@ permission to create module workers and compile WASM.
 | `auto` | Router only: `{english, default}` routes for `"model": "auto"` |
 | `initializationTimeoutMs`, `signal`, `onDiagnostic` | Initialization control and diagnostics (below) |
 
-The engine always runs one thread. See [API.md](API.md#engine-configuration) for the native meaning of each key.
+The engine always runs one thread. See [API.md](API.md#engine-configuration) for the native meaning of each key. Initialization that exceeds `initializationTimeoutMs` rejects with `status` 6.
+
+`engine.execute(request, options)` takes one request (object or JSON string) or an array of up to 32, with the call options `signal`, `timeoutMs`, `onEvent` and `requestId` as in Node. Requests are strict; besides `state` and `questions` or `schema`, they may set `max_tokens`, `temperatures`, `overflow`, `max_windows`, `boolean_threshold` (with `schema`), and on a router `model` and `lang` ([API.md](API.md#primitive-requests-and-results)). Request objects are serialized with `JSON.stringify`, which reorders integer-like keys and writes `149.0` as `149`; pass a JSON string when the literal text matters.
 
 `openRouter({id: {url, sha256, contextTokens, overflow, temperatures}}, options)` maps logical routes to assets. A model's own `contextTokens`, `overflow` and `temperatures` override the shared options for that route, like a native route `config`. Identical URL/hash pairs are downloaded once and use one canonical model path. The `auto: {english, default}` option enables `"model": "auto"` (see [API.md](API.md#choosing-the-model-by-language)):
 
@@ -119,13 +131,13 @@ Repeated `close()` returns the same promise.
 (default 120000 per backend attempt). Aborting initialization terminates its
 worker and prevents automatic backend fallback.
 
-Hooks use the same native event contract and execute on the host thread. Callback
+Observers use the same native event contract and execute on the host thread. Callback
 failures are passive. Low-level runtime text is suppressed unless `onDiagnostic`
 is provided. Requests and results are not logged or sent to telemetry endpoints.
 
 ## Conformance and release gates
 
-Browser release checks must cover primitive/schema/batch outputs, ordered hooks,
+Browser release checks must cover primitive/schema/batch outputs, ordered events,
 invalid/closed calls, asset budgets, route aliases, pre-cancellation, deadlines,
 cancelling/idempotent shutdown and explicit WASM initialization fallback. Include
 missing/corrupt assets, hash mismatch, initialization aborts, device loss, worker
@@ -138,11 +150,13 @@ Export its `window.state` after completion to a local report. Compare against a
 native run of the same model and fixtures, not a historical checked-in result:
 
 ```sh
-python3 tests/parity.py /path/to/Laya-Q8_0.gguf --report build/native-results.json
-python3 tests/compare-browser.py build/browser-results.json --native build/native-results.json
+python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf --output build-check-native
+python3 tests/compare-browser.py build/browser-results.json --native build-check-native/outputs.json
 ```
 
-The comparator requires matching fixture sets, native key order mapped to JavaScript property order, a responsive main-thread
+`validate.py` writes the native fixture results to `outputs.json` (from
+`tests/parity.py --report`); `check-candidate.py` accepts browser drift only
+against that file of the candidate's native run. The comparator requires matching fixture sets, native key order mapped to JavaScript property order, a responsive main-thread
 heartbeat, ordered events and finite values. It reports numeric drift and changed
 choice/structured decisions without a cross-profile tolerance gate. Metadata,
 token counts and result shapes remain exact. `tests/compare-browser-reference.py` separately compares with unchanged
@@ -154,7 +168,7 @@ installed Chrome. Build both backend reference probes with `--reference` first:
 ```sh
 npm ci --ignore-scripts --prefix tests/browser-automation
 node tests/browser-automation/run.mjs --model /path/to/Laya-Q8_0.gguf \
-  --native build/native-results.json --output build-browser-check
+  --native build-check-native/outputs.json --output build-browser-check
 ```
 
 The runner starts its own loopback-only harness, verifies the model, runs both

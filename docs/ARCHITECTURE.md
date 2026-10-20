@@ -79,7 +79,7 @@ Native builds link a private, static llama.cpp into the shared Ducktape library.
 Only the public C ABI is exported; upstream types must not appear in public
 headers. Node-API delegates to that ABI in a dedicated worker thread. Its host
 wrapper owns bounded FIFO admission, promise settlement and graceful shutdown.
-C++ and Rust calls are blocking. Native inference has no runtime network access,
+Calls in every native binding except Node block the calling thread (Python's `execute_async` and .NET's `ExecuteAsync` move the blocking call to a worker thread); Node and the browser return promises. Native inference has no runtime network access,
 child process or inference server. Model/context resources belong to handles;
 backend registration lasts for the process lifetime.
 

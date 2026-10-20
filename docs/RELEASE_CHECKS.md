@@ -60,15 +60,20 @@ the runner does not silently transplant historical results to a different binary
 This runner currently covers a subset of release gates and cannot approve a release
 by itself. A successful normal exit means its selected checks passed.
 
-The GitHub workflow defines Ubuntu 24.04 model-free checks for Clang/Node 24 and GCC/Node 26, including `--packages` and its package smoke test. Manual dispatch can explicitly enable the pinned model download and the real-model installed-package checks. Workflow dependencies are pinned by commit; Rust and Node
+With `--model`, the runner requires the `cpu-guard` test to be registered, which needs `qemu-x86_64` (and `python3`) on `PATH` when CMake configures; without QEMU a real-model run fails. It also runs `tests/download-model.py` and records the Rust, Go, Java, .NET and Python versions it found under `toolchains`.
+
+The GitHub workflow defines Ubuntu 24.04 model-free checks for Clang/Node 24 and GCC/Node 26, including `--packages` and its package smoke test. Manual dispatch can explicitly enable the pinned model download, QEMU and the real-model installed-package checks. CI uses the runner's default `clang` and `gcc`, which need not be the compiler versions `release/qualification.json` lists; the `native_matrix` evidence for `check-candidate.py` may therefore combine local and CI reports, as long as together they cover every listed compiler and Node version and each is bound to the candidate. Workflow dependencies are pinned by commit; Rust and Node
 versions are explicit. Consult the relevant GitHub Actions run for results;
 workflow definitions alone are not release evidence. CI does not publish packages
 or update dependencies.
 
-A separate model-free CI job instruments the shared library with ASan/UBSan and
-runs `tests/input-fuzz.cpp`: deterministic request/schema/config mutations, nesting
-and size boundaries. It does not replace real-model sanitizer runs or claim
-coverage-guided fuzzing. No sanitizer recovery or suppression is enabled.
+A separate model-free CI job instruments the shared library with ASan/UBSan, runs
+the model-free CTest suite and `tests/input-fuzz.cpp` (deterministic
+request/schema/config mutations, nesting and size boundaries), then builds
+`laya-input-fuzzer` and runs a 60-second coverage-guided libFuzzer smoke from the
+generated corpus. The smoke exercises the harness; it does not meet the one-hour
+fuzz budget or replace real-model sanitizer runs. No sanitizer recovery or
+suppression is enabled.
 
 The benchmark (`tests/benchmark.py`, one fresh process per run) records model
 open/close, first and warm p50/p95/p99 latency for small, structured, near-limit
@@ -85,7 +90,11 @@ python3 scripts/performance-budgets.py check build/bench-candidate.json
 ```
 
 Limits are the worst baseline value times a declared headroom (1.5 for time, 1.25
-for memory); leaks have none. They detect regressions on the reference host, not
+for memory); leaks have none. The committed budgets in
+`release/budgets/native-performance.json` were frozen from a 0.1.0-era baseline
+(source commit `baaf568`, an ancestor of `v0.1.0`). 0.2.0 changes the library, so re-check them for the 0.2.0
+candidate and re-derive them from new baseline runs if the measured profile no
+longer matches. They detect regressions on the reference host, not
 portable latency promises. Run without competing builds or inference and keep
 the reports as CI/PR artifacts.
 
@@ -134,13 +143,22 @@ python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COM
 
 The sanitizer runner builds ASan+UBSan and TSan configurations, runs every
 registered native test with the model (allocation-failure injection is skipped
-under sanitizer runtimes) and a short stress run. The rollback rehearsal switches an installed application from retained last-known-good packages to the candidate and back, requiring the LKG library and byte-identical outputs after rollback. When both sides have the same ABI, one consumer binary must work with both. Across an ABI break (0.1.0 to 0.2.0), an application must rebuild, so each side runs a consumer built from its own packaging source commit against its own headers. `check-candidate.py` takes a JSON map of evidence names
+under sanitizer runtimes) and a short stress run. The `sanitizers` gate also
+lists the coverage-guided fuzz campaign (`scripts/check-fuzz.py`, below) among
+its checks; its report is the separate `fuzz` evidence. The rollback rehearsal switches an installed application from retained last-known-good packages to the candidate and back, requiring the LKG library and byte-identical outputs after rollback. Make `LKG_PACKAGES` from the previous GitHub release: `gh release download vX.Y.Z -D build/lkg-assets` and `python3 scripts/release-assets.py retain build/lkg-assets --output build/lkg-packages`, which restores the native package directory (`inventory.json` and its artifacts) and verifies it. When both sides have the same ABI, one consumer binary must work with both. Across an ABI break (0.1.0 to 0.2.0), an application must rebuild, so each side runs a consumer built from its own packaging source commit against its own headers. `check-candidate.py` takes a JSON map of evidence names
 (`native`, `native_matrix`, `browser_package`, `browser`, `browser_isolated`,
 `userspaces`, `electron`, `cross_cpu`, `sanitizers`, `fuzz`, `stress`, `soak`,
 `reproducibility`, `performance`, `security_review`, `upgrade`, `model_upgrade`,
 `rollback`) to report paths. A gate passes only when its evidence passed and is
 bound to the candidate commit, the validated library and packages, the browser
-package assets and the pinned model; missing evidence is `not_run`. Hours-long
+package assets and the pinned model; missing evidence is `not_run`. In particular:
+the security review must name its `source_commit` and `source_tracked_dirty`
+(false) like other reports; the cross-CPU bundle must contain the candidate
+library; the rollback's previous side must be an earlier release whose source is
+an ancestor of the candidate; the native packages must be built from the
+candidate's source identity; browser runs must use a Chrome version listed in
+`release/qualification.json` and, for WebGPU, listed non-fallback hardware; and
+each reproduced build must contain the candidate library. Hours-long
 evidence (`soak`, `stress`, `fuzz`, `sanitizers`, `performance`, `upgrade`,
 `model_upgrade`) may come from an ancestor commit when the diff since touches no
 library input (`src/`, `include/`, `cmake/`, `patches/`, `CMakeLists.txt`, the
@@ -156,7 +174,8 @@ commit's own tree, so later tooling commits cannot alter what is checked.
 Before publication, require all applicable recorded gates, review current evidence
 and numeric-profile limits, verify the security contact and release hosting, and
 retain the prior artifacts for rollback. Publication is an explicit maintainer
-action. After the GitHub release exists, run the `attest-release` workflow with its tag: it checks that `gates.json` is `release_ready`, qualified the tagged commit and came from a clean checker; that the published native and browser inventories are the ones `gates.json` qualified; and that every asset matches its inventory and `SHA256SUMS`. It then signs a release-qualification attestation for each asset. It is not build
+action. Assemble the release assets with `scripts/release-assets.py assemble`
+(see [PUBLISHING.md](PUBLISHING.md#release-day-order)). After the GitHub release exists, run the `attest-release` workflow from `main` with its tag (it refuses other refs): it checks that `gates.json` is `release_ready`, that every gate in it passed, that it qualified the tagged commit and came from a clean checker; that the published native and browser inventories are the ones `gates.json` qualified and were packaged from the tagged commit; that every artifact they list is published with the listed hash; and that `SHA256SUMS` matches. Any asset outside those inventories fails the run. It then signs a release-qualification attestation for each asset. It is not build
 provenance; the assets are built and qualified locally. Registry status, missing
 publishing work and the release-day order are in [PUBLISHING.md](PUBLISHING.md).
 Each numerical profile must pass strict same-backend upstream checks.

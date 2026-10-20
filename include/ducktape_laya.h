@@ -29,7 +29,9 @@ DTL_API uint32_t dtl_abi_version(void);
 /* config_json may be NULL. Keys (unknown keys are rejected):
  *   "threads": 0 (automatic, capped at 4) or 1..256
  *   "context_tokens": capacity reserved for one prompt, 32 up to the model's
- *     trained length; default 512 (or the trained length if smaller)
+ *     trained length; default 512 (or the trained length if smaller). Values
+ *     below 32 fail when the config is parsed; the upper bound is checked when
+ *     the model loads (for a router route, on its first request)
  *   "overflow": default policy for prompts over their limit: "reject" (default),
  *     "truncate_end", "truncate_start" or "scan"; a request's own value wins
  *   "temperatures": calibration overrides keyed like the GGUF metadata, e.g.
@@ -40,7 +42,8 @@ DTL_API dtl_status dtl_open(const char *model_path, const char *config_json,
                             dtl_engine **out, char **error);
 /* router_json: {"models": {"id": "path.gguf" | {"path": "...", "config": {...}}},
  * "max_loaded": 1, "auto": {"english": "id", "default": "id"}}. 1..16 routes,
- * max_loaded 1..4 (loaded path and config pairs), "auto" optional. Paths are
+ * max_loaded 1..4 (loaded models; routes share one when the canonical path and
+ * the configured threads, context_tokens and temperatures are equal), "auto" optional. Paths are
  * checked at open; models load lazily (least recently used evicted first).
  * config_json applies to every model; a route's own "config" overrides it key by
  * key. Requests name a route in "model", or send "model": "auto" (with an
@@ -51,7 +54,9 @@ DTL_API dtl_status dtl_open_router(const char *router_json, const char *config_j
 /* Allocated diagnostics JSON, freed with dtl_free. A NULL engine reports runtime
  * identity, limits and CPU compatibility without loading a model; a single-model
  * engine adds its model metadata and calibration; a router reports the runtime
- * only. No paths, input or result data are included. Ignore unknown fields. */
+ * only. No paths, input or result data are included; invalid UTF-8 in model
+ * metadata is replaced. On a single-model engine this waits for a running call.
+ * Ignore unknown fields. */
 DTL_API dtl_status dtl_info(dtl_engine *engine, char **result_json, char **error);
 
 typedef void (*dtl_event_callback)(const char *event_json, void *user_data);
@@ -86,7 +91,9 @@ DTL_API dtl_call_options dtl_default_call_options(void);
 DTL_API uint32_t dtl_cancel_flag(void *user_data);
 
 /* One request object or an array of 1..32 (at most 128 questions, 1 MiB in
- * total); arrays return arrays in input order. Every request is validated first.
+ * total, 1024 members per JSON object, 4096 planned forward passes, no run of
+ * more than 4096 ASCII spaces in a question or state); arrays return arrays in
+ * input order. Every request is validated first.
  * A single-model engine then prepares every request before any inference; a
  * router loads, prepares and runs request by request. Errors return no partial
  * result. Calls on one handle serialize; separate handles may run concurrently.

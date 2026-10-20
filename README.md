@@ -21,7 +21,7 @@ This README and the guides in `docs/` describe main. Registry installs (`npm ins
 - [Long input](docs/API.md#long-input): reject (default), truncate from either end, or scan the whole text in windows.
 - [Engine configuration](docs/API.md#engine-configuration): threads, prompt capacity up to the model's trained length, and calibration temperatures.
 - [Local routing](docs/API.md#local-routing) between several models, including [routing by language](docs/API.md#choosing-the-model-by-language) between the English and multilingual models.
-- Deadlines, cooperative cancellation and passive events in every binding, with the same results from every binding on the same build.
+- Deadlines, cooperative cancellation and passive events in every binding, with the same results from every binding on the same build for the same request text (Node and the browser serialize request objects with `JSON.stringify`, which writes `149.0` as `149`; see [the API guide](docs/API.md#primitive-requests-and-results)).
 
 ## Requirements
 
@@ -43,26 +43,31 @@ What each package needs on top:
 | Package | Install | Also needs |
 | --- | --- | --- |
 | Node.js | `npm install ducktape-laya` | Node.js 20+ (tested on 24 and 26). The native addon is prebuilt; no compiler. |
-| Electron | `npm install ducktape-laya` | Tested with Electron 44. Keep the package and the model unpacked from ASAR. |
+| Electron | `npm install ducktape-laya` | Tested with Electron 44. Unpack the whole `node_modules/ducktape-laya` package (its worker script and native files) and the model from ASAR. |
 | Rust | `cargo add ducktape-laya` | The native library from the [release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0), found through `pkg-config` or `DUCKTAPE_LAYA_LIB_DIR`. Tested with Rust 1.98. |
 | C/C++ | [release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0) | A C or C++ compiler; CMake 3.22+ or `pkg-config` to link. |
-| Python | From a checkout (unreleased) | Python 3.10+. The wheel bundles the native library; no compiler. See [bindings/python](bindings/python/README.md). |
+| Python | From a checkout (unreleased) | Python 3.10+. The wheel from `scripts/package-linux.py` bundles the native library, so installing it needs no compiler; building it needs the native build with the Node addon, npm and Cargo. See [bindings/python](bindings/python/README.md). |
 | Go | From a checkout (unreleased) | Go 1.22+, cgo with a C compiler, and the native library and header. See [bindings/go](bindings/go/README.md). |
 | Java/Kotlin | From a checkout (unreleased) | Java 22+ (FFM API), run with `--enable-native-access`. See [bindings/java](bindings/java/README.md). |
 | .NET | From a checkout (unreleased) | .NET 10. See [bindings/dotnet](bindings/dotnet/README.md). |
 | Browser (experimental) | `npm install ducktape-laya-browser` | Tested on Chromium 152 only. WASM SIMD in a module worker, secure context; WebGPU is optional. See the [browser guide](docs/BROWSER.md) and [package README](bindings/browser/README.md). |
 
+The versions above are minimums the packages declare. CI tests Node 24 and 26, Rust 1.98, Go 1.27, Java 25, .NET 10 and the Ubuntu 24.04 runner's system Python; the older minimums (Node 20, Go 1.22, Java 22, Python 3.10) are not tested. `./demo ts` needs Node 22.6+ (`--experimental-strip-types`).
+
 The registry installs and the release tarball above are 0.1.0. For 0.2.0, build the library from a checkout ([manual setup](#manual-setup)); the [Node](bindings/node/README.md), [Rust](bindings/rust/ducktape-laya/README.md), [Python](bindings/python/README.md), [Go](bindings/go/README.md), [Java](bindings/java/README.md) and [.NET](bindings/dotnet/README.md) READMEs describe the 0.2.0 APIs, and each non-npm binding's README explains how to use it from a checkout.
 
-Building from source instead needs CMake 3.22+, a C/C++17 compiler and Git, plus
-Python 3.11+ for the setup wizard.
+Building from source instead needs CMake 3.22+, a C/C++17 compiler and Git. The
+setup wizard and `scripts/download-model.py` need Python 3; the maintainer
+scripts that import `scripts/release_support.py` (`convert-model.py`,
+`verify-model.py`, `check-release.py`, the packaging and validation scripts) need
+Python 3.11+.
 
 ## Optional setup wizard
 
 From a clone with submodules (see below), run `python3 scripts/setup.py`. It asks
 where to install the library and model, and can build a local Node.js package.
 At the end, it prints project paths and settings. It does not edit your shell
-profile or `PATH`. The wizard requires Python 3.11+.
+profile or `PATH`.
 
 ```sh
 python3 scripts/setup.py                 # interactive
@@ -216,15 +221,21 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
 The wizard's `--node` option stages a package you can install into a separate
 Node project. [Packaging](docs/PACKAGING.md) also shows how to build the npm
 tarball manually. In an installed project, import it with
-`require('ducktape-laya')`. For Electron, keep the GGUF and native files
-unpacked and open the engine in the main process.
+`require('ducktape-laya')`. For Electron, keep the GGUF and the whole
+`node_modules/ducktape-laya` package unpacked from ASAR (the worker script is
+started from the package directory) and open the engine in the main process.
 
 Structured results, batches, model routing, limits and the full request format are in the [API guide](docs/API.md). Browser setup is in the [browser guide](docs/BROWSER.md). `npm install ducktape-laya` installs 0.1.0, whose API differs (`decide`, no `contextTokens`); the [Node README](bindings/node/README.md) describes 0.2.0.
 
 ## Verify and explore
 
-Run `./demo cpp "$LAYA_MODEL"` for an interactive example. To run native tests
-against the downloaded model:
+Run `./demo cpp "$LAYA_MODEL"` for an interactive example. `examples/request.json`,
+`examples/structured.json`, `examples/batch.json` and the presets in
+`examples/presets/` are ready requests; `examples/decide.c` and
+`examples/decide.cpp` (CMake targets `laya-decide` and `laya-decide-cpp`, built
+with `-DDUCKTAPE_BUILD_EXAMPLES=ON`) and `bindings/rust/ducktape-laya/examples/decide.rs`
+run one request from standard input. To run native tests against the downloaded
+model:
 
 ```sh
 cmake -S . -B build -DDUCKTAPE_TEST_MODEL="$LAYA_MODEL"

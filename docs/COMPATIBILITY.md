@@ -21,10 +21,10 @@ The npm packages bundle their own native library, so upgrading them is a depende
 ### C ABI
 
 - **One handle type.** `dtl_router`, `dtl_router_open`, `dtl_router_execute*` and `dtl_router_close` are gone: `dtl_open_router` returns a `dtl_engine`, and `dtl_execute`, `dtl_info` and `dtl_close` work on either kind.
-- **One call function.** `dtl_decide`, `dtl_decide_observed`, `dtl_decide_with_options` and `dtl_execute_with_options` are gone. Call `dtl_execute(engine, request, options, &result, &error)`. The observer moved into `dtl_call_options` (`request_id`, `on_event`, `event_user_data`), so `dtl_observer` is gone too, and the cancellation user data is now `cancel_user_data`.
-- **No lenient decide.** The legacy primitive API ignored unknown top-level request fields; every request is now strict, so remove fields such as `metadata` before sending, or keep them outside the request.
+- **One call function.** `dtl_decide`, `dtl_decide_observed`, `dtl_decide_with_options` and `dtl_execute_with_options` are gone. Call `dtl_execute(engine, request, options, &result, &error)`. The observer moved into `dtl_call_options` (`request_id`, `on_event`, `event_user_data`), so `dtl_observer` is gone too, and the cancellation user data is now `cancel_user_data`. Hosts that set a flag from another thread can pass the new `dtl_cancel_flag` as `should_cancel`, with a pointer to an aligned `uint32_t` as `cancel_user_data`.
+- **No lenient decide.** The legacy primitive API ignored unknown top-level request fields; every request is now strict, so remove fields such as `metadata` before sending, or keep them outside the request. Unknown keys inside a question are rejected too.
 - **Open config instead of `dtl_options`.** `dtl_open(path, config_json, ...)` and `dtl_open_router(router_json, config_json, ...)` take an optional JSON object (`threads`, `context_tokens`, `overflow`, `temperatures`); `dtl_options` and `dtl_default_options` are gone. A router route may carry its own `config`.
-- **Library name.** The SONAME is now `libducktape_laya.so.1`; rebuild and relink. CMake consumers ask for `find_package(ducktape_laya 0.2 ...)`.
+- **Library name.** The SONAME is now `libducktape_laya.so.1` and the exported symbols carry the version `DUCKTAPE_LAYA_2`; rebuild and relink. CMake consumers ask for `find_package(ducktape_laya 0.2 ...)`.
 - **Results.** Every answer has `answer_confidence` (the probability of the reported answer) and `confidence` (`1 − H(p)/log k`). The old `choice`/`score` `confidence` formulas are replaced; `noul` answers gained both fields.
 - **Diagnostics.** Model info reports `context_tokens`, `trained_context_tokens`, `temperatures` and `metadata_temperatures` instead of `max_tokens`; the runtime limit `tokens_per_question` became `default_context_tokens`.
 
@@ -37,8 +37,11 @@ The npm packages bundle their own native library, so upgrading them is a depende
 ### Rust
 
 - `Engine::open(path, threads)` and `Engine::open_router(json, threads)` become `Engine::open(path, &Config)` and `Engine::open_router(json, &Config)`. `Config::default().threads(n)` keeps the old thread setting; `context_tokens`, `overflow` and `temperature` are new.
-- `decide`, `decide_with_options`, `execute_observed` and `execute_with_options` are replaced by `execute(json)` and `execute_with(json, CallOptions)`. `CallOptions` carries `request_id`, `timeout_ms`, `cancel_flag` (a borrowed `AtomicU32`) and `on_event`.
-- The crate checks the library's ABI version at run time and refuses ABI 1.
+- `decide`, `decide_with_options`, `execute_observed` and `execute_with_options` are replaced by `execute(json)` and `execute_with(json, options)`, which takes the options by value.
+- `CallOptions` fields are private; set them with builders: `CallOptions::default().request_id(id).timeout_ms(ms).cancel_flag(&flag).on_event(&mut callback)`. The cancel flag is now an `AtomicU32` instead of an `AtomicBool`: store a nonzero value to cancel, or `status::DEADLINE_EXCEEDED` (6) to report a host deadline.
+- Status constants are in `ducktape_laya::status` (`status::CANCELLED`, ...).
+- `ducktape-laya-sys` follows the C ABI: `Router`, `Options`, `Observer`, `dtl_default_options` and the removed functions are gone; `dtl_open_router` and `dtl_cancel_flag` are new, and `CallOptions` has the ABI 2 layout.
+- A program built with the 0.2 crates needs `libducktape_laya.so.1`; with only the 0.1.0 library installed it fails when the loader starts it, before any call.
 
 ### Node.js and browser
 
@@ -46,6 +49,8 @@ The npm packages bundle their own native library, so upgrading them is a depende
 - `execute` options gain `requestId`. Open options gain `contextTokens`, `overflow` and `temperatures`; the browser's `openRouter` also takes `auto`, and each model asset may set its own `contextTokens`, `overflow` and `temperatures`.
 - After an abort or deadline settles a call, its `onEvent` handler receives no more events.
 - Strings that are not well-formed Unicode (lone surrogates) are rejected instead of being replaced.
+- Both packages export `Status`. Argument errors carry `status` 1 (they keep their `TypeError`/`RangeError` types), and queue, closed and worker failures carry `code` (`ERR_LAYA_QUEUE_FULL`, `ERR_LAYA_CLOSED`, `ERR_LAYA_WORKER_EXITED`); match on these instead of message text.
+- `close()` resolves even when the worker has already exited or failed.
 
 ### Behavior changes
 
@@ -58,3 +63,4 @@ These change results or accepted input without any code change:
 - **`"auto"` is reserved** and cannot be a route ID.
 - **Rejecting over-long input is now the default policy**, not the only behavior: requests or engines may choose `truncate_end`, `truncate_start` or `scan`. Under the default, results are unchanged.
 - **Text between mask tokens is tokenized separately**, as the models were trained. This fixes whitespace dropped before a mask token with the multilingual model's vocabulary.
+- **New input limits** (status 1): unknown keys inside a question, `null` `score` levels, JSON objects with more than 1,024 members, runs of more than 4,096 consecutive ASCII spaces in a question or the state, and calls that would plan more than 4,096 forward passes. See [API.md](API.md#batches).

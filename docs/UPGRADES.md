@@ -42,11 +42,30 @@ introspection includes the applied patch list; isolated candidate archives get
 their actual revision through `DUCKTAPE_LLAMA_REVISION`. A custom source directory
 without an explicit identity reports `unverified-custom-source`.
 
-The [callback-signature patch](../patches/README.md) supplies typed bridges for
-specific ggml CPU callbacks. Remove it when the selected upstream revision fixes
-those signatures and passes strict sanitizers and unchanged-output checks. Patch
-applicability alone does not establish candidate compilation or compatibility.
-Every candidate must run the checks for its actual patched build.
+`release/compatibility.json` lists five patches; [patches/README.md](../patches/README.md)
+explains each and its removal condition:
+
+- `typed-cpu-callbacks.patch`: typed bridges for ggml CPU callbacks whose
+  prototypes fail function-type sanitizer checks. Remove when upstream fixes the
+  signatures and the strict sanitizer and unchanged-output checks pass.
+- `wasm-q8-round-to-nearest.patch`: the WASM SIMD Q8_0/Q8_1 activation quantizers
+  round to nearest like the reference and x86 paths (browser arithmetic only).
+  Remove when upstream rounds these to nearest, after re-checking same-backend
+  agreement and drift.
+- `nlohmann-nothrow-destroy.patch`: JSON destruction no longer terminates the
+  process when its stack allocation fails. Remove when the vendored nlohmann/json
+  handles that and `real-faults` passes.
+- `common-propagate-allocation-failure.patch`: JSON parsing and Jinja rendering
+  rethrow `std::bad_alloc`, so the caller sees status 4. Remove when upstream
+  propagates it and `real-faults` passes.
+- `ggml-check-allocations.patch`: unchecked ggml allocations report allocation
+  failure (thread pool) or abort (graph allocator, scheduler) instead of using
+  NULL. Remove when upstream checks them and `real-faults` passes.
+
+On an upgrade, a patch that no longer applies fails configuration; inspect the
+upstream change and remove or adapt the patch explicitly. Patch applicability
+alone does not establish candidate compilation or compatibility. Every candidate
+must run the checks for its actual patched build.
 
 The approved-runtime runner (`scripts/validate.py`) resets candidate source/revision
 overrides in reused CMake caches and verifies built diagnostics against the release

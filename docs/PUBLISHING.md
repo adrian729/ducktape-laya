@@ -11,7 +11,7 @@ Where each package is published, and what is still missing. Publication follows 
 | `ducktape-laya-browser` | npm | Published | Same process |
 | `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Same process |
 | `ducktape-laya` (Python wheel) | PyPI | — | Wheel is built and tested; PyPI setup missing |
-| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | Needs only a tag |
+| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | No account needed; publishing is a tag. Release-tarball consumer test missing |
 | `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Packaging and Central setup missing |
 | `DucktapeLaya` (.NET) | NuGet | — | Packaging and NuGet setup missing |
 
@@ -33,7 +33,8 @@ These are code changes; they need no accounts.
   feed to `tests/installed-packages.py`. Add NuGet metadata: license expression,
   project URL, readme and description.
 - Go: add a consumer test that builds against the release tarball's `include`
-  and `lib` directories, not the checkout.
+  and `lib` directories, not the checkout. Publishing itself needs only the tag
+  (below); this test is what should come first.
 - Set `rust-version` in the crates; 0.1.0 declares none and was tested with 1.98.
 
 ## One-time maintainer setup
@@ -68,15 +69,31 @@ is handled locally, and every upload is logged in Actions.
 
 ## Release-day order
 
-1. Qualify the candidate: all gates in `gates.json` pass.
-2. Tag `vX.Y.Z` (annotated) at the candidate and push it.
-3. Create the GitHub release with every artifact, `SHA256SUMS` and `gates.json`.
-4. Run the `attest-release` workflow for the tag, then check one asset with
-   `gh attestation verify`.
-5. Publish to each registry from the release assets; publish the crates with `cargo publish` at the tag, `-sys` before the safe crate.
-6. Push `bindings/go/vX.Y.Z` at the same commit.
-7. Download every package from its registry into a clean directory, check its bytes against `SHA256SUMS` and its attestation (crates, which `cargo publish` rebuilds, against the tagged source instead), and run a real-model consumer.
-8. Update the README status and requirements tables, and the version in the README's install snippets.
+1. Qualify the candidate: all gates in `gates.json` pass (`scripts/check-candidate.py`).
+2. Assemble the release assets from the qualified package directories:
+   `python3 scripts/release-assets.py assemble --packages PACKAGES --browser-package BROWSER_PACKAGE --gates gates.json --output build/release-assets`.
+   It refuses a `gates.json` that is not `release_ready` and package directories
+   whose inventory is not the one `gates.json` qualified. The output is the full
+   asset set: every artifact listed in the native inventory (native tarball, npm
+   tarball, both `.crate` files, the Python wheel) and in the browser inventory
+   (the browser npm tarball), the inventories as `native-inventory.json` and
+   `npm-browser-inventory.json`, the SBOMs as `native-sbom.cdx.json` and
+   `npm-browser-sbom.cdx.json`, `gates.json` and `SHA256SUMS`.
+3. Tag `vX.Y.Z` (annotated) at the candidate and push it.
+4. Create the GitHub release with exactly those files. The attestation step fails
+   on any extra asset.
+5. Run the `attest-release` workflow from `main` for the tag, then check one asset with
+   `gh attestation verify` (see [SECURITY.md](../SECURITY.md)).
+6. Publish to each registry from the release assets; publish the crates with `cargo publish` at the tag, `-sys` before the safe crate.
+7. Push `bindings/go/vX.Y.Z` at the same commit.
+8. Download every package from its registry into a clean directory, check its bytes against `SHA256SUMS` and its attestation (crates, which `cargo publish` rebuilds, against the tagged source instead), and run a real-model consumer.
+9. Update the README status and requirements tables, and the version in the README's install snippets.
+
+For the next release's rollback rehearsal, the published assets become the
+last-known-good packages: `gh release download vX.Y.Z -D lkg-assets`, then
+`python3 scripts/release-assets.py retain lkg-assets --output lkg-packages`
+restores and verifies the native package directory that `tests/rollback.py`
+takes as its first argument.
 
 ## Converted models
 

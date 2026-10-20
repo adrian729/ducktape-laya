@@ -66,7 +66,8 @@ public:
     engine &operator=(engine &&) noexcept = default;
     engine(const engine &) = delete;
     engine &operator=(const engine &) = delete;
-    // Model metadata for a single model; runtime capabilities for a router.
+    // Model metadata for a single model (waits for a running call); runtime
+    // capabilities for a router.
     std::string info() const {
         char *result = nullptr, *message = nullptr;
         auto status = dtl_info(engine_.get(), &result, &message);

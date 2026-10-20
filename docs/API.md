@@ -35,7 +35,7 @@ The bindings differ only where their language has a convention:
 | Java | `Laya` | JSON string | `Duration` | `CancellationToken` | calling thread | — | `LayaClosedException` |
 | .NET | `LayaEngine` | JSON string | `TimeSpan` | `CancellationToken` | calling thread (pool thread for `*Async`) | `ExecuteAsync` | `ObjectDisposedException` |
 
-Every binding reports native failures with the C status (`status`, `Status` constants) and maps cancellation to 5 and deadlines to 6 (.NET raises the standard `OperationCanceledException` when its token cancels). Arguments a binding checks itself (thread counts, timeout ranges) use the language's standard argument errors. Bindings that convert strings reject text that is not well-formed Unicode (lone surrogates) instead of replacing it. The Rust, Go, Node, Python, Java and .NET bindings check `dtl_abi_version()` after loading the library and refuse any ABI but 2.
+Every binding reports native failures with the C status (`status`, `Status` constants) and maps cancellation to 5 and deadlines to 6 (.NET raises the standard `OperationCanceledException` when its token cancels). Arguments a binding checks itself (thread counts, timeout ranges) use the language's standard argument errors. Bindings that convert strings reject text that is not well-formed Unicode (lone surrogates) instead of replacing it. The Rust, Go, Node, Python, Java, .NET and browser bindings check `dtl_abi_version()` and refuse any ABI but 2. The check matters for the bindings that load the library by file name at run time (Python, Java and .NET, for example `libducktape_laya.so` from `DUCKTAPE_LAYA_LIB_DIR`): Python raises `OSError`, Java and .NET report status 7. Rust, Go and the Node addon link against `libducktape_laya.so.1` and its `DUCKTAPE_LAYA_2` symbol versions, so with only an ABI 1 library (`libducktape_laya.so.0`) the program or addon fails to load before any call.
 
 Closing differs by binding:
 
@@ -47,6 +47,8 @@ Closing differs by binding:
 | Node, browser | `close()` drains accepted calls; `close({ cancelPending: true })` cancels them first | Allowed; resolves after the running call |
 | Python, Java, .NET | Waits for running calls | Returns at once; the handle is released when the running call finishes |
 | Go | `Close` waits for running calls | Use `CloseDeferred()`: `Close` would wait for its own call |
+
+In Python, Go, Java and .NET, a call made after closing has started fails at once with the binding's closed error, even while the close still waits for running calls.
 
 ## Engine configuration
 
@@ -73,7 +75,7 @@ would report a 0.24 top probability as 0.9999. Temperatures you pass are used as
 given. `info()` reports the applied values as `temperatures` and the stored ones
 as `metadata_temperatures`.
 
-A router's config applies to every route; a route given as `{"path": "...", "config": {...}}` overrides it key by key. Routes with the same file and the same effective `threads`, `context_tokens` and `temperatures` share one loaded model; each route still applies its own default `overflow`.
+A router's config applies to every route; a route given as `{"path": "...", "config": {...}}` overrides it key by key. Routes share one loaded model when they have the same canonical path and the same configured `threads`, `context_tokens` and `temperatures` after that merge; each route still applies its own default `overflow`. The configured values are compared as given, not the effective ones: a route without `context_tokens` and a route with `context_tokens` 512 load the model separately even though both run at 512. `context_tokens` below 32 is rejected when the config is parsed; its upper bound, the model's trained length, is checked when the model loads, which for a router route is the first request that uses it.
 
 Each request may add `max_tokens` (a prompt limit up to the engine's `context_tokens`), `temperatures` (overrides for that request only, merged over the engine's), `overflow` and `max_windows` (see [Long input](#long-input)). A prompt over its limit is handled by the overflow policy; the default, `reject`, fails with status 1. `info()` on a single-model engine reports `context_tokens` and `trained_context_tokens`.
 
@@ -92,7 +94,7 @@ config can set a default `overflow`; a request's own value wins.
 
 Under every policy except `reject`, option texts and instructions over the
 model's head budget are shortened exactly as llama.cpp's decision server does
-(the model was trained that way); `reject` refuses such questions instead. The question and options, after any shortening, must fit within the limit on their own; otherwise the request fails with status 1 under every policy. When the request's policy is not `reject`, `usage` always reports `state_tokens`, `state_tokens_dropped` (the most any question dropped) and `truncated_questions` (questions whose state was cut or whose instructions or options were shortened). Under `reject` these fields are absent.
+(the model was trained that way); `reject` refuses such questions instead. The question and options, after any shortening, must fit within the limit on their own; otherwise the request fails with status 1 under every policy. When the effective policy is not `reject` (the request's own `overflow`, or else the engine's or route's default), `usage` always reports `state_tokens`, `state_tokens_dropped` (the most any question dropped), `truncated_questions` (questions whose state was cut or whose instructions or options were shortened) and `windows` (the most state windows any question used: 1 when the state fitted, 0 when every question was a single-option `choice`). Under `reject` these fields are absent.
 
 With `scan`, a `noul` answer is the maximum over windows ("does any part say
 this?"), or the minimum with `"aggregate": "all"` on the question ("does the whole
@@ -102,7 +104,7 @@ window's `index`, the window `count`, and its `token_start`/`token_end` in the
 tokenized state. Its probabilities are that window's, not a calibrated
 statement about the whole document. A state that fits is read once, exactly as
 without `scan`. `max_windows` (1–1024, default 32) caps the windows per
-question; a state needing more fails with status 1. Each window is one forward pass, and `input_tokens` counts every window.
+question; a state needing more fails with status 1. Each window is one forward pass, and `input_tokens` counts every window. One call may plan at most 4,096 forward passes in total over all its questions and requests (`limits.windows_per_call`); a call needing more fails with status 1 before any inference on a single engine, and before the request that exceeds it on a router.
 
 ## Primitive requests and results
 
@@ -115,7 +117,7 @@ Requests are strict: these are the only top-level keys, and any other key (inclu
 | `schema` | A [structured decision](#structured-decisions) schema instead of `questions` |
 | `boolean_threshold` | With `schema` only: 0–1, default 0.5 |
 | `model` | Routers only, and required there: a route ID or `"auto"` ([routing](#local-routing)) |
-| `lang` | With `"model": "auto"` only: a 1–64 character language tag that skips detection |
+| `lang` | With `"model": "auto"` only: a language tag of 1–64 bytes that skips detection |
 | `max_tokens` | Prompt limit for this request, at most the engine's `context_tokens` |
 | `temperatures` | Calibration overrides for this request, merged over the engine's |
 | `overflow` | `reject`, `truncate_end`, `truncate_start` or `scan` ([Long input](#long-input)) |
@@ -127,6 +129,8 @@ Requests are strict: these are the only top-level keys, and any other key (inclu
 | `instructions` | Required, non-null text or JSON |
 | `criteria` | Options or levels; see the table below |
 | `aggregate` | `noul` only: `any` (default) or `all`, how `scan` combines windows |
+
+Any other key in a question is rejected.
 
 A primitive request contains non-null `state` and 1–32 named `questions`.
 Each question requires a supported `type` and non-null `instructions`; state,
@@ -141,7 +145,7 @@ A criterion description that is `null` or `""` means no description; `0` and
 | --- | --- | --- |
 | `choice` | Object with 1–255 named options (label → description), or a list of 1–255 distinct labels without descriptions | Highest-probability `choice` and a `probabilities` object |
 | `noul` | Omitted/null or an object containing only `false`/`true` descriptions | `noul`: probability of true |
-| `score` | Array of 2–10 ordered level descriptions | `score`: expected zero-based level index; `legend` and `probabilities` |
+| `score` | Array of 2–10 ordered level descriptions, none `null` | `score`: expected zero-based level index; `legend` and `probabilities` |
 
 Every answer also has `answer_confidence` and `confidence`:
 
@@ -159,18 +163,28 @@ tokens.
 Probabilities are a softmax of the model's scores divided by the calibration temperature for the question's type and option count (see [Engine configuration](#engine-configuration)). Both confidence fields are model-derived statistics, not application-specific decision thresholds. The definitions follow the original Laya, except that its `noul` `confidence` is max(p), which here is `answer_confidence`.
 
 Results contain `answers` keyed by question ID and `usage` with `input_tokens`
-and `output_tokens: 0`. No chat text is generated. Input insertion order is
+and `output_tokens: 0` (plus the overflow fields under [Long input](#long-input)). No chat text is generated. Input insertion order is
 preserved by the core and can affect inference; ties choose the first option.
 JavaScript object serialization reorders integer-like keys: pass a raw JSON
-string when literal ordering matters. Node and browser results are parsed JavaScript
+string when literal ordering matters. Node and the browser serialize request
+objects with `JSON.stringify`, which also writes `149.0` as `149`, so a structured
+value's prompt text, and with it the results, can differ from the same request
+sent as a raw JSON string or from Python. Bindings return identical results for
+the same request text. Node and browser results are parsed JavaScript
 objects, so their members follow ECMAScript property order (integer-like keys
-ascending, then insertion order); names and values match the core result exactly. Literal mask text in values is sanitized before rendering, and the text between mask tokens is tokenized on its own, as the model was trained. Input longer than its limit follows the request's [overflow policy](#long-input).
+ascending, then insertion order); names and values match the core result exactly. Literal mask text in values is replaced by a space before rendering, and the text between mask tokens is tokenized on its own, as the model was trained. Other special tokens written literally in text (for example `[SEP]` or `[CLS]`) are tokenized as those special tokens, as upstream llama.cpp and the original Laya's tokenizer do; a `[SEP]` in the last option's description therefore breaks the prompt layout and is rejected with status 1. Input longer than its limit follows the request's [overflow policy](#long-input).
 
 ### Example requests and option order
 
-`examples/presets/` has ready requests for common uses: support triage, email
-triage, prompt-injection screening and moderation. They are ordinary requests:
-copy one and adapt its questions.
+`examples/request.json` is a primitive request, `examples/structured.json` a
+structured one and `examples/batch.json` a batch. `examples/presets/` has ready
+requests for common uses: support triage, email triage, prompt-injection
+screening and moderation. They are ordinary requests: copy one and adapt its
+questions. To run one, build the `laya-decide` (C, `examples/decide.c`) or
+`laya-decide-cpp` (C++, `examples/decide.cpp`) target with
+`-DDUCKTAPE_BUILD_EXAMPLES=ON`, or the Rust example
+(`cargo run --example decide` in `bindings/rust/ducktape-laya`), and pass the
+model path with the request on standard input.
 
 Option order can influence a `choice`. To reduce that bias, ask the same
 question several times in one request with the options in rotated order (for
@@ -181,8 +195,10 @@ probability across the copies. Each copy costs one more model pass.
 
 Pass a JSON array of 1–32 requests; results are an array in the same order.
 Primitive and structured requests can be mixed. Limits apply to the entire
-call: 1 MiB UTF-8, 128 questions total, 32 questions per request, depth 64; each
-prompt must fit its token limit (`max_tokens`, at most the engine's `context_tokens`) or follow its overflow policy. The model's instruction/option head budget still applies. Every
+call: 1 MiB UTF-8, 128 questions total, 32 questions per request, depth 64, at
+most 1,024 members in any JSON object (also in open and router configs), and at
+most 4,096 planned forward passes; each
+prompt must fit its token limit (`max_tokens`, at most the engine's `context_tokens`, checked even when every question is a single-option `choice`) or follow its overflow policy. The model's instruction/option head budget still applies. A run of more than 4,096 consecutive ASCII spaces in a question or in the state is rejected, because llama.cpp's tokenizer takes quadratic time on such runs. Every
 binding's `execute` accepts an array:
 
 ```js
@@ -279,7 +295,10 @@ Loads are lazy and serialized. Before inference, each model must pass the core's
 Laya GGUF metadata, three-column output, template, marker, head-budget and
 calibration checks. This verifies format compatibility, **not model quality or
 artifact authenticity**. Applications should verify bundled weights against
-`models/manifest.json` using `scripts/verify-model.py` and keep resources immutable.
+`models/manifest.json` and keep resources immutable. `scripts/verify-model.py`
+does this from a checkout (it imports the repository's `scripts/release_support.py`
+and needs Python 3.11+); the installed and npm `download-model.py` checks the hash
+of the file it downloads.
 The pinned English, multilingual and typed-decisions models are qualified here: each is checked against the original Laya's recorded results (identical token counts, probabilities within 0.05) and against upstream llama.cpp processing (see [RELEASE_CHECKS.md](RELEASE_CHECKS.md)). Other models require their own tokenizer, calibration and decision tests before use. There is no fallback model or network download.
 
 ### Choosing the model by language
@@ -298,7 +317,8 @@ Routing by language is opt-in. Name the routes in `auto`, then send requests wit
 Text that is confidently English goes to `english`; everything else goes to
 `default`, which should be the multilingual model since it also reads English.
 Only the string values of `state` are read (keys are usually English field
-names), up to 4,000 characters. Text is non-Latin when at least a fifth of its letters are non-Latin, or at least a tenth with 10 or more non-Latin letters. Otherwise it is English when it has at least four words, English function words are not outnumbered by another language's, and letters English does not use (é, ș, ł, ...) are rare. Short or undecided text goes to `default`. The word lists and
+names), down to nesting depth 6, joined with spaces, and only the first 4,000
+characters (Unicode code points) of the result. Text is non-Latin when at least a fifth of its letters are non-Latin, or at least a tenth with 10 or more non-Latin letters. Otherwise it is English when it has at least four words, no other language leads (another language leads when it has a function word no other list has and at least 2 function-word hits, and at least 2 more than English), it has at least one English function word, and letters English does not use (é, ș, ł, ...) are rare. Short or undecided text goes to `default`. The word lists and
 thresholds come from the original Laya, and the detector agrees with all 180 of
 its recorded detection and routing cases (`tests/language.cpp`), but it is a
 heuristic: pass `lang` when the application knows the language. `"lang"`
@@ -307,7 +327,7 @@ heuristic: pass `lang` when the application knows the language. `"lang"`
 
 `usage.routing` reports why: `reason` is `lang` (with the request's `lang`), `english_text` (with `language: "en"`), `no_letters`, `non_latin_script` (with `script`), `too_short`, `other_language` (with `language`), `non_english_letters` (with `language` when another language's words were found) or `no_english_words`. Explicitly routed requests have no `routing`.
 
-`max_loaded` defaults to 1, allows 1–4, and bounds the number of loaded models: one per canonical path and effective config (`threads`, `context_tokens`, `temperatures`). Least-recently-used models are unloaded **before** another is loaded at
+`max_loaded` defaults to 1, allows 1–4, and bounds the number of loaded models: one per canonical path and configured `threads`, `context_tokens` and `temperatures` (see [Engine configuration](#engine-configuration)). Least-recently-used models are unloaded **before** another is loaded at
 capacity. This avoids temporarily holding one extra model. A failed load can
 therefore evict a previously cached model. Failed loads are not cached.
 This is a model-count bound, not a byte-accurate RAM quota; size and runtime
@@ -330,11 +350,13 @@ no partial result. Waiting calls check controls while acquiring the mutex;
 preparation and question boundaries check them too. CPU execution uses the
 upstream abort callback and resets it before releasing the inference lock.
 Cancellation is cooperative, not a thread kill or a hard wall-clock guarantee.
-Model loading and template execution may finish before the next safe check.
+Model loading, template execution and tokenization may finish before the next safe
+check; tokenization cannot be interrupted, and the request limits above bound its
+cost.
 Router cache mutations are not rolled back by a cancelled request.
 
-C++ `execute` takes a `call_options` with `request_id`, `timeout_ms`, `should_cancel`, `cancel_user_data` and `on_event`. Rust `execute_with` takes `CallOptions` with `timeout_ms`, a borrowed
-`AtomicU32` cancel flag and an event callback. Hosts
+C++ `execute` takes a `call_options` with `request_id`, `timeout_ms`, `should_cancel`, `cancel_user_data` and `on_event`. Rust `execute_with` takes `CallOptions` built with `request_id`, `timeout_ms`, `cancel_flag` (a borrowed
+`AtomicU32`) and `on_event`. Hosts
 whose own callbacks are costly on backend threads (interpreter locks, VM thread
 attachment) pass `dtl_cancel_flag` as `should_cancel` with a pointer to an aligned
 `uint32_t` they set; the Rust, Python, Java, .NET and Go bindings do this.
@@ -357,9 +379,9 @@ stops admission and drains accepted calls. Worker failure rejects pending work;
 callers must open a new instance. Browser admission follows the same bounds,
 with platform-specific controls and initialization rules in [BROWSER.md](BROWSER.md).
 
-C inputs are borrowed UTF-8 NUL-terminated strings. Initialize options with the
-provided defaults; incompatible layouts/ABI versions and reserved fields are
-rejected. Output pointers are reset on entry. Successful result buffers and any
+C inputs are borrowed UTF-8 NUL-terminated strings. Initialize call options with
+`dtl_default_call_options()`; a `struct_size` other than this ABI's
+`sizeof(dtl_call_options)` or a nonzero `reserved` field is rejected with status 1. Output pointers are reset on entry. Successful result buffers and any
 non-null error buffers belong to the caller and must be released by `dtl_free`.
 An error message may be absent on allocation failure. Null close/free is allowed;
 closing a non-null handle invalidates it and must not race any active call.
@@ -397,12 +419,14 @@ message wording is diagnostic, not a stable machine-readable contract.
 
 ## Runtime and model diagnostics
 
-`dtl_info(NULL, &result, &error)` returns runtime/version/ABI identity, supported features and limits, and required/missing CPU features without loading a model. `features` lists `structured_decisions`, `sequential_batches`, `routing`, `language_routing`, `overflow_policies`, `observers`, `cooperative_cancellation` and `deadlines`; `overflow_policies` lists the accepted policies; `limits` includes `request_bytes`, `questions_per_request`, `requests_per_batch`, `questions_per_batch`, `default_context_tokens`, `minimum_context_tokens`, `scan_windows`, `routes` and `loaded_models`.
+`dtl_info(NULL, &result, &error)` returns runtime/version/ABI identity, supported features and limits, and required/missing CPU features without loading a model. `features` lists `structured_decisions`, `sequential_batches`, `routing`, `language_routing`, `overflow_policies`, `observers`, `cooperative_cancellation` and `deadlines`; `overflow_policies` lists the accepted policies; `limits` includes `request_bytes`, `object_members`, `questions_per_request`, `requests_per_batch`, `questions_per_batch`, `default_context_tokens`, `minimum_context_tokens`, `scan_windows`, `windows_per_call`, `routes` and `loaded_models`.
 Supply an engine to include its model architecture, name, head/token budgets and
 calibration temperatures. The allocated JSON follows normal `dtl_free` ownership;
 unknown fields must be ignored for forward compatibility. It contains no model
-path, request, prediction or telemetry destination. Metadata is not proof of a
-model's hash/provenance; use the immutable manifest for that.
+path, request, prediction or telemetry destination. Invalid UTF-8 in model
+metadata is replaced (U+FFFD). Metadata is not proof of a
+model's hash/provenance; use the immutable manifest for that. On a single-model
+engine, `dtl_info` takes the engine's lock, so it waits for a running call.
 
 C++ exposes `ducktape::info()` and `engine.info()`. Rust exposes `runtime_info()`
 and `Engine::info()`. Node exposes `Laya.runtimeInfo()` and async `engine.info()`;

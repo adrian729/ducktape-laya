@@ -5,6 +5,9 @@ node_modules/
 *.node
 *.gguf
 __pycache__/
+*.egg-info/
+/bindings/python/build/
+.cache/
 /.venv-convert/
 .DS_Store
 

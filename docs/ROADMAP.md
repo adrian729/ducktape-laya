@@ -15,7 +15,7 @@ platforms are fully qualified.
 
 | Backend | Platforms | Notes |
 |---|---|---|
-| Metal | macOS arm64 | Built into ggml; the obvious first GPU target |
+| Metal | macOS arm64 | Built into ggml; a possibility only if macOS itself becomes supported, which has no commitment (see [PLAN.md](PLAN.md)) |
 | CUDA | Linux and Windows x64 with NVIDIA GPUs | Fastest server option; a large toolkit dependency, so ship it as a separate package variant |
 | Vulkan | Linux and Windows (any vendor), Android later | One portable backend across GPU vendors |
 | WebGPU | Browser | Already exists (experimental) |
@@ -29,7 +29,9 @@ Each backend needs:
 - device-loss and out-of-memory handling and tests (the WebGPU work is the
   pattern);
 - packaging variants, so CPU users don't download GPU runtimes;
-- qualification, starting at tier 2 (CI-tested).
+- qualification like the CPU profile: the release gates in
+  [QUALIFICATION.md](QUALIFICATION.md), run on CI or listed hardware for that
+  backend.
 
 ### Higher-precision model variants
 
@@ -62,7 +64,7 @@ switch to official GGUFs if the Laya authors or ggml-org publish them. Steps:
 
 iOS and Android need their own packaging (XCFramework, AAR), toolchains and
 memory testing. The 0.5 GB model fits on phones.
-- **Swift for iOS:** extends a Swift package for macOS.
+- **Swift for iOS:** a Swift package; if macOS were ever supported, the same package could serve it.
 - **Kotlin on Android:** needs a JNI binding, because Android lacks Java's FFM
   API.
 - **Dart/Flutter:** a `dart:ffi` binding across mobile and desktop.
@@ -108,4 +110,4 @@ Features the original Laya has that ducktape-laya deliberately leaves out.
 | `batch_tokens` open setting | It sized the batched forward pass, which was not adopted (see Research questions) |
 | Temperature fitting, fine-tuning, evaluation harnesses | Training tooling: use the original's tools, then convert the model or pass the fitted temperatures |
 | HTTP server, MCP server, LangChain/LlamaIndex/CrewAI integrations | In-process embedding is a project goal; integrations could later sit on top of the Python binding |
-| Intel Macs | Apple stopped selling them in 2023 and CI runners are being retired; they still build from source |
+| Intel Macs | macOS is not supported at all (see the README); if Apple Silicon support were ever added, Intel Macs would still be left out, since Apple stopped selling them in 2023 and CI runners are being retired |

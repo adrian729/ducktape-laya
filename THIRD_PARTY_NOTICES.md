@@ -16,6 +16,21 @@
   `tests/original-reference` are its recorded results.
 - llamafile CPU kernels incorporated by ggml: MIT, Copyright 2024 Mozilla
   Foundation. [Full notice](licenses/llamafile-MIT.txt).
+- Further code that llama.cpp/ggml adapted from other projects and that is
+  compiled into the library, with the attribution in the pinned source:
+  - YaRN rotary-embedding scaling, `ggml/src/ggml-cpu/ops.cpp` (comment above
+    `rope_yarn`): "MIT licensed. Copyright (c) 2023 Jeffrey Quesnelle and Bowen
+    Peng", based on https://github.com/jquesnelle/yarn.
+  - SIMD `expf` routines (`ggml_v_expf` variants), `ggml/src/ggml-cpu/vec.h`:
+    "adapted from arm limited optimized routine", that is Arm's
+    optimized-routines (https://github.com/ARM-software/optimized-routines),
+    which is offered under the MIT license (or Apache-2.0 with the LLVM exception).
+  - BPE tokenizer, `src/llama-vocab.cpp`: "adapted from
+    https://github.com/cmp-nct/ggllm.cpp [MIT License]".
+
+  The upstream comments carry no separate license file; the MIT license text is in
+  [licenses/llama.cpp-MIT.txt](licenses/llama.cpp-MIT.txt). Keep these
+  attributions when redistributing.
 - nlohmann JSON: MIT, Niels Lohmann. Included through llama.cpp's vendor directory.
   [License](licenses/nlohmann-json-MIT.txt).
 - Laya models: the upstream model card declares Apache-2.0 for all three checkpoints in [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) ([license text](licenses/Apache-2.0.txt)).
@@ -31,7 +46,9 @@ Browser artifacts additionally incorporate code from the pinned Emscripten SDK
 (`release/browser-toolchain.json`): Emscripten runtime glue (MIT or NCSA), musl
 (MIT and the notices in its COPYRIGHT), libc++/libc++abi/compiler-rt (LLVM license
 texts including applicable exceptions), and Dawn WebGPU bindings (BSD notices).
-Their complete texts are included under `licenses/`. The browser's GPU driver
+Their complete texts are included under `licenses/`. The native installation, the
+npm package and the Python wheel copy the whole `licenses/` directory, so they also carry these
+browser-only texts although the native library contains none of that code. The browser's GPU driver
 and browser implementation are supplied by the host, not redistributed here.
 Test-only Electron, ASAR and upstream server-reference dependencies are excluded
 from consumer packages. Build/toolchain licenses do not replace the separate
