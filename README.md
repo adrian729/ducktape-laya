@@ -126,7 +126,17 @@ python3 scripts/convert-model.py models/laya-typed-decisions.json resources/laya
 ```
 
 Both were trained with 1,024-token prompts; open them with `context_tokens`
-1024 to match the original.
+1024 to match the original. The files accept up to 8,192, but cost grows faster
+than the prompt length, and longer prompts are untested for accuracy. One
+yes/no question, 4 threads, on an i7-1165G7 that was also running other work:
+
+| Prompt tokens | Multilingual (F16): time, peak memory | Typed decisions (Q8_0): time, peak memory |
+|---|---|---|
+| 512 | 3.2 s, 1.3 GB | 10 s, 0.6 GB |
+| 1,024 | 7 s, 1.8 GB | 22 s, 0.7 GB |
+| 2,048 | 19 s, 2.8 GB | 52 s, 1.0 GB |
+| 4,096 | 55 s, 5.0 GB | 137 s, 1.5 GB |
+| 8,192 | 172 s, 6.6 GB | 413 s, 2.7 GB |
 
 ## Use it in a project
 
