@@ -51,7 +51,7 @@ native options. Unknown keys are rejected.
 | Key | Meaning |
 |---|---|
 | `threads` | 0 (automatic, at most 4) or 1–256 CPU threads |
-| `context_tokens` | The longest prompt the engine reserves memory for: 32 up to the model's trained length. Default 512. Compute follows each prompt's real length; only memory grows with this value. The pinned English model's file allows 8,192, but the original Laya uses it with 512 tokens, so longer prompts are untested for accuracy |
+| `context_tokens` | The longest prompt the engine reserves memory for: 32 up to the model's trained length. Default 512. Compute follows each prompt's real length; only memory grows with this value. The model files allow 8,192, but the original Laya runs the English checkpoint at 512 and the multilingual and typed-decisions checkpoints at 1,024, so longer prompts are untested for accuracy |
 | `overflow` | Default policy for prompts over their limit; see [Long input](#long-input) |
 | `temperatures` | Calibration overrides, keyed like the model's metadata: a type (`choice`, `score`, `noul`) or a type and option-count bucket (`choice.2`, `choice.3_5`, `choice.6_10`, `choice.11`, `score.3_5`, `noul.2`, ...). Values must be finite and greater than 0 |
 
@@ -61,6 +61,12 @@ two-option `choice` when the model defines `choice.2`, override `choice.2`; an
 override of plain `choice` applies only to buckets the model leaves undefined.
 Fit temperatures on your own data with the original Laya's calibration tools and
 pass them here.
+
+Temperatures stored in the model are bounded to [0.5, 5], as the original Laya
+does: the shipped `choice.11` value, 0.1006, sharpens scores about tenfold and
+would report a 0.24 top probability as 0.9999. Temperatures you pass are used as
+given. `info()` reports the applied values as `temperatures` and the stored ones
+as `metadata_temperatures`.
 
 A router's config applies to every route; a route given as
 `{"path": "...", "config": {...}}` overrides it key by key. Routes with the same

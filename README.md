@@ -102,6 +102,32 @@ For a shorter explicit download command, use
 placing it there. Applications must pass their own local model path to the
 library. `LAYA_MODEL` is only a convenience for examples and tests.
 
+### Other Laya checkpoints
+
+The original Laya also publishes a multilingual checkpoint (mmBERT-base, 100+
+languages) and a typed-decisions checkpoint. Both are supported and qualified
+against the original's recorded results, but no official GGUF exists yet, so
+build them from the official checkpoint with the pinned converter. The script
+downloads the source files at a fixed revision, checks their hashes, converts,
+and checks the result against the manifest:
+
+| Model | Manifest | File | Precision |
+|---|---|---|---|
+| Multilingual | [models/laya-multilingual.json](models/laya-multilingual.json) | 658 MB | F16: Q8_0 moved probabilities up to 0.056 from the original's, over the 0.05 limit |
+| Typed decisions | [models/laya-typed-decisions.json](models/laya-typed-decisions.json) | 449 MB | Q8_0 |
+
+```sh
+python3 -m venv .venv-convert
+.venv-convert/bin/pip install -r third_party/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt
+cmake -S third_party/llama.cpp -B build-llama-tools -DGGML_OPENMP=OFF -DBUILD_SHARED_LIBS=OFF
+cmake --build build-llama-tools --target llama-quantize -j 3
+python3 scripts/convert-model.py models/laya-typed-decisions.json resources/laya-typed-decisions-q8_0.gguf \
+  --python .venv-convert/bin/python --quantize build-llama-tools/bin/llama-quantize
+```
+
+Both were trained with 1,024-token prompts; open them with `context_tokens`
+1024 to match the original.
+
 ## Use it in a project
 
 For C++, point CMake at the installed prefix and link the target:

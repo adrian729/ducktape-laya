@@ -1,5 +1,6 @@
 #include "ducktape_laya.hpp"
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -265,6 +266,15 @@ int main(int argc, char **argv) {
             invalid([&] { ducktape::engine::open(argv[1], json({{"temperatures", {{"noul.2", bad}}}}).dump()); });
         }
         invalid([&] { engine.execute(with(requests[0], "temperatures", 3).dump()); });
+        // Temperatures stored in the model are bounded to [0.5, 5] (the pinned model's
+        // choice.11 is 0.1006); temperatures the app passes are used as given.
+        const auto calibration = json::parse(engine.info())["model"];
+        for (const auto &[key, t] : calibration["metadata_temperatures"].items())
+            expect(calibration["temperatures"][key] == std::clamp(t.get<float>(), 0.5f, 5.0f), "stored temperatures are bounded");
+        expect(calibration["metadata_temperatures"]["choice.11"].get<float>() < 0.5f &&
+               calibration["temperatures"]["choice.11"] == 0.5f, "the shipped choice.11 temperature is bounded");
+        auto sharp = ducktape::engine::open(argv[1], json({{"threads", 2}, {"temperatures", {{"choice.11", 0.1}}}}).dump());
+        expect(json::parse(sharp.info())["model"]["temperatures"]["choice.11"] == 0.1f, "app temperatures are not bounded");
         // Open config: validation and context size.
         const auto model_info = json::parse(engine.info())["model"];
         const size_t trained = model_info.at("trained_context_tokens").get<size_t>();

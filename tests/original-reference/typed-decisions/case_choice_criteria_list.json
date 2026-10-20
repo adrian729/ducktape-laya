@@ -1,0 +1,44 @@
+{
+ "name": "choice_criteria_list",
+ "state": "I would like to upgrade to the enterprise plan.",
+ "questions": {
+  "intent": {
+   "type": "choice",
+   "instructions": "Classify the intent.",
+   "criteria": [
+    "upgrade",
+    "downgrade",
+    "cancel",
+    "support"
+   ]
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "intent": {
+    "type": "choice",
+    "choice": "upgrade",
+    "probabilities": {
+     "upgrade": 0.7194,
+     "downgrade": 0.0636,
+     "cancel": 0.0418,
+     "support": 0.1752
+    },
+    "confidence": 0.3867,
+    "answer_confidence": 0.7194,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 31,
+   "output_tokens": 0,
+   "state_tokens": 10,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

@@ -169,7 +169,7 @@ window.startInfo = async (backend) => {
   try {
     engine = await Laya.open({ backend, modelUrl: '/model.gguf', moduleUrl: '/wasm/laya.mjs', webgpuModuleUrl: '/webgpu/laya.mjs' });
     const info = await engine.info();
-    if (info.abi_version !== 1 || !info.cpu_supported || info.model.decision_type !== 'laya' || info.limits.questions_per_batch !== 128 || !info.model.temperatures.noul) throw new Error('Incomplete diagnostics');
+    if (info.abi_version !== 2 || !info.cpu_supported || info.model.decision_type !== 'laya' || info.limits.questions_per_batch !== 128 || !info.model.temperatures.noul) throw new Error('Incomplete diagnostics');
     window.infoCheck = { status: 'passed', backend, info };
   } catch (error) { window.infoCheck = { status: 'failed', error: error.stack }; }
   finally { if (engine) await engine.close().catch(() => {}); }

@@ -1,0 +1,92 @@
+{
+ "name": "criterion_shapes",
+ "state": "The request mentions a security vulnerability in the login flow.",
+ "questions": {
+  "route": {
+   "type": "choice",
+   "instructions": "Route this report.",
+   "criteria": {
+    "security": {
+     "desc": "vulnerabilities",
+     "sla_hours": 4,
+     "escalate": true
+    },
+    "eng": [
+     "bugs",
+     "regressions",
+     3
+    ],
+    "zero": 0,
+    "falsey": false,
+    "blank": "",
+    "nothing": null,
+    "plain": "anything else"
+   }
+  },
+  "severity": {
+   "type": "score",
+   "instructions": "Severity of the report.",
+   "criteria": [
+    {
+     "label": "info",
+     "cvss": 0.0
+    },
+    {
+     "label": "high",
+     "cvss": 7.5
+    },
+    "critical"
+   ]
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "route": {
+    "type": "choice",
+    "choice": "security",
+    "probabilities": {
+     "security": 0.945,
+     "eng": 0.022,
+     "zero": 0.0012,
+     "falsey": 0.0032,
+     "blank": 0.0179,
+     "nothing": 0.0029,
+     "plain": 0.0078
+    },
+    "confidence": 0.8507,
+    "answer_confidence": 0.945,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "severity": {
+    "type": "score",
+    "score": 1.5365,
+    "legend": {
+     "0": "{\"label\": \"info\", \"cvss\": 0.0}",
+     "1": "{\"label\": \"high\", \"cvss\": 7.5}",
+     "2": "critical"
+    },
+    "probabilities": {
+     "0": 0.1472,
+     "1": 0.169,
+     "2": 0.6837
+    },
+    "confidence": 0.2331,
+    "answer_confidence": 0.6837,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 148,
+   "output_tokens": 0,
+   "state_tokens": 11,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

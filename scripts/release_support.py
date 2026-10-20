@@ -72,7 +72,24 @@ def check_record(root=ROOT):
             raise ValueError(f'Model compatibility runtime mismatch: {name}')
         if len(model['sha256']) != 64 or len(model['revision']) != 40:
             raise ValueError(f'Model must identify immutable artifact: {name}')
+    for name in record.get('additional_models', []):
+        model = read_json(root / name)
+        if model['conversion']['llama_cpp_commit'] != expected:
+            raise ValueError(f'Model converter runtime mismatch: {name}')
+        if len(model['sha256']) != 64 or len(model['source']['revision']) != 40:
+            raise ValueError(f'Model must identify immutable artifact: {name}')
     return record
+
+def find_manifest(path, record, root=ROOT):
+    """The pinned manifest (primary or additional) that a local model file matches."""
+    for name in [*record['models'], *record.get('additional_models', [])]:
+        manifest = read_json(root / name)
+        try:
+            verify_model(path, manifest)
+            return manifest
+        except ValueError:
+            pass
+    raise ValueError(f'{path} matches no pinned model manifest')
 
 def check_qualification(record, root=ROOT):
     """Keep the executable required-gate list and product requirements in sync."""

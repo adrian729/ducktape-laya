@@ -13,6 +13,7 @@
 #include <cmath>
 #include <map>
 #include <mutex>
+#include <string_view>
 #include <thread>
 
 namespace dtl {
@@ -74,7 +75,7 @@ struct backend::impl {
     jinja::program program;
     llama_token marker, sep;
     size_t max_head, capacity, trained;
-    temperature_map temperatures;
+    temperature_map temperatures, metadata_temperatures;
 
     impl(const char *path, const engine_config &config) {
         static std::once_flag once;
@@ -128,7 +129,11 @@ struct backend::impl {
             if (std::string(key).compare(0, prefix.size(), prefix) != 0) continue;
             float t = std::stof(meta(model.get(), key));
             if (!(t > 0) || !std::isfinite(t)) throw failure(DTL_MODEL_ERROR, "Invalid temperature");
-            temperatures[std::string(key).substr(prefix.size())] = t;
+            // Fitted values are bounded to [0.5, 5], as in the original Laya: the shipped
+            // choice.11 value (0.1006) sharpens about 10x and would report a 0.24 top
+            // probability as 0.9999. Temperatures the app sets are used as given.
+            metadata_temperatures[std::string(key).substr(prefix.size())] = t;
+            temperatures[std::string(key).substr(prefix.size())] = std::clamp(t, 0.5f, 5.0f);
         }
         for (const auto &[key, t] : config.temperatures) temperatures[key] = t;
         auto cp = llama_context_default_params();
@@ -167,12 +172,28 @@ struct backend::impl {
         require(rendered.size() <= max_request * 2, "Rendered prompt is too large");
         require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
         const size_t limit = q.max_tokens ? q.max_tokens : capacity;
-        int n = llama_tokenize(vocab, rendered.data(), static_cast<int32_t>(rendered.size()), nullptr, 0, false, true);
-        if (n >= 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-        std::vector<llama_token> tokens(-n);
-        n = llama_tokenize(vocab, rendered.data(), static_cast<int32_t>(rendered.size()), tokens.data(), tokens.size(), false, true);
-        if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-        tokens.resize(n);
+        // The text between mask tokens is tokenized on its own, as the model was
+        // trained: some vocabularies (mmBERT) mark the mask as left-stripping, which
+        // would drop whitespace ending an option. After sanitizing, the mask text
+        // appears only where the template put it.
+        std::vector<llama_token> tokens;
+        auto append = [&](std::string_view text) {
+            int n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), nullptr, 0, false, true);
+            if (n == 0) return;
+            if (n > 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
+            const size_t at = tokens.size();
+            tokens.resize(at - n);
+            n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), tokens.data() + at, -n, false, true);
+            if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
+            tokens.resize(at + n);
+        };
+        for (size_t at = 0;;) {
+            const size_t next = rendered.find(marker_text, at);
+            append(std::string_view(rendered).substr(at, next == std::string::npos ? std::string::npos : next - at));
+            if (next == std::string::npos) break;
+            tokens.push_back(marker);
+            at = next + marker_text.size();
+        }
         // Layout: [CLS] question [SEP] ([MASK] option)* [SEP] state [SEP]. Special
         // tokens split the text, so each piece is tokenized on its own and can be
         // cut at token level without re-tokenizing.
@@ -315,7 +336,7 @@ json backend::info() const {
             {"name", meta(impl_->model.get(), "general.name")}, {"decision_type", "laya"},
             {"max_head_tokens", impl_->max_head}, {"context_tokens", impl_->capacity},
             {"trained_context_tokens", impl_->trained},
-            {"temperatures", impl_->temperatures}};
+            {"temperatures", impl_->temperatures}, {"metadata_temperatures", impl_->metadata_temperatures}};
 }
 void backend::prepare(question &q, const json &state) { impl_->prepare(q, state); }
 json backend::run(const question &q, const execution *control) { return impl_->run(q, control); }

@@ -17,9 +17,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MAX_PROBABILITY_DRIFT = 0.05
 # Where the original's top two probabilities are this close, the model is
-# undecided: quantization noise can reorder them, and at sharp calibration
-# temperatures it moves probabilities far. Such answers are reported, but neither
-# their decision nor their probabilities are held to the thresholds.
+# undecided and quantization noise can reorder them: such a decision may differ,
+# but its probabilities are still held to the drift threshold.
 NEAR_TIE = 0.05
 # Case name -> why the core refuses it today. Remove an entry when its feature lands.
 # The original clamps over-long input by default; here that is an explicit policy.
@@ -37,10 +36,12 @@ args = parser.parse_args()
 build = args.build_dir.resolve()
 consumer = build / 'laya-conformance-c'
 env = dict(os.environ, LD_LIBRARY_PATH=str(build) + ':' + os.environ.get('LD_LIBRARY_PATH', ''))
+# The original runs each checkpoint at the sequence length it was trained with.
+config = json.dumps({'threads': 4, 'context_tokens': json.loads((args.cases / 'meta.json').read_text())['max_len']})
 
 
 def run(request):
-    output = subprocess.run([str(consumer), str(args.model.resolve())], input=json.dumps(request, ensure_ascii=False).encode(),
+    output = subprocess.run([str(consumer), str(args.model.resolve()), config], input=json.dumps(request, ensure_ascii=False).encode(),
                             capture_output=True, env=env, timeout=900)
     if output.returncode:
         return None, output.stderr.decode(errors='replace').strip()
@@ -69,7 +70,7 @@ def compare(expected, got):
 
 
 failures, answers = [], []
-report: dict = {'cases': {}, 'model': str(args.model), 'thresholds': {
+report: dict = {'cases': {}, 'model': str(args.model), 'config': json.loads(config), 'thresholds': {
     'max_probability_drift': MAX_PROBABILITY_DRIFT, 'near_tie': NEAR_TIE}}
 for path in sorted(args.cases.glob('case_*.json')):
     case = json.loads(path.read_text())
@@ -105,16 +106,14 @@ for path in sorted(args.cases.glob('case_*.json')):
         answers.append(drift)
         entry['answers'][qid] = {'type': expected['type'], 'max_probability_drift': round(drift, 6),
                                  'decision_changed': changed, 'near_tie': near}
-        if drift > MAX_PROBABILITY_DRIFT and not near:
+        if drift > MAX_PROBABILITY_DRIFT:
             failures.append(f'{name}/{qid}: probability drift {drift:.4f} > {MAX_PROBABILITY_DRIFT}')
         if changed and not near:
             failures.append(f'{name}/{qid}: decision differs from the original')
     entry['status'] = 'passed' if not any(f.startswith(name + '/') or f.startswith(name + ':') for f in failures) else 'failed'
     report['cases'][name] = entry
     print(f'{name}: {entry["status"]}, max drift {max(a["max_probability_drift"] for a in entry["answers"].values()):.4f}')
-gated = [a['max_probability_drift'] for c in report['cases'].values() for a in c.get('answers', {}).values() if not a['near_tie']]
 report['summary'] = {'answers': len(answers), 'max_probability_drift': max(answers, default=0),
-                     'max_probability_drift_excluding_near_ties': max(gated, default=0),
                      'mean_probability_drift': sum(answers) / len(answers) if answers else 0,
                      'status': 'failed' if failures else 'passed', 'failures': failures}
 if args.report:

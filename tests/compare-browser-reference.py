@@ -26,7 +26,7 @@ if set(results) != set(reference['results']):
     raise AssertionError('Reference fixture set changed')
 maximum = (0, '')
 for key, value in results.items():
-    ours, theirs = comparable_answers(value['answers'], reference['results'][key]['answers'], key + '.answers')
+    ours, theirs = comparable_answers(value['answers'], reference['results'][key]['answers'], key + '.answers', adapter['info']['model'])
     difference = compare_results(ours, theirs, a.tolerance, key + '.answers')
     if difference[0] > maximum[0]: maximum = difference
     compare_results(value['usage']['input_tokens'], reference['results'][key]['input_tokens'])

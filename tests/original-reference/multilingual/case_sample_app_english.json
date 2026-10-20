@@ -1,0 +1,102 @@
+{
+ "name": "sample_app_english",
+ "state": {
+  "from": "user@acme.com",
+  "subject": "Duplicate charge on invoice #4411",
+  "body": "Hi, we were billed twice for March. Please refund the duplicate today or we will cancel our plan."
+ },
+ "questions": {
+  "department": {
+   "type": "choice",
+   "instructions": "Which department should handle this request?",
+   "criteria": {
+    "billing": "invoices, payments, refunds",
+    "technical": "bugs, outages, system errors",
+    "sales": "pricing, new contracts",
+    "other": "everything else"
+   }
+  },
+  "urgency": {
+   "type": "score",
+   "instructions": "How urgent is this request?",
+   "criteria": [
+    "not urgent",
+    "soon",
+    "critical deadline or blocking issue"
+   ]
+  },
+  "churn_risk": {
+   "type": "noul",
+   "instructions": "Does the user threaten to cancel or leave?"
+  },
+  "refund_requested": {
+   "type": "noul",
+   "instructions": "Does the user explicitly request a refund?"
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "department": {
+    "type": "choice",
+    "choice": "billing",
+    "probabilities": {
+     "billing": 1.0,
+     "technical": 0.0,
+     "sales": 0.0,
+     "other": 0.0
+    },
+    "confidence": 1.0,
+    "answer_confidence": 1.0,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "urgency": {
+    "type": "score",
+    "score": 1.8974,
+    "legend": {
+     "0": "not urgent",
+     "1": "soon",
+     "2": "critical deadline or blocking issue"
+    },
+    "probabilities": {
+     "0": 0.0025,
+     "1": 0.0977,
+     "2": 0.8998
+    },
+    "confidence": 0.6932,
+    "answer_confidence": 0.8998,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "churn_risk": {
+    "type": "noul",
+    "noul": 0.1345,
+    "confidence": 0.8655,
+    "answer_confidence": 0.8655,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "refund_requested": {
+    "type": "noul",
+    "noul": 0.973,
+    "confidence": 0.973,
+    "answer_confidence": 0.973,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 348,
+   "output_tokens": 0,
+   "state_tokens": 50,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

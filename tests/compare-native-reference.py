@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from compare_results import compare_results
-from release_support import ROOT, check_record, read_json, sha256, verify_model, git
+from release_support import ROOT, check_record, find_manifest, read_json, sha256, git
 from reference_requests import comparable_answers, reference_key, reference_requests
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -21,8 +21,7 @@ p.add_argument('--report', type=pathlib.Path, required=True)
 a = p.parse_args()
 if a.report.exists(): p.error('Report exists; choose a new path')
 record = check_record()
-manifest = read_json(ROOT / record['models'][0])
-verify_model(a.model, manifest)
+manifest = find_manifest(a.model, record)
 build, model = a.build.resolve(), a.model.resolve()
 policy = read_json(ROOT / 'release/qualification.json')
 tolerance = policy['budgets']['native_upstream_absolute_tolerance']
@@ -32,6 +31,12 @@ report = {'schema_version': 1, 'status': 'not_run', 'source_commit': git(ROOT, '
           'binaries': {name: sha256(build / name) for name in ['laya-reference', 'laya-conformance-c', 'libducktape_laya.so']},
           'reference_source_sha256': sha256(ROOT / 'tests/upstream-reference.cpp'), 'fixtures': {}}
 env = dict(os.environ, LD_LIBRARY_PATH=str(build))
+# The model's applied and stored temperatures, from the core's own diagnostics.
+info = subprocess.run([sys.executable, '-c', 'import json, sys, ducktape_laya\n'
+                       'with ducktape_laya.Engine.open(sys.argv[1], threads=1) as e: print(json.dumps(e.info()["model"]))', model],
+                      capture_output=True, text=True, timeout=180, check=True,
+                      env=dict(env, DUCKTAPE_LAYA_LIB_DIR=str(build), PYTHONPATH=str(ROOT / 'bindings/python/src')))
+model_info = json.loads(info.stdout)
 try:
     fixtures = sorted((ROOT / 'tests/fixtures').glob('*.json'))
     report['fixtures'] = {fixture.name: {'sha256': sha256(fixture), 'cases': []} for fixture in fixtures}
@@ -50,7 +55,7 @@ try:
                 raise RuntimeError(f'{key}/{label}: {process.stderr[-4000:]}')
             outputs[label] = json.loads(process.stdout)
         adapter, upstream = outputs['adapter'], outputs['upstream']
-        answers, reference = comparable_answers(adapter['answers'], upstream['answers'], key)
+        answers, reference = comparable_answers(adapter['answers'], upstream['answers'], key, model_info)
         maximum = compare_results(answers, reference, tolerance)
         compare_results(adapter['usage']['input_tokens'], upstream['input_tokens'])
         report['fixtures'][name]['cases'].append({'key': key, 'structured': 'schema' in originals[key],

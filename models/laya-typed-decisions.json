@@ -1,0 +1,36 @@
+{
+  "id": "laya-typed-decisions-q8_0",
+  "filename": "laya-typed-decisions-q8_0.gguf",
+  "size_bytes": 449397664,
+  "sha256": "6e73722d317913d98f3b93eff593f70e7e9ec7861b96885fcd397d021b492aad",
+  "url": null,
+  "source_model": "https://huggingface.co/convaiinnovations/laya",
+  "model_license": "Apache-2.0",
+  "max_tokens_per_question": 1024,
+  "source": {
+    "repository_url": "https://huggingface.co/convaiinnovations/laya",
+    "revision": "7b928d828b7b0e022f929d9bd2e44165aa270148",
+    "subfolder": "typed-decisions/",
+    "files": {
+      "encoder/config.json": "5268d24ad3b77c8151de5dcb0762ba4391619aad9ab0bda33e36fb083cfeae6d",
+      "model.safetensors": "4fa56de72383a9d3efa9cfa78955733c81b9fc8067a587ca4beb82c78107a24e",
+      "rl_agent_config.json": "ebf0cd524d92342a6be5e48e9fca3d7c2babfb5a56ccd79d2171ef5d8c7f7be8",
+      "tokenizer/tokenizer.json": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30",
+      "tokenizer/tokenizer_config.json": "08d4cf3ac4dca381759441b85b91a6d40e688471dcd33d15d6649eb0a9a854d1"
+    }
+  },
+  "conversion": {
+    "llama_cpp_commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
+    "outtype": "f16",
+    "quantize": "Q8_0",
+    "metadata": {
+      "general.name": "Laya Typed Decisions",
+      "general.basename": "laya",
+      "general.finetune": "typed-decisions",
+      "general.source.url": "https://huggingface.co/convaiinnovations/laya",
+      "general.license.name": "Apache-2.0",
+      "general.license.link": "https://www.apache.org/licenses/LICENSE-2.0"
+    }
+  },
+  "original_reference_cases": "tests/original-reference/typed-decisions"
+}

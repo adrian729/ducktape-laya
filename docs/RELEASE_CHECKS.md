@@ -46,14 +46,19 @@ way the original Laya writes them, so they render identical prompts. Without thi
 option, the upstream-reference gate stays not run.
 
 With a model, `tests/original-reference.py` also runs the original Laya
-implementation's recorded cases (`tests/original-reference/`, Apache-2.0, with
-provenance) through the C consumer: the `original_reference` gate. Input token
-counts must match exactly, and probabilities must stay within 0.05 with unchanged
-decisions, except on near ties (the original's top two within 0.05), where the
-model is undecided and 8-bit noise can reorder options and, at sharp calibration
-temperatures, move probabilities far; near ties are reported, not gated. Cases for
-features the core does not support yet must still be refused; when one starts
-passing, it moves into the supported set.
+implementation's recorded cases (`tests/original-reference/<model>/`, Apache-2.0,
+with provenance) through the C consumer at the checkpoint's trained sequence
+length: the `original_reference` gate. Input token counts must match exactly, and
+probabilities must stay within 0.05 with unchanged decisions. On near ties (the
+original's top two within 0.05) the decision may differ, since the model is
+undecided and quantization noise can reorder options; the probabilities are still
+gated. Cases for features the core does not support yet must still be refused;
+when one starts passing, it moves into the supported set.
+
+The core bounds the temperatures stored in a model to [0.5, 5], as the original
+does; llama.cpp applies them unbounded. The upstream-reference checks therefore
+compare our probabilities re-expressed at the stored temperature (exact up to
+rounding, since probabilities are a softmax of scores over the temperature).
 Sanitizer, stress, browser and platform evidence remain separate;
 the runner does not silently transplant historical results to a different binary.
 `--require-release` exits unsuccessfully if any required gate is failed or unrun.

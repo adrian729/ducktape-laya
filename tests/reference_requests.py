@@ -61,13 +61,45 @@ def reference_requests(fixtures=FIXTURES):
     return requests
 
 
-def comparable_answers(ours, theirs, where):
+def _temperature(table, kind, n):
+    bucket = '2' if n <= 2 else '3_5' if n <= 5 else '6_10' if n <= 10 else '11'
+    return table.get(f'{kind}.{bucket}', table.get(kind, 1.0))
+
+
+def _retempered(answer, applied, stored):
+    """One answer re-expressed at the temperature the model file stores.
+
+    The core bounds fitted temperatures to [0.5, 5]; upstream applies them as
+    stored. Probabilities are softmax(scores / T), so scaling log p by
+    T_applied / T_stored gives upstream's distribution up to rounding."""
+    import math
+    kind = answer['type']
+    values = [1 - answer['noul'], answer['noul']] if kind == 'noul' else list(answer['probabilities'].values())
+    ratio = _temperature(applied, kind, len(values)) / _temperature(stored, kind, len(values))
+    if ratio == 1:
+        return answer
+    logits = [math.log(v) * ratio if v > 0 else -math.inf for v in values]
+    top = max(logits)
+    weights = [math.exp(v - top) for v in logits]
+    values = [w / sum(weights) for w in weights]
+    answer = dict(answer)
+    if kind == 'noul':
+        answer['noul'] = values[1]
+    else:
+        answer['probabilities'] = dict(zip(answer['probabilities'], values))
+        if kind == 'score':
+            answer['score'] = sum(i * v for i, v in enumerate(values))
+    return answer
+
+
+def comparable_answers(ours, theirs, where, model=None):
     """Answers with the confidence fields set aside, for comparison with upstream.
 
     The core reports answer_confidence (max p) and confidence (1 - H(p)/log k) for
     every type; the upstream decision processing has an older `confidence` and no
     answer_confidence. Check ours against their definitions, then compare every
-    other field."""
+    other field. `model` is the engine's info()["model"]: where the core bounded a
+    stored temperature, our probabilities are compared at the stored one."""
     import math
     mine, reference = {}, {}
     for question, answer in ours.items():
@@ -76,6 +108,8 @@ def comparable_answers(ours, theirs, where):
         concentration = 1.0 if len(probabilities) < 2 else max(0.0, min(1.0, 1 - entropy / math.log(len(probabilities))))
         if abs(answer['answer_confidence'] - max(probabilities)) > 1e-9 or abs(answer['confidence'] - concentration) > 1e-9:
             raise AssertionError(f'{where}.{question}: confidence fields do not match their definitions')
+        if model is not None:
+            answer = _retempered(answer, model['temperatures'], model['metadata_temperatures'])
         mine[question] = {k: v for k, v in answer.items() if k not in ('answer_confidence', 'confidence')}
         reference[question] = {k: v for k, v in theirs[question].items() if k not in ('answer_confidence', 'confidence')}
     return mine, reference

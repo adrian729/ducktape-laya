@@ -1,0 +1,53 @@
+{
+ "name": "arabic",
+ "state": "تم خصم المبلغ مرتين من حسابي هذا الشهر ولم يتم إرجاع المبلغ الثاني. هذه هي المرة الثالثة التي أتواصل فيها.",
+ "questions": {
+  "قسم": {
+   "type": "choice",
+   "instructions": "أي قسم يجب أن يتعامل مع هذا؟",
+   "criteria": {
+    "الفواتير": "المدفوعات والمبالغ المستردة",
+    "الدعم": "الأخطاء التقنية"
+   }
+  },
+  "إلغاء": {
+   "type": "noul",
+   "instructions": "العميل يهدد بإلغاء الحساب."
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "قسم": {
+    "type": "choice",
+    "choice": "الفواتير",
+    "probabilities": {
+     "الفواتير": 0.5414,
+     "الدعم": 0.4586
+    },
+    "confidence": 0.005,
+    "answer_confidence": 0.5414,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "إلغاء": {
+    "type": "noul",
+    "noul": 0.38,
+    "confidence": 0.62,
+    "answer_confidence": 0.62,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 252,
+   "output_tokens": 0,
+   "state_tokens": 69,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

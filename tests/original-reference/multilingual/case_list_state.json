@@ -1,0 +1,45 @@
+{
+ "name": "list_state",
+ "state": [
+  {
+   "role": "user",
+   "content": "where is my refund?"
+  },
+  {
+   "role": "assistant",
+   "content": "I can check that for you."
+  },
+  {
+   "role": "user",
+   "content": "you said that last week"
+  }
+ ],
+ "questions": {
+  "resolved": {
+   "type": "noul",
+   "instructions": "The issue is resolved."
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "resolved": {
+    "type": "noul",
+    "noul": 0.2687,
+    "confidence": 0.7313,
+    "answer_confidence": 0.7313,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 83,
+   "output_tokens": 0,
+   "state_tokens": 52,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

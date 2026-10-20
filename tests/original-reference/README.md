@@ -6,7 +6,8 @@ ducktape-laya follows the model's authors.
 
 - Source: https://github.com/NandhaKishorM/laya, commit
   `ffc142012af63d015fa19f05f29f9c5ff329a2cc`, files
-  `laya-rust/tests/golden/english/case_*.json` and `meta.json`.
+  `laya-rust/tests/golden/<model>/case_*.json` and `meta.json`, for the
+  `english`, `multilingual` and `typed-decisions` checkpoints.
 - Generated upstream by `tools/dump_golden.py` with laya 0.4.0 on ONNX Runtime
   1.30.0 (see `english/meta.json`).
 - Modified: each case is reduced to `name`, `state`, `questions` and `result`;
