@@ -118,8 +118,9 @@ final class Native {
             Path dir = Files.createTempDirectory("ducktape-laya");
             Path file = dir.resolve(LIB);
             Files.copy(in, file);
-            file.toFile().deleteOnExit();
+            // Hooks run in reverse registration order: the directory must be registered first.
             dir.toFile().deleteOnExit();
+            file.toFile().deleteOnExit();
             return file;
         } catch (IOException e) {
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot extract bundled library: " + e.getMessage(), e);

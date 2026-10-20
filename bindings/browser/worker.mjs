@@ -45,7 +45,7 @@ async function call(name, request, job) {
       if (!text) throw fail('Out of WASM memory', 4);
       runtime.stringToUTF8(request, text, length);
       active = job;
-      const remaining = job.deadline ? Math.max(0, Math.ceil(job.deadline - performance.timeOrigin - performance.now())) : 0;
+      const remaining = job.deadline ? Math.max(0, Math.ceil(job.deadline - Date.now())) : 0;
       if (job.deadline && !remaining && !job.status) job.status = 6;
       const requestId = job.requestId ?? job.id;
       runtime.HEAPU32.set([CALL_OPTIONS_SIZE, 0, requestId >>> 0, Math.floor(requestId / 4294967296), remaining, 0,

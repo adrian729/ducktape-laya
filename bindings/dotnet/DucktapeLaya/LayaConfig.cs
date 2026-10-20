@@ -23,6 +23,9 @@ public sealed class LayaConfig
         ArgumentOutOfRangeException.ThrowIfNegative(Threads);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(Threads, 256);
         if (ContextTokens is { } c) ArgumentOutOfRangeException.ThrowIfNegativeOrZero(c);
+        // Utf8JsonWriter would silently replace lone surrogates with U+FFFD; reject them like LayaEngine.Encode.
+        if (Overflow is { } o) CheckUnicode(o);
+        if (Temperatures is { } t) foreach (var key in t.Keys) { ArgumentNullException.ThrowIfNull(key); CheckUnicode(key); }
         using var stream = new MemoryStream();
         using (var w = new Utf8JsonWriter(stream))
         {
@@ -46,4 +49,12 @@ public sealed class LayaConfig
         }
         return System.Text.Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
     }
+
+    static void CheckUnicode(string s)
+    {
+        try { Strict.GetByteCount(s); }
+        catch (System.Text.EncoderFallbackException) { throw new LayaException(1, "config is not valid Unicode"); }
+    }
+
+    static readonly System.Text.UTF8Encoding Strict = new(false, throwOnInvalidBytes: true);
 }

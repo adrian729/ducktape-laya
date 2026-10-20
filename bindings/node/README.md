@@ -17,19 +17,24 @@ npm install ducktape-laya
 ```js
 const { Laya } = require('ducktape-laya');
 
-const engine = await Laya.open('/absolute/path/to/Laya-Q8_0.gguf', { threads: 2 });
-try {
-  const result = await engine.execute({
-    state: 'Please refund the duplicate charge.',
-    questions: {
-      refund: { type: 'noul', instructions: 'Does the customer request a refund?' }
-    }
-  });
-  console.log(result.answers.refund.noul, result.answers.refund.answer_confidence);
-} finally {
-  await engine.close();
+async function main() {
+  const engine = await Laya.open('/absolute/path/to/Laya-Q8_0.gguf', { threads: 2 });
+  try {
+    const result = await engine.execute({
+      state: 'Please refund the duplicate charge.',
+      questions: {
+        refund: { type: 'noul', instructions: 'Does the customer request a refund?' }
+      }
+    });
+    console.log(result.answers.refund.noul, result.answers.refund.answer_confidence);
+  } finally {
+    await engine.close();
+  }
 }
+main().catch(error => { console.error(error); process.exitCode = 1; });
 ```
+
+From an ES module, `import { Laya } from 'ducktape-laya';` works too, and top-level `await` is then allowed.
 
 `close()` is required: the worker keeps the process alive until it is closed.
 
@@ -66,7 +71,7 @@ For a router, the options apply to every route, and a route's own `config` (`thr
 
 ## Executing
 
-`engine.execute(request, options)` takes one request (object or JSON string) or an array of up to 32, and resolves to parsed results in the same shape. Requests are strict; besides `state` and `questions` or `schema`, they may set `max_tokens`, `temperatures`, `overflow`, `max_windows`, `boolean_threshold` (with `schema`), and on a router `model` and `lang`. Pass a JSON string when the literal key order of integer-like labels matters, since JavaScript objects reorder them.
+`engine.execute(request, options)` takes one request (object or JSON string) or an array of up to 32, and resolves to parsed results in the same shape. Requests are strict; besides `state` and `questions` or `schema`, they may set `max_tokens`, `temperatures`, `overflow`, `max_windows`, `boolean_threshold` (with `schema`), and on a router `model` and `lang`. Request objects are serialized with `JSON.stringify`, so integer-like keys are reordered and a number such as `149.0` is written as `149`; both can change the prompt and the results compared with the same request as a raw JSON string (or from Python). Pass a JSON string when the literal text matters.
 
 | Call option | Meaning |
 |---|---|
@@ -87,6 +92,6 @@ Errors are `Error` objects. Native failures carry `status` (the C ABI status, al
 
 ## Electron
 
-Open the engine in the main process. Keep the package's `native` directory and the model unpacked from ASAR (for example with `asarUnpack`); the package resolves `app.asar` paths to `app.asar.unpacked`.
+Open the engine in the main process. Unpack the whole `node_modules/ducktape-laya` package and the model from ASAR, for example with electron-builder's `asarUnpack: ["**/node_modules/ducktape-laya/**"]`: the worker script (`worker.cjs`) is started from the package directory, and the native addon and library must be real files. The package resolves its `app.asar` native path to `app.asar.unpacked`.
 
 The full request and result format is in the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).

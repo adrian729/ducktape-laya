@@ -177,6 +177,9 @@ public final class Laya implements AutoCloseable {
     }
 
     private <T> T withHandle(Body<T> body) {
+        // Fail fast once close is pending rather than queueing behind the writer, which would block
+        // (or deadlock a callback waiting on another thread's call); re-checked under the lock.
+        if (closing) throw new LayaClosedException();
         lock.readLock().lock();
         try {
             if (closing || released) throw new LayaClosedException();

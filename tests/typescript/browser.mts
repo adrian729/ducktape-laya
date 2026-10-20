@@ -1,4 +1,4 @@
-import { Laya, Status, Request, StructuredRequest, LayaError } from 'ducktape-laya-browser';
+import { Laya, Status, Request, StructuredRequest, LayaError, Answer, Overflow, Routing, Usage, Window } from 'ducktape-laya-browser';
 
 const request: Request = { state: 'Refund please', questions: {
   refund: { type: 'noul', instructions: 'Is a refund requested?' },
@@ -12,12 +12,25 @@ async function consumer() {
     type: 'object', properties: { refund: { type: 'boolean' } },
   } };
   await engine.execute(structured);
+  const overflow: Overflow = 'truncate_start';
+  const windowed = await engine.execute({ ...request, overflow, max_windows: 2, lang: 'en', questions: {
+    any: { type: 'noul', instructions: 'Any refund?', aggregate: 'any' } } });
+  const answer: Answer = windowed.answers.any;
+  const window: Window | undefined = answer.window;
+  const usage: Usage = windowed.usage;
+  const routing: Routing | undefined = usage.routing;
+  const policies: string[] = (await engine.info()).overflow_policies;
+  void [answer.answer_confidence, window, usage.windows, routing?.reason, policies];
   await engine.execute([request, structured]);
   const profile: { id: string; cross_profile_equivalence: false } = (await engine.info()).numerical_profile;
   void profile;
   await engine.close();
   const router = await Laya.openRouter({ english: { url: '/model.gguf', contextTokens: 2048, temperatures: { noul: 2 } } }, { backend: 'wasm' });
   await router.execute({ ...request, model: 'english' });
+  const auto = await Laya.openRouter({ english: { url: '/model.gguf' }, other: { url: '/model.gguf', overflow: 'scan' } },
+    { auto: { english: 'english', default: 'other' }, overflow: 'reject', maxLoaded: 1 });
+  await auto.execute({ ...request, model: 'auto' });
+  await auto.close();
   await router.close({ cancelPending: true });
   // @ts-expect-error The lenient decide family was removed.
   engine.decideBatch([request]);

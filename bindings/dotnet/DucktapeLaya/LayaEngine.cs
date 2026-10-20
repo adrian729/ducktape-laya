@@ -115,6 +115,9 @@ public sealed unsafe class LayaEngine : IDisposable
 
     void EnterRead()
     {
+        // Fail fast once Dispose is pending rather than queueing behind the writer, which would block
+        // (or deadlock a callback waiting on another thread's call); re-checked under the lock.
+        if (_closing) throw new ObjectDisposedException(nameof(LayaEngine));
         _lock.EnterReadLock();
         if (!_closing) return;
         ExitRead();

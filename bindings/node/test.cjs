@@ -261,9 +261,11 @@ test('router per-route config overrides open options key by key', { skip: !proce
     await assert.rejects(router.execute({ ...request, max_tokens: 100, model: 'small' }), { status: 1 });
     await router.execute({ ...request, max_tokens: 64, model: 'small' });
   } finally { await router.close(); }
-  // A route below the 32-token minimum fails when it first loads.
-  const bad = await Laya.openRouter({ models: { tiny: { path: process.env.LAYA_MODEL, config: { context_tokens: 8 } }, ok: process.env.LAYA_MODEL } }, { threads: 2 });
-  try {
+  // A route below the 32-token minimum is rejected (at open, or at first load for older cores).
+  const bad = await Laya.openRouter({ models: { tiny: { path: process.env.LAYA_MODEL, config: { context_tokens: 8 } }, ok: process.env.LAYA_MODEL } }, { threads: 2 }).catch(error => {
+    assert.equal(error.status, 1); return undefined;
+  });
+  if (bad) try {
     await assert.rejects(bad.execute({ ...request, model: 'tiny' }), { status: 1 });
     await bad.execute({ ...request, model: 'ok' });
   } finally { await bad.close(); }
@@ -295,5 +297,56 @@ test('no onEvent delivery after the call settled', async () => {
     await assert.rejects(call, e => e.status === Status.CANCELLED);
     await engine.close();
     assert.deepEqual(events, []);
+  } finally { await engine.close(); }
+});
+test('JSON serialization failures are argument errors with status', async () => {
+  const circular = {}; circular.self = circular;
+  await assert.rejects(Laya.openRouter(circular), e => e instanceof TypeError && e.status === Status.INVALID_ARGUMENT);
+  await assert.rejects(Laya.openRouter({ models: { a: 1n } }), e => e.status === Status.INVALID_ARGUMENT);
+  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  try {
+    await assert.rejects(engine.execute({ state: circular, questions: {} }), e => e instanceof TypeError && e.status === Status.INVALID_ARGUMENT);
+    await assert.rejects(engine.execute({ state: 1n, questions: {} }), e => e instanceof TypeError && e.status === Status.INVALID_ARGUMENT);
+  } finally { await engine.close(); }
+});
+test('router auto config and lang are validated by the native core', async () => {
+  const models = { english: __filename, other: __filename };
+  const request = { state: 'hi', questions: { q: { type: 'noul', instructions: 'x' } } };
+  for (const auto of [{ english: 'english' }, { english: 'english', default: 'missing' }, { english: 'english', default: 'other', extra: 1 }, 'english']) {
+    await assert.rejects(Laya.openRouter({ models, auto }), e => e.status === Status.INVALID_ARGUMENT && /auto/.test(e.message), JSON.stringify(auto));
+  }
+  const router = await Laya.openRouter({ models });
+  try {
+    await assert.rejects(router.execute({ ...request, model: 'auto' }), e => e.status === 1 && /auto/.test(e.message));
+    await assert.rejects(router.execute({ ...request, model: 'english', lang: 'en' }), e => e.status === 1 && /lang/.test(e.message));
+  } finally { await router.close(); }
+});
+test('router auto routing by script, language and lang override', { skip: !process.env.LAYA_MODEL }, async () => {
+  const model = process.env.LAYA_MODEL;
+  const router = await Laya.openRouter({ models: { english: model, other: model }, max_loaded: 1, auto: { english: 'english', default: 'other' } }, { threads: 2 });
+  const question = { refund: { type: 'noul', instructions: 'Is a refund requested?' } };
+  try {
+    const english = await router.execute({ state: 'Hello, I would like a refund for my order because it arrived broken.', questions: question, model: 'auto' });
+    assert.equal(english.model, 'english');
+    assert.equal(english.usage.routing.reason, 'english_text');
+    const russian = await router.execute({ state: 'Здравствуйте, я хочу вернуть деньги за заказ.', questions: question, model: 'auto' });
+    assert.equal(russian.model, 'other');
+    assert.equal(russian.usage.routing.reason, 'non_latin_script');
+    const forced = await router.execute({ state: 'Hello, I would like a refund for my order because it arrived broken.', questions: question, model: 'auto', lang: 'de' });
+    assert.equal(forced.model, 'other');
+    assert.equal(forced.usage.routing.reason, 'lang');
+    assert.equal(forced.usage.routing.lang, 'de');
+  } finally { await router.close(); }
+});
+test('answers report confidence and answer_confidence', { skip: !process.env.LAYA_MODEL }, async () => {
+  const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2 });
+  try {
+    const request = JSON.parse(fs.readFileSync(path.join(__dirname, '../../tests/fixtures/primitive.json'), 'utf8'));
+    const { answers } = await engine.execute(request);
+    for (const answer of Object.values(answers)) {
+      assert.ok(answer.confidence >= 0 && answer.confidence <= 1);
+      const top = answer.type === 'noul' ? Math.max(answer.noul, 1 - answer.noul) : Math.max(...Object.values(answer.probabilities));
+      assert.equal(answer.answer_confidence, top);
+    }
   } finally { await engine.close(); }
 });

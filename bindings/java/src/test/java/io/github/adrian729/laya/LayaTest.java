@@ -126,6 +126,85 @@ public final class LayaTest {
         }
     }
 
+    @SuppressWarnings("try")
+    static void pendingCloseFailsFast() throws Exception {
+        Path file = Files.createTempFile("laya", ".gguf");
+        try {
+            Laya router = Laya.openRouter("{\"models\":{\"unused\":\"" + json(file.toString()) + "\"}}", ONE);
+            ExecutorService pool = Executors.newCachedThreadPool();
+            try {
+                Future<?>[] closer = {null};
+                boolean[] failedFast = {false};
+                CallOptions options = CallOptions.none().withOnEvent(e -> {
+                    if (closer[0] != null) return;
+                    // close() on another thread waits for this call; calls from other threads meanwhile must
+                    // fail instead of queueing behind it (this callback waits for them).
+                    closer[0] = pool.submit(router::close);
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                    try {
+                        while (!failedFast[0] && System.nanoTime() < deadline) {
+                            Future<Boolean> probe = pool.submit(() -> {
+                                try { router.execute("{}"); return false; }
+                                catch (LayaClosedException x) { return true; }
+                                catch (LayaException x) { return false; }
+                            });
+                            failedFast[0] = probe.get(10, TimeUnit.SECONDS);
+                        }
+                    } catch (Exception x) {
+                        throw new AssertionError("a new call blocked behind the pending close: " + x);
+                    }
+                });
+                try { router.execute("{}", options); } catch (LayaException expected) { /* the invalid request */ }
+                check(failedFast[0], "new calls fail fast while close is pending");
+                closer[0].get(10, TimeUnit.SECONDS);
+                check(thrown(() -> router.execute("{}")) instanceof LayaClosedException, "closed after the call returned");
+            } finally {
+                pool.shutdownNow();
+            }
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    static void routerAutoValidation() throws Exception {
+        Path file = Files.createTempFile("laya", ".gguf");
+        try {
+            String models = "\"models\":{\"a\":\"" + json(file.toString()) + "\"}";
+            String[][] bad = {
+                {"{\"english\":\"a\"}", "auto.default must name a route"},
+                {"{\"english\":\"zz\",\"default\":\"a\"}", "auto.english must name a route"},
+                {"[]", "auto must be an object"},
+                {"{\"english\":\"a\",\"default\":\"a\",\"x\":\"a\"}", "auto: unsupported key x"},
+            };
+            for (String[] c : bad) {
+                Throwable t = thrown(() -> Laya.openRouter("{" + models + ",\"auto\":" + c[0] + "}", ONE));
+                check(t instanceof LayaException e && e.status() == 1 && e.getMessage().contains(c[1]), c[0] + " -> " + t);
+            }
+            try (Laya router = Laya.openRouter("{" + models + "}", ONE)) {
+                Throwable noAuto = thrown(() -> router.execute(withModel(PRIMITIVE, "auto")));
+                check(noAuto instanceof LayaException e && e.status() == 1 && e.getMessage().contains("requires an \"auto\" router config"), "auto without config: " + noAuto);
+                Throwable lang = thrown(() -> router.execute(withModel(PRIMITIVE, "a").replaceFirst("\\{", "{\"lang\":\"en\",")));
+                check(lang instanceof LayaException e && e.status() == 1 && e.getMessage().contains("lang"), "lang without auto: " + lang);
+            }
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    static void routerAutoRoutes() throws Exception {
+        String json = "{\"models\":{\"en\":\"" + json(MODEL) + "\",\"ml\":\"" + json(MODEL)
+            + "\"},\"max_loaded\":1,\"auto\":{\"english\":\"en\",\"default\":\"ml\"}}";
+        String english = "I was charged twice for my subscription this month and I would like my money back please.";
+        try (Laya router = Laya.openRouter(json, TWO)) {
+            String out = router.execute(withModel(PRIMITIVE, "auto").replace("Refund me", english));
+            check(out.contains("\"model\":\"en\"") && out.contains("\"reason\":\"english_text\""), "english text " + out);
+            out = router.execute(withModel(PRIMITIVE, "auto").replace("Refund me", "\u6211\u8fd9\u4e2a\u6708\u7684\u8ba2\u9605\u88ab\u6263\u4e86\u4e24\u6b21\u8d39\u7528\uff0c\u8bf7\u9000\u6b3e"));
+            check(out.contains("\"model\":\"ml\"") && out.contains("\"reason\":\"non_latin_script\""), "non-Latin text " + out);
+            out = router.execute(withModel(PRIMITIVE, "auto").replace("Refund me", english).replaceFirst("\\{", "{\"lang\":\"fr\","));
+            check(out.contains("\"model\":\"ml\"") && out.contains("\"reason\":\"lang\""), "lang override " + out);
+        }
+    }
+
     static void closeIsIdempotent() throws Exception {
         Path file = Files.createTempFile("laya", ".gguf");
         try {
@@ -339,14 +418,16 @@ public final class LayaTest {
             loadFailureChild();
             System.exit(0);
         }
-        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "configJson", "loadFailure"};
+        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "configJson", "loadFailure", "pendingCloseFailsFast", "routerAutoValidation"};
         Case[] cases = {LayaTest::diagnostics, LayaTest::rejectsBadPath, LayaTest::rejectsNul, LayaTest::rejectsInvalidUnicode,
-            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::configJson, LayaTest::loadFailure};
+            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::configJson, LayaTest::loadFailure,
+            LayaTest::pendingCloseFailsFast, LayaTest::routerAutoValidation};
         List<String> failed = new ArrayList<>();
         int ran = 0;
         for (int i = 0; i < cases.length; i++) ran += run(names[i], cases[i], failed);
         if (MODEL == null) System.out.println("SKIP real-model tests (LAYA_MODEL unset)");
         else {
+            ran += run("routerAutoRoutes", LayaTest::routerAutoRoutes, failed);
             ran += run("realFeatures", LayaTest::realFeatures, failed);
             ran += run("configAndPerRequestSettings", LayaTest::configAndPerRequestSettings, failed);
             ran += run("cancellationAndDeadline", LayaTest::cancellationAndDeadline, failed);

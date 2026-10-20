@@ -14,10 +14,7 @@ class Laya {
   static open(modelPath, options) { return Laya.#open(modelPath, options, false); }
   static async openRouter(config, options) {
     let text = config;
-    if (typeof config !== 'string') {
-      try { text = wellFormedJson(config, 'router config'); }
-      catch (error) { if (error && typeof error === 'object' && error.status === undefined) error.status = 1; throw error; }
-    }
+    if (typeof config !== 'string') text = wellFormedJson(config, 'router config');
     return Laya.#open(text, options, true);
   }
   static async #open(modelPath, { threads, contextTokens, overflow, temperatures, maxPending = 16, addonPath } = {}, router) {
@@ -152,9 +149,17 @@ const exitedError = message => Object.assign(new Error(message), { code: 'ERR_LA
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
 // JSON.stringify escapes lone surrogates instead of failing, which the native
 // side would then silently replace; reject them before serializing.
-const wellFormedJson = (value, what) => JSON.stringify(value, (key, item) => {
-  if (!key.isWellFormed() || (typeof item === 'string' && !item.isWellFormed())) throw invalid(TypeError, `${what} is not valid Unicode`);
-  return item;
-});
+const wellFormedJson = (value, what) => {
+  try {
+    return JSON.stringify(value, (key, item) => {
+      if (!key.isWellFormed() || (typeof item === 'string' && !item.isWellFormed())) throw invalid(TypeError, `${what} is not valid Unicode`);
+      return item;
+    });
+  } catch (error) {
+    // Circular structures, BigInt values and throwing toJSON/getters are argument errors.
+    if (error && typeof error === 'object' && error.status === undefined) error.status = 1;
+    throw error;
+  }
+};
 const Status = Object.freeze({ OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
 module.exports = { Laya, Status };

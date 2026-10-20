@@ -6,11 +6,10 @@ No model or runtime download occurs. Model files are application-owned resources
 
 ## Library resolution
 
-1. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`. When this variable is set it is authoritative: if that file cannot be loaded, a `DllNotFoundException` naming the path is thrown and nothing else is tried.
-2. `runtimes/linux-x64/native/libducktape_laya.so` next to the application (the NuGet layout)
-3. The system loader: `libducktape_laya.so`, then `libducktape_laya.so.1`
+1. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`. When this variable is set it is authoritative: if that file cannot be loaded, a `DllNotFoundException` naming the path is thrown, and if it is incompatible, a `LayaException`; nothing else is tried.
+2. Otherwise `libducktape_laya.so.1`, then `libducktape_laya.so`, each through .NET's default native library probing, which covers `runtimes/linux-x64/native/` next to the application (the NuGet layout) and the system loader.
 
-After loading, the binding requires `dtl_abi_version() == 2` and the `dtl_cancel_flag` export; an incompatible or too old library fails with `LayaException` (`UnsupportedPlatform`). Load failures are reported on every call, not just the first.
+A library must report `dtl_abi_version() == 2` and export `dtl_cancel_flag`. Without the override, an incompatible candidate is skipped for the next one; if none loads, the call fails with `DllNotFoundException`, and if only incompatible ones load, with `LayaException` (`UnsupportedPlatform`). Load failures are reported on every call, not just the first.
 
 To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project. Without it, `dotnet pack` still succeeds but produces a package without the native library.
 
@@ -28,6 +27,8 @@ Instead of the environment variable, build with `-p:DucktapeLayaNativeLibrary=/p
 
 ## Example
 
+A fragment: `requestJson` is your request as a JSON string and `cancellationToken` any `CancellationToken`.
+
 ```csharp
 using Ducktape.Laya;
 
@@ -40,7 +41,7 @@ string result = engine.Execute(requestJson, options, cancellationToken);
 
 ## Threading and cancellation
 
-A `LayaEngine` may be shared across threads; native calls on one handle serialize. `Dispose` is idempotent, waits for in-flight calls, and later calls throw `ObjectDisposedException`. Disposed from inside its own event callback, the engine returns at once and is released when the running call finishes. A finalizer releases the native handle if an engine is never disposed, but it is only a safety net: always dispose (`using`) so memory is freed promptly.
+A `LayaEngine` may be shared across threads; native calls on one handle serialize. `Dispose` is idempotent and waits for in-flight calls. Calls made once `Dispose` has started, even while it still waits, throw `ObjectDisposedException` at once. Disposed from inside its own event callback, the engine returns at once and is released when the running call finishes. A finalizer releases the native handle if an engine is never disposed, but it is only a safety net: always dispose (`using`) so memory is freed promptly.
 
 Inference blocks. `ExecuteAsync` runs the call on a thread-pool thread, which stays occupied for the whole inference; the options (`RequestId`, `Timeout`, `OnEvent`) are snapshotted when the method is called. `OnEvent` runs on the calling thread for sync calls and on that pool thread for `ExecuteAsync`; exceptions it throws are swallowed and never change results.
 

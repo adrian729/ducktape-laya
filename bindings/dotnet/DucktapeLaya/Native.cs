@@ -38,13 +38,7 @@ internal static unsafe partial class Native
         lock (Gate)
         {
             if (_ready) return;
-            var handle = Load();
-            if (!NativeLibrary.TryGetExport(handle, "dtl_abi_version", out var abi))
-                throw Incompatible("it does not export dtl_abi_version");
-            var version = ((delegate* unmanaged<uint>)abi)();
-            if (version != 2) throw Incompatible($"it reports ABI version {version}, expected 2");
-            if (!NativeLibrary.TryGetExport(handle, "dtl_cancel_flag", out var cancel))
-                throw Incompatible("it does not export dtl_cancel_flag");
+            var (handle, cancel) = Load();
             CancelFlag = (delegate* unmanaged<void*, uint>)cancel;
             _handle = handle;
             if (!_resolverSet)
@@ -59,21 +53,46 @@ internal static unsafe partial class Native
     static LayaException Incompatible(string why) =>
         new((int)LayaStatus.UnsupportedPlatform, $"The ducktape_laya native library is incompatible or too old: {why}.");
 
-    static IntPtr Load()
+    // Rejects a library of the wrong ABI; returns dtl_cancel_flag.
+    static IntPtr Validate(IntPtr handle)
+    {
+        if (!NativeLibrary.TryGetExport(handle, "dtl_abi_version", out var abi))
+            throw Incompatible("it does not export dtl_abi_version");
+        var version = ((delegate* unmanaged<uint>)abi)();
+        if (version != 2) throw Incompatible($"it reports ABI version {version}, expected 2");
+        if (!NativeLibrary.TryGetExport(handle, "dtl_cancel_flag", out var cancel))
+            throw Incompatible("it does not export dtl_cancel_flag");
+        return cancel;
+    }
+
+    static (IntPtr, IntPtr) Load()
     {
         var dir = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
-        if (!string.IsNullOrEmpty(dir))
-        {
-            // An explicit override never falls back to other locations.
-            var full = System.IO.Path.Combine(dir, FileName);
-            if (NativeLibrary.TryLoad(full, out var explicitHandle)) return explicitHandle;
-            throw new DllNotFoundException($"DUCKTAPE_LAYA_LIB_DIR is set but '{full}' could not be loaded.");
-        }
         var assembly = typeof(Native).Assembly;
-        // The NuGet runtimes/linux-x64/native layout is found by default probing, as are the soname and plain name.
-        foreach (var candidate in new[] { FileName, FileName + ".1" })
-            if (NativeLibrary.TryLoad(candidate, assembly, null, out var handle)) return handle;
-        throw new DllNotFoundException($"{FileName} was not found. Set DUCKTAPE_LAYA_LIB_DIR or install the native library.");
+        // An explicit override never falls back to other locations. Otherwise the soname comes first (as in
+        // the Python and Java bindings), then the plain name; the NuGet runtimes/linux-x64/native layout is
+        // found by default probing. A library of the wrong ABI is skipped in favour of the next candidate.
+        var overridden = !string.IsNullOrEmpty(dir);
+        var candidates = overridden
+            ? new[] { System.IO.Path.Combine(dir!, FileName) }
+            : new[] { FileName + ".1", FileName };
+        LayaException? incompatible = null;
+        foreach (var candidate in candidates)
+        {
+            var loaded = overridden ? NativeLibrary.TryLoad(candidate, out var h) ? h : IntPtr.Zero
+                                    : NativeLibrary.TryLoad(candidate, assembly, null, out h) ? h : IntPtr.Zero;
+            if (loaded == IntPtr.Zero) continue;
+            try { return (loaded, Validate(loaded)); }
+            catch (LayaException ex)
+            {
+                incompatible = ex;
+                NativeLibrary.Free(loaded);
+            }
+        }
+        if (incompatible is not null) throw incompatible;
+        throw overridden
+            ? new DllNotFoundException($"DUCKTAPE_LAYA_LIB_DIR is set but '{candidates[0]}' could not be loaded.")
+            : new DllNotFoundException($"{FileName} was not found. Set DUCKTAPE_LAYA_LIB_DIR or install the native library.");
     }
 
     static IntPtr Resolve(string name, Assembly assembly, DllImportSearchPath? path) => name == Lib ? _handle : IntPtr.Zero;

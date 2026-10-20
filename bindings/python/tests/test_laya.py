@@ -11,6 +11,8 @@ MODEL = os.environ.get('LAYA_MODEL')
 REQUEST = '{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}'
 STRUCTURED = ('{"state":"Please refund me.","schema":{"type":"object","properties":'
               '{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}')
+CHOICE = ('{"state":"Please refund me.","questions":{"kind":{"type":"choice",'
+          '"instructions":"What is requested?","criteria":["refund","other"]}}}')
 LONG = json.dumps([json.loads(STRUCTURED)] * 8)
 real = unittest.skipUnless(MODEL, 'LAYA_MODEL is not set')
 
@@ -66,6 +68,26 @@ class Basics(unittest.TestCase):
         with self.assertRaises(ValueError):
             laya.Engine.open_router({'models': {'unused': __file__}, 'max_loaded': float('nan')})
 
+    def test_router_auto_validation(self):
+        def route(**extra):
+            return dict({'models': {'a': __file__}}, **extra)
+        for bad in ({'english': 'a'}, {'english': 'a', 'default': 'missing'},
+                    {'english': 'a', 'default': 'a', 'extra': 'a'}):
+            with self.assertRaises(laya.LayaError) as caught:
+                laya.Engine.open_router(route(auto=bad), threads=1)
+            self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+        with self.assertRaises(laya.LayaError):
+            laya.Engine.open_router({'models': {'auto': __file__}}, threads=1)
+        request = json.loads(REQUEST)
+        # Rejected before any model is loaded.
+        with laya.Engine.open_router(route(), threads=1) as plain, \
+                laya.Engine.open_router(route(auto={'english': 'a', 'default': 'a'}), threads=1) as auto:
+            for engine, extra in ((plain, {'model': 'auto'}), (auto, {'lang': 'en'}),
+                                  (auto, {'model': 'a', 'lang': 'en'}), (auto, {'model': 'auto', 'lang': ''})):
+                with self.assertRaises(laya.LayaError) as caught:
+                    engine.execute(dict(request, **extra))
+                self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT, extra)
+
     def test_close_is_idempotent(self):
         router = laya.Engine.open_router({'models': {'unused': __file__}}, threads=1)
         router.close()
@@ -113,6 +135,9 @@ class RealModel(unittest.TestCase):
         answer = self.baseline['answers']['refund']
         self.assertIn('answer_confidence', answer)
         self.assertIn('confidence', answer)
+        choice = self.engine.execute(CHOICE)['answers']['kind']
+        self.assertEqual(choice['answer_confidence'], max(choice['probabilities'].values()))
+        self.assertTrue(0 <= choice['confidence'] <= 1)
         self.assertEqual(engine.execute(REQUEST), self.baseline)
 
     def test_open_options(self):
@@ -153,6 +178,11 @@ class RealModel(unittest.TestCase):
         request = json.loads(REQUEST)
         hot = self.engine.execute(dict(request, temperatures={'noul': 3.0}))
         self.assertIn('answers', hot)
+        # "noul" alone has no effect: the model defines "noul.2".
+        base = self.baseline['answers']['refund']['noul']
+        warm = self.engine.execute(dict(request, temperatures={'noul.2': 4.0}))['answers']['refund']['noul']
+        self.assertNotEqual(warm, base)
+        self.assertEqual(hot, self.baseline)
         with self.assertRaises(laya.LayaError) as caught:
             self.engine.execute(dict(request, temperatures={'noul': 0}))
         self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
@@ -177,6 +207,18 @@ class RealModel(unittest.TestCase):
         with self.assertRaises(laya.EngineClosedError):
             engine.execute(REQUEST)
         engine.close()
+
+    def test_router_auto_routes_by_language(self):
+        config = {'models': {'en': MODEL, 'ml': MODEL}, 'max_loaded': 2, 'auto': {'english': 'en', 'default': 'ml'}}
+        english = 'I was charged twice for my subscription this month, so please refund me.'
+        with laya.Engine.open_router(config, threads=2) as router:
+            for state, extra, model, routing in (
+                    (english, {}, 'en', {'reason': 'english_text'}),
+                    ('Пожалуйста, верните мне деньги за подписку.', {}, 'ml', {'reason': 'non_latin_script'}),
+                    (english, {'lang': 'fr'}, 'ml', {'reason': 'lang'})):
+                result = router.execute(dict(json.loads(REQUEST), state=state, model='auto', **extra))
+                self.assertEqual(result['model'], model)
+                self.assertEqual(result['usage']['routing']['reason'], routing['reason'])
 
     def test_router(self):
         with laya.Engine.open_router({'models': {'english': MODEL}, 'max_loaded': 1}, threads=2) as router:

@@ -229,7 +229,8 @@ class Engine:
             if self._closing:
                 raise EngineClosedError()
             self._active += 1
-        self._local.depth = getattr(self._local, 'depth', 0) + 1
+            # Counted under the lock so no asynchronous exception can separate the two.
+            self._local.depth = getattr(self._local, 'depth', 0) + 1
 
     def _leave(self):
         self._local.depth -= 1
@@ -309,9 +310,9 @@ class Engine:
             options.on_event = callback
         result, error = ctypes.c_void_p(), ctypes.c_void_p()
         self._enter()
-        for token in tokens:
-            token._attach(flag)
-        try:
+        try:  # attach inside the try so a failure still leaves the count
+            for token in tokens:
+                token._attach(flag)
             status = lib.dtl_execute(self._handle, payload, ctypes.byref(options),
                                      ctypes.byref(result), ctypes.byref(error))
         finally:

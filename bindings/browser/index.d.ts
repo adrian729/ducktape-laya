@@ -1,5 +1,5 @@
 import type { Overflow, Request, StructuredRequest, Result, StructuredResult, ExecuteOptions, RuntimeInfo } from './protocol.js';
-export type { Json, Question, Answer, Request, Result, Routing, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, ExecuteOptions, RuntimeInfo, LayaError } from './protocol.js';
+export type { Json, Question, Answer, Window, Overflow, Usage, Request, Result, Routing, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, ExecuteOptions, RuntimeInfo, LayaError } from './protocol.js';
 /** contextTokens/overflow/temperatures override the open options for this route only. */
 export interface ModelAsset { url: string; sha256?: string; contextTokens?: number; overflow?: Overflow; temperatures?: Record<string, number> }
 export interface BrowserOptions {

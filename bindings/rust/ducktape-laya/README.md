@@ -39,7 +39,7 @@ match engine.execute_with(request, options) {
 - `Config::overflow` sets the default policy for prompts over the limit: `"reject"` (default), `"truncate_end"`, `"truncate_start"` or `"scan"`; a request's own `overflow` wins. The library validates the name.
 - `Engine::open_router` opens a lazy multi-model registry; requests on a router must name a route in `model`, or send `"model": "auto"` when the router JSON has `"auto": {"english": "en", "default": "ml"}`, to choose by the state's language (`"auto"` cannot be a route ID). The same `execute` and `execute_with` calls serve both. A route may carry its own config in the router JSON.
 - Requests are plain JSON; per-request `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` need no extra API.
-- Opening checks that the library speaks C ABI 2 and fails with `UNSUPPORTED_PLATFORM` otherwise; 0.2 crates need the 0.2 native library (`libducktape_laya.so.1`).
+- 0.2 crates need the 0.2 native library: the program links against `libducktape_laya.so.1` and its `DUCKTAPE_LAYA_2` symbols, so with only the 0.1.0 library (`libducktape_laya.so.0`) it fails to start. Opening also checks `dtl_abi_version()` and fails with `UNSUPPORTED_PLATFORM` for any ABI but 2.
 - Calls are blocking and the engine is `Send + Sync`; use your runtime's blocking pool from async code.
 - Errors are `Error { status, message }`. `status` is one of the constants in `ducktape_laya::status` (`INVALID_ARGUMENT`, `MODEL_ERROR`, `CANCELLED`, `DEADLINE_EXCEEDED`, ...).
 
@@ -57,3 +57,5 @@ export DUCKTAPE_LAYA_LIB_DIR=/path/to/ducktape-laya/build
 export LD_LIBRARY_PATH="$DUCKTAPE_LAYA_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cargo build
 ```
+
+`examples/decide.rs` runs one request from standard input: `cargo run --example decide -- /path/to/Laya-Q8_0.gguf < request.json` in this crate's directory, with the same variables set.

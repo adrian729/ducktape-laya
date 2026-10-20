@@ -7,10 +7,18 @@ const exitedError = (message, status) => Object.assign(new Error(message), { cod
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
 // JSON.stringify escapes lone surrogates instead of failing, which the native
 // side would then silently replace; reject them before serializing.
-const wellFormedJson = (value, what) => JSON.stringify(value, (key, item) => {
-  if (!key.isWellFormed() || (typeof item === 'string' && !item.isWellFormed())) throw invalid(TypeError, `${what} is not valid Unicode`);
-  return item;
-});
+const wellFormedJson = (value, what) => {
+  try {
+    return JSON.stringify(value, (key, item) => {
+      if (!key.isWellFormed() || (typeof item === 'string' && !item.isWellFormed())) throw invalid(TypeError, `${what} is not valid Unicode`);
+      return item;
+    });
+  } catch (error) {
+    // Circular structures, BigInt values and throwing toJSON/getters are argument errors.
+    if (error && typeof error === 'object' && error.status === undefined) error.status = 1;
+    throw error;
+  }
+};
 export const Status = Object.freeze({ OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
 const closedError = () => Object.assign(new Error('Laya is closing or closed'), { code: 'ERR_LAYA_CLOSED' });
 export class Laya {
@@ -73,7 +81,8 @@ export class Laya {
       const worker = new Worker(options.workerUrl || new URL('./worker.mjs', import.meta.url), { type: 'module' });
       const engine = new Laya(internal, worker, maxPending, onDiagnostic);
       const abort = () => engine.#fail(new DOMException('Initialization aborted', 'AbortError'));
-      const timer = setTimeout(() => engine.#fail(new Error('Laya initialization timed out')), initializationTimeoutMs);
+      // status 6 (DEADLINE_EXCEEDED), like request deadlines; browser errors otherwise use codes only for lifecycle failures.
+      const timer = setTimeout(() => engine.#fail(Object.assign(new Error('Laya initialization timed out'), { status: 6 })), initializationTimeoutMs);
       try {
         signal?.addEventListener('abort', abort, { once: true });
         // Option getters/URL coercion can run caller code before registration.
@@ -99,7 +108,8 @@ export class Laya {
     const id = ++this.#next;
     // Shared cancellation is optional: ordinary pages still run without isolation.
     const flag = globalThis.crossOriginIsolated && typeof SharedArrayBuffer === 'function' ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
-    const deadline = timeoutMs ? performance.timeOrigin + performance.now() + timeoutMs : 0;
+    // Wall-clock milliseconds: the page and worker realms have different performance.now() origins.
+    const deadline = timeoutMs ? Date.now() + timeoutMs : 0;
     return new Promise((resolve, reject) => {
       let timer;
       const stop = status => {

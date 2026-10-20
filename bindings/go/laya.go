@@ -55,6 +55,7 @@ import (
 
 // Native status codes (dtl_status).
 const (
+	StatusOK                  = 0
 	StatusInvalidArgument     = 1
 	StatusModelError          = 2
 	StatusInferenceError      = 3
@@ -228,7 +229,8 @@ func Open(modelPath string, config *Config) (*Engine, error) {
 
 // OpenRouter opens a bounded, lazy local model registry described by
 // routerJSON (see docs/API.md). config applies to every route; a route's own
-// config overrides it key by key. Requests must name a route in "model".
+// config overrides it key by key. Requests must name a route in "model", or
+// use "model": "auto" when routerJSON has an "auto" config.
 func OpenRouter(routerJSON string, config *Config) (*Engine, error) {
 	return openNative(routerJSON, config, true, "Native router returned null")
 }

@@ -179,6 +179,135 @@ public class EngineTests
     }
 
     [Fact]
+    public async Task PendingDisposeFailsNewCallsFast()
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            var engine = LayaEngine.OpenRouter(Config(("unused", file)), One);
+            Task? closer = null;
+            var failedFast = false;
+            var options = new LayaCallOptions
+            {
+                OnEvent = _ =>
+                {
+                    if (closer is not null) return;
+                    // Dispose from another thread blocks until this call finishes; calls made from other
+                    // threads meanwhile must fail instead of queueing behind it (this callback waits for them).
+                    closer = Task.Run(engine.Dispose);
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (!failedFast && DateTime.UtcNow < deadline)
+                    {
+                        var probe = Task.Run(() =>
+                        {
+                            try { engine.Execute("{}"); return false; }
+                            catch (ObjectDisposedException) { return true; }
+                            catch (LayaException) { return false; }
+                        });
+#pragma warning disable xUnit1031 // the callback must block on the probe
+                        Assert.True(probe.Wait(TimeSpan.FromSeconds(10)), "a new call blocked behind the pending Dispose");
+                        failedFast = probe.Result;
+#pragma warning restore xUnit1031
+                    }
+                }
+            };
+            Assert.Equal(1, Assert.Throws<LayaException>(() => engine.Execute("{}", options)).Status);
+            Assert.True(failedFast);
+            await closer!.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Throws<ObjectDisposedException>(() => engine.Execute("{}"));
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public void ConfigRejectsInvalidUnicode()
+    {
+        const string lone = "a\ud800b";
+        foreach (var config in new[]
+        {
+            new LayaConfig { Overflow = lone },
+            new LayaConfig { Temperatures = new Dictionary<string, double> { [lone] = 1 } },
+        })
+        {
+            var e = Assert.Throws<LayaException>(() => LayaEngine.Open("missing.gguf", config));
+            Assert.Equal(1, e.Status);
+            Assert.Equal("config is not valid Unicode", e.Message);
+            Assert.Equal("config is not valid Unicode", Assert.Throws<LayaException>(() => LayaEngine.OpenRouter("{}", config)).Message);
+        }
+    }
+
+    [Fact]
+    public void RouterAutoConfigIsValidated()
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            var models = "\"models\":{\"a\":" + System.Text.Json.JsonSerializer.Serialize(file) + "}";
+            foreach (var (auto, text) in new[]
+            {
+                ("{\"english\":\"a\"}", "auto.default must name a route"),
+                ("{\"english\":\"zz\",\"default\":\"a\"}", "auto.english must name a route"),
+                ("[]", "auto must be an object"),
+                ("{\"english\":\"a\",\"default\":\"a\",\"x\":\"a\"}", "auto: unsupported key x"),
+            })
+            {
+                var e = Assert.Throws<LayaException>(() => LayaEngine.OpenRouter("{" + models + ",\"auto\":" + auto + "}", One));
+                Assert.Equal(1, e.Status);
+                Assert.Contains(text, e.Message);
+            }
+            using var plain = LayaEngine.OpenRouter("{" + models + "}", One);
+            var noAuto = Assert.Throws<LayaException>(() => plain.Execute(WithKey(Primitive, "model", "auto")));
+            Assert.Equal(1, noAuto.Status);
+            Assert.Contains("requires an \"auto\" router config", noAuto.Message);
+            var lang = Assert.Throws<LayaException>(() => plain.Execute(WithRaw(WithKey(Primitive, "model", "a"), "\"lang\":\"en\"")));
+            Assert.Equal(1, lang.Status);
+            Assert.Contains("lang", lang.Message);
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public void RouterAutoRoutesByLanguage()
+    {
+        if (Model is not { } path) return;
+        var q = Quote(path);
+        var json = "{\"models\":{\"en\":\"" + q + "\",\"ml\":\"" + q + "\"},\"max_loaded\":1,\"auto\":{\"english\":\"en\",\"default\":\"ml\"}}";
+        using var router = LayaEngine.OpenRouter(json, Two);
+        string Ask(string state, string extra = "")
+        {
+            var request = "{\"model\":\"auto\"," + extra + "\"state\":" + System.Text.Json.JsonSerializer.Serialize(state) + "," + Primitive[(Primitive.IndexOf("\"questions\"", StringComparison.Ordinal))..];
+            return router.Execute(request);
+        }
+        var english = Ask("I was charged twice for my subscription this month and I would like my money back please.");
+        Assert.Contains("\"model\":\"en\"", english);
+        Assert.Contains("\"reason\":\"english_text\"", english);
+        var script = Ask("\u6211\u8fd9\u4e2a\u6708\u7684\u8ba2\u9605\u88ab\u6263\u4e86\u4e24\u6b21\u8d39\u7528\uff0c\u8bf7\u9000\u6b3e");
+        Assert.Contains("\"model\":\"ml\"", script);
+        Assert.Contains("\"reason\":\"non_latin_script\"", script);
+        var forced = Ask("I was charged twice for my subscription this month and I would like my money back please.", "\"lang\":\"fr\",");
+        Assert.Contains("\"model\":\"ml\"", forced);
+        Assert.Contains("\"reason\":\"lang\"", forced);
+    }
+
+    [Fact]
+    public void TemperatureOverrideChangesProbability()
+    {
+        if (Model is not { } path) return;
+        using var engine = LayaEngine.Open(path, Two);
+        static double Noul(LayaEngine e, string request)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(e.Execute(request));
+            return doc.RootElement.GetProperty("answers").GetProperty("refund").GetProperty("noul").GetDouble();
+        }
+        var baseline = Noul(engine, Primitive);
+        // The model defines noul.2, so only that key has an effect; plain "noul" is shadowed.
+        Assert.NotEqual(baseline, Noul(engine, WithRaw(Primitive, "\"temperatures\":{\"noul.2\":4.0}")));
+        Assert.Equal(baseline, Noul(engine, Primitive));
+        using var hot = LayaEngine.Open(path, new LayaConfig { Threads = 2, Temperatures = new Dictionary<string, double> { ["noul.2"] = 4.0 } });
+        Assert.NotEqual(baseline, Noul(hot, Primitive));
+    }
+
+    [Fact]
     public void InvalidTimeoutIsRejected()
     {
         var file = Path.GetTempFileName();

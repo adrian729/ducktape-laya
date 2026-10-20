@@ -50,7 +50,7 @@ try {
 | `maxModelBytes` | Total model bytes fetched, default 1 GiB |
 | `maxLoaded` | Router only: models kept loaded, 1–4, default 1 |
 | `auto` | Router only: `{ english, default }` routes for `model: 'auto'` |
-| `initializationTimeoutMs` | 1–86400000, default 120000 per backend attempt |
+| `initializationTimeoutMs` | 1–86400000, default 120000 per backend attempt; expiry rejects with `status` 6 |
 | `signal` | Aborts initialization |
 | `onDiagnostic` | Receives low-level runtime text, otherwise suppressed |
 | `moduleUrl`, `wasmUrl`, `webgpuModuleUrl`, `webgpuWasmUrl`, `workerUrl` | Override asset locations |
@@ -61,7 +61,7 @@ Router requests name a route in `model`, or send `model: 'auto'` (with an option
 
 ## Executing
 
-`engine.execute(request, options)` takes one request (object or JSON string) or an array of up to 32, and resolves to parsed results. Call options are `signal`, `timeoutMs` (0–86400000, counted from enqueue), `onEvent` and `requestId`, as in the [Node package](https://www.npmjs.com/package/ducktape-laya). After an abort or deadline settles a call, its `onEvent` receives no more events. `await engine.info()` returns runtime and model diagnostics.
+`engine.execute(request, options)` takes one request (object or JSON string) or an array of up to 32, and resolves to parsed results. Requests are strict; besides `state` and `questions` or `schema`, they may set `max_tokens`, `temperatures`, `overflow`, `max_windows`, `boolean_threshold` (with `schema`), and on a router `model` and `lang`. Request objects are serialized with `JSON.stringify`, which reorders integer-like keys and writes `149.0` as `149`; both can change the prompt and the results, so pass a JSON string when the literal text matters. Call options are `signal`, `timeoutMs` (0–86400000, counted from enqueue), `onEvent` and `requestId`, as in the [Node package](https://www.npmjs.com/package/ducktape-laya). After an abort or deadline settles a call, its `onEvent` receives no more events. `await engine.info()` returns runtime and model diagnostics.
 
 ## Errors and closing
 
