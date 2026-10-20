@@ -150,6 +150,19 @@ struct backend::impl {
         ctx.reset(llama_init_from_model(model.get(), cp));
         if (!ctx) throw failure(DTL_MODEL_ERROR, "Could not create CPU inference context");
     }
+    // The last state tokenized, reused while consecutive questions share it.
+    std::string cached_state_text;
+    std::vector<llama_token> cached_state_tokens;
+    void tokenize_into(std::vector<llama_token> &out, std::string_view text) const {
+        int n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), nullptr, 0, false, true);
+        if (n == 0) return;
+        if (n > 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
+        const size_t at = out.size();
+        out.resize(at - n);
+        n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), out.data() + at, -n, false, true);
+        if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
+        out.resize(at + n);
+    }
     void prepare(question &q, const json &state) {
         if (q.overflow.empty()) q.overflow = "reject";
         if (q.options.size() == 1) return; // answered without inference; uses no tokens
@@ -165,6 +178,11 @@ struct backend::impl {
         as_text(input["instructions"]);
         for (auto &option : input["options"]) as_text(option["description"]);
         sanitize(input, marker_text);
+        // The state sits between two separators, so its tokens do not depend on the
+        // question: it is tokenized on its own, once for all questions sharing it.
+        const bool separate_state = input["state"].is_string();
+        std::string state_text;
+        if (separate_state) { state_text = input["state"].get<std::string>(); input["state"] = ""; }
         jinja::context jc(source);
         jinja::global_from_json(jc, common_json::parse(input.dump()), false);
         jinja::runtime runtime(jc);
@@ -177,16 +195,7 @@ struct backend::impl {
         // would drop whitespace ending an option. After sanitizing, the mask text
         // appears only where the template put it.
         std::vector<llama_token> tokens;
-        auto append = [&](std::string_view text) {
-            int n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), nullptr, 0, false, true);
-            if (n == 0) return;
-            if (n > 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-            const size_t at = tokens.size();
-            tokens.resize(at - n);
-            n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), tokens.data() + at, -n, false, true);
-            if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-            tokens.resize(at + n);
-        };
+        auto append = [&](std::string_view text) { tokenize_into(tokens, text); };
         for (size_t at = 0;;) {
             const size_t next = rendered.find(marker_text, at);
             append(std::string_view(rendered).substr(at, next == std::string::npos ? std::string::npos : next - at));
@@ -234,10 +243,22 @@ struct backend::impl {
         std::vector<size_t> head_markers;
         for (const auto &o : options) { head_markers.push_back(head.size()); head.insert(head.end(), o.begin(), o.end()); }
         head.push_back(sep);
-        const std::vector<llama_token> state_tokens(tokens.begin() + opts_end + 1, tokens.end() - 1);
+        require(!separate_state || opts_end + 2 == tokens.size(), "Invalid decision prompt layout");
+        if (separate_state && state_text != cached_state_text) {
+            cached_state_tokens.clear();
+            tokenize_into(cached_state_tokens, state_text);
+            cached_state_text = std::move(state_text);
+        }
+        const std::vector<llama_token> state_tokens = separate_state ? cached_state_tokens
+            : std::vector<llama_token>(tokens.begin() + opts_end + 1, tokens.end() - 1);
         prepared.state_tokens = state_tokens.size();
         prepared.head_shortened = head_cut;
-        const size_t room = limit > head.size() + 1 ? limit - head.size() - 1 : 0;
+        // The question, options and final separator must fit on their own, even with an
+        // empty state; otherwise a window would exceed the context.
+        require(head.size() + 1 <= limit,
+                q.id + ": the question and options need " + std::to_string(head.size() + 1) + " tokens, over the " +
+                std::to_string(limit) + "-token limit");
+        const size_t room = limit - head.size() - 1;
         if (reject) require(state_tokens.size() <= room, q.id + ": prompt exceeds the " + std::to_string(limit) + "-token limit");
         require(room > 0 || state_tokens.empty(),
                 q.id + ": the question and options leave no room for the state within " + std::to_string(limit) + " tokens");

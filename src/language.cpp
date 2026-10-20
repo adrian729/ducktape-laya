@@ -6,7 +6,7 @@
 // the original Laya's laya/lang.py (Apache-2.0, copyright the Laya authors,
 // https://github.com/NandhaKishorM/laya at ffc1420); its finer heuristics for
 // naming Latin-script languages are not ported. Agreement with its routing
-// cases is checked by tests/language-routing.py.
+// cases is checked by tests/language.cpp (ctest language-routing).
 #include "language.hpp"
 #include <algorithm>
 #include <array>
@@ -185,12 +185,13 @@ bool word_char(char32_t c) {
     return latin_letter(c) || non_latin_script(c) || (c >= '0' && c <= '9') || c == '_';
 }
 char32_t lower(char32_t c) {
+    if (c == 0x130) return 'i'; // İ: Python lowercases it to i plus a combining dot
+    if (c == 0x178) return 0xFF;
+    if (c == 0x18F) return 0x259; // Ə
     if ((c >= 'A' && c <= 'Z') || (c >= 0xC0 && c <= 0xDE && c != 0xD7)) return c + 0x20;
     if ((c >= 0x100 && c <= 0x137) || (c >= 0x14A && c <= 0x177) || (c >= 0x218 && c <= 0x21B))
         return c % 2 ? c : c + 1;
     if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) return c % 2 ? c + 1 : c;
-    if (c == 0x130) return 'i'; // İ: Python lowercases it to i plus a combining dot
-    if (c == 0x178) return 0xFF;
     return c;
 }
 std::u32string decode(std::string_view s) {

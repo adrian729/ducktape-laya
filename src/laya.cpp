@@ -133,8 +133,11 @@ dtl::temperature_map temperatures(const json &value, const std::string &where) {
         require((type == "choice" || type == "score" || type == "noul") &&
                 (dot == std::string::npos || bucket == "2" || bucket == "3_5" || bucket == "6_10" || bucket == "11"),
                 where + ": unsupported key " + key);
-        require(t.is_number() && std::isfinite(t.get<double>()) && t.get<double>() > 0, where + "." + key + " must be > 0");
-        out[key] = t.get<float>();
+        // Checked after narrowing to the float the engine uses: 1e-50 or 1e39 would
+        // otherwise pass as a double and become 0 or infinity.
+        const float temperature = t.is_number() ? t.get<float>() : 0.0f;
+        require(std::isfinite(temperature) && temperature > 0, where + "." + key + " must be > 0 and fit a float");
+        out[key] = temperature;
     }
     return out;
 }
@@ -254,10 +257,11 @@ std::vector<planned> plans(const json &body, bool routed) {
 struct model_engine {
     dtl::backend runtime;
     std::mutex mutex;
-    std::string overflow;  // default policy for requests that don't name one
-    model_engine(const char *path, const dtl::engine_config &config) : runtime(path, config), overflow(config.overflow) {}
-    void prepare(question &q, const json &state) {
-        if (q.overflow.empty()) q.overflow = overflow;
+    explicit model_engine(const char *path, const dtl::engine_config &config) : runtime(path, config) {}
+    // default_overflow applies to questions whose request names no policy; it comes from
+    // the engine's or the route's config, so routes sharing a loaded model keep their own.
+    void prepare(question &q, const json &state, const std::string &default_overflow) {
+        if (q.overflow.empty()) q.overflow = default_overflow;
         runtime.prepare(q, state);
     }
 };
@@ -372,6 +376,7 @@ struct router_state {
 };
 struct dtl_engine {
     std::unique_ptr<model_engine> single;
+    std::string overflow; // a single model's default policy
     std::unique_ptr<router_state> router;
 };
 extern "C" {
@@ -383,6 +388,7 @@ dtl_status dtl_open(const char *path, const char *config_json, dtl_engine **out,
         auto config = engine_config(optional_json(config_json));
         auto engine = std::make_unique<dtl_engine>();
         engine->single = load_model(path, config);
+        engine->overflow = config.overflow;
         *out = engine.release();
     });
 }
@@ -419,7 +425,7 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
                 throw failure(DTL_MODEL_ERROR, "Model path is not a local regular file: " + id);
             router_state::route route{canonical.string(), {}, engine_config(config, shared)};
             json key = {{"path", route.path}, {"threads", route.config.threads}, {"context_tokens", route.config.context_tokens},
-                        {"temperatures", route.config.temperatures}};  // overflow is applied per request, not per model
+                        {"temperatures", route.config.temperatures}};  // overflow is applied per call, not per loaded model
             route.cache_key = key.dump();
             r->routes[id] = std::move(route);
         }
@@ -466,7 +472,7 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
         if (!routed) {
             auto &single = *engine->single;
             auto lock = control.lock(single.mutex);
-            for (auto &p : work) for (auto &q : p.questions) { control.check(); single.prepare(q, p.body["state"]); }
+            for (auto &p : work) for (auto &q : p.questions) { control.check(); single.prepare(q, p.body["state"], engine->overflow); }
             for (auto &p : work) results.push_back(evaluate(single, p, control));
         } else {
             auto &router = *engine->router;
@@ -499,8 +505,9 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
                 auto &p = work[i];
                 const auto &id = chosen[i].first;
                 control.check();
-                auto &model = router.load(router.routes.at(id));
-                for (auto &q : p.questions) { control.check(); model.prepare(q, p.body["state"]); }
+                const auto &route = router.routes.at(id);
+                auto &model = router.load(route);
+                for (auto &q : p.questions) { control.check(); model.prepare(q, p.body["state"], route.config.overflow); }
                 auto answer = evaluate(model, p, control); answer["model"] = id;
                 if (!chosen[i].second.is_null()) answer["usage"]["routing"] = chosen[i].second;
                 results.push_back(std::move(answer));
