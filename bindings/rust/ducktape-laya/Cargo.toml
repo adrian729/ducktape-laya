@@ -1,12 +1,12 @@
 [package]
 name = "ducktape-laya"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "Embedded Laya GGUF decisions through a shared native C ABI"
 include = ["src/**", "build.rs", "Cargo.toml", "LICENSE", "README.md"]
 [dependencies]
-ducktape-laya-sys = { path = "../ducktape-laya-sys", version = "0.1.0" }
+ducktape-laya-sys = { path = "../ducktape-laya-sys", version = "0.2.0" }
 
 [dev-dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }

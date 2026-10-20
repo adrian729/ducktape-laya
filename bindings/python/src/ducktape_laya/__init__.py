@@ -21,7 +21,7 @@ import threading
 from . import _native
 
 __all__ = ['CancelToken', 'Engine', 'EngineClosedError', 'LayaError', 'Status', 'runtime_info']
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 
 class Status(enum.IntEnum):
@@ -212,12 +212,15 @@ class Engine:
         """Open a bounded registry of local models.
 
         ``config`` is a dict or JSON string:
-        ``{"models": {"id": "path.gguf" | {"path": ..., "config": {...}}}, "max_loaded": 1}``.
+        ``{"models": {"id": "path.gguf" | {"path": ..., "config": {...}}}, "max_loaded": 1,
+        "auto": {"english": "id", "default": "id"}}`` (``auto`` is optional).
+        Requests name a route in ``"model"``, or send ``"model": "auto"`` (with an
+        optional ``"lang"``) to choose by language; ``"auto"`` cannot be a route ID.
         The open options apply to every route; a route's own ``config`` overrides
         them key by key.
         """
         lib = _library()
-        text = config if isinstance(config, str) else json.dumps(config, ensure_ascii=False)
+        text = config if isinstance(config, str) else json.dumps(config, ensure_ascii=False, allow_nan=False)
         return cls._create(lib, True, _encode(text, 'router config'),
                            _open_config(threads, context_tokens, temperatures, overflow))
 
@@ -250,7 +253,7 @@ class Engine:
         """One primitive or structured request, or a list of up to 32 requests.
 
         ``on_event(event)`` receives start/end/error events on the thread running
-        the call. ``timeout`` is in seconds (``None`` for no deadline; status 6 when
+        the call. ``timeout`` is in seconds (``None`` or 0 for no deadline; status 6 when
         it expires). ``cancel`` is a ``CancelToken``; cancelling it stops the call
         at the next safe point with status 5.
         """
@@ -283,10 +286,9 @@ class Engine:
         lib = self._lib
         options = lib.dtl_default_call_options()
         if timeout is not None:
-            milliseconds = math.ceil(timeout * 1000) if math.isfinite(timeout) else 0
-            if not 1 <= milliseconds <= 86400000:
-                raise ValueError('timeout must be positive and at most 86400 seconds')
-            options.timeout_ms = milliseconds
+            if not math.isfinite(timeout) or not 0 <= timeout <= 86400:
+                raise ValueError('timeout must be 0..86400 seconds (0 or None for no deadline)')
+            options.timeout_ms = math.ceil(timeout * 1000)  # 0 means no deadline
         tokens = [token for token in (cancel if isinstance(cancel, tuple) else (cancel,)) if token is not None]
         if not all(isinstance(token, CancelToken) for token in tokens):
             raise TypeError('cancel must be a CancelToken')

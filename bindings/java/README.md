@@ -29,7 +29,7 @@ Laya.open("Laya-Q8_0.gguf", Config.none().withThreads(4)).use { laya ->
 }
 ```
 
-`Laya.open(path)` and `Laya.openRouter(routerJson)` use the library defaults. `Laya.open(path, config)` and `Laya.openRouter(routerJson, config)` take an immutable `Config` (`Config.none().withThreads(n).withContextTokens(n).withTemperatures(map)`) that is serialized to the native config JSON; unset fields are omitted and keys are written in a fixed order. `threads` must be 0..256, `contextTokens` positive and temperatures finite and above 0 (otherwise `IllegalArgumentException`); the library validates the rest (unknown temperature keys, context size limits) and reports status 1. A router opens a bounded local model registry (requests carry `"model": "id"`); the `Config` applies to every route and a route's own `config` overrides it key by key. There is one strict request contract (`execute`); per-request `"max_tokens"` and `"temperatures"` are plain request JSON keys. `info()` reports model metadata (`context_tokens`, `trained_context_tokens`, ...) for a single model and runtime information only for a router.
+`Laya.open(path)` and `Laya.openRouter(routerJson)` use the library defaults. `Laya.open(path, config)` and `Laya.openRouter(routerJson, config)` take an immutable `Config` (`Config.none().withThreads(n).withContextTokens(n).withOverflow(policy).withTemperatures(map)`) that is serialized to the native config JSON; unset fields are omitted and keys are written in a fixed order. `threads` must be 0..256, `contextTokens` positive and temperatures finite and above 0 (otherwise `IllegalArgumentException`); the library validates the rest (the overflow policy name, unknown temperature keys, context size limits) and reports status 1. `withOverflow` sets the default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan`; a request's own `overflow` wins. A router opens a bounded local model registry (requests carry `"model": "id"`, or `"model": "auto"` when the router JSON has `"auto": {"english": "en", "default": "ml"}`, to choose by the state's language; `"auto"` cannot be a route ID); the `Config` applies to every route and a route's own `config` overrides it key by key. There is one strict request contract (`execute`); per-request `"max_tokens"`, `"temperatures"`, `"overflow"`, `"max_windows"` and (with `"model": "auto"`) `"lang"` are plain request JSON keys. `info()` reports model metadata (`context_tokens`, `trained_context_tokens`, ...) for a single model and runtime information only for a router.
 
 A `Laya` is thread-safe. Native calls on one handle serialize, inference blocks the calling thread, and `close()` waits for in-flight calls and is idempotent; later calls throw `LayaClosedException` (a `LayaException`, status 1). Closed from inside its own event callback, `close()` returns at once and the handle is released when the running call finishes. A `Cleaner` releases the native handle if a `Laya` becomes unreachable without `close()`, but that is only a safety net: call `close()` (try-with-resources) for prompt release of model memory.
 
@@ -39,4 +39,13 @@ Cancellation: each call using a token gets a 4-byte native flag read by the libr
 
 Errors: `LayaException` with `status()` and constants such as `LayaException.CANCELLED`; `LayaClosedException` after `close()`; `UNSUPPORTED_PLATFORM` for load, platform or ABI failures. Arguments the binding validates itself throw standard exceptions: `IllegalArgumentException` for a bad timeout or thread count, `NullPointerException` for a null request, path or config. Inputs containing a NUL character are rejected with `LayaException` status 1 before reaching native code.
 
-Build and test without Maven: `bindings/java/build.sh` (set `LAYA_MODEL` to also run the real-model tests). A `pom.xml` is provided for Maven users.
+## From a checkout
+
+The binding is not on Maven Central yet. Build the native library (see the repository README), then build the jar without Maven:
+
+```sh
+bindings/java/build.sh            # compiles, writes bindings/java/target/ducktape-laya.jar and runs the tests
+bindings/java/build.sh --no-test  # jar only
+```
+
+`build.sh` needs JDK 22+ on `PATH` and uses `DUCKTAPE_LAYA_LIB_DIR`, defaulting to the checkout's `build` directory; set `LAYA_MODEL` to also run the real-model tests. Put the jar on your application's classpath and set `DUCKTAPE_LAYA_LIB_DIR` (or `-Dducktape.laya.library=/path/to/libducktape_laya.so`) when running, since this jar does not bundle the library. A `pom.xml` is provided for Maven users.

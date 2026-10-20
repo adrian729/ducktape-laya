@@ -15,13 +15,15 @@ class Laya {
   static async openRouter(config, options) {
     let text = config;
     if (typeof config !== 'string') {
-      try { text = JSON.stringify(config); }
+      try { text = wellFormedJson(config, 'router config'); }
       catch (error) { if (error && typeof error === 'object' && error.status === undefined) error.status = 1; throw error; }
     }
     return Laya.#open(text, options, true);
   }
   static async #open(modelPath, { threads, contextTokens, overflow, temperatures, maxPending = 16, addonPath } = {}, router) {
-    if (typeof modelPath !== 'string' || modelPath.includes('\0') || Buffer.byteLength(modelPath) > 1048576) throw invalid(TypeError, 'Invalid model path');
+    const what = router ? 'router config' : 'model path';
+    if (typeof modelPath !== 'string' || modelPath.includes('\0') || Buffer.byteLength(modelPath) > 1048576) throw invalid(TypeError, `Invalid ${what}`);
+    if (!modelPath.isWellFormed()) throw invalid(TypeError, `${what} is not valid Unicode`);
     const config = {};
     if (threads !== undefined) {
       if (!Number.isInteger(threads) || threads < 0 || threads > 256) throw invalid(RangeError, 'threads must be 0..256');
@@ -44,7 +46,7 @@ class Laya {
     }
     if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw invalid(RangeError, 'maxPending must be 1..1024');
     const worker = new Worker(path.join(__dirname, 'worker.cjs'), { workerData: {
-      modelPath, config: Object.keys(config).length ? JSON.stringify(config) : null, router, addonPath: resolveAddon(addonPath)
+      modelPath, config: Object.keys(config).length ? wellFormedJson(config, 'config') : null, router, addonPath: resolveAddon(addonPath)
     }});
     const engine = new Laya(internal, worker, maxPending);
     await new Promise((resolve, reject) => {
@@ -98,10 +100,12 @@ class Laya {
       const stop = status => {
         Atomics.compareExchange(cancellation, 0, 0, status);
         cleanup();
+        entry.onEvent = undefined; // the promise settles now; drop late events
         reject(Object.assign(new Error(status === 6 ? 'Request deadline exceeded' : 'Request cancelled'), { status }));
       };
       const abort = () => stop(5);
-      this.#pending.set(id, { resolve, reject, onEvent, cleanup, stop, kind });
+      const entry = { resolve, reject, onEvent, cleanup, stop, kind };
+      this.#pending.set(id, entry);
       signal?.addEventListener('abort', abort, { once: true });
       if (timeoutMs) timer = setTimeout(() => stop(6), timeoutMs);
       // Keep cancelled entries counted until the worker acknowledges them: an
@@ -119,7 +123,8 @@ class Laya {
     if (this.#closing) throw closedError();
     if (this.#pending.size >= this.#maxPending) throw queueFullError();
     // A JSON string preserves the caller's literal key order, including numeric labels.
-    const text = typeof request === 'string' ? request : JSON.stringify(request);
+    const text = typeof request === 'string' ? request : wellFormedJson(request, 'request');
+    if (typeof text === 'string' && !text.isWellFormed()) throw invalid(TypeError, 'request is not valid Unicode');
     if (typeof text !== 'string' || Buffer.byteLength(text) > 1048576 || text.includes('\0')) throw invalid(TypeError, 'Invalid or oversized request');
     return JSON.parse(await this.#send('execute', text, onEvent, { signal, timeoutMs, requestId }));
   }
@@ -145,5 +150,11 @@ const closedError = () => Object.assign(new Error('Engine is closing or closed')
 const queueFullError = () => Object.assign(new Error('Laya queue is full'), { code: 'ERR_LAYA_QUEUE_FULL' });
 const exitedError = message => Object.assign(new Error(message), { code: 'ERR_LAYA_WORKER_EXITED' });
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
+// JSON.stringify escapes lone surrogates instead of failing, which the native
+// side would then silently replace; reject them before serializing.
+const wellFormedJson = (value, what) => JSON.stringify(value, (key, item) => {
+  if (!key.isWellFormed() || (typeof item === 'string' && !item.isWellFormed())) throw invalid(TypeError, `${what} is not valid Unicode`);
+  return item;
+});
 const Status = Object.freeze({ OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
 module.exports = { Laya, Status };

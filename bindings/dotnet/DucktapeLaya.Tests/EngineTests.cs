@@ -21,6 +21,26 @@ public class EngineTests
     public void RejectsBadPath() => Assert.Throws<LayaException>(() => LayaEngine.Open("missing.gguf", Two));
 
     [Fact]
+    public void RejectsInvalidUnicode()
+    {
+        const string lone = "a\ud800b";
+        var e = Assert.Throws<LayaException>(() => LayaEngine.Open(lone, Two));
+        Assert.Equal(1, e.Status);
+        Assert.Contains("model path is not valid Unicode", e.Message);
+        Assert.Contains("router config is not valid Unicode", Assert.Throws<LayaException>(() => LayaEngine.OpenRouter("{\"models\":{\"x\":\"" + lone + "\"}}")).Message);
+        Assert.Equal(1, Assert.Throws<LayaException>(() => LayaEngine.Open("x", new LayaConfig { Temperatures = new Dictionary<string, double> { [lone] = 1 } })).Status);
+        var file = Path.GetTempFileName();
+        try
+        {
+            using var router = LayaEngine.OpenRouter("{\"models\":{\"x\":" + System.Text.Json.JsonSerializer.Serialize(file) + "}}");
+            var bad = Assert.Throws<LayaException>(() => router.Execute("{\"state\":\"" + lone + "\"}"));
+            Assert.Equal(1, bad.Status);
+            Assert.Equal("request is not valid Unicode", bad.Message);
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
     public void RejectsNul()
     {
         Assert.Equal(1, Assert.Throws<LayaException>(() => LayaEngine.Open("a\0b", Two)).Status);

@@ -28,7 +28,22 @@ out, err := engine.Execute(`{"state":"Please refund me.","schema":{"type":"objec
 Inference is blocking, so call it from goroutines. An `*Engine` is safe for concurrent use; native calls on one handle serialize.
 `Close` rejects new calls with `laya.ErrClosed` (status 1), waits for all in-flight calls, releases the handle, and is idempotent; concurrent `Close` calls all return after release. Never call `Close` from inside an `OnEvent` callback of the same engine, because it would wait for its own call and deadlock. Use the non-blocking `CloseDeferred()` there: it marks the engine closed and the last running call releases the handle.
 A finalizer releases the native handle if an `Engine` is dropped without `Close`; it is only a safety net, so still call `Close` for prompt release.
-`Open(path, config)` and `OpenRouter(routerJSON, config)` take an optional `*laya.Config` (nil means defaults; zero fields are omitted): `Threads` is 0 for automatic (capped at 4) or 1..256, `ContextTokens` is the prompt capacity (default 512, at most the model's trained length), and `Temperatures` overrides calibration temperatures such as `"choice.3_5"` or `"noul"` (finite and > 0). Invalid values fail with status 1. For a router the config applies to every route and a route's own `config` overrides it key by key. Requests accept optional `max_tokens` and `temperatures` keys; there is a single strict request contract (`Execute`), and unknown top-level keys are rejected.
+`Open(path, config)` and `OpenRouter(routerJSON, config)` take an optional `*laya.Config` (nil means defaults; zero fields are omitted): `Threads` is 0 for automatic (capped at 4) or 1..256, `ContextTokens` is the prompt capacity (default 512, at most the model's trained length), `Overflow` is the default policy for prompts over the limit (`"reject"` (default), `"truncate_end"`, `"truncate_start"` or `"scan"`; a request's own `overflow` wins), and `Temperatures` overrides calibration temperatures such as `"choice.3_5"` or `"noul"` (finite and > 0). Invalid values fail with status 1. For a router the config applies to every route and a route's own `config` overrides it key by key. Requests accept optional `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` keys; there is a single strict request contract (`Execute`), and unknown top-level keys are rejected.
 `ExecuteContext` returns an `*laya.Error` that matches `context.Canceled` (status 5) or `context.DeadlineExceeded` (status 6) with `errors.Is`; an already-done context returns at once with no native call. Deadlines beyond the native 24 hour maximum are enforced by the context watcher instead of being clamped.
 Cancellation is cooperative and returns no partial result. `CallOptions.OnEvent` receives events synchronously on the calling thread; panics in it are contained.
-`OpenRouter` opens a bounded lazy model registry (see `docs/API.md`). Errors are `*laya.Error` with a `Status` matching `ducktape_laya.h`.
+`OpenRouter` opens a bounded lazy model registry (see `docs/API.md`). Requests name a route in `"model"`; with `"auto": {"english": "en", "default": "ml"}` in the router JSON, `"model": "auto"` chooses the route by the state's language, and `"auto"` cannot be a route ID. Errors are `*laya.Error` with a `Status` matching `ducktape_laya.h`. `Open` and `OpenRouter` check that the library speaks C ABI 2 and fail with status 7 otherwise.
+
+## From a checkout
+
+The module is not tagged yet. Build the native library (see the repository README), then require the module from your own `go.mod` with a `replace` directive pointing at the checkout:
+
+```sh
+go mod edit -require=github.com/adrian729/ducktape-laya/bindings/go@v0.0.0 \
+  -replace=github.com/adrian729/ducktape-laya/bindings/go=/path/to/ducktape-laya/bindings/go
+export CGO_CFLAGS=-I/path/to/ducktape-laya/include
+export CGO_LDFLAGS=-L/path/to/ducktape-laya/build
+export LD_LIBRARY_PATH=/path/to/ducktape-laya/build
+go build ./...
+```
+
+To run the binding's own tests, use the same variables in `bindings/go` and set `LAYA_MODEL` for the real-model tests: `go test ./...`.

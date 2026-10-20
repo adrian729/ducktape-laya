@@ -45,7 +45,19 @@ fn check(status: i32, message: *mut c_char) -> Result<(), Error> {
     };
     Err(Error { status, message })
 }
+/// The bindings speak C ABI 2; refuse a library built for another version.
+fn check_abi() -> Result<(), Error> {
+    let version = unsafe { ffi::dtl_abi_version() };
+    if version == 2 {
+        return Ok(());
+    }
+    Err(Error {
+        status: status::UNSUPPORTED_PLATFORM,
+        message: format!("Native ducktape-laya ABI {version} is not supported (expected 2)"),
+    })
+}
 fn read_info(engine: *mut ffi::Engine) -> Result<String, Error> {
+    check_abi()?;
     let mut result = std::ptr::null_mut();
     let mut error = std::ptr::null_mut();
     let status = unsafe { ffi::dtl_info(engine, &mut result, &mut error) };
@@ -210,6 +222,7 @@ impl Engine {
         config: &Config,
         open: impl FnOnce(*const c_char, *mut *mut ffi::Engine, *mut *mut c_char) -> i32,
     ) -> Result<Self, Error> {
+        check_abi()?;
         let config = config.to_json()?;
         let mut raw = std::ptr::null_mut();
         let mut error = std::ptr::null_mut();

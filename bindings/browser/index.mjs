@@ -1,9 +1,16 @@
 const internal = Symbol('Laya');
+const overflows = ['reject', 'truncate_end', 'truncate_start', 'scan'];
 const bytes = text => new TextEncoder().encode(text).byteLength;
 const absolute = url => new URL(url, globalThis.location?.href).href;
 const queueFullError = () => Object.assign(new Error('Laya queue is full'), { code: 'ERR_LAYA_QUEUE_FULL' });
 const exitedError = (message, status) => Object.assign(new Error(message), { code: 'ERR_LAYA_WORKER_EXITED', ...(status === undefined ? {} : { status }) });
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
+// JSON.stringify escapes lone surrogates instead of failing, which the native
+// side would then silently replace; reject them before serializing.
+const wellFormedJson = (value, what) => JSON.stringify(value, (key, item) => {
+  if (!key.isWellFormed() || (typeof item === 'string' && !item.isWellFormed())) throw invalid(TypeError, `${what} is not valid Unicode`);
+  return item;
+});
 export const Status = Object.freeze({ OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
 const closedError = () => Object.assign(new Error('Laya is closing or closed'), { code: 'ERR_LAYA_CLOSED' });
 export class Laya {
@@ -39,7 +46,7 @@ export class Laya {
     if (!Number.isSafeInteger(maxModelBytes) || maxModelBytes < 1) throw invalid(RangeError, 'maxModelBytes must be positive');
     if (!Number.isInteger(initializationTimeoutMs) || initializationTimeoutMs < 1 || initializationTimeoutMs > 86400000) throw invalid(RangeError, 'initializationTimeoutMs must be 1..86400000');
     if (options.contextTokens !== undefined && (!Number.isSafeInteger(options.contextTokens) || options.contextTokens < 1)) throw invalid(RangeError, 'contextTokens must be a positive integer');
-    if (options.overflow !== undefined && !['reject', 'truncate_end', 'truncate_start', 'scan'].includes(options.overflow)) throw invalid(RangeError, 'overflow must be reject, truncate_end, truncate_start or scan');
+    if (options.overflow !== undefined && !overflows.includes(options.overflow)) throw invalid(RangeError, 'overflow must be reject, truncate_end, truncate_start or scan');
     const temperatureError = value => value !== undefined && (value === null || typeof value !== 'object' || Array.isArray(value) ||
       Object.values(value).some(t => typeof t !== 'number' || !Number.isFinite(t) || t <= 0));
     if (temperatureError(options.temperatures)) throw invalid(TypeError, 'temperatures must map names to finite positive numbers');
@@ -47,8 +54,10 @@ export class Laya {
     if (onDiagnostic !== undefined && typeof onDiagnostic !== 'function') throw invalid(TypeError, 'onDiagnostic must be a function');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
     if (signal?.aborted) throw new DOMException('Initialization aborted', 'AbortError');
+    wellFormedJson([options.models, options.modelUrl, options.temperatures, options.auto], 'config');
     const models = options.models && Object.fromEntries(Object.entries(options.models).map(([id, model]) => {
       if (!model || typeof model.url !== 'string' || !model.url) throw invalid(TypeError, 'Each model requires a URL');
+      if (model.overflow !== undefined && !overflows.includes(model.overflow)) throw invalid(RangeError, 'overflow must be reject, truncate_end, truncate_start or scan');
       return [id, { ...model, url: absolute(model.url) }];
     }));
     if (models && (Object.keys(models).length < 1 || Object.keys(models).length > 16)) throw invalid(RangeError, 'models must contain 1..16 entries');
@@ -96,12 +105,14 @@ export class Laya {
       const stop = status => {
         if (flag) Atomics.compareExchange(flag, 0, 0, status);
         cleanup();
+        entry.onEvent = undefined; // the promise settles now; drop late events
         this.#worker.postMessage({ kind: 'cancel', id, status });
         reject(Object.assign(new Error(status === 6 ? 'Request deadline exceeded' : 'Request cancelled'), { status }));
       };
       const abort = () => stop(5);
       const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
-      this.#pending.set(id, { resolve, reject, onEvent, cleanup, stop, kind });
+      const entry = { resolve, reject, onEvent, cleanup, stop, kind };
+      this.#pending.set(id, entry);
       if (timeoutMs) timer = setTimeout(() => stop(6), timeoutMs);
       signal?.addEventListener('abort', abort, { once: true });
       try { this.#worker.postMessage({ id, requestId, kind, request, observe: !!onEvent, options, flag, deadline }); }
@@ -116,7 +127,8 @@ export class Laya {
     if (onEvent !== undefined && typeof onEvent !== 'function') throw invalid(TypeError, 'onEvent must be a function');
     if (this.#closing) throw closedError();
     if (this.#dead) throw exitedError('Laya is closing or closed');
-    const text = typeof request === 'string' ? request : JSON.stringify(request);
+    const text = typeof request === 'string' ? request : wellFormedJson(request, 'request');
+    if (typeof text === 'string' && !text.isWellFormed()) throw invalid(TypeError, 'request is not valid Unicode');
     if (typeof text !== 'string' || bytes(text) > 1048576 || text.includes('\0')) throw invalid(TypeError, 'Invalid or oversized request');
     return JSON.parse(await this.#send('execute', text, onEvent, undefined, { signal, timeoutMs, requestId }));
   }

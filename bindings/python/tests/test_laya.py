@@ -62,6 +62,10 @@ class Basics(unittest.TestCase):
             laya.Engine.open_router({'models': {'unused': __file__}}, temperatures={'x': 'y'})
         self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
 
+    def test_router_config_rejects_nan(self):
+        with self.assertRaises(ValueError):
+            laya.Engine.open_router({'models': {'unused': __file__}, 'max_loaded': float('nan')})
+
     def test_close_is_idempotent(self):
         router = laya.Engine.open_router({'models': {'unused': __file__}}, threads=1)
         router.close()
@@ -195,8 +199,10 @@ class RealModel(unittest.TestCase):
         self.assertEqual(caught.exception.status, laya.Status.DEADLINE_EXCEEDED)
         self.assertEqual(engine.execute(REQUEST), self.baseline)
         self.assertEqual(engine.execute(REQUEST, cancel=laya.CancelToken()), self.baseline)
-        with self.assertRaises(ValueError):
-            engine.execute(REQUEST, timeout=0)
+        self.assertEqual(engine.execute(REQUEST, timeout=0), self.baseline)  # 0 means no deadline
+        for bad in (-1, float('inf'), float('nan'), 86401):
+            with self.assertRaises(ValueError):
+                engine.execute(REQUEST, timeout=bad)
         with self.assertRaises(TypeError):
             engine.execute(REQUEST, cancel=threading.Event())
         # Cancelled from another thread while the call runs (or is about to).

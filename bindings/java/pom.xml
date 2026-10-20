@@ -4,7 +4,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.adrian729</groupId>
   <artifactId>ducktape-laya</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <name>ducktape-laya</name>
   <description>Java binding for the ducktape-laya local Laya GGUF decision library (FFM API)</description>
   <properties>

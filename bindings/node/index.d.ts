@@ -41,11 +41,11 @@ export interface StructuredRequest { state: Json; schema: DecisionSchema; boolea
 export interface StructuredResult extends Result { values: Record<string, string | number | boolean> }
 export interface ObserverEvent { event: 'start' | 'end' | 'error'; request_id: number; status: number; elapsed_ms: number }
 export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; onEvent?: (event: ObserverEvent) => void | Promise<void> }
-/** `threads`, `contextTokens` and `temperatures` become the native open config; `contextTokens` is the prompt capacity (default 512, max the model's trained length). */
+/** `threads`, `contextTokens`, `overflow` and `temperatures` become the native open config; `contextTokens` is the prompt capacity (default 512, max the model's trained length). */
 export interface OpenOptions { threads?: number; contextTokens?: number; overflow?: Overflow; temperatures?: Record<string, number>; maxPending?: number; addonPath?: string }
 /** `requestId` (non-negative safe integer) is reported as `request_id` in events; defaults to a generated id. */
 export interface ExecuteOptions extends CallOptions { requestId?: number }
-export interface RouterRoute { path: string; config?: { threads?: number; context_tokens?: number; temperatures?: Record<string, number> } }
+export interface RouterRoute { path: string; config?: { threads?: number; context_tokens?: number; overflow?: Overflow; temperatures?: Record<string, number> } }
 export interface RouterConfig { models: Record<string, string | RouterRoute>; max_loaded?: number; auto?: AutoRoutes }
 /** Routes for `"model": "auto"`: confidently English text goes to `english`, everything else to `default`. */
 export interface AutoRoutes { english: string; default: string }

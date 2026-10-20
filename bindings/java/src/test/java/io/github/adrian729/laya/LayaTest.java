@@ -85,6 +85,22 @@ public final class LayaTest {
         eq(1, statusOf(() -> Laya.openRouter("{\0}", ONE)), "router NUL");
     }
 
+    static void rejectsInvalidUnicode() throws Exception {
+        String lone = "a\ud800b";
+        eq(1, statusOf(() -> Laya.open(lone, TWO)), "open lone surrogate");
+        eq(1, statusOf(() -> Laya.openRouter("{\"models\":{\"x\":\"" + lone + "\"}}", ONE)), "router lone surrogate");
+        eq(1, statusOf(() -> Laya.open("x", Config.none().withTemperatures(Map.of(lone, 1.0)))), "config lone surrogate");
+        Path file = Files.createTempFile("laya", ".gguf");
+        try (Laya router = Laya.openRouter("{\"models\":{\"x\":\"" + json(file.toString()) + "\"}}")) {
+            check(thrown(() -> router.execute("{\"state\":\"" + lone + "\"}")) instanceof LayaException e && e.status() == 1
+                && e.getMessage().equals("request is not valid Unicode"), "request lone surrogate");
+            // A valid surrogate pair is accepted (the library rejects the request for other reasons).
+            check(thrown(() -> router.execute("{\"state\":\"\uD83D\uDE00\"}")) instanceof LayaException e && !e.getMessage().contains("Unicode"), "pair");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
     @SuppressWarnings("try") // closes the resource inside its own callback on purpose
     static void containsObserverFailures() throws Exception {
         Path file = Files.createTempFile("laya", ".gguf");
@@ -231,6 +247,8 @@ public final class LayaTest {
         eq(86_400_000L, CallOptions.none().withTimeout(Duration.ofHours(24)).timeoutMillis(), "24h");
         check(thrown(() -> CallOptions.none().withTimeout(Duration.ofHours(24).plusNanos(1))) instanceof IllegalArgumentException, ">24h");
         check(thrown(() -> CallOptions.none().withTimeout(Duration.ofMillis(-1))) instanceof IllegalArgumentException, "negative");
+        check(thrown(() -> CallOptions.none().withRequestId(-1)) instanceof IllegalArgumentException, "requestId -1");
+        eq(Long.MAX_VALUE, CallOptions.none().withRequestId(Long.MAX_VALUE).requestId(), "requestId max");
         check(thrown(() -> Config.none().withThreads(-1)) instanceof IllegalArgumentException, "threads -1");
         check(thrown(() -> Config.none().withThreads(257)) instanceof IllegalArgumentException, "threads 257");
         check(thrown(() -> Config.none().withContextTokens(0)) instanceof IllegalArgumentException, "context 0");
@@ -321,8 +339,8 @@ public final class LayaTest {
             loadFailureChild();
             System.exit(0);
         }
-        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "configJson", "loadFailure"};
-        Case[] cases = {LayaTest::diagnostics, LayaTest::rejectsBadPath, LayaTest::rejectsNul,
+        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "configJson", "loadFailure"};
+        Case[] cases = {LayaTest::diagnostics, LayaTest::rejectsBadPath, LayaTest::rejectsNul, LayaTest::rejectsInvalidUnicode,
             LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::configJson, LayaTest::loadFailure};
         List<String> failed = new ArrayList<>();
         int ran = 0;

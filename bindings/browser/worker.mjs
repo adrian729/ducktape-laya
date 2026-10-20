@@ -28,7 +28,7 @@ async function asset(url, limit, expectedHash) {
 }
 async function call(name, request, job) {
   const out = runtime._malloc(4), error = runtime._malloc(4);
-  let control = 0;
+  let control = 0, text = 0;
   if (!out || !error) { if (out) runtime._free(out); if (error) runtime._free(error); throw fail('Out of WASM memory', 4); }
   runtime.HEAPU32[out >>> 2] = runtime.HEAPU32[error >>> 2] = 0;
   try {
@@ -38,6 +38,12 @@ async function call(name, request, job) {
       // on_event@24, event_user_data@28, should_cancel@32, cancel_user_data@36 (40 bytes).
       control = runtime._malloc(CALL_OPTIONS_SIZE);
       if (!control) throw fail('Out of WASM memory', 4);
+      // Requests (up to 1 MiB) go on the heap: a ccall string argument would take
+      // half of the 2 MiB stack the native call itself needs.
+      const length = runtime.lengthBytesUTF8(request) + 1;
+      text = runtime._malloc(length);
+      if (!text) throw fail('Out of WASM memory', 4);
+      runtime.stringToUTF8(request, text, length);
       active = job;
       const remaining = job.deadline ? Math.max(0, Math.ceil(job.deadline - performance.timeOrigin - performance.now())) : 0;
       if (job.deadline && !remaining && !job.status) job.status = 6;
@@ -45,14 +51,14 @@ async function call(name, request, job) {
       runtime.HEAPU32.set([CALL_OPTIONS_SIZE, 0, requestId >>> 0, Math.floor(requestId / 4294967296), remaining, 0,
         job.observe ? observer : 0, 0, cancellation, 0], control >>> 2);
     }
-    const status = await runtime.ccall(name, 'number', info ? ['number','number','number'] : ['number','string','number','number','number'],
-      info ? [handle, out, error] : [handle, request, control, out, error], { async: !info });
+    const status = await runtime.ccall(name, 'number', info ? ['number','number','number'] : ['number','number','number','number','number'],
+      info ? [handle, out, error] : [handle, text, control, out, error], { async: !info });
     const result = runtime.HEAPU32[out >>> 2], message = runtime.HEAPU32[error >>> 2];
     try {
       if (status) throw fail(message ? runtime.UTF8ToString(message) : 'Laya operation failed', status);
       return runtime.UTF8ToString(result);
     } finally { runtime._dtl_free(result); runtime._dtl_free(message); }
-  } finally { active = undefined; if (control) runtime._free(control); runtime._free(out); runtime._free(error); }
+  } finally { active = undefined; if (control) runtime._free(control); if (text) runtime._free(text); runtime._free(out); runtime._free(error); }
 }
 async function init(options) {
   if (options.backend === 'webgpu') {
@@ -112,6 +118,7 @@ async function init(options) {
     for (const [id, path] of Object.entries(models)) {
       const route = {};
       if (assets[id]?.contextTokens !== undefined) route.context_tokens = assets[id].contextTokens;
+      if (assets[id]?.overflow !== undefined) route.overflow = assets[id].overflow;
       if (assets[id]?.temperatures !== undefined) route.temperatures = assets[id].temperatures;
       routes[id] = Object.keys(route).length ? { path, config: route } : path;
     }

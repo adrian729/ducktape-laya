@@ -268,3 +268,32 @@ test('router per-route config overrides open options key by key', { skip: !proce
     await bad.execute({ ...request, model: 'ok' });
   } finally { await bad.close(); }
 });
+test('invalid Unicode is rejected instead of replaced', async () => {
+  const lone = 'a\ud800b';
+  await assert.rejects(Laya.open(lone), e => e.status === 1 && /model path is not valid Unicode/.test(e.message));
+  await assert.rejects(Laya.open('x', { temperatures: { [lone]: 1 } }), e => e.status === 1 && /not valid Unicode/.test(e.message));
+  await assert.rejects(Laya.openRouter({ models: { [lone]: __filename } }), e => e.status === 1 && /router config is not valid Unicode/.test(e.message));
+  await assert.rejects(Laya.openRouter({ models: { a: lone } }), e => e.status === 1 && /router config is not valid Unicode/.test(e.message));
+  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  try {
+    await assert.rejects(engine.execute({ state: lone, questions: {} }), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
+    await assert.rejects(engine.execute({ state: {}, questions: { [lone]: {} } }), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
+    await assert.rejects(engine.execute(`{"state":"${lone}"}`), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
+  } finally { await engine.close(); }
+});
+test('invalid router config names the router config', async () => {
+  await assert.rejects(Laya.openRouter('x\0'), /router config/);
+  await assert.rejects(Laya.open('x\0'), /model path/);
+});
+test('no onEvent delivery after the call settled', async () => {
+  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  try {
+    const events = [];
+    const controller = new AbortController();
+    const call = engine.execute({ state: {}, questions: { q: { type: 'bool', text: 'q' } }, model: 'unused' }, { signal: controller.signal, onEvent: event => { events.push(event); } });
+    controller.abort();
+    await assert.rejects(call, e => e.status === Status.CANCELLED);
+    await engine.close();
+    assert.deepEqual(events, []);
+  } finally { await engine.close(); }
+});
