@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     archive_tree(native, out / (native.name + '.tar.gz'), native.name, epoch)
     package = directory / 'npm'
     package.mkdir()
-    for name in ['package.json', 'index.cjs', 'index.d.ts', 'worker.cjs', 'resolve-addon.cjs']:
+    for name in ['package.json', 'README.md', 'index.cjs', 'index.d.ts', 'worker.cjs', 'resolve-addon.cjs']:
         shutil.copy(ROOT / 'bindings/node' / name, package / name)
     for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
         shutil.copy(ROOT / name, package / name)
@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     installed_libdir = installed_addon.parents[2]
     shutil.copy(installed_addon, addon / 'ducktape_laya.node')
     # Copy real bytes under both loader names, avoiding symlink support differences in npm tarballs.
-    for name in ['libducktape_laya.so', 'libducktape_laya.so.0']:
+    for name in ['libducktape_laya.so', 'libducktape_laya.so.1']:
         shutil.copy(installed_libdir / 'libducktape_laya.so', addon / name)
     subprocess.run(['npm', 'pack', '--ignore-scripts', '--pack-destination', str(out)], cwd=package, check=True, capture_output=True)
     env = dict(os.environ, DUCKTAPE_LAYA_LIB_DIR=str(build))
@@ -82,6 +82,15 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     isa = {key: value for key, value in cache.items() if key.startswith(('GGML_AVX', 'GGML_FMA', 'GGML_F16C', 'GGML_BMI', 'GGML_SSE', 'GGML_NATIVE'))}
     symbols = subprocess.check_output(['readelf', '--version-info', str(build / 'libducktape_laya.so')], text=True)
     requirements = sorted(set(re.findall(r'Name: ((?:GLIBC|GLIBCXX|CXXABI)_[0-9.]+)', symbols)))
+    # The wheel tag and the declared floors must cover what the library actually needs.
+    def newest(prefix):
+        return max((tuple(map(int, r[len(prefix):].split('.'))) for r in requirements if r.startswith(prefix)), default=())
+    platform = json.loads((ROOT / 'release/qualification.json').read_text())['platforms']['native']
+    wheel_glibc = tuple(map(int, re.search(r'manylinux_(\d+)_(\d+)', python_wheel.TAG).groups()))
+    for prefix, limit in (('GLIBC_', wheel_glibc), ('GLIBC_', tuple(map(int, platform['maximum_glibc'].split('.')))),
+                          ('GLIBCXX_', tuple(map(int, platform['maximum_glibcxx'].split('.'))))):
+        if newest(prefix) > limit:
+            raise SystemExit(f'Library needs {prefix}{".".join(map(str, newest(prefix)))}, above the declared {".".join(map(str, limit))}')
     compiler = subprocess.check_output([cache['CMAKE_CXX_COMPILER'], '--version'], text=True).splitlines()[0]
     sbom.write(out / 'sbom.cdx.json', record)
     inventory = {'schema_version': 2, 'package_version': version, 'packaging_source_commit': git(ROOT, 'rev-parse', 'HEAD'),
@@ -91,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         'toolchain': {'compiler': compiler, 'build_type': cache.get('CMAKE_BUILD_TYPE'), 'cxx_flags': cache.get('CMAKE_CXX_FLAGS'), 'required_runtime_symbol_versions': requirements},
         'reproducibility_scope': 'deterministic packaging of identical build inputs; independent compilation is a separate gate',
         'artifacts': {f.name: {'sha256': sha256(f), 'bytes': f.stat().st_size} for f in sorted(out.iterdir())},
-        'components': [{'name': 'ducktape-laya', 'license': 'MIT'}, {'name': 'llama.cpp/ggml', 'license': 'MIT', 'revision': record['runtime']['commit']}, {'name': 'nlohmann-json', 'license': 'MIT'}],
+        'components': [{'name': 'ducktape-laya', 'license': 'MIT'}, {'name': 'llama.cpp/ggml', 'license': 'MIT', 'revision': record['runtime']['commit']}, {'name': 'nlohmann-json', 'license': 'MIT'}, {'name': 'llamafile-cpu-kernels', 'license': 'MIT'}, {'name': 'laya-language-data', 'license': 'Apache-2.0'}],
         'status': 'local unsigned development artifacts; not release approval'}
     (out / 'inventory.json').write_text(json.dumps(inventory, indent=2)+'\n')
 print(out)

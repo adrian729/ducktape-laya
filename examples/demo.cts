@@ -27,7 +27,7 @@ const { Laya }: typeof import('../bindings/node') = require('../bindings/node');
   console.log('Running Laya...');
   const engine = await Laya.open(model, { threads: 2 });
   try {
-    const { answers: { decision } } = await engine.decide(request);
+    const { answers: { decision } } = await engine.execute(request);
     if (decision.type !== 'choice') throw Error('Expected a choice response.');
     console.log(`\nBest answer: ${decision.choice}\nProbabilities:`);
     for (const [label, probability] of Object.entries(decision.probabilities))

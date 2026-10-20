@@ -50,6 +50,22 @@ def trained_text(request):
     return dict(request, state=as_text(request['state']), questions=questions)
 
 
+# Request keys and question shapes only the core supports; upstream decision
+# processing has no equivalent, so such requests are compared across bindings and
+# backends but not with upstream.
+CORE_ONLY_KEYS = {'temperatures', 'max_tokens', 'overflow', 'max_windows'}
+
+
+def upstream_comparable(request):
+    if CORE_ONLY_KEYS & set(request):
+        return False
+    for question in request.get('questions', {}).values():
+        criteria = question.get('criteria')
+        if 'aggregate' in question or (question.get('type') == 'choice' and not (isinstance(criteria, dict) and len(criteria) > 1)):
+            return False
+    return True
+
+
 def reference_requests(fixtures=FIXTURES):
     """Return {key: (fixture name, primitive request)} with insertion order preserved."""
     requests = {}
@@ -57,7 +73,8 @@ def reference_requests(fixtures=FIXTURES):
         body = json.loads(fixture.read_text())
         items = enumerate(body) if isinstance(body, list) else [(None, body)]
         for index, request in items:
-            requests[reference_key(fixture.stem, index)] = (fixture.name, trained_text(primitive_request(request)))
+            if upstream_comparable(request):
+                requests[reference_key(fixture.stem, index)] = (fixture.name, trained_text(primitive_request(request)))
     return requests
 
 

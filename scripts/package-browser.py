@@ -20,8 +20,8 @@ if package_info['version'] != record['package_version']: p.error('Browser packag
 out = a.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 with tempfile.TemporaryDirectory(prefix='ducktape-browser-pack-') as directory:
     package = pathlib.Path(directory)
-    for name in ['package.json', 'index.mjs', 'index.d.ts', 'protocol.d.ts', 'worker.mjs']:
-        shutil.copy(ROOT / 'bindings/browser' / name, package / name) # follows shared type symlink
+    for name in ['package.json', 'README.md', 'index.mjs', 'index.d.ts', 'protocol.d.ts', 'worker.mjs']:
+        shutil.copy(ROOT / 'bindings/browser' / name, package / name)
     for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
         shutil.copy(ROOT / name, package / name)
     shutil.copytree(ROOT / 'licenses', package / 'licenses')

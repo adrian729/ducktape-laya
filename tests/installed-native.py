@@ -15,13 +15,15 @@ p.add_argument('model', type=pathlib.Path)
 a = p.parse_args()
 prefix, model = a.prefix.resolve(), a.model.resolve()
 fixture = (root / 'tests/fixtures/primitive.json').read_bytes()
+# The installed package must satisfy a request for its own minor version.
+minor = '.'.join(json.loads((root / 'release/compatibility.json').read_text())['package_version'].split('.')[:2])
 with tempfile.TemporaryDirectory(prefix='ducktape-consumer-') as tmp:
     tmp = pathlib.Path(tmp)
     for source in ['c.c', 'cpp.cpp']:
         shutil.copy(root / 'tests/consumers' / source, tmp / source)
-    (tmp / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.22)
+    (tmp / 'CMakeLists.txt').write_text(f'''cmake_minimum_required(VERSION 3.22)
 project(consumer LANGUAGES C CXX)
-find_package(ducktape_laya 0.1 CONFIG REQUIRED)
+find_package(ducktape_laya {minor} CONFIG REQUIRED)
 add_executable(c c.c)
 add_executable(cpp cpp.cpp)
 target_link_libraries(c PRIVATE ducktape::laya)

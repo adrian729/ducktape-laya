@@ -92,13 +92,17 @@
       "implementation": [
         "include/ducktape_laya.hpp",
         "bindings/rust",
-        "bindings/node"
+        "bindings/node",
+        "bindings/python",
+        "bindings/go",
+        "bindings/java",
+        "bindings/dotnet"
       ],
       "checks": [
         "tests/parity.py",
         "tests/consumers"
       ],
-      "acceptance": "Exact ordered outputs across the same native binary (JavaScript objects in ECMAScript property order); Rust layouts and TS consumer compilation agree with the public ABI/API."
+      "acceptance": "Exact ordered outputs across the same native binary for the C, C++, Rust, Node, Python, Go, Java and .NET consumers (JavaScript objects in ECMAScript property order); each binding's own suite passes; Rust layouts and TS consumer compilation agree with the public ABI/API."
     },
     "upstream_reference": {
       "implementation": [
@@ -132,7 +136,7 @@
       "checks": [
         "scripts/check-abi.py"
       ],
-      "acceptance": "Exports, layouts, status constants and installed consumer compatibility match ABI 1."
+      "acceptance": "Exports, layouts, status constants and installed consumer compatibility match the ABI version in release/compatibility.json."
     },
     "installed_packages": {
       "implementation": [
@@ -144,7 +148,7 @@
         "tests/installed-packages.py",
         "tests/electron/run.cjs"
       ],
-      "acceptance": "Actual C/C++, Rust, npm/TS/Electron and browser artifacts work outside the checkout."
+      "acceptance": "Actual C/C++, Rust, npm/TS/Electron, Python wheel and browser artifacts work outside the checkout."
     },
     "sanitizers": {
       "implementation": [

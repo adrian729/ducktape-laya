@@ -64,5 +64,9 @@ with tempfile.TemporaryDirectory(dir=args.output.parent) as scratch:
                     '--metadata', metadata, '--outfile', converted], check=True)
     if conversion.get('quantize'):
         subprocess.run([args.quantize, converted, args.output, conversion['quantize']], check=True)
-verify_model(args.output, manifest)
+try:
+    verify_model(args.output, manifest)
+except ValueError:
+    args.output.unlink()  # never leave an unverified model behind
+    raise
 print(f'{args.output} matches {manifest["id"]}')

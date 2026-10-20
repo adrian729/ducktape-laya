@@ -6,7 +6,7 @@ import pathlib
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 from compare_results import compare_results
-from reference_requests import comparable_answers, reference_key
+from reference_requests import comparable_answers, reference_key, reference_requests
 p = argparse.ArgumentParser()
 p.add_argument('adapter', type=pathlib.Path)
 p.add_argument('reference', type=pathlib.Path)
@@ -22,6 +22,7 @@ for name, value in adapter['results'].items():
     stem = name.removesuffix('.json')
     items = enumerate(value) if isinstance(value, list) else [(None, value)]
     results.update({reference_key(stem, index): item for index, item in items})
+results = {key: value for key, value in results.items() if key in reference_requests()}
 if set(results) != set(reference['results']):
     raise AssertionError('Reference fixture set changed')
 maximum = (0, '')

@@ -6,7 +6,7 @@
   "url": null,
   "source_model": "https://huggingface.co/convaiinnovations/laya",
   "model_license": "Apache-2.0",
-  "max_tokens_per_question": 1024,
+  "trained_question_tokens": 1024,
   "source": {
     "repository_url": "https://huggingface.co/convaiinnovations/laya",
     "revision": "7b928d828b7b0e022f929d9bd2e44165aa270148",

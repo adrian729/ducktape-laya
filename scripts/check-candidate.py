@@ -116,6 +116,12 @@ def native_gate(gate):
     def check():
         report = native()
         need(report['gates'][gate]['status'] == 'passed', f'native: {gate} {report["gates"][gate]["status"]}')
+        if gate in ('original_reference', 'upstream_reference'):
+            # Every additional pinned model is qualified like the primary one.
+            for name in record.get('additional_models', []):
+                model_id = read_json(candidate_tree / name)['id']
+                status = report.get('additional_model_gates', {}).get(model_id, {}).get(gate, 'not_run')
+                need(status == 'passed', f'native: {gate} for {model_id} {status}')
         if gate == 'installed_packages':
             packages()
     return check
@@ -272,6 +278,12 @@ for gate, check in GATES.items():
     except (Mismatch, KeyError, ValueError, OSError) as error:
         result['gates'][gate] = {'status': 'failed', 'detail': f'{type(error).__name__}: {error}'}
 result['release_ready'] = all(g['status'] == 'passed' for g in result['gates'].values())
+# The package inventories this report qualified; attest-release.yml checks the
+# published native-inventory.json and npm-browser-inventory.json against them.
+result['inventories_sha256'] = {}
+for label, path in (('native', paths.get('native') and paths['native'].parent / 'packages/inventory.json'),
+                    ('browser', paths.get('browser_package'))):
+    if path and path.is_file(): result['inventories_sha256'][label] = sha256(path)
 result['reused_evidence'] = reused
 result['publication_gates'] = {gate: 'not_run' for gate in policy['publication_gates']}
 a.report.write_text(json.dumps(result, indent=2) + '\n')

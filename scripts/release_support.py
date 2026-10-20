@@ -53,6 +53,13 @@ def check_record(root=ROOT):
         info = tomllib.loads((root / 'bindings/rust' / package / 'Cargo.toml').read_text())
         if info['package']['version'] != version:
             raise ValueError(f'Rust package version mismatch: {package}')
+    safe = tomllib.loads((root / 'bindings/rust/ducktape-laya/Cargo.toml').read_text())
+    if safe['dependencies']['ducktape-laya-sys']['version'] != version:
+        raise ValueError('Rust ducktape-laya-sys dependency version mismatch')
+    for lock in ['bindings/rust/Cargo.lock', 'tests/consumers/rust/Cargo.lock']:
+        locked = {item['name']: item['version'] for item in tomllib.loads((root / lock).read_text())['package']}
+        if any(locked.get(name) != version for name in ('ducktape-laya', 'ducktape-laya-sys')):
+            raise ValueError(f'Rust lock file version mismatch: {lock}')
     if read_json(root / 'bindings/node/package.json')['version'] != version:
         raise ValueError('npm package version mismatch')
     python = tomllib.loads((root / 'bindings/python/pyproject.toml').read_text())['project']['version']

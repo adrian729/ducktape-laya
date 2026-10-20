@@ -59,3 +59,8 @@ with tempfile.TemporaryDirectory(prefix='ducktape-typescript-') as directory:
                         '--types', 'node', '--typeRoots', str(HERE / 'node_modules/@types'), *sources],
                        cwd=tmp, check=True)
         print(f'TypeScript external consumers: {mode}/{resolution} passed')
+# The demos must keep compiling against the current Node API.
+subprocess.run(['node', str(compiler), '--strict', '--noEmit', '--target', 'ES2022', '--module', 'NodeNext',
+                '--moduleResolution', 'NodeNext', '--types', 'node', '--typeRoots', str(HERE / 'node_modules/@types'),
+                str(ROOT / 'examples/demo.cts')], cwd=ROOT, check=True)
+subprocess.run(['node', '--check', str(ROOT / 'examples/demo.cjs')], check=True)

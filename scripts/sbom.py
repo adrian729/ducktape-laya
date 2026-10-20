@@ -13,6 +13,9 @@ def document(record, browser=False):
         component('llamafile-cpu-kernels', record['runtime']['commit'], 'MIT', ['licenses/llamafile-MIT.txt'])]
     # Recorded patches modify build copies of llama.cpp/ggml and its vendored nlohmann header.
     for item in components: item['properties'] += patches
+    # Word lists and thresholds in src/language.cpp come from the original Laya (laya/lang.py).
+    components.append(component('laya-language-data', 'ffc142012af63d015fa19f05f29f9c5ff329a2cc', 'Apache-2.0',
+                                ['licenses/Apache-2.0.txt']))
     if browser:
         sdk = read_json(ROOT / 'release/browser-toolchain.json')
         components += [component('emscripten-runtime', sdk['sdk_version'], 'MIT OR NCSA', ['licenses/emscripten.txt', 'licenses/emscripten-authors.txt']),

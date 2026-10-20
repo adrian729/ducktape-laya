@@ -11,11 +11,11 @@ dependencies = [
 
 [[package]]
 name = "ducktape-laya"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ducktape-laya-sys",
 ]
 
 [[package]]
 name = "ducktape-laya-sys"
-version = "0.1.0"
+version = "0.2.0"

@@ -59,7 +59,7 @@ jobs:
   native:
     name: ${{ matrix.compiler }} / Node ${{ matrix.node }} / ${{ inputs.real_model && 'real model' || 'model free' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -117,7 +117,7 @@ jobs:
         run: npm ci --ignore-scripts --prefix tests/typescript
       - name: Model-free checks
         if: ${{ !inputs.real_model }}
-        run: python3 scripts/validate.py --output build-ci-report --jobs 2
+        run: python3 scripts/validate.py --packages --output build-ci-report --jobs 2
       - name: Real-model and installed artifact checks
         if: inputs.real_model
         run: python3 scripts/validate.py --model build-model/laya.gguf --packages --upstream-reference --output build-ci-report --jobs 2

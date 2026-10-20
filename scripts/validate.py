@@ -20,14 +20,13 @@ p.add_argument('--build', type=pathlib.Path, default=ROOT / 'build-validation')
 p.add_argument('--output', type=pathlib.Path, required=True)
 p.add_argument('--jobs', type=int, default=2)
 p.add_argument('--node-include', type=pathlib.Path)
-p.add_argument('--packages', action='store_true', help='Build and exercise installed artifacts; requires --model')
+p.add_argument('--packages', action='store_true', help='Build the packages and load them outside the checkout; with --model also run them')
 p.add_argument('--upstream-reference', action='store_true', help='Build an isolated test-only upstream processor and compare every real-model fixture request')
 p.add_argument('--reproducibility', action='store_true', help='Also compile two independent source snapshots')
 p.add_argument('--require-release', action='store_true', help='Fail if any required release gate is failed or not run')
-p.add_argument('--extra-model', type=pathlib.Path, action='append', default=[], help='An additional pinned model (models/*.json) to qualify against the original Laya and upstream; repeatable')
+p.add_argument('--extra-model', type=pathlib.Path, action='append', default=[], help='GGUF of an additional pinned model (release/compatibility.json additional_models) to qualify against the original Laya and upstream; repeatable')
 a = p.parse_args()
 if a.jobs < 1: p.error('--jobs must be positive')
-if a.packages and not a.model: p.error('--packages requires --model')
 if a.upstream_reference and not a.model: p.error('--upstream-reference requires --model')
 record = check_record()
 model = a.model.resolve() if a.model else None
@@ -48,7 +47,7 @@ if model: env['LAYA_MODEL'] = str(model)
 report = {'schema_version': 1, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')),
           'runtime': record['runtime'], 'model': manifest if model else None,
-          'additional_models': [m for _, m in extra_models],
+          'additional_models': [m for _, m in extra_models], 'additional_model_gates': {},
           'mode': 'real_model' if model else 'model_free', 'release_ready': False,
           'node_version': subprocess.check_output(['node', '--version'], text=True).strip(),
           'source_files_sha256': source_files(),
@@ -85,6 +84,7 @@ try:
     run('packaging-identities', [sys.executable, ROOT / 'tests/packaging-identity.py'])
     run('browser-backend-identities', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-backend.mjs'])
     run('browser-lifecycle', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-lifecycle.mjs'])
+    run('browser-binding', ['node', '--experimental-vm-modules', '--test', ROOT / 'bindings/browser/test.mjs'])
     run('configure', ['cmake', '-S', ROOT, '-B', build, '-DCMAKE_BUILD_TYPE=Release',
         # Validation is for the approved checkout, even if this cache previously
         # built a candidate runtime. Candidate evaluation has its own runner.
@@ -124,16 +124,27 @@ try:
     if a.upstream_reference:
         run('upstream-reference', [sys.executable, ROOT / 'tests/compare-native-reference.py', model,
             '--build', build, '--report', out / 'upstream-reference.json'], 'upstream_reference')
+    # The additional models must pass the same reference gates; check-candidate.py
+    # requires every model in release/compatibility.json additional_models.
+    def extra_gate(name, gate, label, command):
+        report['additional_model_gates'].setdefault(name, {})[gate] = 'failed'
+        run(label, command)
+        report['additional_model_gates'][name][gate] = 'passed'
+        save()
     for extra, extra_manifest in extra_models:
         name = extra_manifest['id']
-        run(f'original-reference-{name}', [sys.executable, ROOT / 'tests/original-reference.py', extra, '--build-dir', build,
-            '--cases', ROOT / extra_manifest['original_reference_cases'], '--report', out / f'original-reference-{name}.json'])
+        extra_gate(name, 'original_reference', f'original-reference-{name}',
+                   [sys.executable, ROOT / 'tests/original-reference.py', extra, '--build-dir', build,
+                    '--cases', ROOT / extra_manifest['original_reference_cases'], '--report', out / f'original-reference-{name}.json'])
         if a.upstream_reference:
-            run(f'upstream-reference-{name}', [sys.executable, ROOT / 'tests/compare-native-reference.py', extra,
-                '--build', build, '--report', out / f'upstream-reference-{name}.json'])
+            extra_gate(name, 'upstream_reference', f'upstream-reference-{name}',
+                       [sys.executable, ROOT / 'tests/compare-native-reference.py', extra,
+                        '--build', build, '--report', out / f'upstream-reference-{name}.json'])
     if a.packages:
         run('package', [sys.executable, ROOT / 'scripts/package-linux.py', '--build', build, '--output', out / 'packages'])
-        run('installed', [sys.executable, ROOT / 'tests/installed-packages.py', out / 'packages', model], 'installed_packages')
+        run('package-smoke', [sys.executable, ROOT / 'tests/package-smoke.py', out / 'packages'])
+        if model:
+            run('installed', [sys.executable, ROOT / 'tests/installed-packages.py', out / 'packages', model], 'installed_packages')
     if a.reproducibility:
         run('reproducibility', [sys.executable, ROOT / 'scripts/check-reproducibility.py', '--output', out / 'reproducibility',
                                '--jobs', a.jobs, '--node-include', headers], 'reproducibility')

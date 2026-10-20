@@ -1,0 +1,78 @@
+[
+  {
+    "state": "I was charged twice for my subscription this month.",
+    "questions": {
+      "team": {
+        "type": "choice",
+        "instructions": "Which team should handle this?",
+        "criteria": [
+          "billing",
+          "technical",
+          "sales"
+        ]
+      },
+      "channel": {
+        "type": "choice",
+        "instructions": "Reply channel",
+        "criteria": {
+          "email": "reply by email"
+        }
+      }
+    }
+  },
+  {
+    "state": "I was charged twice for my subscription this month.",
+    "temperatures": {
+      "noul.2": 1.5,
+      "choice": 2.0
+    },
+    "max_tokens": 128,
+    "questions": {
+      "refund": {
+        "type": "noul",
+        "instructions": "Does the customer ask for a refund?"
+      },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team?",
+        "criteria": {
+          "billing": null,
+          "technical": null,
+          "sales": null
+        }
+      }
+    }
+  },
+  {
+    "state": "Order 4411 arrived late. Order 4411 arrived late. Order 4411 arrived late. The customer was charged twice and asks for a refund of the second charge before Friday. They also say the tracking page never updated. They also say the tracking page never updated. They also say the tracking page never updated. They also say the tracking page never updated. Please escalate this, it is the third time they write.",
+    "max_tokens": 48,
+    "overflow": "truncate_start",
+    "questions": {
+      "urgent": {
+        "type": "noul",
+        "instructions": "Is this urgent?"
+      }
+    }
+  },
+  {
+    "state": "Order 4411 arrived late. Order 4411 arrived late. Order 4411 arrived late. The customer was charged twice and asks for a refund of the second charge before Friday. They also say the tracking page never updated. They also say the tracking page never updated. They also say the tracking page never updated. They also say the tracking page never updated. Please escalate this, it is the third time they write.",
+    "max_tokens": 48,
+    "overflow": "scan",
+    "max_windows": 16,
+    "questions": {
+      "refund": {
+        "type": "noul",
+        "instructions": "Does the customer ask for a refund?",
+        "aggregate": "all"
+      },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team?",
+        "criteria": {
+          "billing": null,
+          "logistics": null
+        }
+      }
+    }
+  }
+]

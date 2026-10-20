@@ -30,7 +30,17 @@ jobs:
           cd assets
           sha256sum -c SHA256SUMS
           commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
-          jq -e '.release_ready == true' gates.json > /dev/null
+          # The qualified commit must be the tagged one, checked by a clean checker.
+          jq -e --arg commit "$commit" '.release_ready == true and .candidate_commit == $commit and .checker_tree_dirty == false' \
+            gates.json > /dev/null
+          # The published inventories are the qualified ones, and every artifact they list matches.
+          for pair in native:native-inventory.json browser:npm-browser-inventory.json; do
+            jq -e --arg label "${pair%%:*}" --arg sum "$(sha256sum "${pair#*:}" | cut -d' ' -f1)" \
+              '.inventories_sha256[$label] == $sum' gates.json > /dev/null
+            jq -r '.artifacts | to_entries[] | "\(if (.value | type) == "object" then .value.sha256 else .value end)  \(.key)"' "${pair#*:}" | while read -r sum name; do
+              [ ! -e "$name" ] || echo "$sum  $name" | sha256sum -c --quiet -
+            done
+          done
           jq -n --arg tag "$TAG" --arg commit "$commit" --arg gates "$(sha256sum gates.json | cut -d' ' -f1)" \
             --arg repo "$GITHUB_REPOSITORY" \
             '{release: $tag, repository: $repo, source_commit: $commit, gates_sha256: $gates, release_ready: true}' > ../predicate.json

@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
     (app / 'src').mkdir()
     (app / 'src/main.rs').write_text((root / 'tests/consumers/rust/src/main.rs').read_text())
     safe = directory / f'ducktape-laya-{version}'
-    sys = directory / f'ducktape-laya-sys-{version}'
+    sys_crate = directory / f'ducktape-laya-sys-{version}'
     assert 'path = ' not in (safe / 'Cargo.toml').read_text().split('[dependencies.ducktape-laya-sys]')[1].split('[')[0]
     assert not (safe / 'examples').exists()
     (app / 'Cargo.toml').write_text(f'''[package]
@@ -57,7 +57,7 @@ edition = "2021"
 [dependencies]
 ducktape-laya = {{ path = "{safe}" }}
 [patch.crates-io]
-ducktape-laya-sys = {{ path = "{sys}" }}
+ducktape-laya-sys = {{ path = "{sys_crate}" }}
 ''')
     libdir = next(native.glob('lib*/pkgconfig/ducktape-laya.pc')).parent.parent
     env['PKG_CONFIG_PATH'] = str(libdir / 'pkgconfig')

@@ -11,6 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((ROOT / 'models/manifest.json').read_text())
+MINOR = '.'.join(json.loads((ROOT / 'release/compatibility.json').read_text())['package_version'].split('.')[:2])
 
 
 def prompt_path(label, default):
@@ -70,7 +71,7 @@ def notes(prefix, model_dir, libdir, node_package, download_requested, dry_run):
     print('\nC/C++ with CMake:')
     print(f'  cmake -S . -B build -DCMAKE_PREFIX_PATH={q(str(prefix))}')
     print('  In CMakeLists.txt:')
-    print('  find_package(ducktape_laya 0.1 CONFIG REQUIRED)')
+    print(f'  find_package(ducktape_laya {MINOR} CONFIG REQUIRED)')
     print('  target_link_libraries(your_target PRIVATE ducktape::laya)')
     print('  In your C++ source:')
     print('  #include <ducktape_laya.hpp>')
