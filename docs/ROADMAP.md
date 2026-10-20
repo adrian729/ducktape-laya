@@ -49,6 +49,15 @@ checkpoint published as of 2026-10-20. GGUF and llama.cpp run this architecture
 at any size, so a larger release would be supported the same way: convert or
 download, pin, qualify. Check memory per engine and the context capacity.
 
+### Downloadable multilingual and typed-decisions models
+
+Users currently build these two GGUFs with `scripts/convert-model.py`. Make
+them downloadable: upload the exact pinned files (for example to a Hugging Face
+repository under the maintainer's account, with a model card giving the
+Apache-2.0 notice, source revision and hashes) and set each manifest's `url`, or
+switch to official GGUFs if the Laya authors or ggml-org publish them. Steps:
+[PUBLISHING.md](PUBLISHING.md#converted-models).
+
 ### Mobile, and the languages that depend on it
 
 iOS and Android need their own packaging (XCFramework, AAR), toolchains and

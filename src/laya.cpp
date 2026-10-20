@@ -3,6 +3,7 @@
 #include "decision.hpp"
 #include "errors.hpp"
 #include "execution.hpp"
+#include "language.hpp"
 #include "platform.hpp"
 #include <algorithm>
 #include <cmath>
@@ -143,9 +144,12 @@ std::string overflow_policy(const json &value, const std::string &where) {
     return value.get<std::string>();
 }
 planned plan(json body, bool routed) {
-    keys(body, {"state", "questions", "schema", "boolean_threshold", "model", "max_tokens", "temperatures",
+    keys(body, {"state", "questions", "schema", "boolean_threshold", "model", "lang", "max_tokens", "temperatures",
                 "overflow", "max_windows"}, "request");
     require(routed || !body.contains("model"), "model is only supported by a router");
+    require(!body.contains("lang") || (body.value("model", json()) == "auto" && body["lang"].is_string() &&
+                                       !body["lang"].get<std::string>().empty() && body["lang"].get<std::string>().size() <= 64),
+            "lang must be a 1..64 character string and requires model \"auto\"");
     require(body.contains("questions") != body.contains("schema"), "Supply exactly one of questions or schema");
     planned out;
     if (body.contains("schema")) {
@@ -346,6 +350,7 @@ std::unique_ptr<model_engine> load_model(const std::string &path, const dtl::eng
 struct router_state {
     struct route { std::string path, cache_key; dtl::engine_config config; };
     std::map<std::string, route> routes;
+    std::string auto_english, auto_default; // routes for "model": "auto"; empty when not configured
     std::map<std::string, std::unique_ptr<model_engine>> loaded; // by canonical path and config
     std::list<std::string> lru;
     size_t max_loaded = 1;
@@ -387,7 +392,7 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
         require(out, "out is required");
         auto shared = engine_config(optional_json(config_json));
         auto body = read_json(router_json);
-        keys(body, {"models", "max_loaded"}, "router config");
+        keys(body, {"models", "max_loaded", "auto"}, "router config");
         require(body.contains("models") && body["models"].is_object() && !body["models"].empty() &&
                 body["models"].size() <= 16, "models must contain 1..16 routes");
         auto r = std::make_unique<router_state>();
@@ -398,6 +403,7 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
         }
         for (auto &[id, entry] : body["models"].items()) {
             require(!id.empty() && id.size() <= 128 && id.find('\0') == std::string::npos, "Invalid model ID");
+            require(id != "auto", "\"auto\" is reserved and cannot be a model ID");
             json path = entry, config;
             if (entry.is_object()) {
                 keys(entry, {"path", "config"}, "route " + id);
@@ -416,6 +422,15 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
                         {"temperatures", route.config.temperatures}};  // overflow is applied per request, not per model
             route.cache_key = key.dump();
             r->routes[id] = std::move(route);
+        }
+        if (body.contains("auto")) {
+            const auto &automatic = body["auto"];
+            keys(automatic, {"english", "default"}, "auto");
+            for (const char *key : {"english", "default"})
+                require(automatic.contains(key) && automatic[key].is_string() && r->routes.count(automatic[key].get<std::string>()),
+                        std::string("auto.") + key + " must name a route");
+            r->auto_english = automatic["english"].get<std::string>();
+            r->auto_default = automatic["default"].get<std::string>();
         }
         auto engine = std::make_unique<dtl_engine>();
         engine->router = std::move(r);
@@ -455,17 +470,39 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
             for (auto &p : work) results.push_back(evaluate(single, p, control));
         } else {
             auto &router = *engine->router;
+            std::vector<std::pair<std::string, json>> chosen; // route ID and, for "auto", why
             for (auto &p : work) {
                 require(p.body.contains("model") && p.body["model"].is_string(), "Router requests require model ID");
-                require(router.routes.count(p.body["model"].get<std::string>()), "Unknown model ID");
+                auto id = p.body["model"].get<std::string>();
+                if (id != "auto") {
+                    require(router.routes.count(id), "Unknown model ID");
+                    chosen.emplace_back(id, json());
+                    continue;
+                }
+                require(!router.auto_english.empty(), "model \"auto\" requires an \"auto\" router config");
+                json routing;
+                bool english;
+                if (p.body.contains("lang")) {
+                    english = dtl::english_tag(p.body["lang"].get<std::string>());
+                    routing = {{"reason", "lang"}, {"lang", p.body["lang"]}};
+                } else {
+                    auto detected = dtl::detect_language(p.body["state"]);
+                    english = detected.english;
+                    routing = {{"reason", detected.reason}};
+                    if (!detected.script.empty()) routing["script"] = detected.script;
+                    if (!detected.language.empty()) routing["language"] = detected.language;
+                }
+                chosen.emplace_back(english ? router.auto_english : router.auto_default, std::move(routing));
             }
             auto lock = control.lock(router.mutex);
-            for (auto &p : work) {
-                auto id = p.body["model"].get<std::string>();
+            for (size_t i = 0; i < work.size(); ++i) {
+                auto &p = work[i];
+                const auto &id = chosen[i].first;
                 control.check();
                 auto &model = router.load(router.routes.at(id));
                 for (auto &q : p.questions) { control.check(); model.prepare(q, p.body["state"]); }
                 auto answer = evaluate(model, p, control); answer["model"] = id;
+                if (!chosen[i].second.is_null()) answer["usage"]["routing"] = chosen[i].second;
                 results.push_back(std::move(answer));
             }
         }

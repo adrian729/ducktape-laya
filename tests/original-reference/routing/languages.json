@@ -1,0 +1,787 @@
+[
+ {
+  "label": "script/english",
+  "state": "The customer was charged twice and wants a refund.",
+  "language": "en"
+ },
+ {
+  "label": "script/armenian",
+  "state": "Հայերեն",
+  "language": null
+ },
+ {
+  "label": "script/armenian_uppercase",
+  "state": "ՀԱՅԵՐԵՆ",
+  "language": null
+ },
+ {
+  "label": "script/armenian_punctuation_only",
+  "state": "։֊",
+  "language": null
+ },
+ {
+  "label": "script/french",
+  "state": "Le client a été facturé deux fois et demande un remboursement.",
+  "language": "fr"
+ },
+ {
+  "label": "script/hindi",
+  "state": "ग्राहक से दो बार शुल्क लिया गया और वह धनवापसी चाहता है।",
+  "language": null
+ },
+ {
+  "label": "script/japanese",
+  "state": "お客様は二重に請求されたため返金を希望しています。",
+  "language": null
+ },
+ {
+  "label": "script/chinese",
+  "state": "客户被重复扣款要求退款",
+  "language": null
+ },
+ {
+  "label": "script/korean",
+  "state": "고객이 두 번 청구되어 환불을 원합니다",
+  "language": null
+ },
+ {
+  "label": "script/arabic",
+  "state": "تم خصم المبلغ مرتين من العميل ويريد استرداد الأموال",
+  "language": null
+ },
+ {
+  "label": "script/tamil",
+  "state": "வாடிக்கையாளரிடம் இருமுறை கட்டணம் வசூலிக்கப்பட்டது",
+  "language": null
+ },
+ {
+  "label": "script/russian",
+  "state": "С клиента дважды сняли деньги и он хочет возврат",
+  "language": null
+ },
+ {
+  "label": "script/thai",
+  "state": "ลูกค้าถูกเรียกเก็บเงินสองครั้งและต้องการเงินคืน",
+  "language": null
+ },
+ {
+  "label": "script/greek",
+  "state": "Ο πελάτης χρεώθηκε δύο φορές και θέλει επιστροφή χρημάτων",
+  "language": null
+ },
+ {
+  "label": "script/hebrew",
+  "state": "הלקוח חויב פעמיים ורוצה החזר כספי",
+  "language": null
+ },
+ {
+  "label": "script/empty",
+  "state": "",
+  "language": null
+ },
+ {
+  "label": "script/digits_only",
+  "state": "12345 6789",
+  "language": null
+ },
+ {
+  "label": "is_english/plain_english",
+  "state": "Please refund the duplicate charge on invoice 4411 today.",
+  "language": "en"
+ },
+ {
+  "label": "is_english/armenian",
+  "state": "Հայերեն",
+  "language": null
+ },
+ {
+  "label": "is_english/english_short",
+  "state": "refund me",
+  "language": null
+ },
+ {
+  "label": "is_english/hindi",
+  "state": "ग्राहक से दो बार शुल्क लिया गया",
+  "language": null
+ },
+ {
+  "label": "is_english/japanese",
+  "state": "お客様は二重に請求されました",
+  "language": null
+ },
+ {
+  "label": "is_english/russian",
+  "state": "С клиента дважды сняли деньги",
+  "language": null
+ },
+ {
+  "label": "is_english/french_long",
+  "state": "Le client a été facturé deux fois et il demande un remboursement pour la facture qui a été payée le mois dernier avec la carte de crédit",
+  "language": "fr"
+ },
+ {
+  "label": "is_english/german_long",
+  "state": "Der Kunde wurde zweimal belastet und möchte eine Rückerstattung für die Rechnung die nicht korrekt ist und auch nicht bezahlt wurde",
+  "language": "de"
+ },
+ {
+  "label": "is_english/romanian",
+  "state": "Gătește-mi o rețetă de sarmale de post pentru mâine.",
+  "language": "ro"
+ },
+ {
+  "label": "is_english/romanian_invoice",
+  "state": "Am fost taxat de două ori pentru factura din luna martie și vreau banii",
+  "language": "ro"
+ },
+ {
+  "label": "is_english/polish",
+  "state": "Klient został obciążony dwukrotnie i chce zwrot pieniędzy za fakturę",
+  "language": null
+ },
+ {
+  "label": "is_english/czech",
+  "state": "Zákazníkovi byla částka účtována dvakrát a žádá o vrácení peněz",
+  "language": null
+ },
+ {
+  "label": "is_english/turkish",
+  "state": "Müşteriden iki kez ücret alındı ve para iadesi istiyor lütfen yardım",
+  "language": null
+ },
+ {
+  "label": "is_english/vietnamese",
+  "state": "Khách hàng đã bị thu phí hai lần và muốn được hoàn tiền ngay",
+  "language": null
+ },
+ {
+  "label": "is_english/english_with_loanwords",
+  "state": "We visited a cafe in Zurich and the naive assumption about the invoice was wrong, so please refund the duplicate charge",
+  "language": "en"
+ },
+ {
+  "label": "is_english/undecided_turkish",
+  "state": "Müşteriden iki kez ücret alındı ve para iadesi istiyor",
+  "language": null
+ },
+ {
+  "label": "is_english/english_not_undecided",
+  "state": "Please refund the duplicate charge on the invoice",
+  "language": "en"
+ },
+ {
+  "label": "is_english/romanian_diacritics",
+  "state": "Gătește-mi o rețetă de sarmale",
+  "language": null
+ },
+ {
+  "label": "is_english/no_diacritics",
+  "state": "Please refund the duplicate charge today",
+  "language": "en"
+ },
+ {
+  "label": "is_english/zero_tie_romanian",
+  "state": "Cât e ora acum la Tokyo",
+  "language": null
+ },
+ {
+  "label": "is_english/known_gap_romanian_no_diacritics",
+  "state": "Care este ora in Tokyo?",
+  "language": "en"
+ },
+ {
+  "label": "latin_lang/english",
+  "state": "The customer was charged twice and wants a refund for this invoice",
+  "language": "en"
+ },
+ {
+  "label": "latin_lang/french",
+  "state": "Le client a ete facture deux fois et il demande un remboursement pour la facture",
+  "language": "fr"
+ },
+ {
+  "label": "latin_lang/german",
+  "state": "Der Kunde wurde zweimal belastet und moechte eine Rueckerstattung fuer die Rechnung",
+  "language": "de"
+ },
+ {
+  "label": "latin_lang/spanish",
+  "state": "El cliente fue cobrado dos veces y quiere que le devuelvan el dinero por la factura",
+  "language": "es"
+ },
+ {
+  "label": "latin_lang/too_short",
+  "state": "refund",
+  "language": null
+ },
+ {
+  "label": "latin_lang/long_english_stays_en",
+  "state": "Please refund the duplicate charge on invoice 4411 today because we have been waiting for three days and nobody has replied to us",
+  "language": "en"
+ },
+ {
+  "label": "state_text/dict",
+  "state": {
+   "body": "charged twice",
+   "n": 3
+  },
+  "language": null
+ },
+ {
+  "label": "state_text/nested",
+  "state": {
+   "a": {
+    "b": [
+     "deep"
+    ]
+   }
+  },
+  "language": null
+ },
+ {
+  "label": "state_text/list",
+  "state": [
+   "x",
+   {
+    "y": "z"
+   }
+  ],
+  "language": null
+ },
+ {
+  "label": "state_text/none",
+  "state": null,
+  "language": null
+ },
+ {
+  "label": "state_text/keys_ignored",
+  "state": {
+   "subject": "नमस्ते",
+   "body": "ग्राहक से दो बार शुल्क लिया गया"
+  },
+  "language": null
+ },
+ {
+  "label": "profile/armenian_pure",
+  "state": "Հայերեն",
+  "language": null
+ },
+ {
+  "label": "profile/armenian_mixed_with_latin",
+  "state": "Հայերեն abc",
+  "language": null
+ },
+ {
+  "label": "plain_ascii/es_1",
+  "state": "El pedido llego roto y nadie responde cuando escribo al soporte",
+  "language": "es"
+ },
+ {
+  "label": "plain_ascii/es_2",
+  "state": "Quiero cancelar mi plan y pedir un reembolso",
+  "language": "es"
+ },
+ {
+  "label": "plain_ascii/es_3",
+  "state": "La factura tiene un error en el importe total",
+  "language": "es"
+ },
+ {
+  "label": "plain_ascii/es_4",
+  "state": "Necesito que me devuelvan el dinero de la compra duplicada",
+  "language": "es"
+ },
+ {
+  "label": "plain_ascii/it_1",
+  "state": "Il cliente e stato addebitato due volte e vuole un rimborso",
+  "language": "it"
+ },
+ {
+  "label": "plain_ascii/it_2",
+  "state": "Voglio cancellare il mio abbonamento e chiedere un rimborso",
+  "language": "it"
+ },
+ {
+  "label": "plain_ascii/it_3",
+  "state": "La fattura contiene un errore nell importo totale",
+  "language": "it"
+ },
+ {
+  "label": "plain_ascii/pt_1",
+  "state": "O cliente foi cobrado duas vezes e quer o dinheiro de volta",
+  "language": "pt"
+ },
+ {
+  "label": "plain_ascii/fr_1",
+  "state": "Le client a ete facture deux fois et demande un remboursement",
+  "language": "fr"
+ },
+ {
+  "label": "plain_ascii/fr_2",
+  "state": "Je ne peux pas acceder a mon compte et j ai besoin d aide",
+  "language": "fr"
+ },
+ {
+  "label": "accented/es",
+  "state": "La facturación tiene un error y necesito una corrección urgente",
+  "language": "es"
+ },
+ {
+  "label": "accented/it",
+  "state": "La fattura è sbagliata, devo avere un rimborso per il pagamento",
+  "language": "it"
+ },
+ {
+  "label": "accented/fr",
+  "state": "La commande est arrivée cassée et personne ne répond au support",
+  "language": "fr"
+ },
+ {
+  "label": "romance_control/1",
+  "state": "The customer was charged twice and wants a refund for this invoice",
+  "language": "en"
+ },
+ {
+  "label": "romance_control/2",
+  "state": "Please cancel my subscription and refund the duplicate charge today",
+  "language": "en"
+ },
+ {
+  "label": "romance_control/3",
+  "state": "The report by Smith et al. shows the de facto standard, e.g. the LA office and Rio",
+  "language": "en"
+ },
+ {
+  "label": "romance_control/4",
+  "state": "Our MI5 and UN contacts discussed the DOS attack in LA last month",
+  "language": "en"
+ },
+ {
+  "label": "romance_control/5",
+  "state": "No refund was issued, so I am writing to you again about invoice 4411",
+  "language": "en"
+ },
+ {
+  "label": "romance_control/6",
+  "state": "no refund no reply",
+  "language": null
+ },
+ {
+  "label": "romance_control/7",
+  "state": "The son of the director filed a complaint about the duplicate invoice",
+  "language": "en"
+ },
+ {
+  "label": "shared_words/names_nothing",
+  "state": "Cât e ora acum la Tokyo",
+  "language": null
+ },
+ {
+  "label": "shared_words/distinctive_names_it",
+  "state": "La fattura contiene un errore nell importo totale",
+  "language": "it"
+ },
+ {
+  "label": "shared_words/shared_hits_still_count_es",
+  "state": "La factura tiene un error en el importe total",
+  "language": "es"
+ },
+ {
+  "label": "all_scripts/greek",
+  "state": "Γεια σου κόσμε, πώς είσαι σήμερα;",
+  "language": null
+ },
+ {
+  "label": "all_scripts/cyrillic",
+  "state": "Привет, как ты себя чувствуешь сегодня?",
+  "language": null
+ },
+ {
+  "label": "all_scripts/armenian",
+  "state": "Բարեւ ձեզ, ինչպե՞ս եք այսօր",
+  "language": null
+ },
+ {
+  "label": "all_scripts/hebrew",
+  "state": "שלום, מה שלומך היום",
+  "language": null
+ },
+ {
+  "label": "all_scripts/arabic",
+  "state": "مرحبا كيف حالك اليوم",
+  "language": null
+ },
+ {
+  "label": "all_scripts/devanagari",
+  "state": "नमस्ते आप कैसे हैं आज",
+  "language": null
+ },
+ {
+  "label": "all_scripts/bengali",
+  "state": "আমি ভালো আছি, আপনি কেমন আছেন",
+  "language": null
+ },
+ {
+  "label": "all_scripts/gurmukhi",
+  "state": "ਤੁਸੀਂ ਕਿਵੇਂ ਹੋ, ਮੈਂ ਠੀਕ ਹਾਂ",
+  "language": null
+ },
+ {
+  "label": "all_scripts/gujarati",
+  "state": "તમે કેમ છો, હું સારો છું",
+  "language": null
+ },
+ {
+  "label": "all_scripts/oriya",
+  "state": "ତୁମେ କେମିତି ଅଛ, ମୁଁ ଭଲ ଅଛି",
+  "language": null
+ },
+ {
+  "label": "all_scripts/tamil",
+  "state": "நீங்கள் எப்படி இருக்கிறீர்கள்",
+  "language": null
+ },
+ {
+  "label": "all_scripts/telugu",
+  "state": "మీరు ఎలా ఉన్నారు, నేను బాగున్నాను",
+  "language": null
+ },
+ {
+  "label": "all_scripts/kannada",
+  "state": "ನೀವು ಹೇಗಿದ್ದೀರಿ, ನಾನು ಚೆನ್ನಾಗಿದ್ದೇನೆ",
+  "language": null
+ },
+ {
+  "label": "all_scripts/malayalam",
+  "state": "നിങ്ങൾക്ക് സുഖമാണോ, എനിക്ക് സുഖമാണ്",
+  "language": null
+ },
+ {
+  "label": "all_scripts/sinhala",
+  "state": "ඔබට කොහොමද, මට හොඳින්",
+  "language": null
+ },
+ {
+  "label": "all_scripts/thai",
+  "state": "คุณเป็นอย่างไรบ้างวันนี้",
+  "language": null
+ },
+ {
+  "label": "all_scripts/lao",
+  "state": "ສະບາຍດີ ທ່ານເປັນແນວໃດແດ່",
+  "language": null
+ },
+ {
+  "label": "all_scripts/tibetan",
+  "state": "བཀྲ་ཤིས་བདེ་ལེགས་ཁྱེད་རང་ག་འདྲ་ཡོད",
+  "language": null
+ },
+ {
+  "label": "all_scripts/myanmar",
+  "state": "မင်္ဂလာပါ သင်နေကောင်းလား",
+  "language": null
+ },
+ {
+  "label": "all_scripts/georgian",
+  "state": "გამარჯობა როგორ ხარ დღეს",
+  "language": null
+ },
+ {
+  "label": "all_scripts/ethiopic",
+  "state": "ሰላም እንዴት ነህ ዛሬ",
+  "language": null
+ },
+ {
+  "label": "all_scripts/khmer",
+  "state": "សួស្តី តើអ្នកសុខសប្បាយទេ",
+  "language": null
+ },
+ {
+  "label": "all_scripts/hangul",
+  "state": "안녕하세요 오늘 기분이 어때요",
+  "language": null
+ },
+ {
+  "label": "all_scripts/kana",
+  "state": "こんにちは、今日は元気ですか",
+  "language": null
+ },
+ {
+  "label": "all_scripts/han",
+  "state": "你好，你今天过得怎么样",
+  "language": null
+ },
+ {
+  "label": "all_scripts/latin",
+  "state": "Hello, how are you feeling today?",
+  "language": "en"
+ },
+ {
+  "label": "tie/greek_then_cyrillic_1v1",
+  "state": "ΑА",
+  "language": null
+ },
+ {
+  "label": "tie/cyrillic_then_greek_1v1",
+  "state": "АΑ",
+  "language": null
+ },
+ {
+  "label": "tie/han_then_latin_1v1",
+  "state": "中 a",
+  "language": null
+ },
+ {
+  "label": "tie/latin_then_han_1v1",
+  "state": "a 中",
+  "language": null
+ },
+ {
+  "label": "tie/three_way_greek_cyrillic_armenian",
+  "state": "ΑАԱ",
+  "language": null
+ },
+ {
+  "label": "mixed/latin_han_arabic",
+  "state": "invoice 中文 فاتورة refund",
+  "language": null
+ },
+ {
+  "label": "mixed/devanagari_latin_majority_devanagari",
+  "state": "ग्राहक से दो बार शुल्क लिया गया refund",
+  "language": null
+ },
+ {
+  "label": "mixed/latin_majority_devanagari_minor",
+  "state": "Please refund the customer today ग्राहक",
+  "language": "en"
+ },
+ {
+  "label": "latin_tie/fr_vs_de",
+  "state": "être cette nicht sich",
+  "language": "fr"
+ },
+ {
+  "label": "latin_tie/de_vs_es",
+  "state": "nicht sich el los",
+  "language": "de"
+ },
+ {
+  "label": "latin_tie/es_vs_pt",
+  "state": "está una dos tres o não está",
+  "language": "es"
+ },
+ {
+  "label": "latin_tie/pt_vs_it",
+  "state": "não está o della sono",
+  "language": "pt"
+ },
+ {
+  "label": "astral/emoji_only",
+  "state": "😀🚀❤️",
+  "language": null
+ },
+ {
+  "label": "astral/emoji_with_latin",
+  "state": "refund please 😀 today",
+  "language": null
+ },
+ {
+  "label": "astral/deseret_letter_alone",
+  "state": "𐐀𐐁𐐂",
+  "language": null
+ },
+ {
+  "label": "astral/deseret_mixed_with_latin",
+  "state": "refund 𐐀 today",
+  "language": null
+ },
+ {
+  "label": "astral/mathematical_bold_letters",
+  "state": "𝐀𝐁𝐂",
+  "language": null
+ },
+ {
+  "label": "combining/devanagari_with_virama",
+  "state": "ग्राहक",
+  "language": null
+ },
+ {
+  "label": "combining/latin_with_combining_acute",
+  "state": "café résumé",
+  "language": null
+ },
+ {
+  "label": "turkish_i/capital_i_with_dot",
+  "state": "İstanbul",
+  "language": null
+ },
+ {
+  "label": "turkish_i/mixed_case",
+  "state": "İYİ GÜNLER İstanbul'da",
+  "language": null
+ },
+ {
+  "label": "turkish_i/lowercase_dotless",
+  "state": "ıstanbul",
+  "language": null
+ },
+ {
+  "label": "numerics/ascii_digits_only",
+  "state": "12345 67890",
+  "language": null
+ },
+ {
+  "label": "numerics/roman_numeral_nl",
+  "state": "chapter Ⅷ begins",
+  "language": null
+ },
+ {
+  "label": "numerics/fullwidth_digits",
+  "state": "１２３ refund",
+  "language": null
+ },
+ {
+  "label": "numerics/mixed_digits_and_words",
+  "state": "invoice 4411 was paid twice on 2024-01-05",
+  "language": "en"
+ },
+ {
+  "label": "nesting/depth_6_kept",
+  "state": {
+   "a": {
+    "b": {
+     "c": {
+      "d": {
+       "e": {
+        "f": "visible at depth 6"
+       }
+      }
+     }
+    }
+   }
+  },
+  "language": null
+ },
+ {
+  "label": "nesting/depth_7_dropped",
+  "state": {
+   "a": {
+    "b": {
+     "c": {
+      "d": {
+       "e": {
+        "f": {
+         "g": "invisible past depth 6"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "language": null
+ },
+ {
+  "label": "nesting/list_depth_7_dropped",
+  "state": [
+   [
+    [
+     [
+      [
+       [
+        [
+         "invisible list depth 7"
+        ]
+       ]
+      ]
+     ]
+    ]
+   ]
+  ],
+  "language": null
+ },
+ {
+  "label": "nesting/mixed_depth_boundary",
+  "state": {
+   "a": {
+    "b": {
+     "c": {
+      "d": {
+       "e": [
+        "kept depth 6",
+        {
+         "f": "dropped depth 7"
+        }
+       ]
+      }
+     }
+    }
+   }
+  },
+  "language": null
+ },
+ {
+  "label": "long/ascii_over_4000",
+  "state": "refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. refund please. ",
+  "language": "en"
+ },
+ {
+  "label": "long/multibyte_over_4000",
+  "state": "退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 退款请求 ",
+  "language": null
+ },
+ {
+  "label": "long/mixed_script_over_4000_boundary_near_switch",
+  "state": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa客户被重复扣款要求退款客户被重复扣款要求退款客户被重复扣款要求退款客户被重复扣款要求退款客户被重复扣款要求退款",
+  "language": null
+ },
+ {
+  "label": "long/english_over_1000",
+  "state": "Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. Please refund the duplicate charge on invoice 4411 today. ",
+  "language": "en"
+ },
+ {
+  "label": "sample/english",
+  "state": "The customer was charged twice this month and wants a refund.",
+  "language": "en"
+ },
+ {
+  "label": "sample/spanish_accent_stripped",
+  "state": "El cliente fue cobrado dos veces y quiere que le devuelvan el dinero",
+  "language": "es"
+ },
+ {
+  "label": "sample/french",
+  "state": "Le client a été facturé deux fois et demande un remboursement.",
+  "language": "fr"
+ },
+ {
+  "label": "sample/romanian",
+  "state": "Am fost taxat de două ori pentru factura din luna martie și vreau banii",
+  "language": "ro"
+ },
+ {
+  "label": "sample/hindi",
+  "state": "ग्राहक से दो बार शुल्क लिया गया और वह धनवापसी चाहता है।",
+  "language": null
+ },
+ {
+  "label": "sample/arabic",
+  "state": "تم خصم المبلغ مرتين من العميل ويريد استرداد الأموال",
+  "language": null
+ },
+ {
+  "label": "sample/japanese",
+  "state": "お客様は二重に請求されたため返金を希望しています。",
+  "language": null
+ },
+ {
+  "label": "sample/dict_state",
+  "state": {
+   "subject": "Double charge",
+   "body": "मुझसे दो बार शुल्क लिया गया"
+  },
+  "language": null
+ }
+]

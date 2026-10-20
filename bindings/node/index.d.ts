@@ -4,13 +4,15 @@ export type Question =
   | { type: 'score'; instructions: Json; criteria: Json[] }
   | { type: 'noul'; instructions: Json; criteria?: { false?: Json; true?: Json }; aggregate?: 'any' | 'all' };
 export type Overflow = 'reject' | 'truncate_end' | 'truncate_start' | 'scan';
-export interface Request { state: Json; questions: Record<string, Question>; model?: string; max_tokens?: number; temperatures?: Record<string, number>; overflow?: Overflow; max_windows?: number }
+export interface Request { state: Json; questions: Record<string, Question>; model?: string; lang?: string; max_tokens?: number; temperatures?: Record<string, number>; overflow?: Overflow; max_windows?: number }
 export type Answer =
   | { type: 'choice'; choice: string; probabilities: Record<string, number>; confidence: number; answer_confidence: number; window?: Window }
   | { type: 'score'; score: number; legend: Record<string, Json>; probabilities: Record<string, number>; confidence: number; answer_confidence: number; window?: Window }
   | { type: 'noul'; noul: number; confidence: number; answer_confidence: number; window?: Window };
 export interface Window { index: number; count: number; token_start: number; token_end: number }
-export interface Usage { input_tokens: number; output_tokens: 0; state_tokens?: number; state_tokens_dropped?: number; truncated_questions?: string[] }
+export interface Usage { input_tokens: number; output_tokens: 0; state_tokens?: number; state_tokens_dropped?: number; truncated_questions?: string[]; routing?: Routing }
+/** Why `"model": "auto"` chose its route. */
+export interface Routing { reason: 'lang' | 'english_text' | 'no_letters' | 'non_latin_script' | 'too_short' | 'other_language' | 'non_english_letters' | 'no_english_words'; lang?: string; script?: string; language?: string }
 export interface Result { answers: Record<string, Answer>; usage: Usage; model?: string }
 export class Laya {
   private constructor();
@@ -35,7 +37,7 @@ export interface DecisionSchema {
   type: 'object'; properties: Record<string, Property>; required?: string[];
   additionalProperties?: false; description?: string; title?: string;
 }
-export interface StructuredRequest { state: Json; schema: DecisionSchema; boolean_threshold?: number; model?: string; max_tokens?: number; temperatures?: Record<string, number>; overflow?: Overflow; max_windows?: number }
+export interface StructuredRequest { state: Json; schema: DecisionSchema; boolean_threshold?: number; model?: string; lang?: string; max_tokens?: number; temperatures?: Record<string, number>; overflow?: Overflow; max_windows?: number }
 export interface StructuredResult extends Result { values: Record<string, string | number | boolean> }
 export interface ObserverEvent { event: 'start' | 'end' | 'error'; request_id: number; status: number; elapsed_ms: number }
 export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; onEvent?: (event: ObserverEvent) => void | Promise<void> }
@@ -44,7 +46,9 @@ export interface OpenOptions { threads?: number; contextTokens?: number; overflo
 /** `requestId` (non-negative safe integer) is reported as `request_id` in events; defaults to a generated id. */
 export interface ExecuteOptions extends CallOptions { requestId?: number }
 export interface RouterRoute { path: string; config?: { threads?: number; context_tokens?: number; temperatures?: Record<string, number> } }
-export interface RouterConfig { models: Record<string, string | RouterRoute>; max_loaded?: number }
+export interface RouterConfig { models: Record<string, string | RouterRoute>; max_loaded?: number; auto?: AutoRoutes }
+/** Routes for `"model": "auto"`: confidently English text goes to `english`, everything else to `default`. */
+export interface AutoRoutes { english: string; default: string }
 
 export interface RuntimeInfo {
   schema_version: 1; package_version: string; abi_version: number; llama_cpp_commit: string;
@@ -53,7 +57,7 @@ export interface RuntimeInfo {
   numerical_profile: { id: string; cross_profile_equivalence: false };
   required_cpu_features: string[]; missing_cpu_features: string[]; cpu_supported: boolean;
   decision_types: string[]; features: string[]; limits: Record<string, number>;
-  model?: { architecture: string; name: string; decision_type: string; max_head_tokens: number; context_tokens: number; trained_context_tokens: number; temperatures: Record<string, number> };
+  model?: { architecture: string; name: string; decision_type: string; max_head_tokens: number; context_tokens: number; trained_context_tokens: number; temperatures: Record<string, number>; metadata_temperatures: Record<string, number> };
 }
 
 /** Native status codes carried on `error.status`. Mirrors the C ABI `dtl_status`. */

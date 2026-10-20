@@ -10,6 +10,10 @@
   vendored files; preserve them when redistributing source. Builds compile modified
   copies of some upstream files, including the vendored nlohmann/json header, using
   the recorded patches in `patches/llama.cpp` (see `patches/README.md`).
+- Laya (original implementation, https://github.com/NandhaKishorM/laya): Apache-2.0,
+  copyright the Laya authors. [License](licenses/Apache-2.0.txt). The word lists and
+  thresholds in `src/language.cpp` are taken from its `laya/lang.py`; the test cases in
+  `tests/original-reference` are its recorded results.
 - llamafile CPU kernels incorporated by ggml: MIT, Copyright 2024 Mozilla
   Foundation. [Full notice](licenses/llamafile-MIT.txt).
 - nlohmann JSON: MIT, Niels Lohmann. Included through llama.cpp's vendor directory.

@@ -115,7 +115,7 @@ async function init(options) {
       if (assets[id]?.temperatures !== undefined) route.temperatures = assets[id].temperatures;
       routes[id] = Object.keys(route).length ? { path, config: route } : path;
     }
-    const input = routed ? JSON.stringify({ models: routes, max_loaded: options.maxLoaded ?? 1 }) : files[0];
+    const input = routed ? JSON.stringify({ models: routes, max_loaded: options.maxLoaded ?? 1, ...(options.auto ? { auto: options.auto } : {}) }) : files[0];
     const status = await runtime.ccall(routed ? 'dtl_open_router' : 'dtl_open', 'number', ['string','string','number','number'], [input, JSON.stringify(config), out, error], { async: true });
     handle = runtime.HEAPU32[out >>> 2];
     const message = runtime.HEAPU32[error >>> 2];

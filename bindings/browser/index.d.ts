@@ -1,5 +1,5 @@
 import type { Overflow, Request, StructuredRequest, Result, StructuredResult, ExecuteOptions, RuntimeInfo } from './protocol.js';
-export type { Json, Question, Answer, Request, Result, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, ExecuteOptions, RuntimeInfo, LayaError } from './protocol.js';
+export type { Json, Question, Answer, Request, Result, Routing, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, ExecuteOptions, RuntimeInfo, LayaError } from './protocol.js';
 /** contextTokens/temperatures override the open options for this route only. */
 export interface ModelAsset { url: string; sha256?: string; contextTokens?: number; temperatures?: Record<string, number> }
 export interface BrowserOptions {
@@ -10,6 +10,8 @@ export interface BrowserOptions {
   /** Native open config: prompt capacity (default 512, max the model's trained length) and calibration overrides. */
   contextTokens?: number; overflow?: Overflow; temperatures?: Record<string, number>;
   maxPending?: number; maxModelBytes?: number; maxLoaded?: number;
+  /** Router only: routes for `"model": "auto"` (confidently English text to `english`, everything else to `default`). */
+  auto?: { english: string; default: string };
   initializationTimeoutMs?: number; signal?: AbortSignal;
 }
 export class Laya {

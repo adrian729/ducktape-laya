@@ -81,7 +81,7 @@ string(REGEX REPLACE "#define GGML_COMMIT[ \t]+\"[^\"]*\"" "#define GGML_COMMIT 
 file(WRITE "${DTL_GGML_VERSION_HEADER}" "${DTL_GGML_VERSION_TEXT}")
 include(cmake/runtime_patches.cmake)
 configure_file(cmake/build_config.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/build_config.hpp @ONLY)
-add_library(ducktape_laya ${DTL_LIBRARY_KIND} src/laya.cpp src/backend_llama.cpp src/platform.cpp
+add_library(ducktape_laya ${DTL_LIBRARY_KIND} src/laya.cpp src/backend_llama.cpp src/language.cpp src/platform.cpp
   ${UPSTREAM}/common/json.cpp ${UPSTREAM}/common/unicode.cpp
   ${UPSTREAM}/common/jinja/lexer.cpp ${UPSTREAM}/common/jinja/parser.cpp
   ${UPSTREAM}/common/jinja/runtime.cpp ${UPSTREAM}/common/jinja/value.cpp
@@ -175,6 +175,9 @@ if(DUCKTAPE_BUILD_TESTS)
   add_executable(laya-decision-tests tests/decision.cpp)
   target_include_directories(laya-decision-tests PRIVATE src ${DTL_VENDOR_INCLUDE})
   add_test(NAME decision-rules COMMAND laya-decision-tests)
+  add_executable(laya-language-tests tests/language.cpp src/language.cpp)
+  target_include_directories(laya-language-tests PRIVATE src ${DTL_VENDOR_INCLUDE})
+  add_test(NAME language-routing COMMAND laya-language-tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/original-reference/routing)
   add_executable(laya-fault-tests tests/faults.cpp)
   target_link_libraries(laya-fault-tests PRIVATE ducktape_laya)
   if(DUCKTAPE_TEST_MODEL)

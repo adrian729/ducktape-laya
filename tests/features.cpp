@@ -327,6 +327,40 @@ int main(int argc, char **argv) {
             invalid([&] { ducktape::engine::open_router(json({{"models", {{"x", {{"path", b}, {"config", {{"bogus", 1}}}}}}}}).dump()); });
         }
         checkpoint("router configuration");
+        {
+            // "model": "auto": confidently English text goes to auto.english, everything else to
+            // auto.default; "lang" overrides detection; usage reports why.
+            const auto b = (dir / "b.gguf").string(), c = (dir / "c.gguf").string();
+            const json routes = {{"en", b}, {"ml", c}};
+            auto automatic = ducktape::engine::open_router(json({{"models", routes}, {"auto", {{"english", "en"}, {"default", "ml"}}}}).dump(),
+                                                           json({{"threads", 2}}).dump());
+            json question = {{"q", {{"type", "noul"}, {"instructions", "Is a refund requested?"}}}};
+            auto ask = [&](json state, json lang = nullptr) {
+                json request = {{"model", "auto"}, {"state", std::move(state)}, {"questions", question}};
+                if (!lang.is_null()) request["lang"] = lang;
+                return json::parse(automatic.execute(request.dump()));
+            };
+            auto english = ask("The customer was charged twice and wants a refund for this invoice.");
+            expect(english["model"] == "en" && english["usage"]["routing"] == json({{"reason", "english_text"}, {"language", "en"}}), "auto routes English text");
+            auto hindi = ask({{"body", "ग्राहक से दो बार शुल्क लिया गया और वह धनवापसी चाहता है।"}});
+            expect(hindi["model"] == "ml" && hindi["usage"]["routing"] == json({{"reason", "non_latin_script"}, {"script", "devanagari"}}), "auto routes non-Latin text");
+            expect(ask("refund me")["model"] == "ml", "auto sends short undecided text to the default");
+            auto forced = ask("Der Kunde wurde zweimal belastet und möchte eine Rückerstattung.", "en-US");
+            expect(forced["model"] == "en" && forced["usage"]["routing"] == json({{"reason", "lang"}, {"lang", "en-US"}}), "lang overrides detection");
+            expect(ask("The customer was charged twice.", "de")["model"] == "ml", "a non-English lang goes to the default");
+            auto plain = json::parse(automatic.execute(json({{"model", "en"}, {"state", "x"}, {"questions", question}}).dump()));
+            expect(!plain["usage"].contains("routing"), "explicit routes report no routing");
+            invalid([&] { automatic.execute(json({{"model", "en"}, {"lang", "en"}, {"state", "x"}, {"questions", question}}).dump()); });
+            invalid([&] { ask("x", ""); });
+            invalid([&] { ask("x", 3); });
+            auto manual = ducktape::engine::open_router(json({{"models", routes}}).dump());
+            invalid([&] { manual.execute(json({{"model", "auto"}, {"state", "x"}, {"questions", question}}).dump()); });
+            invalid([&] { ducktape::engine::open_router(json({{"models", {{"auto", b}}}}).dump()); });
+            invalid([&] { ducktape::engine::open_router(json({{"models", routes}, {"auto", {{"english", "en"}, {"default", "nope"}}}}).dump()); });
+            invalid([&] { ducktape::engine::open_router(json({{"models", routes}, {"auto", {{"english", "en"}}}}).dump()); });
+            invalid([&] { ducktape::engine::open_router(json({{"models", routes}, {"auto", {{"english", "en"}, {"default", "ml"}, {"x", 1}}}}).dump()); });
+        }
+        checkpoint("automatic routing");
         std::cout << "feature tests passed\n";
         return 0;
     } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }

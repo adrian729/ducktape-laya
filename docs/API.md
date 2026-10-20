@@ -258,7 +258,7 @@ Reentrant Node calls enter the ordinary bounded FIFO queue. Binding-level errors
 such as queue overflow, closed handles, NUL bytes or unserializable input occur
 before native execution and do not emit native events.
 
-## Explicit local routing
+## Local routing
 
 ```js
 const router = await Laya.openRouter({
@@ -275,18 +275,46 @@ The registry accepts 1–16 model IDs (1–128 bytes each) mapped to local regul
 files. Paths are canonicalized at open, so relative paths resolve then and
 symlink aliases share a cache entry. Hard links with different canonical paths
 are separate entries. Requests must specify a registered `model`; missing or
-unknown IDs fail with invalid argument. Single-model strict execution rejects
-routing fields; legacy `decide` still ignores unrelated metadata. Routed results
-include the chosen `model` ID.
+unknown IDs fail with invalid argument. Single-model engines reject routing
+fields. Routed results include the chosen `model` ID. `auto` is reserved and
+cannot be a model ID.
 
 Loads are lazy and serialized. Before inference, each model must pass the core's
 Laya GGUF metadata, three-column output, template, marker, head-budget and
 calibration checks. This verifies format compatibility, **not model quality or
 artifact authenticity**. Applications should verify bundled weights against
 `models/manifest.json` using `scripts/verify-model.py` and keep resources immutable.
-Only the pinned English Q8_0 model has been validated here. Other models require
-their own tokenizer, calibration and decision tests before use. No automatic
-language detection, multilingual claim, fallback model or network download.
+The pinned English, multilingual and typed-decisions models are validated here
+(see the README); other models require their own tokenizer, calibration and
+decision tests before use. There is no fallback model or network download.
+
+### Choosing the model by language
+
+Routing by language is opt-in. Name the routes in `auto`, then send requests with
+`"model": "auto"`:
+
+```json
+{"models": {"en": "Laya-Q8_0.gguf", "ml": "laya-multilingual-f16.gguf"},
+ "auto": {"english": "en", "default": "ml"}}
+```
+
+Text that is confidently English goes to `english`; everything else goes to
+`default`, which should be the multilingual model since it also reads English.
+Only the string values of `state` are read (keys are usually English field
+names), up to 4,000 characters. The text is English when fewer than a fifth of
+its letters are non-Latin, it has at least four words, English function words are
+not outnumbered by another language's, and letters English does not use (é, ș,
+ł, ...) are rare. Short or undecided text goes to `default`. The word lists and
+thresholds come from the original Laya, and the detector agrees with all 180 of
+its recorded detection and routing cases (`tests/language.cpp`), but it is a
+heuristic: pass `lang` when the application knows the language. `"lang"`
+(`en`, `en-US`, `eng`, `English`, ...) skips detection; any other tag goes to
+`default`. `lang` is accepted only with `"model": "auto"`.
+
+`usage.routing` reports why: `reason` is `lang`, `english_text`, `no_letters`,
+`non_latin_script` (with `script`), `too_short`, `other_language` (with
+`language`), `non_english_letters` or `no_english_words`. Explicitly routed
+requests have no `routing`.
 
 `max_loaded` defaults to 1, allows 1–4, and bounds the number of loaded canonical
 paths. Least-recently-used models are unloaded **before** another is loaded at
