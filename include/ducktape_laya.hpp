@@ -36,13 +36,16 @@ struct call_options {
     dtl_cancel_callback should_cancel = nullptr;
     void *cancel_user_data = nullptr;
 };
-// A single model or a router. Calls on one engine serialize; move-only.
+// A single model or a router. Calls on one engine serialize; move-only. The
+// destructor closes the handle at once: do not destroy or move-assign over an
+// engine while a call on it is running.
 class engine {
     std::unique_ptr<dtl_engine, decltype(&dtl_close)> engine_{nullptr, dtl_close};
     explicit engine(dtl_engine *raw) { engine_.reset(raw); }
     static const char *optional(const std::string &config) { return config.empty() ? nullptr : config.c_str(); }
 public:
-    // config_json: empty, or {"threads", "context_tokens", "temperatures"}; see ducktape_laya.h.
+    // config_json: empty, or {"threads", "context_tokens", "overflow", "temperatures"};
+    // see ducktape_laya.h.
     static engine open(const std::string &model_path, const std::string &config_json = "") {
         check_text(model_path, "Path"); check_text(config_json, "Config");
         dtl_engine *raw = nullptr;
@@ -50,7 +53,8 @@ public:
         check(dtl_open(model_path.c_str(), optional(config_json), &raw, &message), message);
         return engine(raw);
     }
-    // router_json: {"models": {"id": "path.gguf" | {"path", "config"}}, "max_loaded": 1}.
+    // router_json: {"models": {"id": "path.gguf" | {"path", "config"}}, "max_loaded": 1,
+    // "auto": {"english", "default"}}; requests name a route or "model": "auto".
     static engine open_router(const std::string &router_json, const std::string &config_json = "") {
         check_text(router_json, "Router config"); check_text(config_json, "Config");
         dtl_engine *raw = nullptr;

@@ -41,7 +41,7 @@ explicit setup step. Python is only needed to run this optional helper.
 Consumer CMake projects use:
 
 ```cmake
-find_package(ducktape_laya 0.1 CONFIG REQUIRED)
+find_package(ducktape_laya 0.2 CONFIG REQUIRED)
 target_link_libraries(my_application PRIVATE ducktape::laya)
 ```
 
@@ -75,8 +75,8 @@ release gates. Public source availability does not imply a published package rel
 
 ```sh
 # Build with DUCKTAPE_BUILD_NODE=ON and NODE_INCLUDE_DIR first.
-python3 scripts/package-linux.py --build build --output build/packages-0.1.0
-python3 tests/installed-packages.py build/packages-0.1.0 /path/to/approved.gguf
+python3 scripts/package-linux.py --build build --output build/packages-0.2.0
+python3 tests/installed-packages.py build/packages-0.2.0 /path/to/approved.gguf
 ```
 
 The output contains a native installation tarball, an npm tarball with its own
@@ -86,7 +86,7 @@ directories are rejected. No script publishes anything or downloads a model.
 To use the local npm tarball in an application without the wizard:
 
 ```sh
-npm install --save /path/to/ducktape-laya-0.1.0.tgz
+npm install --save /path/to/ducktape-laya-0.2.0.tgz
 ```
 
 Then `const { Laya } = require('ducktape-laya')` and
@@ -153,7 +153,7 @@ The reproducible Electron integration consumer lives under `tests/electron`:
 ```sh
 npm ci --prefix tests/electron
 node tests/electron/node_modules/electron/install.js
-node tests/electron/run.cjs build/packages-0.1.0/ducktape-laya-0.1.0.tgz /path/to/approved.gguf
+node tests/electron/run.cjs build/packages-0.2.0/ducktape-laya-0.2.0.tgz /path/to/approved.gguf
 ```
 
 Only the test setup downloads Electron; applications do not acquire this test

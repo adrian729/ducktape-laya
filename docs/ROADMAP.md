@@ -101,6 +101,11 @@ Features the original Laya has that ducktape-laya deliberately leaves out.
 | Hooks that rewrite questions or budgets | Observers stay passive, so planning is deterministic and nothing reenters it |
 | Presets and option-order rotations as API | They are request content: ship as example request files and a documented recipe |
 | Email cleaner, embedding shortlist | Application helpers; the shortlist needs a second model |
+| Automatic typed-decisions workflow detection (question IDs matching fixed workflows) | Hidden routing by question names; route to the typed-decisions model explicitly |
+| Naming the language of Latin-script text in detection | Routing only decides English or not; `usage.routing.language` comes from function words alone, and the detector already agrees with all 180 of the original's routing cases |
+| `option_layout: "parallel"` | The core renders the one prompt layout defined by the GGUF template, as llama.cpp's decision server does; option-order bias has a documented rotation recipe |
+| `usage.truncated` | Redundant with a non-empty `usage.truncated_questions`, which here also lists questions whose instructions or options were shortened |
+| `batch_tokens` open setting | It sized the batched forward pass, which was not adopted (see Research questions) |
 | Temperature fitting, fine-tuning, evaluation harnesses | Training tooling: use the original's tools, then convert the model or pass the fitted temperatures |
 | HTTP server, MCP server, LangChain/LlamaIndex/CrewAI integrations | In-process embedding is a project goal; integrations could later sit on top of the Python binding |
 | Intel Macs | Apple stopped selling them in 2023 and CI runners are being retired; they still build from source |

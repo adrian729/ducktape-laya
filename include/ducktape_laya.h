@@ -28,17 +28,24 @@ DTL_API uint32_t dtl_abi_version(void);
 
 /* config_json may be NULL. Keys (unknown keys are rejected):
  *   "threads": 0 (automatic, capped at 4) or 1..256
- *   "context_tokens": capacity reserved for one prompt, up to the model's trained
- *     length; default 512 (or the trained length if smaller)
+ *   "context_tokens": capacity reserved for one prompt, 32 up to the model's
+ *     trained length; default 512 (or the trained length if smaller)
+ *   "overflow": default policy for prompts over their limit: "reject" (default),
+ *     "truncate_end", "truncate_start" or "scan"; a request's own value wins
  *   "temperatures": calibration overrides keyed like the GGUF metadata, e.g.
- *     {"choice": 1.5, "choice.3_5": 1.7, "noul.2": 2.0}; each value finite and > 0 */
+ *     {"choice": 1.5, "choice.3_5": 1.7, "noul.2": 2.0}; each value finite, > 0
+ *     and representable as a float. Used as given; temperatures stored in the
+ *     model are bounded to [0.5, 5]. */
 DTL_API dtl_status dtl_open(const char *model_path, const char *config_json,
                             dtl_engine **out, char **error);
 /* router_json: {"models": {"id": "path.gguf" | {"path": "...", "config": {...}}},
- * "max_loaded": 1}. 1..16 routes, max_loaded 1..4. Paths are checked at open;
- * models load lazily (least recently used evicted first). config_json applies to
- * every model; a route's own "config" overrides it key by key. Requests must
- * name a route in "model". */
+ * "max_loaded": 1, "auto": {"english": "id", "default": "id"}}. 1..16 routes,
+ * max_loaded 1..4 (loaded path and config pairs), "auto" optional. Paths are
+ * checked at open; models load lazily (least recently used evicted first).
+ * config_json applies to every model; a route's own "config" overrides it key by
+ * key. Requests name a route in "model", or send "model": "auto" (with an
+ * optional "lang") to choose "english" or "default" by language; "auto" cannot
+ * be a route ID. */
 DTL_API dtl_status dtl_open_router(const char *router_json, const char *config_json,
                                    dtl_engine **out, char **error);
 /* Allocated diagnostics JSON, freed with dtl_free. A NULL engine reports runtime
@@ -79,10 +86,12 @@ DTL_API dtl_call_options dtl_default_call_options(void);
 DTL_API uint32_t dtl_cancel_flag(void *user_data);
 
 /* One request object or an array of 1..32 (at most 128 questions, 1 MiB in
- * total); arrays return arrays in input order. Every request is validated and
- * prepared before inference; errors return no partial result. Calls on one handle
- * serialize; separate handles may run concurrently. options may be NULL.
- * Request format and per-request settings ("max_tokens", "temperatures"):
+ * total); arrays return arrays in input order. Every request is validated first.
+ * A single-model engine then prepares every request before any inference; a
+ * router loads, prepares and runs request by request. Errors return no partial
+ * result. Calls on one handle serialize; separate handles may run concurrently.
+ * options may be NULL. Request format and per-request settings ("max_tokens",
+ * "temperatures", "overflow", "max_windows", and "lang" with "model": "auto"):
  * docs/API.md. */
 DTL_API dtl_status dtl_execute(dtl_engine *engine, const char *request_json,
                                const dtl_call_options *options, char **result_json, char **error);

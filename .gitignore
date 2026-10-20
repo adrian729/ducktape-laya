@@ -5,6 +5,7 @@ node_modules/
 *.node
 *.gguf
 __pycache__/
+/.venv-convert/
 .DS_Store
 
 /.playwright-cli/

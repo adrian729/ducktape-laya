@@ -12,8 +12,10 @@ manifest before real inference; the runner never downloads one.
 
 ```sh
 npm ci --ignore-scripts --prefix tests/typescript
-python3 scripts/validate.py --output build-check-model-free
+python3 scripts/validate.py --packages --output build-check-model-free
 python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf \
+  --extra-model /path/to/laya-multilingual-f16.gguf \
+  --extra-model /path/to/laya-typed-decisions-q8_0.gguf \
   --packages --upstream-reference --output build-check-native
 python3 scripts/check-reproducibility.py --output build-repro --jobs 2
 ```
@@ -29,8 +31,7 @@ locked command above. `tests/typescript/check.py --node-package NPM_TARBALL
 Reused candidate
 source/revision overrides are cleared, and built runtime diagnostics must match
 the approved compatibility record before any test gate is accepted. With a model,
-it also compares C, C++, Rust, Node, Python, Java, .NET and Go fixture outputs. `--packages` builds actual artifacts
-and exercises installed consumers outside the checkout. `--reproducibility` adds two
+it also compares C, C++, Rust, Node, Python, Java, .NET and Go fixture outputs. `--packages` builds actual artifacts and runs `tests/package-smoke.py`, which needs no model: outside the checkout, a C program links the native tarball, the npm package loads its addon and the wheel imports its bundled library, and each must report the recorded ABI version. With a model, `--packages` also runs `tests/installed-packages.py`, which exercises the installed consumers with real inference. `--reproducibility` adds two
 independent builds; it is intentionally optional because it recompiles the runtime.
 
 Every run retains commands, logs, exit codes and source/runtime/model/fixture/binary
@@ -45,15 +46,9 @@ shared-core contracts. Both sides receive structured values already serialized t
 way the original Laya writes them, so they render identical prompts. Without this
 option, the upstream-reference gate stays not run.
 
-With a model, `tests/original-reference.py` also runs the original Laya
-implementation's recorded cases (`tests/original-reference/<model>/`, Apache-2.0,
-with provenance) through the C consumer at the checkpoint's trained sequence
-length: the `original_reference` gate. Input token counts must match exactly, and
-probabilities must stay within 0.05 with unchanged decisions. On near ties (the
-original's top two within 0.05) the decision may differ, since the model is
-undecided and quantization noise can reorder options; the probabilities are still
-gated. Cases for features the core does not support yet must still be refused;
-when one starts passing, it moves into the supported set.
+With a model, `tests/original-reference.py` also runs the original Laya implementation's recorded cases (`tests/original-reference/<model>/`, Apache-2.0, with provenance) through the C consumer at the checkpoint's trained sequence length: the `original_reference` gate. Input token counts must match exactly, and probabilities must stay within 0.05 with unchanged decisions. On near ties (the original's top two within 0.05) the decision may differ, since the model is undecided and quantization noise can reorder options; the probabilities are still gated. The original truncates over-long input by default, so its long-state and many-option cases run with `overflow: truncate_end`, and their `state_tokens` and `state_tokens_dropped` must match too. Cases for features the core does not support (the embedding shortlist) must still be refused; when one starts passing, it moves into the supported set.
+
+`--extra-model PATH` (repeatable) qualifies an additional pinned model, one listed under `additional_models` in `release/compatibility.json` (the multilingual and typed-decisions models), matched to its pinned manifest by file hash. Each runs the `original_reference` gate against its own recorded cases and, with `--upstream-reference`, the upstream comparison. The results go to `additional_model_gates` in `report.json`. `check-candidate.py` requires both gates passed for every additional model, so a candidate cannot qualify without them. The primary model is still passed with `--model`.
 
 The core bounds the temperatures stored in a model to [0.5, 5], as the original
 does; llama.cpp applies them unbounded. The upstream-reference checks therefore
@@ -65,9 +60,7 @@ the runner does not silently transplant historical results to a different binary
 This runner currently covers a subset of release gates and cannot approve a release
 by itself. A successful normal exit means its selected checks passed.
 
-The GitHub workflow defines Ubuntu 24.04 model-free checks for Clang/Node 24 and
-GCC/Node 26. Manual dispatch can explicitly enable the pinned model download and
-installed-package checks. Workflow dependencies are pinned by commit; Rust and Node
+The GitHub workflow defines Ubuntu 24.04 model-free checks for Clang/Node 24 and GCC/Node 26, including `--packages` and its package smoke test. Manual dispatch can explicitly enable the pinned model download and the real-model installed-package checks. Workflow dependencies are pinned by commit; Rust and Node
 versions are explicit. Consult the relevant GitHub Actions run for results;
 workflow definitions alone are not release evidence. CI does not publish packages
 or update dependencies.
@@ -135,16 +128,13 @@ identities for the remaining long or instrumented gates:
 python3 scripts/check-stress.py /path/to/Laya-Q8_0.gguf --build build-validation --output build-stress  # --seconds 28800 for soak
 python3 scripts/check-sanitizers.py /path/to/Laya-Q8_0.gguf --output build-sanitizers
 python3 tests/rollback.py LKG_PACKAGES CANDIDATE_PACKAGES /path/to/Laya-Q8_0.gguf --report build/rollback.json
-node tests/electron/run.cjs PACKAGES/ducktape-laya-0.1.0.tgz /path/to/Laya-Q8_0.gguf build/electron.json
+node tests/electron/run.cjs PACKAGES/ducktape-laya-0.2.0.tgz /path/to/Laya-Q8_0.gguf build/electron.json
 python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COMMIT --report build-candidate/gates.json
 ```
 
 The sanitizer runner builds ASan+UBSan and TSan configurations, runs every
 registered native test with the model (allocation-failure injection is skipped
-under sanitizer runtimes) and a short stress run. The rollback rehearsal switches
-an installed application from retained last-known-good packages to the candidate
-and back with one consumer binary, requiring the LKG library and byte-identical
-outputs after rollback. `check-candidate.py` takes a JSON map of evidence names
+under sanitizer runtimes) and a short stress run. The rollback rehearsal switches an installed application from retained last-known-good packages to the candidate and back, requiring the LKG library and byte-identical outputs after rollback. When both sides have the same ABI, one consumer binary must work with both. Across an ABI break (0.1.0 to 0.2.0), an application must rebuild, so each side runs a consumer built from its own packaging source commit against its own headers. `check-candidate.py` takes a JSON map of evidence names
 (`native`, `native_matrix`, `browser_package`, `browser`, `browser_isolated`,
 `userspaces`, `electron`, `cross_cpu`, `sanitizers`, `fuzz`, `stress`, `soak`,
 `reproducibility`, `performance`, `security_review`, `upgrade`, `model_upgrade`,
@@ -166,9 +156,7 @@ commit's own tree, so later tooling commits cannot alter what is checked.
 Before publication, require all applicable recorded gates, review current evidence
 and numeric-profile limits, verify the security contact and release hosting, and
 retain the prior artifacts for rollback. Publication is an explicit maintainer
-action. After the GitHub release exists, run the `attest-release` workflow with its
-tag: it checks the assets against `SHA256SUMS` and a `release_ready` `gates.json`,
-then signs a release-qualification attestation for each asset. It is not build
+action. After the GitHub release exists, run the `attest-release` workflow with its tag: it checks that `gates.json` is `release_ready`, qualified the tagged commit and came from a clean checker; that the published native and browser inventories are the ones `gates.json` qualified; and that every asset matches its inventory and `SHA256SUMS`. It then signs a release-qualification attestation for each asset. It is not build
 provenance; the assets are built and qualified locally. Registry status, missing
 publishing work and the release-day order are in [PUBLISHING.md](PUBLISHING.md).
 Each numerical profile must pass strict same-backend upstream checks.

@@ -18,15 +18,12 @@
   Foundation. [Full notice](licenses/llamafile-MIT.txt).
 - nlohmann JSON: MIT, Niels Lohmann. Included through llama.cpp's vendor directory.
   [License](licenses/nlohmann-json-MIT.txt).
-- Laya model: the upstream model card declares Apache-2.0.
-  [Model source](https://huggingface.co/convaiinnovations/laya),
-  [GGUF conversion](https://huggingface.co/ggml-org/Laya-GGUF),
-  [license text](licenses/Apache-2.0.txt). It is fine-tuned from
-  [ModernBERT-large](https://huggingface.co/answerdotai/ModernBERT-large) (Apache-2.0).
-  Neither the Laya model, its GGUF conversion nor ModernBERT-large publishes a
-  NOTICE file. Weights are not committed or downloaded by the runtime.
-  `models/manifest.json` pins the tested conversion. An app distributing the
-  model must include the Apache-2.0 text and this attribution with it.
+- Laya models: the upstream model card declares Apache-2.0 for all three checkpoints in [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) ([license text](licenses/Apache-2.0.txt)).
+  - English: fine-tuned from [ModernBERT-large](https://huggingface.co/answerdotai/ModernBERT-large) (Apache-2.0). Used through the [ggml-org GGUF conversion](https://huggingface.co/ggml-org/Laya-GGUF), pinned by `models/manifest.json`.
+  - Multilingual: fine-tuned from [jhu-clsp/mmBERT-base](https://huggingface.co/jhu-clsp/mmBERT-base) (MIT). Pinned by `models/laya-multilingual.json`.
+  - Typed decisions: fine-tuned from ModernBERT-large (Apache-2.0). Pinned by `models/laya-typed-decisions.json`.
+
+  No official GGUF exists for the multilingual and typed-decisions checkpoints; users build them with `scripts/convert-model.py` from the source revision and file hashes in those manifests. Neither the Laya models, the GGUF conversion nor ModernBERT-large publishes a NOTICE file. Weights are not committed or downloaded by the runtime. An app distributing a model must include the Apache-2.0 text and this attribution with it, and for the multilingual model also credit mmBERT-base, whose model card declares MIT (its repository publishes no license file or copyright line).
 
 Ducktape Laya is an independent integration, not an upstream Laya release.
 

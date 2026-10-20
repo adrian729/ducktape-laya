@@ -14,8 +14,11 @@ The product requirements are in [PLAN.md](PLAN.md); observable behavior is in
 | Weights, vocabulary, systemone template, calibration temperatures and head limits | App-supplied GGUF; approved artifact identity in `models/manifest.json` |
 | GGUF loading, tokenization, ModernBERT decision graph and tensor execution | Pinned llama.cpp and ggml |
 | Template parsing and rendering | Upstream `common/jinja` and `common/json`, linked privately |
-| Prompt inputs, marker positions, output columns, calibration and primitive answers | `src/backend_llama.cpp` |
-| Request bounds, schema planning/projection, batch order, routing/cache and passive events | `src/laya.cpp` |
+| Prompt inputs, tokenization between markers, overflow handling (truncation, scan windows), marker positions, output columns and stored-temperature bounds | `src/backend_llama.cpp` |
+| Calibrated probabilities, confidence fields, tie rule and single-option answers (model-independent arithmetic) | `src/decision.hpp` |
+| Serializing structured values as the original Laya does (Python `json.dumps`) | `src/python_json.hpp` |
+| Language detection for `"model": "auto"` | `src/language.cpp` |
+| Request bounds, open config, schema planning/projection, batch order, routing/cache and passive events | `src/laya.cpp` |
 | Cooperative stop state, deadlines and cancellable lock waits | `src/execution.hpp` |
 | Runtime diagnostics and native CPU compatibility checks | `src/platform.cpp` |
 | Ownership, type conversion, error translation and platform scheduling | Thin language bindings |
@@ -43,10 +46,16 @@ keeping the small decision-processing adaptation private. Reassess this boundary
 during upgrades; adopt a reusable upstream component only if it preserves the
 embedded contract and does not bring an inference server into consumer apps.
 
-Intentional differences from server processing: text-only Laya, explicit request
-limits, positive finite temperatures, rejection of prompt/head/option overflow
-instead of silent truncation, and sequential question execution. Keep the model's
-calibration and output interpretation intact. Runtime fixes use separately pinned,
+Intentional differences from server processing:
+
+- Text-only Laya and explicit request limits.
+- Input over the limit is handled by an explicit overflow policy. The default, `reject`, refuses it instead of truncating silently; `truncate_end`, `truncate_start` and `scan` are opt-in, and only they shorten heads the way the server does.
+- Temperatures stored in the model are bounded to [0.5, 5], as the original Laya does; the server applies them unbounded. App-supplied temperatures must be positive and finite and are used as given.
+- Structured state, instructions and descriptions are serialized as the original Laya writes them (Python `json.dumps`) before rendering; the template's own JSON output rounds floats.
+- The text between mask tokens is tokenized on its own, as in training; one tokenization of the whole prompt drops whitespace before a left-stripping mask token (mmBERT).
+- Questions run sequentially, one forward pass each (one per window under `scan`).
+
+Keep the model's calibration and output interpretation intact. Runtime fixes use separately pinned,
 hash-checked patches applied to build-directory copies. The submodule stays clean;
 see [patch policy](../patches/README.md) and [UPGRADES.md](UPGRADES.md).
 
@@ -57,17 +66,10 @@ Prepared tokens, marker positions, output columns, llama handles and template
 objects remain private to the backend. Prepared questions belong to the backend
 that created them and may only execute before that backend closes.
 
-Each engine owns its model/context and a mutex. Calls on one engine serialize;
-independent engines may execute concurrently. A single-engine batch is entirely
-planned and tokenized before inference. The router owns canonical paths, a bounded
-LRU of engines and its own mutex: it validates the whole request plan first, then
-loads, prepares and executes routes in order. Errors return no partial output;
+Each engine owns its model/context and a mutex. Calls on one engine serialize; independent engines may execute concurrently. A single-engine batch is entirely planned and tokenized before inference. The router owns canonical paths, a bounded LRU of loaded models keyed by path and config, the `auto` routes and its own mutex: it validates the whole request plan and resolves routes first, then loads, prepares and executes request by request. Errors return no partial output;
 cache mutations and completed internal computation are not rolled back.
 
-The C boundary returns stable statuses and allocated JSON/error buffers freed by
-`dtl_free`. C++ RAII and Rust ownership wrap those handles. Rust shared references
-permit concurrent calls because native execution serializes; destruction must not
-race a call. Observers run outside inference/cache locks. Cancellation callbacks
+The C boundary returns stable statuses and allocated JSON/error buffers freed by `dtl_free`. C++ RAII and Rust ownership wrap those handles. Rust shared references permit concurrent calls because native execution serializes; destruction must not race a call (the C++ destructor closes at once, and Rust ownership prevents dropping during a call). Observers run outside inference/cache locks. Cancellation callbacks
 have a different contract: they may run on backend threads and must not reenter
 the active handle. See [API.md](API.md) for both callback contracts.
 
@@ -92,9 +94,7 @@ inference failures never silently switch backends or recompute a result.
 Browser requests still pass through the C ABI and shared planner. Platform code
 may adapt memory, scheduling, cancellation transport and device-loss handling,
 but must preserve request/result semantics. Native ISA profiles, WASM and WebGPU
-are distinct numerical profiles: probability differences can change choices and
-threshold projections. Browser delivery remains experimental pending full release
-qualification. Structural/API parity does not promise interchangeable predictions.
+are distinct numerical profiles: probability differences can change choices and threshold projections. Browser delivery is experimental: 0.1.0 passed the browser gates on Chromium 152 only, and main (0.2.0) is not yet qualified. Structural/API parity does not promise interchangeable predictions.
 
 ## Conformance and maintenance
 
