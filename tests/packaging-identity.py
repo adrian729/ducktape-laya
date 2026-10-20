@@ -46,7 +46,7 @@ class BrowserIdentityTests(unittest.TestCase):
         for name in ['laya.mjs', 'laya.wasm']:
             (self.build / name).write_text(name)
         self.identity = {'package_version': '1', 'llama_cpp_commit': 'runtime', 'runtime_patches': [],
-                         'toolchain': 'sdk compiler', 'backend': 'wasm', 'source': self.source.copy(), 'maximum_memory': 4294967296,
+                         'toolchain': 'sdk compiler', 'backend': 'wasm', 'source': self.source.copy(), 'maximum_memory': 4294967296, 'optimization': '1', 'webgpu_debug': False,
                          'assets': {name: sha256(self.build / name) for name in ['laya.mjs', 'laya.wasm']}}
 
     def check(self, slot):
@@ -68,6 +68,13 @@ class BrowserIdentityTests(unittest.TestCase):
         for ceiling in [536870912, None]:
             self.identity['maximum_memory'] = ceiling
             with self.assertRaisesRegex(ValueError, 'memory ceiling'):
+                self.check('wasm')
+
+    def test_test_builds_rejected(self):
+        product = dict(self.identity)
+        for key, value in [('optimization', '2'), ('optimization', None), ('webgpu_debug', True), ('webgpu_debug', None)]:
+            self.identity = {**product, key: value}
+            with self.assertRaisesRegex(ValueError, 'not a product build'):
                 self.check('wasm')
 
     def test_old_identity_requires_rebuild(self):

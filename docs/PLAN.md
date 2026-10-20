@@ -15,9 +15,9 @@ presented as completed capabilities until their gates are satisfied.
 |---|---|
 | Inference | llama.cpp |
 | Model format | GGUF |
-| Native interfaces | Shared C ABI, thin C++, Rust and Node/TypeScript bindings |
+| Native interfaces | Shared C ABI, thin C++, Rust, Node/TypeScript (and Electron), Python, Go, Java/Kotlin and .NET bindings |
 | Browser execution | WebGPU/WASM path, reusing the shared implementation wherever feasible |
-| Higher-level features | Routing, batching, hooks and structured decisions |
+| Higher-level features | Routing (explicit and by language), batching, passive observers, structured decisions and long-input policies |
 | Supported operating system for now | Linux; advertise only tested CPU architectures, distributions/runtime baselines and execution backends |
 
 One shared implementation owns common behavior. Bindings adapt language types,
@@ -38,21 +38,11 @@ validated capability, not implied by browser WebGPU support.
 
 ## Current baseline and remaining release work
 
-The implementation includes Linux CPU GGUF inference, C/C++/Rust/Node interfaces,
-bounded sequential batching, flat structured decisions, passive hooks, explicit
-local routing, cooperative cancellation/deadlines and runtime/model diagnostics.
-Native/npm/Rust packaging, Electron/ASAR consumer checks, CPU preflight,
-hash-checked runtime patches, SBOM generation, isolated upgrade tooling,
-reproducibility checks and Linux CI are implemented. Browser delivery uses the
-same core through experimental WASM/WebGPU packages and module workers.
+0.1.0 (ABI 1) is published and attested: the GitHub release, npm and crates.io. It shipped Linux CPU GGUF inference with the English model, C/C++/Rust/Node interfaces, the experimental browser package, bounded sequential batching, flat structured decisions, passive observers, explicit local routing, cooperative cancellation/deadlines and runtime/model diagnostics.
 
-Remaining release work includes numerical-profile qualification and broader
-physical CPU/browser/GPU and resource-pressure coverage, controlled performance
-regression budgets, a declared distribution baseline and signed package delivery.
-The source repository is public; package publication and signing are separate
-release actions. Private vulnerability reporting is defined in
-[SECURITY.md](../SECURITY.md). Existing tooling does not establish readiness for
-untested operating systems or hardware.
+The next release is 0.2.0 (ABI 2), on main and not yet qualified; see [CHANGELOG.md](../CHANGELOG.md). It adds one engine handle with a JSON open config, configurable context and calibration, overflow policies for long input, the confidence fields, the multilingual and typed-decisions models, routing by language, and the Python, Go, Java and .NET bindings. Native/npm/Rust/Python packaging, Electron/ASAR consumer checks, CPU preflight, hash-checked runtime patches, SBOM generation, isolated upgrade tooling, rollback rehearsal, reproducibility checks, release attestation and Linux CI are implemented.
+
+Remaining work: qualify and publish 0.2.0, publish the Python, Go, Java and .NET packages and downloadable converted models ([PUBLISHING.md](PUBLISHING.md)), and broaden physical CPU/browser/GPU and resource-pressure coverage. Private vulnerability reporting is defined in [SECURITY.md](../SECURITY.md). Existing tooling does not establish readiness for untested operating systems or hardware.
 
 Demos remain opt-in. Shared conformance fixtures and automated consumers live
 under `tests/`. Model adaptation is private to `src/backend_llama.cpp`; all
@@ -124,7 +114,7 @@ No claim that all future upstream changes can be absorbed without adapter work.
 
 - Specify handle/thread ownership, concurrent calls, shutdown, callback reentry,
   partial-failure semantics and error categories consistently across interfaces.
-  Preserve the existing strict bounds and documented legacy API behavior.
+  Preserve the existing strict bounds and request contract.
 - Define queue, request, token, batch, loaded-model and memory budgets. Model-count
   limits are not byte-level RAM guarantees; measure actual peaks and use an
   explicit policy for admission, loading failures and cache eviction.
@@ -254,7 +244,7 @@ this workflow early, before adding more model-specific code or backends.
 4. Run shared contract fixtures: tokenization/prompt boundaries and output
    interpretation where we own them; choice/noul/score probabilities; schema
    projection; overflow/errors; routing and lifecycle; batch order/isolation;
-   hooks; and cross-binding results. Compare with the corresponding upstream
+   passive observer events; and cross-binding results. Compare with the corresponding upstream
    reference for the same artifact/configuration where available.
 5. Use predeclared numeric tolerances for each backend. Require exact equality
    for paths promising it; justify numeric/backend changes rather than widening

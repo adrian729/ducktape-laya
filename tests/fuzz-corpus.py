@@ -17,7 +17,12 @@ for fixture in (root / 'tests/fixtures').glob('*.json'):
 seeds = {'config': '{"models":{"fuzz":"/proc/self/exe"},"max_loaded":1}',
          'null': 'null', 'deep': '[' * 66 + '0' + ']' * 66,
          'oversized': ' ' * 1048577,
-         'nul': '{"state":"x\\u0000y","questions":{"q":{"type":"noul"}}}'}
+         'nul': '{"state":"x\\u0000y","questions":{"q":{"type":"noul"}}}',
+         # Language detection runs before the model loads.
+         'auto': '{"model":"auto","state":{"a":"Le client a été facturé deux fois","b":["ग्राहक","github.com x@y.z"]},'
+                 '"questions":{"q":{"type":"noul"}}}',
+         'auto-lang': '{"model":"auto","lang":"en-US","state":"x","questions":{"q":{"type":"noul"}}}',
+         'auto-config': '{"models":{"a":"/proc/self/exe"},"auto":{"english":"a","default":"a"}}'}
 for name, value in seeds.items():
     (a.output / name).write_text(value)
 print('Seeded ' + str(a.output))

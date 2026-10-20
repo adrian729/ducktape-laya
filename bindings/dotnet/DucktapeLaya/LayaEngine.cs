@@ -31,8 +31,8 @@ public sealed unsafe class LayaEngine : IDisposable
     {
         var cfg = config?.ToJson();
         Native.Ensure();
-        var path = Encode(modelPath);
-        var json = cfg is null ? null : Encode(cfg);
+        var path = Encode(modelPath, "model path");
+        var json = cfg is null ? null : Encode(cfg, "config");
         void* raw = null; byte* error = null;
         int status;
         fixed (byte* p = path) fixed (byte* c = json) status = Native.dtl_open(p, c, &raw, &error);
@@ -45,8 +45,8 @@ public sealed unsafe class LayaEngine : IDisposable
     {
         var cfg = config?.ToJson();
         Native.Ensure();
-        var router = Encode(routerJson);
-        var json = cfg is null ? null : Encode(cfg);
+        var router = Encode(routerJson, "router config");
+        var json = cfg is null ? null : Encode(cfg, "config");
         void* raw = null; byte* error = null;
         int status;
         fixed (byte* p = router) fixed (byte* c = json) status = Native.dtl_open_router(p, c, &raw, &error);
@@ -115,6 +115,9 @@ public sealed unsafe class LayaEngine : IDisposable
 
     void EnterRead()
     {
+        // Fail fast once Dispose is pending rather than queueing behind the writer, which would block
+        // (or deadlock a callback waiting on another thread's call); re-checked under the lock.
+        if (_closing) throw new ObjectDisposedException(nameof(LayaEngine));
         _lock.EnterReadLock();
         if (!_closing) return;
         ExitRead();
@@ -145,7 +148,7 @@ public sealed unsafe class LayaEngine : IDisposable
 
     string Run(string request, ulong requestId, TimeSpan? timeout, Action<string>? onEvent, CancellationToken token)
     {
-        var bytes = Encode(request);
+        var bytes = Encode(request, "request");
         var native = Native.dtl_default_call_options();
         native.RequestId = requestId;
         native.TimeoutMs = TimeoutMs(timeout);
@@ -205,13 +208,23 @@ public sealed unsafe class LayaEngine : IDisposable
         return (ulong)ms;
     }
 
-    static byte[] Encode(string text)
+    // Strict: lone surrogates would otherwise be silently replaced with U+FFFD.
+    static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
+
+    static byte[] Encode(string text, string what = "input")
     {
         ArgumentNullException.ThrowIfNull(text);
         if (text.Contains('\0')) throw new LayaException(1, "Input contains a NUL byte");
-        var bytes = new byte[Encoding.UTF8.GetByteCount(text) + 1];
-        Encoding.UTF8.GetBytes(text, bytes);
-        return bytes;
+        try
+        {
+            var bytes = new byte[StrictUtf8.GetByteCount(text) + 1];
+            StrictUtf8.GetBytes(text, bytes);
+            return bytes;
+        }
+        catch (EncoderFallbackException)
+        {
+            throw new LayaException(1, what + " is not valid Unicode");
+        }
     }
 
     static string ReadInfo(void* engine)

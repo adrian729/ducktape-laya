@@ -22,6 +22,26 @@ cmake --install build --prefix "$PWD/build/staging"
 After supplying the model, the optional installed-consumer check is
 `python3 tests/installed-native.py build/staging /path/to/Laya-Q8_0.gguf`.
 
+### Build options
+
+| CMake option | Default | Meaning |
+|---|---|---|
+| `DUCKTAPE_BUILD_TESTS` | `ON` | Native test executables and CTest registration |
+| `DUCKTAPE_TEST_MODEL` | empty | A local GGUF; registers the real-model tests (`real-model`, `real-features`, `real-faults`, `cpu-guard` when `qemu-x86_64` is found, ...) |
+| `DUCKTAPE_REAL_TEST_TIMEOUT` | `600` | Per-test timeout in seconds for the long real-model tests; raise it for instrumented builds |
+| `DUCKTAPE_BUILD_EXAMPLES` | `OFF` | Developer examples: `laya-decide`, `laya-decide-cpp` and the demo forms |
+| `DUCKTAPE_BUILD_NODE` | `OFF` | The Node-API addon; supply `NODE_INCLUDE_DIR` |
+| `DUCKTAPE_BUILD_FUZZERS` | `OFF` | Linux Clang libFuzzer target `laya-input-fuzzer`; instruments the library, never for artifacts |
+| `DUCKTAPE_BUILD_REFERENCE_PROBE` | `OFF` | Test-only `laya-reference` executable linking upstream server decision processing; never packaged |
+| `DUCKTAPE_REPRODUCIBLE_PATHS` | `ON` | With GCC or Clang, maps source and build paths out of compiled artifacts (`-ffile-prefix-map`) |
+| `DUCKTAPE_LLAMA_SOURCE` | `third_party/llama.cpp` | The llama.cpp source to build; any other directory reports its runtime commit as `unverified-custom-source` unless `DUCKTAPE_LLAMA_REVISION` is set (upgrade tooling does this) |
+| `DUCKTAPE_WASM_OPTIMIZATION` | `2` | Emscripten builds only: link optimization `0`, `1`, `2`, `3`, `s` or `z`. `scripts/build-browser.py` sets `1`, the only value browser packaging accepts |
+| `DUCKTAPE_WASM_MAXIMUM_MEMORY` | `4294967296` | Emscripten builds only: WebAssembly memory ceiling in bytes, a 64 KiB multiple from 64 MiB to 4 GiB. Lower values are for memory-pressure tests; packaging accepts only 4 GiB |
+
+The GGML ISA options (`GGML_AVX2`, `GGML_FMA`, ...) select the CPU profile; see
+[API.md](API.md#runtime-and-model-diagnostics). AVX-512/VNNI variants are refused
+at configuration.
+
 The installed tree includes versioned shared libraries, C/C++ headers, licenses,
 model/runtime identity records, relocatable CMake targets and pkg-config metadata.
 It also includes `share/ducktape-laya/download-model.py`. To provision a model
@@ -41,7 +61,7 @@ explicit setup step. Python is only needed to run this optional helper.
 Consumer CMake projects use:
 
 ```cmake
-find_package(ducktape_laya 0.1 CONFIG REQUIRED)
+find_package(ducktape_laya 0.2 CONFIG REQUIRED)
 target_link_libraries(my_application PRIVATE ducktape::laya)
 ```
 
@@ -64,8 +84,9 @@ opening the engine; `LAYA_MODEL` is only a convenience for demos and tests.
 `release/compatibility.json` owns the package version and approved runtime pin.
 `python3 scripts/check-release.py` checks the runtime checkout/gitlink, model
 compatibility and language package versions. `scripts/verify-model.py` verifies
-local weights against an explicitly selectable immutable manifest. These checks
-perform no downloads. The current model manifest identifies the exact GGUF;
+local weights against an explicitly selectable immutable manifest. Both run from a
+checkout with Python 3.11+, since they import `scripts/release_support.py`; the
+installed `download-model.py` needs neither. These checks perform no downloads. The current model manifest identifies the exact GGUF;
 its original source-checkpoint revision remains unknown rather than inferred.
 
 Package publication, signing and broad production readiness remain separate
@@ -73,10 +94,15 @@ release gates. Public source availability does not imply a published package rel
 
 ## npm, Rust and Python artifacts
 
+`scripts/package-linux.py` builds every native artifact in one run, so it needs a
+build with the Node addon (`DUCKTAPE_BUILD_NODE=ON`), `npm` (it runs `npm pack`),
+Cargo with the locked dependencies already fetched (it runs `cargo package
+--locked --offline`), `readelf` and Python 3.11+. There is no wheel-only mode.
+
 ```sh
 # Build with DUCKTAPE_BUILD_NODE=ON and NODE_INCLUDE_DIR first.
-python3 scripts/package-linux.py --build build --output build/packages-0.1.0
-python3 tests/installed-packages.py build/packages-0.1.0 /path/to/approved.gguf
+python3 scripts/package-linux.py --build build --output build/packages-0.2.0
+python3 tests/installed-packages.py build/packages-0.2.0 /path/to/approved.gguf
 ```
 
 The output contains a native installation tarball, an npm tarball with its own
@@ -86,7 +112,7 @@ directories are rejected. No script publishes anything or downloads a model.
 To use the local npm tarball in an application without the wizard:
 
 ```sh
-npm install --save /path/to/ducktape-laya-0.1.0.tgz
+npm install --save /path/to/ducktape-laya-0.2.0.tgz
 ```
 
 Then `const { Laya } = require('ducktape-laya')` and
@@ -125,7 +151,8 @@ The npm package selects its bundled Linux x64 addon. Source-checkout users must
 supply `addonPath` or `DUCKTAPE_LAYA_ADDON`; installed users need neither. For
 Electron, unpack `node_modules/ducktape-laya` in the application's packager
 configuration (for example `asarUnpack: ["**/node_modules/ducktape-laya/**"]`
-in electron-builder). This includes the worker and native dependencies. The addon
+in electron-builder). This includes the worker, which the package starts from its
+own directory, and the native files. The addon
 resolver recognizes the physical `.asar.unpacked` native directory. Test both
 ordinary-directory and ASAR installations using the intended Electron version.
 No window or renderer integration is required by the library.
@@ -153,7 +180,7 @@ The reproducible Electron integration consumer lives under `tests/electron`:
 ```sh
 npm ci --prefix tests/electron
 node tests/electron/node_modules/electron/install.js
-node tests/electron/run.cjs build/packages-0.1.0/ducktape-laya-0.1.0.tgz /path/to/approved.gguf
+node tests/electron/run.cjs build/packages-0.2.0/ducktape-laya-0.2.0.tgz /path/to/approved.gguf
 ```
 
 Only the test setup downloads Electron; applications do not acquire this test

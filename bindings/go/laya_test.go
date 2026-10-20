@@ -2,6 +2,7 @@ package laya
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"os"
@@ -503,5 +504,98 @@ func TestInfoFields(t *testing.T) {
 	r := mustOK(t)(e.Execute(choice))
 	if !strings.Contains(r, `"answer_confidence"`) || !strings.Contains(r, `"confidence"`) {
 		t.Fatal(r)
+	}
+}
+
+func TestRouterAutoValidation(t *testing.T) {
+	open := func(json string) (*Engine, error) { return OpenRouter(json, &Config{Threads: 2}) }
+	for _, bad := range []string{
+		`{"models":{"a":"laya_test.go"},"auto":{"english":"a"}}`,
+		`{"models":{"a":"laya_test.go"},"auto":{"english":"a","default":"missing"}}`,
+		`{"models":{"a":"laya_test.go"},"auto":{"english":"a","default":"a","extra":"a"}}`,
+		`{"models":{"auto":"laya_test.go"}}`,
+	} {
+		if _, err := open(bad); err == nil || status(t, err) != StatusInvalidArgument {
+			t.Fatalf("%s: %v", bad, err)
+		}
+	}
+	plain, err := open(`{"models":{"a":"laya_test.go"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.Close()
+	auto, err := open(`{"models":{"a":"laya_test.go"},"auto":{"english":"a","default":"a"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer auto.Close()
+	with := func(extra string) string { return strings.Replace(choice, "{", "{"+extra+",", 1) }
+	// Rejected before any model is loaded.
+	for engine, extra := range map[*Engine]string{
+		plain: `"model":"auto"`,
+		auto:  `"lang":"en"`,
+	} {
+		if _, err := engine.Execute(with(extra)); status(t, err) != StatusInvalidArgument {
+			t.Fatalf("%s: %v", extra, err)
+		}
+	}
+	for _, extra := range []string{`"model":"a","lang":"en"`, `"model":"auto","lang":""`} {
+		if _, err := auto.Execute(with(extra)); status(t, err) != StatusInvalidArgument {
+			t.Fatalf("%s: %v", extra, err)
+		}
+	}
+}
+
+func TestRouterAutoRoutesByLanguage(t *testing.T) {
+	path := quote(model(t))
+	router, err := OpenRouter(`{"models":{"en":"`+path+`","ml":"`+path+`"},"max_loaded":2,"auto":{"english":"en","default":"ml"}}`, &Config{Threads: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Close()
+	ok := mustOK(t)
+	ask := func(state, extra string) (string, string) {
+		result := ok(router.Execute(`{"model":"auto"` + extra + `,"state":"` + state + `","questions":{"kind":{"type":"choice","instructions":"What is requested?","criteria":["refund","other"]}}}`))
+		var out struct {
+			Model string
+			Usage struct{ Routing struct{ Reason string } }
+		}
+		if err := json.Unmarshal([]byte(result), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Model, out.Usage.Routing.Reason
+	}
+	const english = "I was charged twice for my subscription this month, so please refund me."
+	for _, c := range []struct{ state, extra, model, reason string }{
+		{english, "", "en", "english_text"},
+		{"Пожалуйста, верните мне деньги за подписку.", "", "ml", "non_latin_script"},
+		{english, `,"lang":"fr"`, "ml", "lang"},
+	} {
+		if model, reason := ask(c.state, c.extra); model != c.model || reason != c.reason {
+			t.Fatalf("%q%s: got %s/%s, want %s/%s", c.state, c.extra, model, reason, c.model, c.reason)
+		}
+	}
+}
+
+func TestAnswerConfidenceIsMaxProbability(t *testing.T) {
+	e := open(t)
+	var out struct {
+		Answers struct {
+			Kind struct {
+				Probabilities    map[string]float64
+				Confidence       float64
+				AnswerConfidence float64 `json:"answer_confidence"`
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(mustOK(t)(e.Execute(choice))), &out); err != nil {
+		t.Fatal(err)
+	}
+	best := 0.0
+	for _, p := range out.Answers.Kind.Probabilities {
+		best = math.Max(best, p)
+	}
+	if out.Answers.Kind.AnswerConfidence != best || out.Answers.Kind.Confidence < 0 || out.Answers.Kind.Confidence > 1 {
+		t.Fatalf("%+v", out.Answers.Kind)
 	}
 }

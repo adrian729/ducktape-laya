@@ -53,6 +53,13 @@ def check_record(root=ROOT):
         info = tomllib.loads((root / 'bindings/rust' / package / 'Cargo.toml').read_text())
         if info['package']['version'] != version:
             raise ValueError(f'Rust package version mismatch: {package}')
+    safe = tomllib.loads((root / 'bindings/rust/ducktape-laya/Cargo.toml').read_text())
+    if safe['dependencies']['ducktape-laya-sys']['version'] != version:
+        raise ValueError('Rust ducktape-laya-sys dependency version mismatch')
+    for lock in ['bindings/rust/Cargo.lock', 'tests/consumers/rust/Cargo.lock']:
+        locked = {item['name']: item['version'] for item in tomllib.loads((root / lock).read_text())['package']}
+        if any(locked.get(name) != version for name in ('ducktape-laya', 'ducktape-laya-sys')):
+            raise ValueError(f'Rust lock file version mismatch: {lock}')
     if read_json(root / 'bindings/node/package.json')['version'] != version:
         raise ValueError('npm package version mismatch')
     python = tomllib.loads((root / 'bindings/python/pyproject.toml').read_text())['project']['version']
@@ -183,6 +190,9 @@ def browser_build_identity(build, backend, record, toolchain, expected_source):
     require_build_source(identity, expected_source, backend)
     if identity.get('maximum_memory') != 4294967296:
         raise ValueError(backend + ': not the product WebAssembly memory ceiling (test build); rebuild first')
+    # scripts/build-browser.py builds the product at -O1 without GPU tracing.
+    if identity.get('optimization') != '1' or identity.get('webgpu_debug') is not False:
+        raise ValueError(backend + ': not a product build (optimization or GPU tracing differs); rebuild with scripts/build-browser.py')
     if (identity.get('package_version') != record['package_version'] or
         identity.get('llama_cpp_commit') != record['runtime']['commit'] or
         identity.get('runtime_patches') != record['runtime']['patches'] or

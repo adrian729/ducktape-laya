@@ -1,7 +1,7 @@
 # Ducktape Laya for Go
 
 Linux x86-64 Laya GGUF decisions through cgo, backed by the shared `libducktape_laya.so`.
-Requires Go 1.22+, a C compiler and the native library with `ducktape_laya.h` from the release tarball.
+Requires Go 1.22+ (CI tests 1.27), a C compiler and the 0.2 native library (C ABI 2) with `ducktape_laya.h`. The only published release tarball, v0.1.0, has ABI 1 and does not work with this binding; until 0.2.0 is released, build the library from a checkout ([below](#from-a-checkout)).
 No model or runtime download occurs. Model files are application-owned resources.
 
 The package links `-lducktape_laya` and includes `<ducktape_laya.h>`, so tell cgo where they are:
@@ -15,20 +15,48 @@ export LD_LIBRARY_PATH=/opt/ducktape-laya/lib   # or bundle the library next to 
 Alternatively expose `ducktape-laya.pc` through `PKG_CONFIG_PATH` and build with `-tags pkgconfig`.
 
 ```go
-import laya "github.com/adrian729/ducktape-laya/bindings/go"
+package main
 
-engine, err := laya.Open("Laya-Q8_0.gguf", &laya.Config{Threads: 2})
-if err != nil {
-	log.Fatal(err)
+import (
+	"fmt"
+	"log"
+
+	laya "github.com/adrian729/ducktape-laya/bindings/go"
+)
+
+func main() {
+	engine, err := laya.Open("Laya-Q8_0.gguf", &laya.Config{Threads: 2})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer engine.Close()
+	out, err := engine.Execute(`{"state":"Please refund me.","schema":{"type":"object","properties":{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}`)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(out)
 }
-defer engine.Close()
-out, err := engine.Execute(`{"state":"Please refund me.","schema":{"type":"object","properties":{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}`)
 ```
 
 Inference is blocking, so call it from goroutines. An `*Engine` is safe for concurrent use; native calls on one handle serialize.
 `Close` rejects new calls with `laya.ErrClosed` (status 1), waits for all in-flight calls, releases the handle, and is idempotent; concurrent `Close` calls all return after release. Never call `Close` from inside an `OnEvent` callback of the same engine, because it would wait for its own call and deadlock. Use the non-blocking `CloseDeferred()` there: it marks the engine closed and the last running call releases the handle.
 A finalizer releases the native handle if an `Engine` is dropped without `Close`; it is only a safety net, so still call `Close` for prompt release.
-`Open(path, config)` and `OpenRouter(routerJSON, config)` take an optional `*laya.Config` (nil means defaults; zero fields are omitted): `Threads` is 0 for automatic (capped at 4) or 1..256, `ContextTokens` is the prompt capacity (default 512, at most the model's trained length), and `Temperatures` overrides calibration temperatures such as `"choice.3_5"` or `"noul"` (finite and > 0). Invalid values fail with status 1. For a router the config applies to every route and a route's own `config` overrides it key by key. Requests accept optional `max_tokens` and `temperatures` keys; there is a single strict request contract (`Execute`), and unknown top-level keys are rejected.
+`Open(path, config)` and `OpenRouter(routerJSON, config)` take an optional `*laya.Config` (nil means defaults; zero fields are omitted): `Threads` is 0 for automatic (capped at 4) or 1..256, `ContextTokens` is the prompt capacity (default 512, at most the model's trained length), `Overflow` is the default policy for prompts over the limit (`"reject"` (default), `"truncate_end"`, `"truncate_start"` or `"scan"`; a request's own `overflow` wins), and `Temperatures` overrides calibration temperatures such as `"choice.3_5"` or `"noul"` (finite and > 0). Invalid values fail with status 1. For a router the config applies to every route and a route's own `config` overrides it key by key. Requests accept optional `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` keys; there is a single strict request contract (`Execute`), and unknown top-level keys are rejected.
 `ExecuteContext` returns an `*laya.Error` that matches `context.Canceled` (status 5) or `context.DeadlineExceeded` (status 6) with `errors.Is`; an already-done context returns at once with no native call. Deadlines beyond the native 24 hour maximum are enforced by the context watcher instead of being clamped.
 Cancellation is cooperative and returns no partial result. `CallOptions.OnEvent` receives events synchronously on the calling thread; panics in it are contained.
-`OpenRouter` opens a bounded lazy model registry (see `docs/API.md`). Errors are `*laya.Error` with a `Status` matching `ducktape_laya.h`.
+`OpenRouter` opens a bounded lazy model registry (see `docs/API.md`). Requests name a route in `"model"`; with `"auto": {"english": "en", "default": "ml"}` in the router JSON, `"model": "auto"` chooses the route by the state's language, and `"auto"` cannot be a route ID. Errors are `*laya.Error` with a `Status` matching `ducktape_laya.h`. `Open` and `OpenRouter` also check that the library speaks C ABI 2 and fail with status 7 otherwise; in practice a program built against the 0.2 header needs `libducktape_laya.so.1` and fails to start when only the 0.1.0 library (`libducktape_laya.so.0`) is installed.
+
+## From a checkout
+
+The module is not tagged yet. Build the native library (see the repository README), then require the module from your own `go.mod` with a `replace` directive pointing at the checkout:
+
+```sh
+go mod edit -require=github.com/adrian729/ducktape-laya/bindings/go@v0.0.0 \
+  -replace=github.com/adrian729/ducktape-laya/bindings/go=/path/to/ducktape-laya/bindings/go
+export CGO_CFLAGS=-I/path/to/ducktape-laya/include
+export CGO_LDFLAGS=-L/path/to/ducktape-laya/build
+export LD_LIBRARY_PATH=/path/to/ducktape-laya/build
+go build ./...
+```
+
+To run the binding's own tests, use the same variables in `bindings/go` and set `LAYA_MODEL` for the real-model tests: `go test ./...`.

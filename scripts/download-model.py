@@ -28,6 +28,8 @@ def digest(path):
 
 
 def download(manifest, destination):
+    if not manifest.get('url'):
+        raise ValueError(f'{manifest["id"]} has no download URL; build it with scripts/convert-model.py')
     expected_size = manifest['size_bytes']
     expected_sha = manifest['sha256']
     if destination.exists():

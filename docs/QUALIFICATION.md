@@ -4,7 +4,7 @@
 maps every required gate to implementation, reusable checks and acceptance
 criteria. `release/compatibility.json` owns the required gate list; maintainer
 checks reject drift between the two. These records are requirements, not a
-claim that the listed platforms or gates have passed.
+claim that the listed platforms or gates have passed. 0.1.0 passed every gate for its candidate; main (0.2.0) has not been qualified yet.
 
 The first target is Linux x86-64 CPU with the declared AVX2-era ISA, Ubuntu 24.04
 as the minimum userspace and Ubuntu 26.04 as the newer userspace. Native release
@@ -12,7 +12,7 @@ binaries must stay within the declared GLIBC/GLIBCXX floors. The pinned Rust,
 Node, Electron and compiler versions must be tested against actual installed
 packages. Chrome on Linux must qualify both WASM and WebGPU on the listed GPU;
 experimental browser launch flags do not establish default-browser support.
-Additional hardware, versions and platforms need their own qualification.
+Additional hardware, versions and platforms need their own qualification. Every model in `release/compatibility.json` must pass: the primary English model and each entry of `additional_models` (the multilingual and typed-decisions models) must pass the `original_reference` and `upstream_reference` gates.
 
 Record source/build, runtime/patch, model, fixture, toolchain, configuration,
 platform and artifact identities for every gate, together with the command,
@@ -25,8 +25,7 @@ The shared fixtures under `tests/fixtures` are the conformance and drift corpus 
 every binding, backend and upstream comparison. They must cover each decision type
 and calibration bucket, close probabilities, structured and text inputs, Unicode,
 literal mask text, integer-like keys, a prompt near the token budget and every
-supported schema projection. Reports identify the corpus by fixture hashes. Budget
-overflow rejection is checked by focused tests, not inferred from it. Exact score
+supported schema projection. Reports identify the corpus by fixture hashes. Overflow handling (rejection by default, truncation, scan windows and the head budget) is checked by focused tests, not inferred from it. Exact score
 ties cannot be produced reliably through a model, so the tie rule (first option or
 level), calibration bucket selection and confidence formulas are checked by the
 model-free `decision-rules` test against the arithmetic the backend uses.

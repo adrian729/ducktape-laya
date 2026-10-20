@@ -68,22 +68,32 @@ commands = {
     '.NET': ['dotnet', str(build / 'conformance-dotnet/Consumer.dll'), model],
     'Go': [str(build / 'conformance-go'), model],
 }
+# Second pass: open config (context, overflow, calibration temperatures) through every binding.
+OPEN_CONFIG = {'threads': 4, 'context_tokens': 256, 'overflow': 'truncate_end',
+               'temperatures': {'choice': 1.3, 'noul.2': 1.2}}
+OPEN_CONFIG_FIXTURE = root / 'tests/fixtures/options.json'
 report = {'fixtures': {}, 'model_sha256': sha256(args.model),
           'fixture_hashes': {fixture.name: sha256(fixture) for fixture in fixtures},
           'runtime': binary_info(build), 'library_sha256': sha256(build / 'libducktape_laya.so'),
           'source_identity': source_identity(), 'settings': {'threads': 4}}
-for fixture in fixtures:
+def run_bindings(fixture, label, config=None):
     request = fixture.read_bytes()
     results = {}
     for name, command in commands.items():
+        if config is not None:
+            command = command + [json.dumps(config, separators=(',', ':'))]
         output = subprocess.run(command, input=request, capture_output=True, env=env, timeout=args.call_timeout)
         if output.returncode:
-            raise RuntimeError(f'{fixture.name}/{name}: {output.stderr.decode(errors="replace")}')
+            raise RuntimeError(f'{label}/{name}: {output.stderr.decode(errors="replace")}')
         results[name] = json.loads(output.stdout, object_pairs_hook=OrderedDict)
         # Parsed JavaScript objects enumerate integer-like keys first; values stay exact.
         expected = js_object_order(results['C']) if name == 'Node' else results['C']
-        compare_results(expected, results[name], path=f'{fixture.name}/{name}')
-        print(f'{fixture.name}/{name}: exact agreement', flush=True)
+        compare_results(expected, results[name], path=f'{label}/{name}')
+        print(f'{label}/{name}: exact agreement', flush=True)
+    return results
+for fixture in fixtures:
+    results = run_bindings(fixture, fixture.name)
+    request = fixture.read_bytes()
     report['fixtures'][fixture.name] = results
     if args.server_url:
         req = urllib.request.Request(args.server_url.rstrip('/') + '/v1/systemone', request,
@@ -93,5 +103,9 @@ for fixture in fixtures:
         error, path = compare_results(results['C']['answers'], reference['answers'], args.tolerance, 'answers')
         compare_results(results['C']['usage'], reference['usage'])
         print(f'Reference maximum absolute difference: {error:.9g} at {path}')
+if not args.request and not args.server_url and OPEN_CONFIG_FIXTURE.is_file():
+    report['open_config'] = {'config': OPEN_CONFIG, 'fixture': OPEN_CONFIG_FIXTURE.name,
+                             'fixture_hash': sha256(OPEN_CONFIG_FIXTURE),
+                             'results': run_bindings(OPEN_CONFIG_FIXTURE, OPEN_CONFIG_FIXTURE.name + '+open_config', OPEN_CONFIG)}
 if args.report:
     args.report.write_text(json.dumps(report, indent=2) + '\n')

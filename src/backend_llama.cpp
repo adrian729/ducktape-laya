@@ -19,25 +19,44 @@
 namespace dtl {
 namespace {
 std::string meta(llama_model *m, const std::string &key) {
-    char buf[256];
-    int n = llama_model_meta_val_str(m, key.c_str(), buf, sizeof(buf));
-    if (n < 0 || n >= static_cast<int>(sizeof(buf)))
+    int n = llama_model_meta_val_str(m, key.c_str(), nullptr, 0);
+    if (n < 0) throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
+    std::string value(static_cast<size_t>(n) + 1, '\0');
+    if (llama_model_meta_val_str(m, key.c_str(), value.data(), value.size()) != n)
         throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
-    return std::string(buf, n);
+    value.resize(static_cast<size_t>(n));
+    return value;
 }
 void sanitize(json &value, const std::string &marker) {
     if (value.is_string()) {
-        auto s = value.get<std::string>();
-        size_t at = 0;
-        while ((at = s.find(marker, at)) != std::string::npos) {
-            s.replace(at, marker.size(), " ");
-            ++at; // Progress even if a custom model's mask token is a space.
+        // One pass: replacing in place would shift the tail once per marker.
+        const auto &s = value.get_ref<const std::string &>();
+        if (s.find(marker) == std::string::npos) return;
+        std::string out;
+        out.reserve(s.size());
+        for (size_t at = 0;;) {
+            const size_t next = s.find(marker, at);
+            out.append(s, at, next == std::string::npos ? std::string::npos : next - at);
+            if (next == std::string::npos) break;
+            out += ' ';
+            at = next + marker.size();
         }
-        value = s;
+        value = std::move(out);
     } else if (value.is_structured()) {
         for (auto &child : value) sanitize(child, marker);
     }
 }
+}
+// llama.cpp's BPE is quadratic in the length of one run of ASCII spaces (800k
+// spaces take about 30 s and cannot be cancelled), so such runs are bounded.
+constexpr size_t max_space_run = 4096;
+void require_space_runs(std::string_view text, const std::string &what) {
+    size_t run = 0;
+    for (char c : text) {
+        run = c == ' ' ? run + 1 : 0;
+        if (run > max_space_run)
+            throw failure(DTL_INVALID_ARGUMENT, what + " has more than " + std::to_string(max_space_run) + " consecutive spaces");
+    }
 }
 struct prepared_window {
     std::vector<llama_token> tokens;
@@ -150,8 +169,22 @@ struct backend::impl {
         ctx.reset(llama_init_from_model(model.get(), cp));
         if (!ctx) throw failure(DTL_MODEL_ERROR, "Could not create CPU inference context");
     }
+    // The last state tokenized, reused while consecutive questions share it.
+    std::string cached_state_text;
+    std::vector<llama_token> cached_state_tokens;
+    void tokenize_into(std::vector<llama_token> &out, std::string_view text) const {
+        int n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), nullptr, 0, false, true);
+        if (n == 0) return;
+        if (n > 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
+        const size_t at = out.size();
+        out.resize(at - n);
+        n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), out.data() + at, -n, false, true);
+        if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
+        out.resize(at + n);
+    }
     void prepare(question &q, const json &state) {
         if (q.overflow.empty()) q.overflow = "reject";
+        require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
         if (q.options.size() == 1) return; // answered without inference; uses no tokens
         q.prepared = std::make_unique<prepared_question>();
         auto &prepared = *q.prepared;
@@ -165,28 +198,25 @@ struct backend::impl {
         as_text(input["instructions"]);
         for (auto &option : input["options"]) as_text(option["description"]);
         sanitize(input, marker_text);
+        // The state sits between two separators, so its tokens do not depend on the
+        // question: it is tokenized on its own, once for all questions sharing it.
+        const bool separate_state = input["state"].is_string();
+        std::string state_text;
+        if (separate_state) { state_text = input["state"].get<std::string>(); input["state"] = ""; }
         jinja::context jc(source);
         jinja::global_from_json(jc, common_json::parse(input.dump()), false);
         jinja::runtime runtime(jc);
         auto rendered = jinja::runtime::gather_string_parts(runtime.execute(program))->as_string().str();
         require(rendered.size() <= max_request * 2, "Rendered prompt is too large");
-        require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
+        require_space_runs(rendered, q.id + ": the question");
+        require_space_runs(state_text, "state");
         const size_t limit = q.max_tokens ? q.max_tokens : capacity;
         // The text between mask tokens is tokenized on its own, as the model was
         // trained: some vocabularies (mmBERT) mark the mask as left-stripping, which
         // would drop whitespace ending an option. After sanitizing, the mask text
         // appears only where the template put it.
         std::vector<llama_token> tokens;
-        auto append = [&](std::string_view text) {
-            int n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), nullptr, 0, false, true);
-            if (n == 0) return;
-            if (n > 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-            const size_t at = tokens.size();
-            tokens.resize(at - n);
-            n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), tokens.data() + at, -n, false, true);
-            if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-            tokens.resize(at + n);
-        };
+        auto append = [&](std::string_view text) { tokenize_into(tokens, text); };
         for (size_t at = 0;;) {
             const size_t next = rendered.find(marker_text, at);
             append(std::string_view(rendered).substr(at, next == std::string::npos ? std::string::npos : next - at));
@@ -234,10 +264,24 @@ struct backend::impl {
         std::vector<size_t> head_markers;
         for (const auto &o : options) { head_markers.push_back(head.size()); head.insert(head.end(), o.begin(), o.end()); }
         head.push_back(sep);
-        const std::vector<llama_token> state_tokens(tokens.begin() + opts_end + 1, tokens.end() - 1);
+        require(!separate_state || opts_end + 2 == tokens.size(), "Invalid decision prompt layout");
+        if (separate_state && state_text != cached_state_text) {
+            // Replace the cache only once tokenization succeeded.
+            std::vector<llama_token> fresh;
+            tokenize_into(fresh, state_text);
+            cached_state_tokens = std::move(fresh);
+            cached_state_text = std::move(state_text);
+        }
+        const std::vector<llama_token> state_tokens = separate_state ? cached_state_tokens
+            : std::vector<llama_token>(tokens.begin() + opts_end + 1, tokens.end() - 1);
         prepared.state_tokens = state_tokens.size();
         prepared.head_shortened = head_cut;
-        const size_t room = limit > head.size() + 1 ? limit - head.size() - 1 : 0;
+        // The question, options and final separator must fit on their own, even with an
+        // empty state; otherwise a window would exceed the context.
+        require(head.size() + 1 <= limit,
+                q.id + ": the question and options need " + std::to_string(head.size() + 1) + " tokens, over the " +
+                std::to_string(limit) + "-token limit");
+        const size_t room = limit - head.size() - 1;
         if (reject) require(state_tokens.size() <= room, q.id + ": prompt exceeds the " + std::to_string(limit) + "-token limit");
         require(room > 0 || state_tokens.empty(),
                 q.id + ": the question and options leave no room for the state within " + std::to_string(limit) + " tokens");

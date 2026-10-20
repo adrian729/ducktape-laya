@@ -116,8 +116,8 @@ int main(int argc, char **argv) {
             json r = {{"state", repeated("refund ", words)}, {"questions", {{"refund", requests[0]["questions"]["refund"]}}}};
             return r.dump();
         };
-        auto rejected = [&](const std::string &request, const char *reason) {
-            try { engine.execute(request); return false; }
+        auto rejected = [&](const std::string &request, const char *reason, const ducktape::engine *target = nullptr) {
+            try { (target ? *target : engine).execute(request); return false; }
             catch (const ducktape::error &e) {
                 expect(e.status == DTL_INVALID_ARGUMENT && std::string(e.what()).find(reason) != std::string::npos, e.what());
                 return true;
@@ -164,6 +164,32 @@ int main(int argc, char **argv) {
             all["overflow"] = "scan"; all["questions"]["refund"]["aggregate"] = "all";
             auto minimum = json::parse(engine.execute(all.dump()))["answers"]["refund"];
             expect(minimum["noul"] <= answer["noul"] && minimum["window"]["count"] == windows, "aggregate all is the minimum");
+            {   // Which tokens each policy keeps, by value: a state whose start and end differ.
+                const size_t tail = 100; // words; their token count comes from the engine
+                auto mixed = [&](size_t refunds, size_t others, const char *policy) {
+                    json r = {{"state", repeated("refund ", refunds) + repeated("weather ", others)},
+                              {"questions", {{"refund", requests[0]["questions"]["refund"]}}}};
+                    if (policy) r["overflow"] = policy;
+                    return json::parse(engine.execute(r.dump()));
+                };
+                auto end_cut = mixed(kept, tail, "truncate_end"), start_cut = mixed(kept, tail, "truncate_start");
+                const size_t tail_tokens = end_cut["usage"]["state_tokens"].get<size_t>() - kept;
+                expect(tail_tokens >= tail && tail_tokens < kept, "the tail is cut off by truncate_end");
+                // A longer state of the same words cut the same way keeps the same tokens: the
+                // first `kept` refunds, or the tail preceded by refunds.
+                expect(end_cut["answers"] == mixed(kept + 50, 0, "truncate_end")["answers"], "truncate_end keeps the start");
+                expect(start_cut["answers"] == mixed(kept + 50, tail, "truncate_start")["answers"], "truncate_start keeps the end");
+                expect(end_cut["answers"] != start_cut["answers"], "the two cuts read different text");
+                // Scan reads both of those windows: "any" is at least, "all" at most, either one.
+                const double first = end_cut["answers"]["refund"]["noul"], last = start_cut["answers"]["refund"]["noul"];
+                auto any = mixed(kept, tail, "scan")["answers"]["refund"];
+                json every = {{"state", repeated("refund ", kept) + repeated("weather ", tail)}, {"overflow", "scan"},
+                              {"questions", {{"refund", requests[0]["questions"]["refund"]}}}};
+                every["questions"]["refund"]["aggregate"] = "all";
+                auto all_windows = json::parse(engine.execute(every.dump()))["answers"]["refund"];
+                expect(any["noul"].get<double>() >= std::max(first, last) && all_windows["noul"].get<double>() <= std::min(first, last),
+                       "scan any is the maximum and all the minimum over windows");
+            }
             expect(rejected([&] { json r = json::parse(sized(words)); r["overflow"] = "scan"; r["max_windows"] = 1; return r.dump(); }(),
                             "max_windows"), "too many windows rejected");
             for (json bad : {json({{"overflow", "clip"}}), json({{"max_windows", 0}}), json({{"overflow", 1}})}) {
@@ -184,6 +210,17 @@ int main(int argc, char **argv) {
             expect(json::parse(lenient.execute(sized(words))) == over("truncate_end", words), "engine default overflow");
             invalid([&] { json r = json::parse(sized(words)); r["overflow"] = "reject"; lenient.execute(r.dump()); });
             invalid([&] { ducktape::engine::open(argv[1], R"({"overflow":"clip"})"); });
+            // A question and options longer than the limit are rejected under every policy,
+            // including with an empty state (it used to overrun the context and abort).
+            json wide = {{"state", ""}, {"questions", {{"q", {{"type", "choice"}, {"instructions", "pick one"}, {"criteria", json::array()}}}}}};
+            for (int i = 0; i < 255; ++i) wide["questions"]["q"]["criteria"].push_back("a" + std::to_string(i));
+            for (const char *policy : {"reject", "truncate_end", "truncate_start", "scan"}) {
+                wide["overflow"] = policy;
+                expect(rejected(wide.dump(), "question and options need"), "head over the limit is rejected");
+            }
+            json short_limit = {{"state", ""}, {"max_tokens", 20},
+                                {"questions", {{"q", {{"type", "noul"}, {"instructions", "Is this text urgent, and does it ask for a refund today?"}}}}}};
+            expect(rejected(short_limit.dump(), "20-token limit"), "max_tokens bounds the question and options too");
         }
         checkpoint("overflow policies");
         auto schema = json::parse(R"({"state":"Please refund me.","schema":{"type":"object","properties":{
@@ -261,7 +298,7 @@ int main(int argc, char **argv) {
         expect(json::parse(hot_engine.execute(with(requests[0], "temperatures", hotter).dump())) ==
                json::parse(engine.execute(with(requests[0], "temperatures", hotter).dump())), "request temperatures win over the engine's");
         expect(json::parse(engine.execute(requests[0].dump())) == plain, "request temperatures do not persist");
-        for (auto bad : {json(0), json(-1), json("x"), json(nullptr), json::array()}) {
+        for (auto bad : {json(0), json(-1), json("x"), json(nullptr), json::array(), json(1e-50), json(1e39)}) {
             invalid([&] { engine.execute(with(requests[0], "temperatures", json{{"noul.2", bad}}).dump()); });
             invalid([&] { ducktape::engine::open(argv[1], json({{"temperatures", {{"noul.2", bad}}}}).dump()); });
         }
@@ -325,6 +362,13 @@ int main(int argc, char **argv) {
             invalid([&] { route("small", json::parse(sized(70 - base))); });
             expect(route("small", json::parse(sized(1)))["usage"] == json::parse(engine.execute(sized(1)))["usage"], "route context_tokens applies");
             invalid([&] { ducktape::engine::open_router(json({{"models", {{"x", {{"path", b}, {"config", {{"bogus", 1}}}}}}}}).dump()); });
+            // Routes sharing one loaded model keep their own default overflow policy.
+            auto policies = ducktape::engine::open_router(json({{"models", {{"lenient", {{"path", b}, {"config", {{"overflow", "truncate_end"}}}}},
+                                                                            {"strict", b}}}}).dump());
+            const auto long_request = json::parse(sized(600));
+            expect(json::parse(policies.execute(with(long_request, "model", "lenient").dump()))["usage"]["state_tokens_dropped"] > 0,
+                   "route overflow default applies");
+            expect(rejected(with(long_request, "model", "strict").dump(), "token limit", &policies), "other route keeps reject");
         }
         checkpoint("router configuration");
         {

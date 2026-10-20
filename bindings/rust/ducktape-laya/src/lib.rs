@@ -45,7 +45,19 @@ fn check(status: i32, message: *mut c_char) -> Result<(), Error> {
     };
     Err(Error { status, message })
 }
+/// The bindings speak C ABI 2; refuse a library built for another version.
+fn check_abi() -> Result<(), Error> {
+    let version = unsafe { ffi::dtl_abi_version() };
+    if version == 2 {
+        return Ok(());
+    }
+    Err(Error {
+        status: status::UNSUPPORTED_PLATFORM,
+        message: format!("Native ducktape-laya ABI {version} is not supported (expected 2)"),
+    })
+}
 fn read_info(engine: *mut ffi::Engine) -> Result<String, Error> {
+    check_abi()?;
     let mut result = std::ptr::null_mut();
     let mut error = std::ptr::null_mut();
     let status = unsafe { ffi::dtl_info(engine, &mut result, &mut error) };
@@ -199,7 +211,8 @@ impl Engine {
         })
     }
     /// Open a bounded, lazy local model registry. See docs/API.md for the JSON.
-    /// Requests must name a route in `model`.
+    /// Requests must name a route in `model`, or use `"model": "auto"` when the
+    /// JSON has an `auto` config.
     pub fn open_router(router_json: &str, config: &Config) -> Result<Self, Error> {
         let router = cstring(router_json)?;
         Self::open_with(config, |config, out, error| unsafe {
@@ -210,6 +223,7 @@ impl Engine {
         config: &Config,
         open: impl FnOnce(*const c_char, *mut *mut ffi::Engine, *mut *mut c_char) -> i32,
     ) -> Result<Self, Error> {
+        check_abi()?;
         let config = config.to_json()?;
         let mut raw = std::ptr::null_mut();
         let mut error = std::ptr::null_mut();
@@ -418,10 +432,20 @@ mod tests {
         );
         let engine = Engine::open(&path, &two().overflow("truncate_end")).unwrap();
         let out = engine.execute(&long).unwrap();
-        assert!(out.contains("\"state_tokens_dropped\":") && !out.contains("\"state_tokens_dropped\":0"), "{out}");
+        assert!(
+            out.contains("\"state_tokens_dropped\":")
+                && !out.contains("\"state_tokens_dropped\":0"),
+            "{out}"
+        );
         let rejected = long.replacen('{', "{\"overflow\":\"reject\",", 1);
         assert_eq!(engine.execute(&rejected).unwrap_err().status, 1);
-        assert_eq!(Engine::open(&path, &two().overflow("bogus")).err().unwrap().status, 1);
+        assert_eq!(
+            Engine::open(&path, &two().overflow("bogus"))
+                .err()
+                .unwrap()
+                .status,
+            1
+        );
     }
     #[test]
     fn config_and_per_request_settings() {
@@ -512,6 +536,98 @@ mod tests {
         assert!(ask("plain").is_ok());
         let bad = format!(r#"{{"models":{{"a":{{"path":"{p}","config":{{"threads":999}}}}}}}}"#);
         assert!(Engine::open_router(&bad, &two()).is_err());
+    }
+    const CHOICE: &str = r#"{"state":"Please refund me.","questions":{"kind":{"type":"choice","instructions":"What is requested?","criteria":["refund","other"]}}}"#;
+    #[test]
+    fn answer_confidence_is_max_probability() {
+        let Some(path) = model() else { return };
+        let engine = Engine::open(&path, &two()).unwrap();
+        let result: serde_json::Value =
+            serde_json::from_str(&engine.execute(CHOICE).unwrap()).unwrap();
+        let answer = &result["answers"]["kind"];
+        let best = answer["probabilities"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|p| p.as_f64().unwrap())
+            .fold(0.0, f64::max);
+        assert_eq!(answer["answer_confidence"].as_f64().unwrap(), best);
+        let confidence = answer["confidence"].as_f64().unwrap();
+        assert!((0.0..=1.0).contains(&confidence));
+    }
+    #[test]
+    fn router_auto_validation() {
+        let open = |json: &str| Engine::open_router(json, &two());
+        for bad in [
+            r#"{"models":{"a":"Cargo.toml"},"auto":{"english":"a"}}"#,
+            r#"{"models":{"a":"Cargo.toml"},"auto":{"english":"a","default":"missing"}}"#,
+            r#"{"models":{"a":"Cargo.toml"},"auto":{"english":"a","default":"a","extra":"a"}}"#,
+            r#"{"models":{"a":"Cargo.toml"},"auto":"a"}"#,
+            r#"{"models":{"auto":"Cargo.toml"}}"#,
+        ] {
+            assert_eq!(open(bad).err().unwrap().status, 1, "{bad}");
+        }
+        let plain = open(r#"{"models":{"a":"Cargo.toml"}}"#).unwrap();
+        let auto =
+            open(r#"{"models":{"a":"Cargo.toml"},"auto":{"english":"a","default":"a"}}"#).unwrap();
+        let body = |extra: &str| NOUL.replacen('{', &format!("{{{extra},"), 1);
+        // "model": "auto" without an auto config, and lang without auto, are rejected before any load.
+        assert_eq!(
+            plain
+                .execute(&body("\"model\":\"auto\""))
+                .unwrap_err()
+                .status,
+            1
+        );
+        assert_eq!(
+            auto.execute(&body("\"lang\":\"en\"")).unwrap_err().status,
+            1
+        );
+        assert_eq!(
+            auto.execute(&body("\"model\":\"a\",\"lang\":\"en\""))
+                .unwrap_err()
+                .status,
+            1
+        );
+        assert_eq!(
+            auto.execute(&body("\"model\":\"auto\",\"lang\":\"\""))
+                .unwrap_err()
+                .status,
+            1
+        );
+    }
+    #[test]
+    fn router_auto_routes_by_language() {
+        let Some(path) = model() else { return };
+        let p = escape(&path);
+        let router = Engine::open_router(
+            &format!(
+                r#"{{"models":{{"en":"{p}","ml":"{p}"}},"max_loaded":2,"auto":{{"english":"en","default":"ml"}}}}"#
+            ),
+            &two(),
+        )
+        .unwrap();
+        let ask = |state: &str, extra: &str| -> serde_json::Value {
+            let request = format!(
+                r#"{{"model":"auto"{extra},"state":"{state}","questions":{{"refund":{{"type":"noul","instructions":"Is a refund requested?"}}}}}}"#
+            );
+            serde_json::from_str(&router.execute(&request).unwrap()).unwrap()
+        };
+        let english = ask(
+            "I was charged twice for my subscription this month, so please refund me.",
+            "",
+        );
+        assert_eq!(english["model"], "en");
+        assert_eq!(english["usage"]["routing"]["reason"], "english_text");
+        let russian = ask("Пожалуйста, верните мне деньги за подписку.", "");
+        assert_eq!(russian["model"], "ml");
+        assert_eq!(russian["usage"]["routing"]["reason"], "non_latin_script");
+        let forced = ask(
+            "I was charged twice for my subscription this month, so please refund me.",
+            r#","lang":"fr""#,
+        );
+        assert_eq!(forced["model"], "ml");
+        assert_eq!(forced["usage"]["routing"]["reason"], "lang");
     }
     #[test]
     fn cancellation_and_deadline() {

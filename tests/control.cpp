@@ -17,6 +17,36 @@ int main(int argc, char **argv) {
     CHECK(dtl_cancel_flag(nullptr) == 0 && dtl_cancel_flag(&flag) == 0);
     flag = DTL_DEADLINE_EXCEEDED;
     CHECK(dtl_cancel_flag(&flag) == DTL_DEADLINE_EXCEEDED);
+    {
+        // Request and config validation needs no model: a router checks every request
+        // before loading, and dtl_open checks its config before reading the file.
+        auto status = [](auto &&f) -> dtl_status { try { f(); return DTL_OK; } catch (const ducktape::error &e) { return e.status; } };
+        auto router = ducktape::engine::open_router(R"({"models":{"a":"/proc/self/exe"},"auto":{"english":"a","default":"a"}})");
+        for (const char *field : {R"("overflow":"clip")", R"("max_windows":0)", R"("max_windows":1025)", R"("max_tokens":0)",
+                                  R"("temperatures":{"noul.2":0})", R"("temperatures":{"noul.2":1e-50})", R"("temperatures":{"noul.4":1})",
+                                  R"("lang":"en")", R"("unknown":1)"})
+            CHECK(status([&] {
+                router.execute(std::string(R"({"model":"a","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}})") + "," + field + "}"); }) == DTL_INVALID_ARGUMENT);
+        CHECK(status([&] { router.execute(R"({"model":"auto","lang":"","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_INVALID_ARGUMENT);
+        CHECK(status([&] { router.execute(R"({"model":"a","state":"x","questions":{"q":{"type":"score","instructions":"How urgent?","aggregate":"all","criteria":["a","b"]}}})"); }) == DTL_INVALID_ARGUMENT);
+        // A valid request reaches the (non-GGUF) model and fails there, not in validation.
+        CHECK(status([&] { router.execute(R"({"model":"a","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_MODEL_ERROR);
+        CHECK(status([&] { router.execute(R"({"model":"auto","lang":"fr","overflow":"scan","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_MODEL_ERROR);
+        auto manual = ducktape::engine::open_router(R"({"models":{"a":"/proc/self/exe"}})");
+        CHECK(status([&] { manual.execute(R"({"model":"auto","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_INVALID_ARGUMENT);
+        for (const char *config : {R"({"models":{"auto":"/proc/self/exe"}})", R"({"models":{"a":"/proc/self/exe"},"auto":{"english":"a"}})",
+                                   R"({"models":{"a":"/proc/self/exe"},"auto":{"english":"a","default":"b"}})"})
+            CHECK(status([&] { ducktape::engine::open_router(config); }) == DTL_INVALID_ARGUMENT);
+        for (const char *config : {R"({"threads":257})", R"({"context_tokens":31})", R"({"overflow":"clip"})",
+                                   R"({"temperatures":{"noul.2":1e39}})", R"({"bogus":1})"})
+            CHECK(status([&] { ducktape::engine::open("/proc/self/exe", config); }) == DTL_INVALID_ARGUMENT);
+        CHECK(status([&] { ducktape::engine::open("/proc/self/exe", R"({"overflow":"scan","context_tokens":256})"); }) == DTL_MODEL_ERROR);
+        // Runtime info advertises the features and limits the core enforces.
+        const auto info = ducktape::info();
+        for (const char *needle : {"\"language_routing\"", "\"overflow_policies\":[\"reject\",\"truncate_end\",\"truncate_start\",\"scan\"]",
+                                   "\"minimum_context_tokens\":32", "\"scan_windows\":1024", "\"default_context_tokens\":512"})
+            CHECK(info.find(needle) != std::string::npos);
+    }
     if (argc != 2) return 0;
     auto engine = ducktape::engine::open(argv[1], R"({"threads":2})");
     const auto baseline = engine.execute(request);

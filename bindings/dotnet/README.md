@@ -6,15 +6,28 @@ No model or runtime download occurs. Model files are application-owned resources
 
 ## Library resolution
 
-1. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`. When this variable is set it is authoritative: if that file cannot be loaded, a `DllNotFoundException` naming the path is thrown and nothing else is tried.
-2. `runtimes/linux-x64/native/libducktape_laya.so` next to the application (the NuGet layout)
-3. The system loader: `libducktape_laya.so`, then `libducktape_laya.so.1`
+1. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`. When this variable is set it is authoritative: if that file cannot be loaded, a `DllNotFoundException` naming the path is thrown, and if it is incompatible, a `LayaException`; nothing else is tried.
+2. Otherwise `libducktape_laya.so.1`, then `libducktape_laya.so`, each through .NET's default native library probing, which covers `runtimes/linux-x64/native/` next to the application (the NuGet layout) and the system loader.
 
-After loading, the binding requires `dtl_abi_version() == 2` and the `dtl_cancel_flag` export; an incompatible or too old library fails with `LayaException` (`UnsupportedPlatform`). Load failures are reported on every call, not just the first.
+A library must report `dtl_abi_version() == 2` and export `dtl_cancel_flag`. Without the override, an incompatible candidate is skipped for the next one; if none loads, the call fails with `DllNotFoundException`, and if only incompatible ones load, with `LayaException` (`UnsupportedPlatform`). Load failures are reported on every call, not just the first.
 
-To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project.
+To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project. Without it, `dotnet pack` still succeeds but produces a package without the native library.
+
+## From a checkout
+
+The package is not on NuGet yet. Build the native library (see the repository README), then reference the project from your application:
+
+```sh
+dotnet add MyApp.csproj reference /path/to/ducktape-laya/bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj
+export DUCKTAPE_LAYA_LIB_DIR=/path/to/ducktape-laya/build
+dotnet run --project MyApp.csproj
+```
+
+Instead of the environment variable, build with `-p:DucktapeLayaNativeLibrary=/path/to/ducktape-laya/build/libducktape_laya.so` to copy the library into the output's `runtimes/linux-x64/native/`. The binding's tests run with `dotnet test bindings/dotnet/DucktapeLaya.slnx` and `DUCKTAPE_LAYA_LIB_DIR` set; `LAYA_MODEL` enables the real-model tests.
 
 ## Example
+
+A fragment: `requestJson` is your request as a JSON string and `cancellationToken` any `CancellationToken`.
 
 ```csharp
 using Ducktape.Laya;
@@ -24,11 +37,11 @@ var options = new LayaCallOptions { Timeout = TimeSpan.FromSeconds(30), OnEvent 
 string result = engine.Execute(requestJson, options, cancellationToken);
 ```
 
-`LayaConfig` (init-only) holds `Threads` (0 = automatic, otherwise 1..256), `ContextTokens` (prompt capacity) and `Temperatures` (calibration overrides keyed like `"choice.3_5"`); unset members are omitted from the config JSON. `OpenRouter(routerJson, config)` opens a lazy local model registry in which the config applies to every route and a route's own `config` overrides it key by key. Per-request `max_tokens` and `temperatures` are ordinary request JSON keys. There is one strict request contract, `Execute`/`ExecuteAsync`; events and `RequestId` are reported through the call options. See `docs/API.md` for request, schema and router contracts.
+`LayaConfig` (init-only) holds `Threads` (0 = automatic, otherwise 1..256), `ContextTokens` (prompt capacity), `Overflow` (default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan`; a request's own `overflow` wins) and `Temperatures` (calibration overrides keyed like `"choice.3_5"`); unset members are omitted from the config JSON. `OpenRouter(routerJson, config)` opens a lazy local model registry in which the config applies to every route and a route's own `config` overrides it key by key. Requests name a route in `"model"`; with `"auto": {"english": "en", "default": "ml"}` in the router JSON, `"model": "auto"` chooses the route by the state's language, and `"auto"` cannot be a route ID. Per-request `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` are ordinary request JSON keys. There is one strict request contract, `Execute`/`ExecuteAsync`; events and `RequestId` are reported through the call options. See `docs/API.md` for request, schema and router contracts.
 
 ## Threading and cancellation
 
-A `LayaEngine` may be shared across threads; native calls on one handle serialize. `Dispose` is idempotent, waits for in-flight calls, and later calls throw `ObjectDisposedException`. Disposed from inside its own event callback, the engine returns at once and is released when the running call finishes. A finalizer releases the native handle if an engine is never disposed, but it is only a safety net: always dispose (`using`) so memory is freed promptly.
+A `LayaEngine` may be shared across threads; native calls on one handle serialize. `Dispose` is idempotent and waits for in-flight calls. Calls made once `Dispose` has started, even while it still waits, throw `ObjectDisposedException` at once. Disposed from inside its own event callback, the engine returns at once and is released when the running call finishes. A finalizer releases the native handle if an engine is never disposed, but it is only a safety net: always dispose (`using`) so memory is freed promptly.
 
 Inference blocks. `ExecuteAsync` runs the call on a thread-pool thread, which stays occupied for the whole inference; the options (`RequestId`, `Timeout`, `OnEvent`) are snapshotted when the method is called. `OnEvent` runs on the calling thread for sync calls and on that pool thread for `ExecuteAsync`; exceptions it throws are swallowed and never change results.
 
@@ -36,4 +49,4 @@ Cancellation is cooperative and no partial result is returned. The native cancel
 
 ## Errors
 
-Argument mistakes the binding validates itself use standard .NET exceptions: `ArgumentNullException` for null strings, `ArgumentOutOfRangeException` for `Threads` outside 0..256, a non-positive `ContextTokens`, a non-finite or non-positive temperature, and for a `Timeout` that is negative or over 24 hours (sub-millisecond values round up to 1 ms). Everything else is a `LayaException` carrying the native `Status`, including inputs containing NUL characters (status 1). Values the native side validates (for example `ContextTokens` below 32 or above the model's trained length, unknown temperature keys, unknown request keys) are a `LayaException` with status 1.
+Argument mistakes the binding validates itself use standard .NET exceptions: `ArgumentNullException` for null strings, `ArgumentOutOfRangeException` for `Threads` outside 0..256, a non-positive `ContextTokens`, a non-finite or non-positive temperature, and for a `Timeout` that is negative or over 24 hours (sub-millisecond values round up to 1 ms). Everything else is a `LayaException` carrying the native `Status`, including inputs containing NUL characters (status 1). Values the native side validates (for example an unknown `Overflow` policy, `ContextTokens` below 32 or above the model's trained length, unknown temperature keys, unknown request keys) are a `LayaException` with status 1.

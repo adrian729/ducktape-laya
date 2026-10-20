@@ -1,20 +1,17 @@
 # Publishing
 
-Where each package is published, and what is still missing. Publication follows
-qualification (see [RELEASE_CHECKS.md](RELEASE_CHECKS.md)): only the exact
-artifacts a candidate qualified are uploaded, and nothing is rebuilt for a
-registry.
+Where each package is published, and what is still missing. Publication follows qualification (see [RELEASE_CHECKS.md](RELEASE_CHECKS.md)). The native tarball and the npm tarballs are uploaded exactly as the candidate qualified them. `cargo publish` cannot upload a prebuilt `.crate`: it packages the crates again from the tagged source, so the crates.io files are rebuilt from the qualified commit rather than copied, and their bytes are not checked against the inventory.
 
 ## Status
 
-| Package | Channel | 0.1.0 | Next release |
+| Package | Channel | 0.1.0 | 0.2.0 (main) |
 | --- | --- | --- | --- |
 | Native tarball, SBOMs, inventories | GitHub Releases | Published, attested | Same process |
 | `ducktape-laya` (Node.js) | npm | Published | Same process |
 | `ducktape-laya-browser` | npm | Published | Same process |
 | `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Same process |
 | `ducktape-laya` (Python wheel) | PyPI | — | Wheel is built and tested; PyPI setup missing |
-| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | Needs only a tag |
+| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | No account needed; publishing is a tag. Release-tarball consumer test missing |
 | `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Packaging and Central setup missing |
 | `DucktapeLaya` (.NET) | NuGet | — | Packaging and NuGet setup missing |
 
@@ -24,23 +21,20 @@ All names above were unclaimed on 2026-10-19.
 
 These are code changes; they need no accounts.
 
-- Bump `package_version` in `release/compatibility.json` and every binding
-  manifest together. `check_record` rejects any mismatch, including the Python,
-  Java and .NET versions.
+- Versions are already 0.2.0 in `release/compatibility.json` and every binding manifest. For later releases, bump them together: `check_record` rejects any mismatch, including the Python, Java and .NET versions.
+- Write the release notes: move the `0.2.0 (unreleased)` section of [CHANGELOG.md](../CHANGELOG.md) under the release version and date, and use it for the GitHub release text.
+- Python: the real wheel comes only from `scripts/python_wheel.py` (run by `scripts/package-linux.py`), which bundles the native library. Building `bindings/python` with its `pyproject.toml` alone (`pip wheel`, `python -m build`) produces a wheel without the library; never upload that.
 - Java: build the release jar in `scripts/package-linux.py` with the native
   library at `native/linux-x64/libducktape_laya.so` (the loader already looks
   there). Maven Central also requires a sources jar, a javadoc jar, and `pom.xml`
   metadata: `url`, `licenses`, `developers` and `scm`. Add the jar to
   `tests/installed-packages.py`.
-- .NET: build the `.nupkg` in `scripts/package-linux.py` with
-  `dotnet pack -p:DucktapeLayaNativeLibrary=...`, which places the library at
-  `runtimes/linux-x64/native/`. Add a consumer that installs it from a local
+- .NET: build the `.nupkg` in `scripts/package-linux.py` with `dotnet pack -p:DucktapeLayaNativeLibrary=...`, which places the library at `runtimes/linux-x64/native/`. Without that property, `dotnet pack` succeeds but the package has no native library. Add a consumer that installs it from a local
   feed to `tests/installed-packages.py`. Add NuGet metadata: license expression,
   project URL, readme and description.
 - Go: add a consumer test that builds against the release tarball's `include`
-  and `lib` directories, not the checkout.
-- Include the package README in the npm tarballs and set `readme` in both
-  crates' `Cargo.toml`. The 0.1.0 package pages show no README.
+  and `lib` directories, not the checkout. Publishing itself needs only the tag
+  (below); this test is what should come first.
 - Set `rust-version` in the crates; 0.1.0 declares none and was tested with 1.98.
 
 ## One-time maintainer setup
@@ -70,22 +64,36 @@ Each registry needs the maintainer's account. Prefer trusted publishing
 Add a `publish-release` workflow like `attest-release`. It would download the
 assets of a published GitHub release, check them against `SHA256SUMS` and a
 `release_ready` `gates.json`, then upload those exact files with trusted
-publishing: npm and PyPI files as they are, and the crates and `.nupkg` as
-built. The registries then serve the attested bytes, no maintainer token or OTP
+publishing: npm and PyPI files as they are, the `.nupkg` as built, and the crates through `cargo publish` from the tagged source (see above). The registries then serve the attested bytes, no maintainer token or OTP
 is handled locally, and every upload is logged in Actions.
 
 ## Release-day order
 
-1. Qualify the candidate: all gates in `gates.json` pass.
-2. Tag `vX.Y.Z` (annotated) at the candidate and push it.
-3. Create the GitHub release with every artifact, `SHA256SUMS` and `gates.json`.
-4. Run the `attest-release` workflow for the tag, then check one asset with
-   `gh attestation verify`.
-5. Publish to each registry from the release assets, `-sys` before the safe crate.
-6. Push `bindings/go/vX.Y.Z` at the same commit.
-7. Download every package from its registry into a clean directory, check its
-   bytes against `SHA256SUMS` and its attestation, and run a real-model consumer.
-8. Update the README status and requirements tables.
+1. Qualify the candidate: all gates in `gates.json` pass (`scripts/check-candidate.py`).
+2. Assemble the release assets from the qualified package directories:
+   `python3 scripts/release-assets.py assemble --packages PACKAGES --browser-package BROWSER_PACKAGE --gates gates.json --output build/release-assets`.
+   It refuses a `gates.json` that is not `release_ready` and package directories
+   whose inventory is not the one `gates.json` qualified. The output is the full
+   asset set: every artifact listed in the native inventory (native tarball, npm
+   tarball, both `.crate` files, the Python wheel) and in the browser inventory
+   (the browser npm tarball), the inventories as `native-inventory.json` and
+   `npm-browser-inventory.json`, the SBOMs as `native-sbom.cdx.json` and
+   `npm-browser-sbom.cdx.json`, `gates.json` and `SHA256SUMS`.
+3. Tag `vX.Y.Z` (annotated) at the candidate and push it.
+4. Create the GitHub release with exactly those files. The attestation step fails
+   on any extra asset.
+5. Run the `attest-release` workflow from `main` for the tag, then check one asset with
+   `gh attestation verify` (see [SECURITY.md](../SECURITY.md)).
+6. Publish to each registry from the release assets; publish the crates with `cargo publish` at the tag, `-sys` before the safe crate.
+7. Push `bindings/go/vX.Y.Z` at the same commit.
+8. Download every package from its registry into a clean directory, check its bytes against `SHA256SUMS` and its attestation (crates, which `cargo publish` rebuilds, against the tagged source instead), and run a real-model consumer.
+9. Update the README status and requirements tables, and the version in the README's install snippets.
+
+For the next release's rollback rehearsal, the published assets become the
+last-known-good packages: `gh release download vX.Y.Z -D lkg-assets`, then
+`python3 scripts/release-assets.py retain lkg-assets --output lkg-packages`
+restores and verifies the native package directory that `tests/rollback.py`
+takes as its first argument.
 
 ## Converted models
 

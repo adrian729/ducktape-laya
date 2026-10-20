@@ -6,3 +6,4 @@ publish = false
 [workspace]
 [dependencies]
 ducktape-laya = { path = "../../../bindings/rust/ducktape-laya" }
+serde_json = "1"

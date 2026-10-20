@@ -54,16 +54,18 @@ for (const [requested, actual] of [['wasm', 'wasm-cpu'], ['webgpu', 'webgpu']]) 
 
 test('worker passes ABI 2 open config and the wasm32 call-options layout', async () => {
   let top = 64;
-  const calls = [], posted = [];
+  const calls = [], posted = [], strings = new Map();
   const heap = new Uint32Array(4096);
   const runtime = {
     HEAPU32: heap, _dtl_abi_version: () => 2,
+    lengthBytesUTF8: text => Buffer.byteLength(text), stringToUTF8: (text, pointer) => { strings.set(pointer, text); },
     _dtl_default_call_options(pointer) { heap[pointer >>> 2] = 40; },
     _malloc: size => { const pointer = top; top += (size + 7) & ~7; return pointer; }, _free() {}, _dtl_free() {},
     UTF8ToString: () => JSON.stringify({ backend: 'wasm-cpu' }), addFunction: () => 11, removeFunction() {},
     FS: { writeFile() {}, unlink() {} },
     async ccall(name, type, types, args) {
-      calls.push({ name, types, args: [...args], words: name === 'dtl_execute' ? [...heap.slice(args[2] >>> 2, (args[2] >>> 2) + 10)] : undefined });
+      calls.push({ name, types, args: [...args], request: name === 'dtl_execute' ? strings.get(args[1]) : undefined,
+                   words: name === 'dtl_execute' ? [...heap.slice(args[2] >>> 2, (args[2] >>> 2) + 10)] : undefined });
       if (name === 'dtl_open' || name === 'dtl_open_router') heap[args[2] >>> 2] = 1000;
       return 0;
     },
@@ -84,7 +86,8 @@ test('worker passes ABI 2 open config and the wasm32 call-options layout', async
   assert.equal(info.length, 1);
   await worker.namespace.call('dtl_execute', '{}', { id: 3, requestId: 2 ** 32 + 5, observe: true, deadline: 0 });
   const execute = calls.find(call => call.name === 'dtl_execute');
-  assert.deepEqual(execute.args.slice(0, 2), [1000, '{}']);
+  // The request is passed as a heap pointer, not on the WASM stack.
+  assert.equal(execute.args[0], 1000); assert.equal(execute.types[1], 'number'); assert.equal(execute.request, '{}');
   // size, reserved, request_id (lo, hi), timeout (lo, hi), on_event, event_user_data, should_cancel, cancel_user_data
   assert.deepEqual(execute.words.slice(0, 6), [40, 0, 5, 1, 0, 0]);
   assert.equal(execute.words[6], 11); assert.equal(execute.words[7], 0); assert.equal(execute.words[9], 0);

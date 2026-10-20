@@ -12,8 +12,10 @@ manifest before real inference; the runner never downloads one.
 
 ```sh
 npm ci --ignore-scripts --prefix tests/typescript
-python3 scripts/validate.py --output build-check-model-free
+python3 scripts/validate.py --packages --output build-check-model-free
 python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf \
+  --extra-model /path/to/laya-multilingual-f16.gguf \
+  --extra-model /path/to/laya-typed-decisions-q8_0.gguf \
   --packages --upstream-reference --output build-check-native
 python3 scripts/check-reproducibility.py --output build-repro --jobs 2
 ```
@@ -29,8 +31,7 @@ locked command above. `tests/typescript/check.py --node-package NPM_TARBALL
 Reused candidate
 source/revision overrides are cleared, and built runtime diagnostics must match
 the approved compatibility record before any test gate is accepted. With a model,
-it also compares C, C++, Rust, Node, Python, Java, .NET and Go fixture outputs. `--packages` builds actual artifacts
-and exercises installed consumers outside the checkout. `--reproducibility` adds two
+it also compares C, C++, Rust, Node, Python, Java, .NET and Go fixture outputs. `--packages` builds actual artifacts and runs `tests/package-smoke.py`, which needs no model: outside the checkout, a C program links the native tarball, the npm package loads its addon and the wheel imports its bundled library, and each must report the recorded ABI version. With a model, `--packages` also runs `tests/installed-packages.py`, which exercises the installed consumers with real inference. `--reproducibility` adds two
 independent builds; it is intentionally optional because it recompiles the runtime.
 
 Every run retains commands, logs, exit codes and source/runtime/model/fixture/binary
@@ -45,15 +46,9 @@ shared-core contracts. Both sides receive structured values already serialized t
 way the original Laya writes them, so they render identical prompts. Without this
 option, the upstream-reference gate stays not run.
 
-With a model, `tests/original-reference.py` also runs the original Laya
-implementation's recorded cases (`tests/original-reference/<model>/`, Apache-2.0,
-with provenance) through the C consumer at the checkpoint's trained sequence
-length: the `original_reference` gate. Input token counts must match exactly, and
-probabilities must stay within 0.05 with unchanged decisions. On near ties (the
-original's top two within 0.05) the decision may differ, since the model is
-undecided and quantization noise can reorder options; the probabilities are still
-gated. Cases for features the core does not support yet must still be refused;
-when one starts passing, it moves into the supported set.
+With a model, `tests/original-reference.py` also runs the original Laya implementation's recorded cases (`tests/original-reference/<model>/`, Apache-2.0, with provenance) through the C consumer at the checkpoint's trained sequence length: the `original_reference` gate. Input token counts must match exactly, and probabilities must stay within 0.05 with unchanged decisions. On near ties (the original's top two within 0.05) the decision may differ, since the model is undecided and quantization noise can reorder options; the probabilities are still gated. The original truncates over-long input by default, so its long-state and many-option cases run with `overflow: truncate_end`, and their `state_tokens` and `state_tokens_dropped` must match too. Cases for features the core does not support (the embedding shortlist) must still be refused; when one starts passing, it moves into the supported set.
+
+`--extra-model PATH` (repeatable) qualifies an additional pinned model, one listed under `additional_models` in `release/compatibility.json` (the multilingual and typed-decisions models), matched to its pinned manifest by file hash. Each runs the `original_reference` gate against its own recorded cases and, with `--upstream-reference`, the upstream comparison. The results go to `additional_model_gates` in `report.json`. `check-candidate.py` requires both gates passed for every additional model, so a candidate cannot qualify without them. The primary model is still passed with `--model`.
 
 The core bounds the temperatures stored in a model to [0.5, 5], as the original
 does; llama.cpp applies them unbounded. The upstream-reference checks therefore
@@ -65,17 +60,20 @@ the runner does not silently transplant historical results to a different binary
 This runner currently covers a subset of release gates and cannot approve a release
 by itself. A successful normal exit means its selected checks passed.
 
-The GitHub workflow defines Ubuntu 24.04 model-free checks for Clang/Node 24 and
-GCC/Node 26. Manual dispatch can explicitly enable the pinned model download and
-installed-package checks. Workflow dependencies are pinned by commit; Rust and Node
+With `--model`, the runner requires the `cpu-guard` test to be registered, which needs `qemu-x86_64` (and `python3`) on `PATH` when CMake configures; without QEMU a real-model run fails. It also runs `tests/download-model.py` and records the Rust, Go, Java, .NET and Python versions it found under `toolchains`.
+
+The GitHub workflow defines Ubuntu 24.04 model-free checks for Clang/Node 24 and GCC/Node 26, including `--packages` and its package smoke test. Manual dispatch can explicitly enable the pinned model download, QEMU and the real-model installed-package checks. CI uses the runner's default `clang` and `gcc`, which need not be the compiler versions `release/qualification.json` lists; the `native_matrix` evidence for `check-candidate.py` may therefore combine local and CI reports, as long as together they cover every listed compiler and Node version and each is bound to the candidate. Workflow dependencies are pinned by commit; Rust and Node
 versions are explicit. Consult the relevant GitHub Actions run for results;
 workflow definitions alone are not release evidence. CI does not publish packages
 or update dependencies.
 
-A separate model-free CI job instruments the shared library with ASan/UBSan and
-runs `tests/input-fuzz.cpp`: deterministic request/schema/config mutations, nesting
-and size boundaries. It does not replace real-model sanitizer runs or claim
-coverage-guided fuzzing. No sanitizer recovery or suppression is enabled.
+A separate model-free CI job instruments the shared library with ASan/UBSan, runs
+the model-free CTest suite and `tests/input-fuzz.cpp` (deterministic
+request/schema/config mutations, nesting and size boundaries), then builds
+`laya-input-fuzzer` and runs a 60-second coverage-guided libFuzzer smoke from the
+generated corpus. The smoke exercises the harness; it does not meet the one-hour
+fuzz budget or replace real-model sanitizer runs. No sanitizer recovery or
+suppression is enabled.
 
 The benchmark (`tests/benchmark.py`, one fresh process per run) records model
 open/close, first and warm p50/p95/p99 latency for small, structured, near-limit
@@ -92,7 +90,11 @@ python3 scripts/performance-budgets.py check build/bench-candidate.json
 ```
 
 Limits are the worst baseline value times a declared headroom (1.5 for time, 1.25
-for memory); leaks have none. They detect regressions on the reference host, not
+for memory); leaks have none. The committed budgets in
+`release/budgets/native-performance.json` were frozen from a 0.1.0-era baseline
+(source commit `baaf568`, an ancestor of `v0.1.0`). 0.2.0 changes the library, so re-check them for the 0.2.0
+candidate and re-derive them from new baseline runs if the measured profile no
+longer matches. They detect regressions on the reference host, not
 portable latency promises. Run without competing builds or inference and keep
 the reports as CI/PR artifacts.
 
@@ -135,22 +137,28 @@ identities for the remaining long or instrumented gates:
 python3 scripts/check-stress.py /path/to/Laya-Q8_0.gguf --build build-validation --output build-stress  # --seconds 28800 for soak
 python3 scripts/check-sanitizers.py /path/to/Laya-Q8_0.gguf --output build-sanitizers
 python3 tests/rollback.py LKG_PACKAGES CANDIDATE_PACKAGES /path/to/Laya-Q8_0.gguf --report build/rollback.json
-node tests/electron/run.cjs PACKAGES/ducktape-laya-0.1.0.tgz /path/to/Laya-Q8_0.gguf build/electron.json
+node tests/electron/run.cjs PACKAGES/ducktape-laya-0.2.0.tgz /path/to/Laya-Q8_0.gguf build/electron.json
 python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COMMIT --report build-candidate/gates.json
 ```
 
 The sanitizer runner builds ASan+UBSan and TSan configurations, runs every
 registered native test with the model (allocation-failure injection is skipped
-under sanitizer runtimes) and a short stress run. The rollback rehearsal switches
-an installed application from retained last-known-good packages to the candidate
-and back with one consumer binary, requiring the LKG library and byte-identical
-outputs after rollback. `check-candidate.py` takes a JSON map of evidence names
+under sanitizer runtimes) and a short stress run. The `sanitizers` gate also
+lists the coverage-guided fuzz campaign (`scripts/check-fuzz.py`, below) among
+its checks; its report is the separate `fuzz` evidence. The rollback rehearsal switches an installed application from retained last-known-good packages to the candidate and back, requiring the LKG library and byte-identical outputs after rollback. Make `LKG_PACKAGES` from the previous GitHub release: `gh release download vX.Y.Z -D build/lkg-assets` and `python3 scripts/release-assets.py retain build/lkg-assets --output build/lkg-packages`, which restores the native package directory (`inventory.json` and its artifacts) and verifies it. When both sides have the same ABI, one consumer binary must work with both. Across an ABI break (0.1.0 to 0.2.0), an application must rebuild, so each side runs a consumer built from its own packaging source commit against its own headers. `check-candidate.py` takes a JSON map of evidence names
 (`native`, `native_matrix`, `browser_package`, `browser`, `browser_isolated`,
 `userspaces`, `electron`, `cross_cpu`, `sanitizers`, `fuzz`, `stress`, `soak`,
 `reproducibility`, `performance`, `security_review`, `upgrade`, `model_upgrade`,
 `rollback`) to report paths. A gate passes only when its evidence passed and is
 bound to the candidate commit, the validated library and packages, the browser
-package assets and the pinned model; missing evidence is `not_run`. Hours-long
+package assets and the pinned model; missing evidence is `not_run`. In particular:
+the security review must name its `source_commit` and `source_tracked_dirty`
+(false) like other reports; the cross-CPU bundle must contain the candidate
+library; the rollback's previous side must be an earlier release whose source is
+an ancestor of the candidate; the native packages must be built from the
+candidate's source identity; browser runs must use a Chrome version listed in
+`release/qualification.json` and, for WebGPU, listed non-fallback hardware; and
+each reproduced build must contain the candidate library. Hours-long
 evidence (`soak`, `stress`, `fuzz`, `sanitizers`, `performance`, `upgrade`,
 `model_upgrade`) may come from an ancestor commit when the diff since touches no
 library input (`src/`, `include/`, `cmake/`, `patches/`, `CMakeLists.txt`, the
@@ -166,9 +174,8 @@ commit's own tree, so later tooling commits cannot alter what is checked.
 Before publication, require all applicable recorded gates, review current evidence
 and numeric-profile limits, verify the security contact and release hosting, and
 retain the prior artifacts for rollback. Publication is an explicit maintainer
-action. After the GitHub release exists, run the `attest-release` workflow with its
-tag: it checks the assets against `SHA256SUMS` and a `release_ready` `gates.json`,
-then signs a release-qualification attestation for each asset. It is not build
+action. Assemble the release assets with `scripts/release-assets.py assemble`
+(see [PUBLISHING.md](PUBLISHING.md#release-day-order)). After the GitHub release exists, run the `attest-release` workflow from `main` with its tag (it refuses other refs): it checks that `gates.json` is `release_ready`, that every gate in it passed, that it qualified the tagged commit and came from a clean checker; that the published native and browser inventories are the ones `gates.json` qualified and were packaged from the tagged commit; that every artifact they list is published with the listed hash; and that `SHA256SUMS` matches. Any asset outside those inventories fails the run. It then signs a release-qualification attestation for each asset. It is not build
 provenance; the assets are built and qualified locally. Registry status, missing
 publishing work and the release-day order are in [PUBLISHING.md](PUBLISHING.md).
 Each numerical profile must pass strict same-backend upstream checks.

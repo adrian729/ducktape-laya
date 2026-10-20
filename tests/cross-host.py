@@ -19,7 +19,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FILES = ('libducktape_laya.so', 'laya-conformance-c')
-SONAME = 'libducktape_laya.so.0'
+SONAME = 'libducktape_laya.so.1'
 
 def sha256(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()

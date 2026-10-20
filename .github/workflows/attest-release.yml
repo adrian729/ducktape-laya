@@ -18,6 +18,8 @@ permissions:
 
 jobs:
   attest:
+    # Only the workflow as merged on main may sign; a branch cannot bring its own.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
       - name: Download and check release assets
@@ -30,7 +32,30 @@ jobs:
           cd assets
           sha256sum -c SHA256SUMS
           commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
-          jq -e '.release_ready == true' gates.json > /dev/null
+          # The qualified commit must be the tagged one, checked by a clean checker.
+          jq -e --arg commit "$commit" '.release_ready == true and .candidate_commit == $commit and .checker_tree_dirty == false
+            and ([.gates[].status] | all(. == "passed"))' gates.json > /dev/null
+          # The published inventories are the qualified ones, were packaged from the tagged
+          # commit, and every artifact they list is published with the listed hash (the
+          # SBOMs are published under a prefixed name).
+          allowed="gates.json"
+          for pair in native:native-inventory.json:native-sbom.cdx.json browser:npm-browser-inventory.json:npm-browser-sbom.cdx.json; do
+            label=${pair%%:*}; rest=${pair#*:}; inventory=${rest%%:*}; sbom=${rest#*:}
+            jq -e --arg label "$label" --arg sum "$(sha256sum "$inventory" | cut -d' ' -f1)" \
+              '.inventories_sha256[$label] == $sum' gates.json > /dev/null
+            jq -e --arg commit "$commit" '.packaging_source_commit == $commit' "$inventory" > /dev/null
+            allowed="$allowed $inventory"
+            jq -r '.artifacts | to_entries[] | "\(if (.value | type) == "object" then .value.sha256 else .value end)  \(.key)"' "$inventory" |
+              while read -r sum name; do
+                [ "$name" = sbom.cdx.json ] && name=$sbom
+                echo "$sum  $name" | sha256sum -c --quiet -
+              done
+            allowed="$allowed $sbom $(jq -r '.artifacts | keys[] | select(. != "sbom.cdx.json")' "$inventory" | tr '\n' ' ')"
+          done
+          # Nothing outside the qualified inventories is attested.
+          for name in $(cut -d' ' -f3 SHA256SUMS); do
+            case " $allowed " in *" $name "*) ;; *) echo "Unqualified asset: $name"; exit 1 ;; esac
+          done
           jq -n --arg tag "$TAG" --arg commit "$commit" --arg gates "$(sha256sum gates.json | cut -d' ' -f1)" \
             --arg repo "$GITHUB_REPOSITORY" \
             '{release: $tag, repository: $repo, source_commit: $commit, gates_sha256: $gates, release_ready: true}' > ../predicate.json

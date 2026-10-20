@@ -7,6 +7,10 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.ref.Cleaner;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
@@ -136,10 +140,11 @@ public final class Laya implements AutoCloseable {
     private static Laya create(boolean router, String input, Config config) {
         Objects.requireNonNull(input, router ? "routerJson" : "modelPath");
         Objects.requireNonNull(config, "config");
-        checkInput(input);
+        checkInput(input, router ? "router config" : "model path");
         Native n = Native.get();
         try (Arena arena = Arena.ofConfined()) {
             String configJson = config.toJson();
+            if (configJson != null) checkInput(configJson, "config");
             MemorySegment out = arena.allocate(PTR);
             MemorySegment error = arena.allocate(PTR);
             MemorySegment cfg = configJson == null ? MemorySegment.NULL : arena.allocateFrom(configJson);
@@ -156,8 +161,15 @@ public final class Laya implements AutoCloseable {
         }
     }
 
-    private static void checkInput(String s) {
+    private static void checkInput(String s, String what) {
         if (s.indexOf('\0') >= 0) throw new LayaException(LayaException.INVALID_ARGUMENT, "Input contains a NUL byte");
+        // allocateFrom would silently turn lone surrogates into '?'.
+        try {
+            StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(s));
+        } catch (CharacterCodingException e) {
+            throw new LayaException(LayaException.INVALID_ARGUMENT, what + " is not valid Unicode");
+        }
     }
 
     private interface Body<T> {
@@ -165,6 +177,9 @@ public final class Laya implements AutoCloseable {
     }
 
     private <T> T withHandle(Body<T> body) {
+        // Fail fast once close is pending rather than queueing behind the writer, which would block
+        // (or deadlock a callback waiting on another thread's call); re-checked under the lock.
+        if (closing) throw new LayaClosedException();
         lock.readLock().lock();
         try {
             if (closing || released) throw new LayaClosedException();
@@ -181,7 +196,7 @@ public final class Laya implements AutoCloseable {
     private String run(String request, CallOptions options) {
         Objects.requireNonNull(request, "request");
         if (options == null) options = CallOptions.none();
-        checkInput(request);
+        checkInput(request, "request");
         CallOptions opts = options;
         Native n = Native.get();
         return withHandle(h -> {

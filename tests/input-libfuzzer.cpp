@@ -12,7 +12,7 @@ struct fixture {
     fixture() {
         char *error = nullptr;
         // A real path satisfies lazy router configuration; it is never a GGUF.
-        const auto status = dtl_open_router(R"({"models":{"fuzz":"/proc/self/exe"}})", nullptr, &router, &error);
+        const auto status = dtl_open_router(R"({"models":{"fuzz":"/proc/self/exe"},"auto":{"english":"fuzz","default":"fuzz"}})", nullptr, &router, &error);
         require(status == DTL_OK && router && !error);
         dtl_free(error);
     }

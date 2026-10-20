@@ -24,6 +24,9 @@ static void check(dtl_status s, char *error) {
     std::unique_ptr<char, decltype(&dtl_free)> owned(error, dtl_free);
     if (s) throw native_error(s, error ? error : "Laya operation failed");
 }
+static void require_abi() {
+    if (dtl_abi_version() != 2) throw std::runtime_error("Native ducktape-laya ABI " + std::to_string(dtl_abi_version()) + " is not supported (expected 2)");
+}
 template<class F> napi_value guarded(napi_env env, F f) {
     try { return f(); }
     catch (const native_error &e) {
@@ -40,6 +43,7 @@ template<class F> napi_value guarded(napi_env env, F f) {
 }
 static napi_value open_engine(napi_env env, napi_callback_info info) {
     return guarded(env, [&] {
+        require_abi();
         size_t argc = 3; napi_value args[3]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
         if (argc != 3) throw std::runtime_error("Expected path/router JSON, config JSON and router flag");
         bool router; ok(napi_get_value_bool(env, args[2], &router));
@@ -108,6 +112,7 @@ static napi_value close_engine(napi_env env, napi_callback_info info) {
 }
 static napi_value info_engine(napi_env env, napi_callback_info info) {
     return guarded(env, [&] {
+        require_abi();
         size_t argc = 1; napi_value arg; ok(napi_get_cb_info(env, info, &argc, &arg, nullptr, nullptr));
         dtl_engine *engine = nullptr;
         if (argc) {

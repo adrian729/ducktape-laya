@@ -44,6 +44,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"runtime"
 	"runtime/cgo"
 	"strings"
@@ -54,6 +55,7 @@ import (
 
 // Native status codes (dtl_status).
 const (
+	StatusOK                  = 0
 	StatusInvalidArgument     = 1
 	StatusModelError          = 2
 	StatusInferenceError      = 3
@@ -119,7 +121,18 @@ func check(status C.dtl_status, msg *C.char) error {
 	return &Error{int32(status), text}
 }
 
+// checkABI refuses a library built for a different C ABI version.
+func checkABI() error {
+	if v := uint32(C.dtl_abi_version()); v != 2 {
+		return &Error{StatusUnsupportedPlatform, fmt.Sprintf("Native ducktape-laya ABI %d is not supported (expected 2)", v)}
+	}
+	return nil
+}
+
 func readInfo(handle unsafe.Pointer) (string, error) {
+	if err := checkABI(); err != nil {
+		return "", err
+	}
 	var result, msg *C.char
 	status := C.dtl_info((*C.dtl_engine)(handle), &result, &msg)
 	if result != nil {
@@ -144,8 +157,9 @@ type CallOptions struct {
 	RequestID uint64
 	// OnEvent receives passive events synchronously on the calling
 	// goroutine's thread, outside native locks. Panics are contained. It may
-	// reenter the engine or Close it, but must not wait for a call that waits
-	// on this one.
+	// reenter the engine, but must not wait for a call that waits on this one.
+	// Do not call Close from inside it (Close waits for the running call and
+	// would deadlock); use CloseDeferred instead.
 	OnEvent func(eventJSON string)
 }
 
@@ -215,12 +229,16 @@ func Open(modelPath string, config *Config) (*Engine, error) {
 
 // OpenRouter opens a bounded, lazy local model registry described by
 // routerJSON (see docs/API.md). config applies to every route; a route's own
-// config overrides it key by key. Requests must name a route in "model".
+// config overrides it key by key. Requests must name a route in "model", or
+// use "model": "auto" when routerJSON has an "auto" config.
 func OpenRouter(routerJSON string, config *Config) (*Engine, error) {
 	return openNative(routerJSON, config, true, "Native router returned null")
 }
 
 func openNative(first string, config *Config, router bool, nullMsg string) (*Engine, error) {
+	if err := checkABI(); err != nil {
+		return nil, err
+	}
 	arg, err := cstring(first)
 	if err != nil {
 		return nil, err

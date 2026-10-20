@@ -16,17 +16,29 @@
   `tests/original-reference` are its recorded results.
 - llamafile CPU kernels incorporated by ggml: MIT, Copyright 2024 Mozilla
   Foundation. [Full notice](licenses/llamafile-MIT.txt).
+- Further code that llama.cpp/ggml adapted from other projects and that is
+  compiled into the library, with the attribution in the pinned source:
+  - YaRN rotary-embedding scaling, `ggml/src/ggml-cpu/ops.cpp` (comment above
+    `rope_yarn`): "MIT licensed. Copyright (c) 2023 Jeffrey Quesnelle and Bowen
+    Peng", based on https://github.com/jquesnelle/yarn.
+  - SIMD `expf` routines (`ggml_v_expf` variants), `ggml/src/ggml-cpu/vec.h`:
+    "adapted from arm limited optimized routine", that is Arm's
+    optimized-routines (https://github.com/ARM-software/optimized-routines),
+    which is offered under the MIT license (or Apache-2.0 with the LLVM exception).
+  - BPE tokenizer, `src/llama-vocab.cpp`: "adapted from
+    https://github.com/cmp-nct/ggllm.cpp [MIT License]".
+
+  The upstream comments carry no separate license file; the MIT license text is in
+  [licenses/llama.cpp-MIT.txt](licenses/llama.cpp-MIT.txt). Keep these
+  attributions when redistributing.
 - nlohmann JSON: MIT, Niels Lohmann. Included through llama.cpp's vendor directory.
   [License](licenses/nlohmann-json-MIT.txt).
-- Laya model: the upstream model card declares Apache-2.0.
-  [Model source](https://huggingface.co/convaiinnovations/laya),
-  [GGUF conversion](https://huggingface.co/ggml-org/Laya-GGUF),
-  [license text](licenses/Apache-2.0.txt). It is fine-tuned from
-  [ModernBERT-large](https://huggingface.co/answerdotai/ModernBERT-large) (Apache-2.0).
-  Neither the Laya model, its GGUF conversion nor ModernBERT-large publishes a
-  NOTICE file. Weights are not committed or downloaded by the runtime.
-  `models/manifest.json` pins the tested conversion. An app distributing the
-  model must include the Apache-2.0 text and this attribution with it.
+- Laya models: the upstream model card declares Apache-2.0 for all three checkpoints in [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) ([license text](licenses/Apache-2.0.txt)).
+  - English: fine-tuned from [ModernBERT-large](https://huggingface.co/answerdotai/ModernBERT-large) (Apache-2.0). Used through the [ggml-org GGUF conversion](https://huggingface.co/ggml-org/Laya-GGUF), pinned by `models/manifest.json`.
+  - Multilingual: fine-tuned from [jhu-clsp/mmBERT-base](https://huggingface.co/jhu-clsp/mmBERT-base) (MIT). Pinned by `models/laya-multilingual.json`.
+  - Typed decisions: fine-tuned from ModernBERT-large (Apache-2.0). Pinned by `models/laya-typed-decisions.json`.
+
+  No official GGUF exists for the multilingual and typed-decisions checkpoints; users build them with `scripts/convert-model.py` from the source revision and file hashes in those manifests. Neither the Laya models, the GGUF conversion nor ModernBERT-large publishes a NOTICE file. Weights are not committed or downloaded by the runtime. An app distributing a model must include the Apache-2.0 text and this attribution with it, and for the multilingual model also credit mmBERT-base, whose model card declares MIT (its repository publishes no license file or copyright line).
 
 Ducktape Laya is an independent integration, not an upstream Laya release.
 
@@ -34,7 +46,9 @@ Browser artifacts additionally incorporate code from the pinned Emscripten SDK
 (`release/browser-toolchain.json`): Emscripten runtime glue (MIT or NCSA), musl
 (MIT and the notices in its COPYRIGHT), libc++/libc++abi/compiler-rt (LLVM license
 texts including applicable exceptions), and Dawn WebGPU bindings (BSD notices).
-Their complete texts are included under `licenses/`. The browser's GPU driver
+Their complete texts are included under `licenses/`. The native installation, the
+npm package and the Python wheel copy the whole `licenses/` directory, so they also carry these
+browser-only texts although the native library contains none of that code. The browser's GPU driver
 and browser implementation are supplied by the host, not redistributed here.
 Test-only Electron, ASAR and upstream server-reference dependencies are excluded
 from consumer packages. Build/toolchain licenses do not replace the separate

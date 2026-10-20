@@ -9,6 +9,6 @@
   "source_model": "https://huggingface.co/convaiinnovations/laya",
   "model_license": "Apache-2.0",
   "llama_cpp_commit": "1e6f04a75e91da4bb66b5248f3fd4bdeff169d41",
-  "max_tokens_per_question": 512,
+  "trained_question_tokens": 512,
   "original_reference_cases": "tests/original-reference/english"
 }

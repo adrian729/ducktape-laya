@@ -66,7 +66,10 @@ NATIVE_TESTS = ['tests/*.cpp', 'tests/*.c', 'tests/consumers/*', 'tests/fixtures
 BINDING_CODE = ['bindings/*.cjs', 'bindings/*.mjs', 'bindings/*.cpp', 'bindings/*.rs', 'bindings/*.toml', 'bindings/*.lock',
                 'bindings/*.py', 'bindings/*.go', 'bindings/*.mod', 'bindings/*.java', 'bindings/*.xml', 'bindings/*.sh',
                 'bindings/*.cs', 'bindings/*.csproj', 'bindings/*.slnx']
+# Helpers every runner imports.
+COMMON_HARNESS = ['scripts/release_support.py', 'scripts/artifact_support.py', 'tests/reference_requests.py']
 HARNESS = {
+    'security_review': BINDING_CODE + ['scripts/*', '.github/*'],
     'stress': ['tests/stress.cpp', 'scripts/check-stress.py'],
     'soak': ['tests/stress.cpp', 'scripts/check-stress.py'],
     'fuzz': ['tests/input-libfuzzer.cpp', 'tests/fuzz-corpus.py', 'scripts/check-fuzz.py'],
@@ -84,8 +87,8 @@ def tested_source(report, name):
         return
     need(isinstance(produced, str) and subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', produced, commit],
          capture_output=True).returncode == 0, f'{name}: source {produced} is not the candidate or its ancestor')
-    changed = git(ROOT, 'diff', '--name-only', produced, commit).splitlines()
-    touched = [path for path in changed if any(fnmatch.fnmatch(path, pattern) for pattern in LIBRARY_INPUTS + HARNESS[name])]
+    changed = git(ROOT, 'diff', '--name-only', '--no-renames', produced, commit).splitlines()
+    touched = [path for path in changed if any(fnmatch.fnmatch(path, pattern) for pattern in LIBRARY_INPUTS + COMMON_HARNESS + HARNESS[name])]
     need(not touched, f'{name}: inputs changed since {produced[:12]}: {", ".join(touched[:6])}')
     reused[name] = produced
 
@@ -99,6 +102,7 @@ def packages():
     directory = paths['native'].parent / 'packages'
     inventory = read_json(directory / 'inventory.json')
     need(inventory['packaging_source_commit'] == commit and not inventory['packaging_source_tracked_dirty'], 'packages: not built from candidate')
+    need(inventory['build_source']['sha256'] == source, 'packages: built from different sources')
     for name, identity in inventory['artifacts'].items():
         need(sha256(directory / name) == identity['sha256'], f'packages: {name} differs from inventory')
     return report, directory, inventory
@@ -116,6 +120,12 @@ def native_gate(gate):
     def check():
         report = native()
         need(report['gates'][gate]['status'] == 'passed', f'native: {gate} {report["gates"][gate]["status"]}')
+        if gate in ('original_reference', 'upstream_reference'):
+            # Every additional pinned model is qualified like the primary one.
+            for name in record.get('additional_models', []):
+                model_id = read_json(candidate_tree / name)['id']
+                status = report.get('additional_model_gates', {}).get(model_id, {}).get(gate, 'not_run')
+                need(status == 'passed', f'native: {gate} for {model_id} {status}')
         if gate == 'installed_packages':
             packages()
     return check
@@ -166,6 +176,7 @@ def linux_matrix():
     need(nodes >= set(policy['platforms']['native']['node_versions']), f'node: {sorted(nodes)} do not cover the matrix')
     cross = load('cross_cpu')
     need(cross['exact'] and len({c['model name'] for c in cross['cpus']}) == 2, 'cross_cpu: outputs differ or CPUs not distinct')
+    need(cross.get('bundle_sha256', {}).get('libducktape_laya.so') == native()['library_sha256'], 'cross_cpu: not the candidate library')
 
 def browser_gate(backend):
     def check():
@@ -176,6 +187,14 @@ def browser_gate(backend):
             need(report['model_sha256'] == manifest_model['sha256'], f'{page}: model differs')
             need(report.get('package_dir'), f'{page}: did not test the extracted package')
             need(report['isolated'] == (page == 'browser_isolated') and not report['headless'] and not report['launch_flags'], f'{page}: page/launch settings differ')
+            browsers = policy['platforms']['browser']['browser_versions']
+            need(any(str(report.get('browser_version', '')).endswith(version.split('-', 1)[-1]) for version in browsers),
+                 f'{page}: browser {report.get("browser_version")} is not one of {browsers}')
+            if backend == 'webgpu':
+                gpu = (report.get('environment') or {}).get('gpu') or {}
+                hardware = f'{gpu.get("vendor")}-{gpu.get("architecture")}'
+                need(gpu and not gpu.get('fallback') and hardware in policy['platforms']['browser']['webgpu_hardware'],
+                     f'{page}: WebGPU ran on {hardware or "no adapter"}, not listed hardware')
             for name in ('laya.mjs', 'laya.wasm'):
                 need(report['asset_hashes'][f'{backend}/{name}'] == package['assets'][f'{backend}/{name}'], f'{page}: {backend} assets are not the candidate package')
             gates = report['backends'][backend]
@@ -214,6 +233,9 @@ def reproducibility():
     report = load('reproducibility')
     same_source(report, 'reproducibility')
     need(report['status'] == 'passed' and not report['differences'], 'reproducibility: builds differ')
+    library = native()['library_sha256']
+    for label, files in report['builds'].items():
+        need(any(entry.get('sha256') == library for entry in files.values()), f'reproducibility: {label} build is not the candidate library')
 
 def artifact_integrity():
     report, _, inventory = packages()
@@ -233,6 +255,7 @@ def performance():
 
 def security_review():
     review = load('security_review')
+    tested_source(review, 'security_review')
     need(review.get('runtime_commit') == record['runtime']['commit'], 'security review: different runtime pin')
     need(review.get('runtime_patches') == [patch['sha256'] for patch in record['runtime']['patches']], 'security review: different runtime patches')
     need(review.get('release_blocking_code_issues') == [], 'security review: unresolved release-blocking issues')
@@ -249,6 +272,12 @@ def upgrade_rollback():
     rollback = load('rollback')
     need(rollback['status'] == 'passed' and rollback['candidate_inventory_sha256'] == sha256(packages()[1] / 'inventory.json'),
          'rollback: failed or not rehearsed with the candidate packages')
+    version = lambda text: tuple(int(part) for part in text.split('.'))
+    need(rollback.get('previous_inventory_sha256') != rollback['candidate_inventory_sha256'] and
+         version(rollback.get('previous_version', '0.0.0')) < version(rollback.get('candidate_version', '0.0.0')),
+         'rollback: the previous side is not an earlier release')
+    need(subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', rollback.get('previous_source_commit', ''), commit],
+                        capture_output=True).returncode == 0, 'rollback: the previous release is not an ancestor of the candidate')
 
 GATES = {'native_contracts': native_gate('native_contracts'), 'binding_conformance': native_gate('binding_conformance'),
          'upstream_reference': native_gate('upstream_reference'), 'original_reference': native_gate('original_reference'),
@@ -272,6 +301,12 @@ for gate, check in GATES.items():
     except (Mismatch, KeyError, ValueError, OSError) as error:
         result['gates'][gate] = {'status': 'failed', 'detail': f'{type(error).__name__}: {error}'}
 result['release_ready'] = all(g['status'] == 'passed' for g in result['gates'].values())
+# The package inventories this report qualified; attest-release.yml checks the
+# published native-inventory.json and npm-browser-inventory.json against them.
+result['inventories_sha256'] = {}
+for label, path in (('native', paths.get('native') and paths['native'].parent / 'packages/inventory.json'),
+                    ('browser', paths.get('browser_package'))):
+    if path and path.is_file(): result['inventories_sha256'][label] = sha256(path)
 result['reused_evidence'] = reused
 result['publication_gates'] = {gate: 'not_run' for gate in policy['publication_gates']}
 a.report.write_text(json.dumps(result, indent=2) + '\n')

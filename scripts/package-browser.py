@@ -17,11 +17,17 @@ record = check_record()
 source = source_identity()
 package_info = read_json(ROOT / 'bindings/browser/package.json')
 if package_info['version'] != record['package_version']: p.error('Browser package version mismatch')
+# Check both builds before creating the output, so a rejected build leaves nothing behind.
+for backend, build in [('wasm', a.wasm.resolve()), ('webgpu', a.webgpu.resolve())]:
+    try:
+        browser_build_identity(build, backend, record, read_json(ROOT / 'release/browser-toolchain.json'), source)
+    except ValueError as error:
+        p.error(str(error))
 out = a.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 with tempfile.TemporaryDirectory(prefix='ducktape-browser-pack-') as directory:
     package = pathlib.Path(directory)
-    for name in ['package.json', 'index.mjs', 'index.d.ts', 'protocol.d.ts', 'worker.mjs']:
-        shutil.copy(ROOT / 'bindings/browser' / name, package / name) # follows shared type symlink
+    for name in ['package.json', 'README.md', 'index.mjs', 'index.d.ts', 'protocol.d.ts', 'worker.mjs']:
+        shutil.copy(ROOT / 'bindings/browser' / name, package / name)
     for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
         shutil.copy(ROOT / name, package / name)
     shutil.copytree(ROOT / 'licenses', package / 'licenses')

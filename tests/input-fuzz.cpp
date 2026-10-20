@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
     seeds.push_back(std::string(1024 * 1024 + 1, ' '));
     dtl_engine *router = nullptr;
     char *error = nullptr;
-    auto status = dtl_open_router("{\"models\":{\"fuzz\":\"/proc/self/exe\"}}", nullptr, &router, &error);
+    auto status = dtl_open_router("{\"models\":{\"fuzz\":\"/proc/self/exe\"},\"auto\":{\"english\":\"fuzz\",\"default\":\"fuzz\"}}", nullptr, &router, &error);
     dtl_free(error);
     if (status || !router) return 1;
     constexpr unsigned rounds = 20000;
