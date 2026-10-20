@@ -41,8 +41,24 @@ processing and compares every fixture request, including batch members, without 
 HTTP server. It never links that processor into the product library. Structured
 requests are compared through their schema-derived primitive questions
 (`tests/reference_requests.py`); value projection remains covered by the
-shared-core contracts. Without this option,
-the upstream-reference gate stays not run.
+shared-core contracts. Both sides receive structured values already serialized the
+way the original Laya writes them, so they render identical prompts. Without this
+option, the upstream-reference gate stays not run.
+
+With a model, `tests/original-reference.py` also runs the original Laya
+implementation's recorded cases (`tests/original-reference/<model>/`, Apache-2.0,
+with provenance) through the C consumer at the checkpoint's trained sequence
+length: the `original_reference` gate. Input token counts must match exactly, and
+probabilities must stay within 0.05 with unchanged decisions. On near ties (the
+original's top two within 0.05) the decision may differ, since the model is
+undecided and quantization noise can reorder options; the probabilities are still
+gated. Cases for features the core does not support yet must still be refused;
+when one starts passing, it moves into the supported set.
+
+The core bounds the temperatures stored in a model to [0.5, 5], as the original
+does; llama.cpp applies them unbounded. The upstream-reference checks therefore
+compare our probabilities re-expressed at the stored temperature (exact up to
+rounding, since probabilities are a softmax of scores over the temperature).
 Sanitizer, stress, browser and platform evidence remain separate;
 the runner does not silently transplant historical results to a different binary.
 `--require-release` exits unsuccessfully if any required gate is failed or unrun.

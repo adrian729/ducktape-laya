@@ -1,0 +1,61 @@
+{
+ "name": "dict_state",
+ "state": {
+  "plan": "pro",
+  "mrr": 149.0,
+  "open_tickets": 3,
+  "vip": true,
+  "notes": null,
+  "tags": [
+   "billing",
+   "escalated"
+  ],
+  "owner": {
+   "team": "success",
+   "name": "Ana Muller"
+  }
+ },
+ "questions": {
+  "priority": {
+   "type": "score",
+   "instructions": "Rank the priority of this account.",
+   "criteria": [
+    "low",
+    "normal",
+    "high"
+   ]
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "priority": {
+    "type": "score",
+    "score": 1.232,
+    "legend": {
+     "0": "low",
+     "1": "normal",
+     "2": "high"
+    },
+    "probabilities": {
+     "0": 0.1487,
+     "1": 0.4706,
+     "2": 0.3807
+    },
+    "confidence": 0.0845,
+    "answer_confidence": 0.4706,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 93,
+   "output_tokens": 0,
+   "state_tokens": 64,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

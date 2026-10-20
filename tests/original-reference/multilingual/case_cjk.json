@@ -1,0 +1,70 @@
+{
+ "name": "cjk",
+ "state": "我这个月被重复扣款了两次，退款一直没有到账。如果今天不解决，我就要取消订阅了。",
+ "questions": {
+  "部门": {
+   "type": "choice",
+   "instructions": "这个请求应该由哪个部门处理？",
+   "criteria": {
+    "账单": "发票、付款、退款",
+    "技术": "故障、错误",
+    "客户成功": "续约、升级"
+   }
+  },
+  "紧急": {
+   "type": "score",
+   "instructions": "这个请求有多紧急？",
+   "criteria": [
+    "不急",
+    "本周",
+    "今天"
+   ]
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "部门": {
+    "type": "choice",
+    "choice": "账单",
+    "probabilities": {
+     "账单": 0.8304,
+     "技术": 0.0705,
+     "客户成功": 0.0991
+    },
+    "confidence": 0.4808,
+    "answer_confidence": 0.8304,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "紧急": {
+    "type": "score",
+    "score": 1.1693,
+    "legend": {
+     "0": "不急",
+     "1": "本周",
+     "2": "今天"
+    },
+    "probabilities": {
+     "0": 0.009,
+     "1": 0.8127,
+     "2": 0.1783
+    },
+    "confidence": 0.5282,
+    "answer_confidence": 0.8127,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 129,
+   "output_tokens": 0,
+   "state_tokens": 27,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

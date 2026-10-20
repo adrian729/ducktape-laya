@@ -1,9 +1,10 @@
 #pragma once
 #include "ducktape_laya.h"
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <utility>
 namespace ducktape {
 class error : public std::runtime_error {
 public:
@@ -14,82 +15,80 @@ inline void check(dtl_status status, char *message) {
     std::unique_ptr<char, decltype(&dtl_free)> owned(message, dtl_free);
     if (status != DTL_OK) throw error(status, message ? message : "Laya operation failed");
 }
-inline std::string info(dtl_engine *engine = nullptr) {
+inline void check_text(const std::string &text, const char *what) {
+    if (text.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, std::string(what) + " contains a NUL byte");
+}
+// Runtime identity, limits and CPU compatibility, without loading a model.
+inline std::string info() {
     char *result = nullptr, *message = nullptr;
-    auto status = dtl_info(engine, &result, &message);
+    auto status = dtl_info(nullptr, &result, &message);
     std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
     check(status, message);
     return result;
 }
-class laya {
+// Per-call controls. on_event runs synchronously on the calling thread; exceptions
+// it throws are contained. should_cancel follows dtl_call_options (dtl_cancel_flag
+// is a ready-made one).
+struct call_options {
+    uint64_t request_id = 0;
+    uint64_t timeout_ms = 0;
+    std::function<void(const std::string &)> on_event;
+    dtl_cancel_callback should_cancel = nullptr;
+    void *cancel_user_data = nullptr;
+};
+// A single model or a router. Calls on one engine serialize; move-only.
+class engine {
     std::unique_ptr<dtl_engine, decltype(&dtl_close)> engine_{nullptr, dtl_close};
+    explicit engine(dtl_engine *raw) { engine_.reset(raw); }
+    static const char *optional(const std::string &config) { return config.empty() ? nullptr : config.c_str(); }
 public:
-    explicit laya(const std::string &path, dtl_options options = dtl_default_options()) {
-        if (path.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Path contains a NUL byte");
+    // config_json: empty, or {"threads", "context_tokens", "temperatures"}; see ducktape_laya.h.
+    static engine open(const std::string &model_path, const std::string &config_json = "") {
+        check_text(model_path, "Path"); check_text(config_json, "Config");
         dtl_engine *raw = nullptr;
         char *message = nullptr;
-        auto status = dtl_open(path.c_str(), &options, &raw, &message);
-        check(status, message);
-        engine_.reset(raw);
+        check(dtl_open(model_path.c_str(), optional(config_json), &raw, &message), message);
+        return engine(raw);
     }
-    std::string info() const { return ducktape::info(engine_.get()); }
-    laya(laya &&) noexcept = default;
-    laya &operator=(laya &&) noexcept = default;
-    laya(const laya &) = delete;
-    laya &operator=(const laya &) = delete;
-    // Accepts one primitive/structured request or a bounded array of requests.
-    std::string execute(const std::string &request, const dtl_observer *observer = nullptr,
-                        const dtl_call_options *options = nullptr) const {
-        if (request.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Request contains a NUL byte");
-        char *result = nullptr, *message = nullptr;
-        auto status = dtl_execute_with_options(engine_.get(), request.c_str(), observer, options, &result, &message);
-        std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
-        check(status, message);
-        return std::string(result);
-    }
-    std::string decide(const std::string &request, const dtl_call_options *options = nullptr) const {
-        if (request.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Request contains a NUL byte");
-        char *result = nullptr, *message = nullptr;
-        auto status = dtl_decide_with_options(engine_.get(), request.c_str(), nullptr, options, &result, &message);
-        std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
-        check(status, message);
-        return result;
-    }
-    // Same as decide(request, options) with a passive observer (either may be null).
-    std::string decide(const std::string &request, const dtl_observer *observer, const dtl_call_options *options) const {
-        if (request.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Request contains a NUL byte");
-        char *result = nullptr, *message = nullptr;
-        auto status = dtl_decide_with_options(engine_.get(), request.c_str(), observer, options, &result, &message);
-        std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
-        check(status, message);
-        return result;
-    }
-};
-class router {
-    std::unique_ptr<dtl_router, decltype(&dtl_router_close)> router_{nullptr, dtl_router_close};
-public:
-    explicit router(const std::string &config, dtl_options options = dtl_default_options()) {
-        if (config.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Config contains a NUL byte");
-        dtl_router *raw = nullptr;
+    // router_json: {"models": {"id": "path.gguf" | {"path", "config"}}, "max_loaded": 1}.
+    static engine open_router(const std::string &router_json, const std::string &config_json = "") {
+        check_text(router_json, "Router config"); check_text(config_json, "Config");
+        dtl_engine *raw = nullptr;
         char *message = nullptr;
-        auto status = dtl_router_open(config.c_str(), &options, &raw, &message);
-        check(status, message); router_.reset(raw);
+        check(dtl_open_router(router_json.c_str(), optional(config_json), &raw, &message), message);
+        return engine(raw);
     }
-    // Runtime identity and capabilities; routers have no single model to describe.
-    std::string info() const { return ducktape::info(nullptr); }
-    router(router &&) noexcept = default;
-    router &operator=(router &&) noexcept = default;
-    router(const router &) = delete;
-    router &operator=(const router &) = delete;
-    std::string execute(const std::string &request, const dtl_observer *observer = nullptr,
-                        const dtl_call_options *options = nullptr) const {
-        if (request.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, "Request contains a NUL byte");
+    engine(engine &&) noexcept = default;
+    engine &operator=(engine &&) noexcept = default;
+    engine(const engine &) = delete;
+    engine &operator=(const engine &) = delete;
+    // Model metadata for a single model; runtime capabilities for a router.
+    std::string info() const {
         char *result = nullptr, *message = nullptr;
-        auto status = dtl_router_execute_with_options(router_.get(), request.c_str(), observer, options, &result, &message);
+        auto status = dtl_info(engine_.get(), &result, &message);
         std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
         check(status, message);
-        return std::string(result);
+        return result;
+    }
+    // One request or an array of requests; see docs/API.md.
+    std::string execute(const std::string &request, const call_options &options = {}) const {
+        check_text(request, "Request");
+        auto native = dtl_default_call_options();
+        native.request_id = options.request_id;
+        native.timeout_ms = options.timeout_ms;
+        native.should_cancel = options.should_cancel;
+        native.cancel_user_data = options.cancel_user_data;
+        if (options.on_event) {
+            native.on_event = [](const char *event, void *data) {
+                try { (*static_cast<const std::function<void(const std::string &)> *>(data))(event); } catch (...) {}
+            };
+            native.event_user_data = const_cast<std::function<void(const std::string &)> *>(&options.on_event);
+        }
+        char *result = nullptr, *message = nullptr;
+        auto status = dtl_execute(engine_.get(), request.c_str(), &native, &result, &message);
+        std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
+        check(status, message);
+        return result;
     }
 };
-
-}
+} // namespace ducktape

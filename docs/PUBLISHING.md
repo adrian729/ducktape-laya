@@ -87,6 +87,18 @@ is handled locally, and every upload is logged in Actions.
    bytes against `SHA256SUMS` and its attestation, and run a real-model consumer.
 8. Update the README status and requirements tables.
 
+## Converted models
+
+The multilingual and typed-decisions GGUFs (`models/laya-multilingual.json`,
+`models/laya-typed-decisions.json`) have no download URL: users build them with
+`scripts/convert-model.py`. To make them downloadable, either:
+
+- ask the Laya authors or ggml-org to publish official GGUFs, then switch the
+  manifests to those files if they qualify; or
+- upload the exact files the manifests pin (for example to a Hugging Face model
+  repository under the maintainer's account, with the Apache-2.0 notice and a
+  link to the source revision) and set each manifest's `url`.
+
 ## Leftovers from 0.1.0
 
 - npm staged publishing left a `0.0.0-stage` placeholder on both npm packages.

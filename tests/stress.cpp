@@ -38,9 +38,9 @@ int main(int argc, char **argv) {
         if (rounds < 10 || rounds > 10000) return 2;
         const auto start = std::chrono::steady_clock::now();
         auto elapsed_seconds = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(); };
-        auto settings = dtl_default_options(); settings.threads = 2;
+        const std::string settings = R"({"threads":2})";
         std::string expected;
-        { ducktape::laya warm(argv[1], settings); expected = warm.execute(request); }
+        { auto warm = ducktape::engine::open(argv[1], settings); expected = warm.execute(request); }
         // Distinct canonical paths (hard links, same filesystem as the model) force real
         // router loads and evictions with one loaded model.
         const auto links = std::filesystem::current_path() / ("stress-router-" + std::to_string(::getpid()));
@@ -59,12 +59,12 @@ int main(int argc, char **argv) {
         double last_progress = 0;
         for (; completed < unsigned(rounds) || elapsed_seconds() < seconds; ++completed) {
           {
-            ducktape::laya engine(argv[1], settings);
+            auto engine = ducktape::engine::open(argv[1], settings);
             if (engine.execute(request) != expected) throw std::runtime_error("Open/use/close result changed");
             try { engine.execute("{bad json"); throw std::runtime_error("Invalid request accepted"); }
             catch (const ducktape::error &error) { if (error.status != DTL_INVALID_ARGUMENT) throw; }
-            auto options = dtl_default_call_options(); options.timeout_ms = 1;
-            try { engine.execute(request, nullptr, &options); throw std::runtime_error("Deadline ignored"); }
+            ducktape::call_options options; options.timeout_ms = 1;
+            try { engine.execute(request, options); throw std::runtime_error("Deadline ignored"); }
             catch (const ducktape::error &error) { if (error.status != DTL_DEADLINE_EXCEEDED) throw; }
             if (engine.execute(request) != expected) throw std::runtime_error("Post-deadline result changed");
             // Concurrent callers share the handle while the main thread issues mixed traffic.
@@ -79,14 +79,14 @@ int main(int argc, char **argv) {
             }
             if (completed % 5 == 2) {
                 // An independent engine runs alongside the shared one.
-                ducktape::laya second(argv[1], settings);
+                auto second = ducktape::engine::open(argv[1], settings);
                 if (second.execute(request) != expected) ++mismatches;
             }
             for (auto &thread : callers) thread.join();
             if (mismatches) throw std::runtime_error("Concurrent or batch result changed");
             if (completed % 5 == 4) {
                 // Cold loads and evictions: each switch unloads the other model.
-                ducktape::router router(router_config, settings);
+                auto router = ducktape::engine::open_router(router_config, settings);
                 for (const char *id : {"a", "b", "a"})
                     if (router.execute(routed(id)) != routed_expected(id)) throw std::runtime_error("Routed result changed");
                 if (router.execute("[" + routed("b") + "," + routed("a") + "]") != "[" + routed_expected("b") + "," + routed_expected("a") + "]")
@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
         // owns its buffers; close waits until all threads have joined.
         std::atomic<unsigned> failures{0};
         {
-            ducktape::laya engine(argv[1], settings); std::vector<std::thread> callers;
+            auto engine = ducktape::engine::open(argv[1], settings); std::vector<std::thread> callers;
             for (int i = 0; i < 4; ++i) callers.emplace_back([&] {
                 for (int j = 0; j < 3; ++j) { try { if (engine.execute(request) != expected) ++failures; } catch (...) { ++failures; } }
             });

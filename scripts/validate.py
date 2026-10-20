@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
-from release_support import ROOT, check_record, git, read_json, sha256, verify_model, source_files, binary_info, require_runtime_identity
+from release_support import ROOT, check_record, find_manifest, git, read_json, sha256, verify_model, source_files, binary_info, require_runtime_identity
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--model', type=pathlib.Path)
@@ -24,6 +24,7 @@ p.add_argument('--packages', action='store_true', help='Build and exercise insta
 p.add_argument('--upstream-reference', action='store_true', help='Build an isolated test-only upstream processor and compare every real-model fixture request')
 p.add_argument('--reproducibility', action='store_true', help='Also compile two independent source snapshots')
 p.add_argument('--require-release', action='store_true', help='Fail if any required release gate is failed or not run')
+p.add_argument('--extra-model', type=pathlib.Path, action='append', default=[], help='An additional pinned model (models/*.json) to qualify against the original Laya and upstream; repeatable')
 a = p.parse_args()
 if a.jobs < 1: p.error('--jobs must be positive')
 if a.packages and not a.model: p.error('--packages requires --model')
@@ -32,6 +33,8 @@ record = check_record()
 model = a.model.resolve() if a.model else None
 manifest = read_json(ROOT / record['models'][0])
 if model: verify_model(model, manifest)
+extra_models = [(path.resolve(), find_manifest(path, record)) for path in a.extra_model]
+if any(m['id'] == manifest['id'] for _, m in extra_models): p.error('--extra-model takes additional models; pass the primary with --model')
 out, build = a.output.resolve(), a.build.resolve()
 out.mkdir(parents=True, exist_ok=False)
 headers = a.node_include or pathlib.Path(shutil.which('node')).resolve().parents[1] / 'include/node'
@@ -45,6 +48,7 @@ if model: env['LAYA_MODEL'] = str(model)
 report = {'schema_version': 1, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')),
           'runtime': record['runtime'], 'model': manifest if model else None,
+          'additional_models': [m for _, m in extra_models],
           'mode': 'real_model' if model else 'model_free', 'release_ready': False,
           'node_version': subprocess.check_output(['node', '--version'], text=True).strip(),
           'source_files_sha256': source_files(),
@@ -114,9 +118,19 @@ try:
     if model:
         run('bindings', [sys.executable, ROOT / 'tests/parity.py', model, '--build-dir', build,
                          '--report', out / 'outputs.json'], 'binding_conformance')
+    if model:
+        run('original-reference', [sys.executable, ROOT / 'tests/original-reference.py', model, '--build-dir', build,
+                                   '--report', out / 'original-reference.json'], 'original_reference')
     if a.upstream_reference:
         run('upstream-reference', [sys.executable, ROOT / 'tests/compare-native-reference.py', model,
             '--build', build, '--report', out / 'upstream-reference.json'], 'upstream_reference')
+    for extra, extra_manifest in extra_models:
+        name = extra_manifest['id']
+        run(f'original-reference-{name}', [sys.executable, ROOT / 'tests/original-reference.py', extra, '--build-dir', build,
+            '--cases', ROOT / extra_manifest['original_reference_cases'], '--report', out / f'original-reference-{name}.json'])
+        if a.upstream_reference:
+            run(f'upstream-reference-{name}', [sys.executable, ROOT / 'tests/compare-native-reference.py', extra,
+                '--build', build, '--report', out / f'upstream-reference-{name}.json'])
     if a.packages:
         run('package', [sys.executable, ROOT / 'scripts/package-linux.py', '--build', build, '--output', out / 'packages'])
         run('installed', [sys.executable, ROOT / 'tests/installed-packages.py', out / 'packages', model], 'installed_packages')

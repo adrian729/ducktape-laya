@@ -13,45 +13,36 @@ static void observe(const char *event, void *user) { goObserver((char *)event, u
 
 static void set_flag(uint32_t *flag, uint32_t value) { __atomic_store_n(flag, value, __ATOMIC_RELAXED); }
 
-static dtl_status open_model(const char *path, uint32_t threads, void **out, char **err) {
-    dtl_options o = dtl_default_options();
-    o.threads = threads;
-    return dtl_open(path, &o, (dtl_engine **)out, err);
+static dtl_status open_model(const char *path, const char *config, void **out, char **err) {
+    return dtl_open(path, config, (dtl_engine **)out, err);
 }
 
-static dtl_status open_router(const char *config, uint32_t threads, void **out, char **err) {
-    dtl_options o = dtl_default_options();
-    o.threads = threads;
-    return dtl_router_open(config, &o, (dtl_router **)out, err);
+static dtl_status open_router(const char *router, const char *config, void **out, char **err) {
+    return dtl_open_router(router, config, (dtl_engine **)out, err);
 }
 
-// kind: 0 model execute, 1 model decide, 2 router execute.
-static dtl_status run(int kind, void *handle, const char *request, uint64_t request_id,
-                      void *observer_user, uint64_t timeout_ms, uint32_t *flag,
+static dtl_status run(void *handle, const char *request, uint64_t request_id,
+                      void *event_user, uint64_t timeout_ms, uint32_t *flag,
                       char **result, char **err) {
-    dtl_observer ob = {request_id, observer_user ? observe : NULL, observer_user};
     dtl_call_options co = dtl_default_call_options();
+    co.request_id = request_id;
     co.timeout_ms = timeout_ms;
+    if (event_user) {
+        co.on_event = observe;
+        co.event_user_data = event_user;
+    }
     if (flag) {
         co.should_cancel = dtl_cancel_flag;
-        co.user_data = flag;
+        co.cancel_user_data = flag;
     }
-    switch (kind) {
-    case 1: return dtl_decide_with_options((dtl_engine *)handle, request, &ob, &co, result, err);
-    case 2: return dtl_router_execute_with_options((dtl_router *)handle, request, &ob, &co, result, err);
-    default: return dtl_execute_with_options((dtl_engine *)handle, request, &ob, &co, result, err);
-    }
-}
-
-static void close_handle(int router, void *handle) {
-    if (router) dtl_router_close((dtl_router *)handle);
-    else dtl_close((dtl_engine *)handle);
+    return dtl_execute((dtl_engine *)handle, request, &co, result, err);
 }
 */
 import "C"
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"runtime"
 	"runtime/cgo"
@@ -149,9 +140,9 @@ func RuntimeInfo() (string, error) { return readInfo(nil) }
 
 // CallOptions controls one call. The zero value (or nil) means defaults.
 type CallOptions struct {
-	// RequestID is reported in observer events.
+	// RequestID is reported in events.
 	RequestID uint64
-	// OnEvent receives passive observer events synchronously on the calling
+	// OnEvent receives passive events synchronously on the calling
 	// goroutine's thread, outside native locks. Panics are contained. It may
 	// reenter the engine or Close it, but must not wait for a call that waits
 	// on this one.
@@ -168,56 +159,95 @@ type Engine struct {
 	active   int
 	closed   bool
 	deferred bool // CloseDeferred: the last running call releases
-	router   bool
 	handle   unsafe.Pointer
 	done     chan struct{} // closed once the handle has been released
 }
 
-func newEngine(handle unsafe.Pointer, router bool) *Engine {
-	e := &Engine{handle: handle, router: router, done: make(chan struct{})}
+func newEngine(handle unsafe.Pointer) *Engine {
+	e := &Engine{handle: handle, done: make(chan struct{})}
 	e.idle = sync.NewCond(&e.mu)
 	runtime.SetFinalizer(e, (*Engine).release)
 	return e
 }
 
-// Open loads a local GGUF model. threads 0 selects automatically (capped at
-// 4); otherwise it must be 1..256.
-func Open(modelPath string, threads uint32) (*Engine, error) {
-	path, err := cstring(modelPath)
-	if err != nil {
-		return nil, err
-	}
-	defer C.free(unsafe.Pointer(path))
-	var raw unsafe.Pointer
-	var msg *C.char
-	if err := check(C.open_model(path, C.uint32_t(threads), &raw, &msg), msg); err != nil {
-		return nil, err
-	}
-	if raw == nil {
-		return nil, &Error{StatusModelError, "Native engine returned null"}
-	}
-	return newEngine(raw, false), nil
+// Config holds open-time settings. A nil *Config or zero fields select the
+// engine defaults; only set fields are sent to the native library.
+type Config struct {
+	// Threads is 0 (automatic, capped at 4) or 1..256.
+	Threads uint32
+	// ContextTokens is the capacity reserved for one prompt (32 up to the
+	// model's trained length; default 512). 0 keeps the default.
+	ContextTokens uint32
+	// Overflow is the engine-wide policy for prompts over the token limit:
+	// "reject" (default), "truncate_end", "truncate_start" or "scan". A
+	// request's own "overflow" wins. Empty keeps the default.
+	Overflow string
+	// Temperatures overrides calibration temperatures keyed like the GGUF
+	// metadata, e.g. "choice", "choice.3_5", "noul.2". Values must be finite
+	// and > 0.
+	Temperatures map[string]float64
 }
 
-// OpenRouter opens a bounded, lazy local model registry. See docs/API.md.
-// threads 0 selects automatically (capped at 4); otherwise it must be 1..256.
-// Decide and DecideContext on a router use strict Execute semantics: requests
-// require "model" and unrelated metadata is rejected.
-func OpenRouter(configJSON string, threads uint32) (*Engine, error) {
-	config, err := cstring(configJSON)
+// configJSON serializes c with sorted temperature keys; nil when there is
+// nothing to send.
+func configJSON(c *Config) (*C.char, error) {
+	if c == nil {
+		return nil, nil
+	}
+	var body struct {
+		Threads       uint32             `json:"threads,omitempty"`
+		ContextTokens uint32             `json:"context_tokens,omitempty"`
+		Overflow      string             `json:"overflow,omitempty"`
+		Temperatures  map[string]float64 `json:"temperatures,omitempty"`
+	}
+	body.Threads, body.ContextTokens, body.Overflow, body.Temperatures = c.Threads, c.ContextTokens, c.Overflow, c.Temperatures
+	data, err := json.Marshal(body) // map keys are emitted sorted
+	if err != nil {
+		return nil, invalid("Invalid config: " + err.Error())
+	}
+	return cstring(string(data))
+}
+
+// Open loads a local GGUF model. config may be nil for defaults.
+func Open(modelPath string, config *Config) (*Engine, error) {
+	return openNative(modelPath, config, false, "Native engine returned null")
+}
+
+// OpenRouter opens a bounded, lazy local model registry described by
+// routerJSON (see docs/API.md). config applies to every route; a route's own
+// config overrides it key by key. Requests must name a route in "model".
+func OpenRouter(routerJSON string, config *Config) (*Engine, error) {
+	return openNative(routerJSON, config, true, "Native router returned null")
+}
+
+func openNative(first string, config *Config, router bool, nullMsg string) (*Engine, error) {
+	arg, err := cstring(first)
 	if err != nil {
 		return nil, err
 	}
-	defer C.free(unsafe.Pointer(config))
+	defer C.free(unsafe.Pointer(arg))
+	cfg, err := configJSON(config)
+	if err != nil {
+		return nil, err
+	}
+	if cfg != nil {
+		defer C.free(unsafe.Pointer(cfg))
+	}
 	var raw unsafe.Pointer
 	var msg *C.char
-	if err := check(C.open_router(config, C.uint32_t(threads), &raw, &msg), msg); err != nil {
+	var status C.dtl_status
+	if router {
+		status = C.open_router(arg, cfg, &raw, &msg)
+	} else {
+		status = C.open_model(arg, cfg, &raw, &msg)
+	}
+	if err := check(status, msg); err != nil {
 		return nil, err
 	}
 	if raw == nil {
-		return nil, &Error{StatusModelError, "Native router returned null"}
+		return nil, &Error{StatusModelError, nullMsg}
 	}
-	return newEngine(raw, true), nil
+	return newEngine(raw), nil
 }
 
 func (e *Engine) begin() error {
@@ -255,7 +285,7 @@ func (e *Engine) release() {
 		return
 	}
 	runtime.SetFinalizer(e, nil)
-	C.close_handle(boolInt(e.router), handle)
+	C.dtl_close((*C.dtl_engine)(handle))
 	close(e.done)
 }
 
@@ -294,34 +324,17 @@ func (e *Engine) CloseDeferred() {
 	}
 }
 
-func boolInt(b bool) C.int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
-// Info reports model metadata for a single engine; routers report common
-// runtime capabilities.
+// Info reports model metadata for a single engine; routers report runtime
+// information only.
 func (e *Engine) Info() (string, error) {
 	if err := e.begin(); err != nil {
 		return "", err
 	}
 	defer e.end()
-	if e.router {
-		return readInfo(nil)
-	}
 	return readInfo(e.handle)
 }
 
-// Decide runs a legacy primitive request (unrelated top-level metadata is
-// ignored). On a router it uses strict Execute semantics: "model" is required
-// and unrelated metadata is rejected.
-func (e *Engine) Decide(request string) (string, error) {
-	return e.DecideContext(context.Background(), request, nil)
-}
-
-// Execute runs one primitive/structured request or a bounded JSON array.
+// Execute runs one request or a bounded JSON array.
 func (e *Engine) Execute(request string) (string, error) {
 	return e.ExecuteContext(context.Background(), request, nil)
 }
@@ -332,12 +345,7 @@ func (e *Engine) Execute(request string) (string, error) {
 // context.DeadlineExceeded). An already-done ctx returns immediately without
 // a native call. No partial result is returned.
 func (e *Engine) ExecuteContext(ctx context.Context, request string, opts *CallOptions) (string, error) {
-	return e.call(ctx, request, opts, 0)
-}
-
-// DecideContext is Decide with the same controls as ExecuteContext.
-func (e *Engine) DecideContext(ctx context.Context, request string, opts *CallOptions) (string, error) {
-	return e.call(ctx, request, opts, 1)
+	return e.call(ctx, request, opts)
 }
 
 //export goObserver
@@ -347,7 +355,7 @@ func goObserver(event *C.char, user unsafe.Pointer) {
 	handle.Value().(func(string))(C.GoString(event))
 }
 
-func (e *Engine) call(ctx context.Context, request string, opts *CallOptions, kind C.int) (string, error) {
+func (e *Engine) call(ctx context.Context, request string, opts *CallOptions) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -363,9 +371,6 @@ func (e *Engine) call(ctx context.Context, request string, opts *CallOptions, ki
 		return "", err
 	}
 	defer e.end()
-	if e.router {
-		kind = 2
-	}
 	var requestID uint64
 	var observer unsafe.Pointer
 	if opts != nil {
@@ -413,7 +418,7 @@ func (e *Engine) call(ctx context.Context, request string, opts *CallOptions, ki
 		}()
 	}
 	var result, msg *C.char
-	status := C.run(kind, e.handle, req, C.uint64_t(requestID), observer, C.uint64_t(timeout), flag, &result, &msg)
+	status := C.run(e.handle, req, C.uint64_t(requestID), observer, C.uint64_t(timeout), flag, &result, &msg)
 	if result != nil {
 		defer C.dtl_free(unsafe.Pointer(result))
 	}

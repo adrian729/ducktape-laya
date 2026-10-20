@@ -66,8 +66,10 @@ Normal same-origin/CORS, secure-context and CSP requirements apply, including
 permission to create module workers and compile WASM.
 
 `openRouter({id: {url, sha256}}, options)` maps logical routes to assets. Identical
-URL/hash pairs are downloaded once and use one canonical model path. Native
-routing validation/cache limits remain authoritative. `maxModelBytes` limits
+URL/hash pairs are downloaded once and use one canonical model path. The
+`auto: {english, default}` option enables `"model": "auto"` (see
+[API.md](API.md#choosing-the-model-by-language)). Native routing validation/cache
+limits remain authoritative. `maxModelBytes` limits
 total fetched model bytes (default 1 GiB), not peak process/GPU RAM. Download
 buffers, filesystem storage, weights and inference buffers add memory overhead.
 This is a wasm32 build with a 4 GiB heap ceiling. When the browser cannot grow

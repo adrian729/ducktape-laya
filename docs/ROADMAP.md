@@ -49,6 +49,15 @@ checkpoint published as of 2026-10-20. GGUF and llama.cpp run this architecture
 at any size, so a larger release would be supported the same way: convert or
 download, pin, qualify. Check memory per engine and the context capacity.
 
+### Downloadable multilingual and typed-decisions models
+
+Users currently build these two GGUFs with `scripts/convert-model.py`. Make
+them downloadable: upload the exact pinned files (for example to a Hugging Face
+repository under the maintainer's account, with a model card giving the
+Apache-2.0 notice, source revision and hashes) and set each manifest's `url`, or
+switch to official GGUFs if the Laya authors or ggml-org publish them. Steps:
+[PUBLISHING.md](PUBLISHING.md#converted-models).
+
 ### Mobile, and the languages that depend on it
 
 iOS and Android need their own packaging (XCFramework, AAR), toolchains and
@@ -66,9 +75,18 @@ binding, for Rails and Laravel backends. Add one when a user asks.
 ## Research questions
 
 - **The original Laya's `act_probability`:** a second "act" output alongside
-  the decisions. The GGUF and llama.cpp path don't carry it; supporting it would
-  need converter and llama.cpp changes. First find out what it means and
-  whether the authors treat it as public.
+  the decisions. The original's config prices an `escalate` action (`act_costs`),
+  so it appears to be the probability that the answer should be acted on rather
+  than escalated. The GGUF and llama.cpp path don't carry it; supporting it would
+  need converter and llama.cpp changes. First confirm its meaning and whether the
+  authors treat it as public.
+- **Batching questions into one forward pass:** measured 2026-10-20 on CPU
+  (4 cores), questions packed as separate sequences in one `llama_encode` were
+  only 1.15× faster on a 4-question request, and results changed with the batch
+  composition: the same question got different probabilities depending on its
+  position and neighbours (up to 0.04 on the fixtures), most likely because
+  matrix kernels tile rows differently. Not adopted. Revisit for GPU backends,
+  where batching pays more, and only with results independent of the batch.
 - **Loading a model from memory:** llama.cpp has no public load-from-buffer API.
   Workarounds (memfd, temporary files) add little real protection for encrypted
   assets. Revisit with mobile.

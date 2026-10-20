@@ -104,3 +104,25 @@ test('validation errors carry status 1 and queue-full carries a code', async () 
   await assert.rejects(engine.execute('{}', { timeoutMs: -1 }), { name: 'RangeError', status: 1 });
   await engine.close();
 });
+
+test('execute is the only call and new open/call options are validated', async () => {
+  const { Laya, workers } = await harness();
+  for (const bad of [0, -1, 1.5, '512', NaN]) {
+    await assert.rejects(Laya.open({ modelUrl: 'model.gguf', contextTokens: bad }), { name: 'RangeError', status: 1 });
+  }
+  for (const bad of [null, [], 'x', { choice: 0 }, { choice: -1 }, { choice: NaN }, { choice: '1' }]) {
+    await assert.rejects(Laya.open({ modelUrl: 'model.gguf', temperatures: bad }), { name: 'TypeError', status: 1 });
+  }
+  for (const bad of ['', 'bogus', null, 1]) {
+    await assert.rejects(Laya.open({ modelUrl: 'model.gguf', overflow: bad }), { name: 'RangeError', status: 1 });
+  }
+  assert.equal(workers.length, 0);
+  const engine = await Laya.open({ modelUrl: 'model.gguf', contextTokens: 256, temperatures: { choice: 1.5 } });
+  for (const name of ['decide', 'decideStructured', 'decideBatch']) assert.equal(engine[name], undefined);
+  assert.equal(typeof engine.execute, 'function');
+  for (const requestId of [-1, 1.5, 2 ** 53, '1']) {
+    await assert.rejects(engine.execute({}, { requestId }), { name: 'RangeError', status: 1 });
+  }
+  assert.equal(JSON.stringify(await engine.execute([{}], { requestId: 7 })), '{}');
+  await engine.close();
+});

@@ -1,0 +1,103 @@
+{
+ "name": "quickstart",
+ "state": "Subject: Double charged on invoice 88213\n\nHi, I was billed twice this month for the Pro plan and the second charge has not been refunded. This is the third time I have written in. If it is not fixed today I am cancelling the account.",
+ "questions": {
+  "department": {
+   "type": "choice",
+   "instructions": "Which department should handle this?",
+   "criteria": {
+    "billing": "invoices, payments, double charges, refunds",
+    "technical": "bugs, outages, integration errors",
+    "account": "logins, seats, plan changes"
+   }
+  },
+  "urgency": {
+   "type": "score",
+   "instructions": "How urgent is this request?",
+   "criteria": [
+    "not urgent",
+    "this week",
+    "today",
+    "drop everything"
+   ]
+  },
+  "churn_risk": {
+   "type": "noul",
+   "instructions": "The customer threatens to cancel the account."
+  },
+  "needs_human": {
+   "type": "noul",
+   "instructions": "This requires a human agent rather than an automated reply.",
+   "criteria": {
+    "false": "a template reply resolves it",
+    "true": "a person must intervene"
+   }
+  }
+ },
+ "result": {
+  "model": "laya-rl-agent",
+  "answers": {
+   "department": {
+    "type": "choice",
+    "choice": "billing",
+    "probabilities": {
+     "billing": 0.9653,
+     "technical": 0.016,
+     "account": 0.0188
+    },
+    "confidence": 0.8409,
+    "answer_confidence": 0.9653,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "urgency": {
+    "type": "score",
+    "score": 1.9821,
+    "legend": {
+     "0": "not urgent",
+     "1": "this week",
+     "2": "today",
+     "3": "drop everything"
+    },
+    "probabilities": {
+     "0": 0.0212,
+     "1": 0.0839,
+     "2": 0.7864,
+     "3": 0.1085
+    },
+    "confidence": 0.4809,
+    "answer_confidence": 0.7864,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "churn_risk": {
+    "type": "noul",
+    "noul": 0.968,
+    "confidence": 0.968,
+    "answer_confidence": 0.968,
+    "action": {
+     "act_probability": 1.0
+    }
+   },
+   "needs_human": {
+    "type": "noul",
+    "noul": 0.4579,
+    "confidence": 0.5421,
+    "answer_confidence": 0.5421,
+    "action": {
+     "act_probability": 1.0
+    }
+   }
+  },
+  "usage": {
+   "input_tokens": 379,
+   "output_tokens": 0,
+   "state_tokens": 57,
+   "state_tokens_dropped": 0,
+   "truncated": false,
+   "truncated_questions": []
+  }
+ }
+}

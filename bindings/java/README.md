@@ -9,14 +9,14 @@ The library is located in this order:
 1. system property `ducktape.laya.library` (full path to the `.so`)
 2. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`
 3. a copy bundled in the jar at `/native/linux-x64/libducktape_laya.so`, extracted to a temp file
-4. the default loader path (`libducktape_laya.so.0`, then `libducktape_laya.so`)
+4. the default loader path (`libducktape_laya.so.1`, then `libducktape_laya.so`)
 
-An explicit override (1 or 2) is honoured or fails; it never falls back to later steps. The Linux x86-64 check applies only when no override is given. After loading, the binding requires `dtl_abi_version() == 1` and the `dtl_cancel_flag` symbol. Loading is lazy (first API call, including `Laya.runtimeInfo()`), not in a static initializer: a failure is cached and every API call throws a fresh `LayaException` with `UNSUPPORTED_PLATFORM` (status 7) whose message includes the cause.
+An explicit override (1 or 2) is honoured or fails; it never falls back to later steps. The Linux x86-64 check applies only when no override is given. After loading, the binding requires `dtl_abi_version() == 2` and the `dtl_cancel_flag` symbol. Loading is lazy (first API call, including `Laya.runtimeInfo()`), not in a static initializer: a failure is cached and every API call throws a fresh `LayaException` with `UNSUPPORTED_PLATFORM` (status 7) whose message includes the cause.
 
 Run with native access enabled: `--enable-native-access=ALL-UNNAMED` on the classpath, or `--enable-native-access=io.github.adrian729.laya` on the module path.
 
 ```java
-try (Laya laya = Laya.open("Laya-Q8_0.gguf", 4)) {
+try (Laya laya = Laya.open("Laya-Q8_0.gguf", Config.none().withThreads(4))) {
     String result = laya.execute(requestJson);
     var options = CallOptions.none().withTimeout(Duration.ofSeconds(5)).withOnEvent(System.err::println);
     String bounded = laya.execute(requestJson, options);
@@ -24,12 +24,12 @@ try (Laya laya = Laya.open("Laya-Q8_0.gguf", 4)) {
 ```
 
 ```kotlin
-Laya.open("Laya-Q8_0.gguf", 4).use { laya ->
+Laya.open("Laya-Q8_0.gguf", Config.none().withThreads(4)).use { laya ->
     println(laya.execute(requestJson))
 }
 ```
 
-`Laya.open(path)` and `Laya.openRouter(configJson)` use automatic threads (0); `threads` must be 0..256. `Laya.openRouter(configJson, threads)` opens a bounded local model registry; requests then carry `"model": "id"`. `decide` keeps the legacy primitive semantics (unrelated top-level metadata ignored) on a single model; on a router it behaves exactly like `execute` (requires `model`, rejects unrelated metadata).
+`Laya.open(path)` and `Laya.openRouter(routerJson)` use the library defaults. `Laya.open(path, config)` and `Laya.openRouter(routerJson, config)` take an immutable `Config` (`Config.none().withThreads(n).withContextTokens(n).withTemperatures(map)`) that is serialized to the native config JSON; unset fields are omitted and keys are written in a fixed order. `threads` must be 0..256, `contextTokens` positive and temperatures finite and above 0 (otherwise `IllegalArgumentException`); the library validates the rest (unknown temperature keys, context size limits) and reports status 1. A router opens a bounded local model registry (requests carry `"model": "id"`); the `Config` applies to every route and a route's own `config` overrides it key by key. There is one strict request contract (`execute`); per-request `"max_tokens"` and `"temperatures"` are plain request JSON keys. `info()` reports model metadata (`context_tokens`, `trained_context_tokens`, ...) for a single model and runtime information only for a router.
 
 A `Laya` is thread-safe. Native calls on one handle serialize, inference blocks the calling thread, and `close()` waits for in-flight calls and is idempotent; later calls throw `LayaClosedException` (a `LayaException`, status 1). Closed from inside its own event callback, `close()` returns at once and the handle is released when the running call finishes. A `Cleaner` releases the native handle if a `Laya` becomes unreachable without `close()`, but that is only a safety net: call `close()` (try-with-resources) for prompt release of model memory.
 

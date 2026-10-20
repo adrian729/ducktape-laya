@@ -20,12 +20,31 @@ class Laya {
     }
     return Laya.#open(text, options, true);
   }
-  static async #open(modelPath, { threads = 0, maxPending = 16, addonPath } = {}, router) {
+  static async #open(modelPath, { threads, contextTokens, overflow, temperatures, maxPending = 16, addonPath } = {}, router) {
     if (typeof modelPath !== 'string' || modelPath.includes('\0') || Buffer.byteLength(modelPath) > 1048576) throw invalid(TypeError, 'Invalid model path');
-    if (!Number.isInteger(threads) || threads < 0 || threads > 256) throw invalid(RangeError, 'threads must be 0..256');
+    const config = {};
+    if (threads !== undefined) {
+      if (!Number.isInteger(threads) || threads < 0 || threads > 256) throw invalid(RangeError, 'threads must be 0..256');
+      config.threads = threads;
+    }
+    if (contextTokens !== undefined) {
+      if (!Number.isSafeInteger(contextTokens) || contextTokens < 1) throw invalid(RangeError, 'contextTokens must be a positive integer');
+      config.context_tokens = contextTokens;
+    }
+    if (overflow !== undefined) {
+      if (!['reject', 'truncate_end', 'truncate_start', 'scan'].includes(overflow)) throw invalid(RangeError, 'overflow must be reject, truncate_end, truncate_start or scan');
+      config.overflow = overflow;
+    }
+    if (temperatures !== undefined) {
+      if (temperatures === null || typeof temperatures !== 'object' || Array.isArray(temperatures)) throw invalid(TypeError, 'temperatures must be an object');
+      for (const value of Object.values(temperatures)) {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw invalid(RangeError, 'temperatures must be finite positive numbers');
+      }
+      config.temperatures = temperatures;
+    }
     if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw invalid(RangeError, 'maxPending must be 1..1024');
     const worker = new Worker(path.join(__dirname, 'worker.cjs'), { workerData: {
-      modelPath, threads, router, addonPath: resolveAddon(addonPath)
+      modelPath, config: Object.keys(config).length ? JSON.stringify(config) : null, router, addonPath: resolveAddon(addonPath)
     }});
     const engine = new Laya(internal, worker, maxPending);
     await new Promise((resolve, reject) => {
@@ -61,7 +80,7 @@ class Laya {
     });
     return engine;
   }
-  #send(kind, request, onEvent, { signal, timeoutMs = 0 } = {}) {
+  #send(kind, request, onEvent, { signal, timeoutMs = 0, requestId } = {}) {
     if (this.#dead) return Promise.reject(exitedError('Engine worker has exited'));
     // JSON.stringify can run application getters/toJSON methods that submit work
     // or close this engine. Check again at the actual enqueue boundary.
@@ -87,19 +106,14 @@ class Laya {
       if (timeoutMs) timer = setTimeout(() => stop(6), timeoutMs);
       // Keep cancelled entries counted until the worker acknowledges them: an
       // abort storm must not bypass the bounded queue or race native shutdown.
-      try { this.#worker.postMessage({ id, kind, request, observe: !!onEvent, cancellation, deadline }); }
+      try { this.#worker.postMessage({ id, requestId: requestId ?? id, kind, request, observe: !!onEvent, cancellation, deadline }); }
       catch (error) { cleanup(); this.#pending.delete(id); reject(error); }
     });
   }
-  decide(request, options) { return this.#execute('decide', request, options); }
-  decideStructured(request, options) { return this.execute(request, options); }
-  decideBatch(requests, options) {
-    if (!Array.isArray(requests)) return Promise.reject(invalid(TypeError, 'Batch must be an array'));
-    return this.execute(requests, options);
-  }
-  execute(request, options) { return this.#execute('execute', request, options); }
-  async #execute(kind, request, { onEvent, signal, timeoutMs = 0 } = {}) {
+  /** Runs one request object (or JSON string) or an array of requests. */
+  async execute(request, { onEvent, signal, timeoutMs = 0, requestId } = {}) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw invalid(RangeError, 'timeoutMs must be 0..86400000');
+    if (requestId !== undefined && (!Number.isSafeInteger(requestId) || requestId < 0)) throw invalid(RangeError, 'requestId must be a non-negative safe integer');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
     if (onEvent !== undefined && typeof onEvent !== 'function') throw invalid(TypeError, 'onEvent must be a function');
     if (this.#closing) throw closedError();
@@ -107,7 +121,7 @@ class Laya {
     // A JSON string preserves the caller's literal key order, including numeric labels.
     const text = typeof request === 'string' ? request : JSON.stringify(request);
     if (typeof text !== 'string' || Buffer.byteLength(text) > 1048576 || text.includes('\0')) throw invalid(TypeError, 'Invalid or oversized request');
-    return JSON.parse(await this.#send(kind, text, onEvent, { signal, timeoutMs }));
+    return JSON.parse(await this.#send('execute', text, onEvent, { signal, timeoutMs, requestId }));
   }
   /**
    * Stops the worker thread and releases the model. Required: the worker keeps

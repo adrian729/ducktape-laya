@@ -251,7 +251,8 @@ def upgrade_rollback():
          'rollback: failed or not rehearsed with the candidate packages')
 
 GATES = {'native_contracts': native_gate('native_contracts'), 'binding_conformance': native_gate('binding_conformance'),
-         'upstream_reference': native_gate('upstream_reference'), 'abi': native_gate('abi'),
+         'upstream_reference': native_gate('upstream_reference'), 'original_reference': native_gate('original_reference'),
+         'abi': native_gate('abi'),
          'installed_packages': native_gate('installed_packages'), 'sanitizers': sanitizers, 'stress': stress,
          'linux_matrix': linux_matrix, 'browser_wasm': browser_gate('wasm'), 'browser_webgpu': browser_gate('webgpu'),
          'license_inventory': license_inventory, 'reproducibility': reproducibility, 'cross_profile_drift': cross_profile_drift,

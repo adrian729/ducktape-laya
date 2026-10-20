@@ -10,7 +10,7 @@ int main(int argc, char **argv) {
     if (!request) return 1;
     try {
         std::cout << "Running Laya...\n";
-        ducktape::laya engine(model);
-        return demo_print(engine.decide(request.get()).c_str());
+        auto engine = ducktape::engine::open(model);
+        return demo_print(engine.execute(request.get()).c_str());
     } catch (const std::exception &e) { std::cerr << "Error: " << e.what() << '\n'; return 1; }
 }

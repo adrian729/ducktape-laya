@@ -177,13 +177,13 @@ static void in_child(const char *name, const std::function<void()> &fn) {
 static void c_allocation_sweep(const std::string &model, const std::string &batch) {
     setenv("GGML_NO_BACKTRACE", "1", 1); // ggml_abort would otherwise attach gdb
     dtl_engine *engine = nullptr; char *result = nullptr, *error = nullptr;
-    auto options = dtl_default_options(); options.threads = 2;
-    expect(dtl_open(model.c_str(), &options, &engine, &error) == DTL_OK, "open");
+    const char *options = "{\"threads\":2}";
+    expect(dtl_open(model.c_str(), options, &engine, &error) == DTL_OK, "open");
     expect(dtl_execute(engine, batch.c_str(), nullptr, &result, &error) == DTL_OK, "baseline");
     const std::string expected = result; dtl_free(result);
     auto count = [&](const std::function<void()> &call) { c_counted = 0; c_counting = true; call(); c_counting = false; return long(c_counted); };
     const long in_execute = count([&] { dtl_execute(engine, batch.c_str(), nullptr, &result, &error); dtl_free(result); });
-    const long in_open = count([&] { dtl_engine *e = nullptr; dtl_open(model.c_str(), &options, &e, &error); dtl_close(e); });
+    const long in_open = count([&] { dtl_engine *e = nullptr; dtl_open(model.c_str(), options, &e, &error); dtl_close(e); });
     enum outcome { exact = 0, out_of_memory = 3, aborted = 4, model_error = 6 };
     auto sweep = [&](const char *label, long points, const std::function<int()> &child) {
         std::map<int, long> outcomes;
@@ -233,7 +233,7 @@ static void c_allocation_sweep(const std::string &model, const std::string &batc
     expect(executed[out_of_memory] > 0, "no C allocation failure reached the caller as DTL_OUT_OF_MEMORY");
     sweep("open", in_open, [&] {
         dtl_engine *e = nullptr;
-        auto status = dtl_open(model.c_str(), &options, &e, &error);
+        auto status = dtl_open(model.c_str(), options, &e, &error);
         c_fail_after = -1;
         if (status == DTL_OK) { dtl_close(e); return int(exact); }
         if (e) return 2;
@@ -267,8 +267,7 @@ int main(int argc, char **argv) {
         in_child("open under address-space limit", [&] {
             limit_address_space(virtual_bytes() + (32ull << 20));
             dtl_engine *engine = nullptr; char *error = nullptr;
-            auto options = dtl_default_options(); options.threads = 2;
-            auto status = dtl_open(model.c_str(), &options, &engine, &error);
+            auto status = dtl_open(model.c_str(), "{\"threads\":2}", &engine, &error);
             expect(!engine, "open succeeded inside a 32 MiB address-space margin");
             expect(status == DTL_MODEL_ERROR || status == DTL_OUT_OF_MEMORY, "unexpected status " + std::to_string(status));
             dtl_free(error);
@@ -278,8 +277,8 @@ int main(int argc, char **argv) {
         // failure is absorbed) and the engine must then return exact results again.
         {
             dtl_engine *engine = nullptr; char *result = nullptr, *error = nullptr;
-            auto options = dtl_default_options(); options.threads = 2;
-            expect(dtl_open(model.c_str(), &options, &engine, &error) == DTL_OK, "open");
+            const char *options = "{\"threads\":2}";
+            expect(dtl_open(model.c_str(), options, &engine, &error) == DTL_OK, "open");
             expect(dtl_execute(engine, batch.c_str(), nullptr, &result, &error) == DTL_OK, "baseline");
             const std::string expected = result; dtl_free(result);
             auto points = [](long dense, long stride) { std::vector<long> n; for (long i = 0; i < dense; ++i) n.push_back(i); for (long i = dense; ; i += stride) { n.push_back(i); if (i > (1l << 30)) break; } return n; };
@@ -311,7 +310,7 @@ int main(int argc, char **argv) {
             long opened = 0;
             for (long n = 0; ; n = n < 32 ? n + 1 : n * 3 / 2) {
                 fail_after = n; failed = 0;
-                auto status = dtl_open(model.c_str(), &options, &engine, &error);
+                auto status = dtl_open(model.c_str(), options, &engine, &error);
                 fail_after = -1;
                 if (status == DTL_OK) { dtl_close(engine); if (!failed) break; continue; }
                 expect(!engine && failed && (status == DTL_OUT_OF_MEMORY || status == DTL_MODEL_ERROR),
@@ -330,8 +329,7 @@ int main(int argc, char **argv) {
         const auto before = open_descriptors();
         auto rejected = [&](const std::string &label, const std::string &path, const char *message = nullptr) {
             dtl_engine *engine = nullptr; char *error = nullptr;
-            auto options = dtl_default_options(); options.threads = 2;
-            auto status = dtl_open(path.c_str(), &options, &engine, &error);
+            auto status = dtl_open(path.c_str(), "{\"threads\":2}", &engine, &error);
             const std::string text = error ? error : "";
             dtl_free(error);
             if (engine) dtl_close(engine);
@@ -401,9 +399,8 @@ int main(int argc, char **argv) {
         expect(open_descriptors() == before, "descriptor leak after rejected models");
 
         // The restored copy and the original model still load and agree exactly.
-        auto options = dtl_default_options(); options.threads = 2;
-        ducktape::laya restored(copy.c_str(), options), original(model.c_str(), options);
-        expect(restored.decide(request) == original.decide(request), "restored copy differs");
+        auto restored = ducktape::engine::open(copy, R"({"threads":2})"), original = ducktape::engine::open(model, R"({"threads":2})");
+        expect(restored.execute(request) == original.execute(request), "restored copy differs");
         std::cout << "fault tests passed\n";
         return 0;
     } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }

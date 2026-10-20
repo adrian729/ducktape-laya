@@ -17,6 +17,22 @@ inline float temperature_for(const std::string &type, size_t n, const std::map<s
     if (it == temperatures.end()) it = temperatures.find(type);
     return it == temperatures.end() ? 1.0f : it->second;
 }
+// How concentrated the distribution is: 1 - H(p)/log k, in 0..1 (1 for one option).
+inline double concentration(const std::vector<double> &p) {
+    if (p.size() < 2) return 1.0;
+    double entropy = 0;
+    for (double v : p) if (v > 0) entropy -= v * std::log(v);
+    return std::clamp(1.0 - entropy / std::log(double(p.size())), 0.0, 1.0);
+}
+// A choice with one option has a known answer; the model is not run for it.
+inline json single_option_answer(const json &options) {
+    const auto &key = options[0]["key"];
+    return {{"type", "choice"}, {"choice", key}, {"probabilities", {{key.get<std::string>(), 1.0}}},
+            {"confidence", 1.0}, {"answer_confidence", 1.0}};
+}
+// `answer_confidence` is max(p), the calibrated probability of the reported answer;
+// `confidence` is the concentration of the whole distribution. Both mean the same
+// for every question type.
 inline json answer_from_scores(const std::string &type, const json &options, const std::vector<float> &scores, float temperature) {
     size_t n = scores.size();
     float largest = *std::max_element(scores.begin(), scores.end());
@@ -25,25 +41,23 @@ inline json answer_from_scores(const std::string &type, const json &options, con
     for (size_t i = 0; i < n; ++i) { p[i] = std::exp(double(scores[i] - largest) / temperature); sum += p[i]; }
     for (double &v : p) v /= sum;
     json answer = {{"type", type}};
-    if (type == "noul") { answer["noul"] = p[1]; return answer; }
-    json probabilities = json::object(), legend = json::object();
     size_t best = first_max(p);
-    double expected = 0, distance = 0, uniform_distance = 0;
-    for (size_t i = 0; i < n; ++i) {
-        auto key = options[i]["key"].get<std::string>();
-        probabilities[key] = p[i]; legend[key] = options[i]["description"];
-        expected += i * p[i]; distance += p[i] * std::fabs(double(i) - double(best));
-        uniform_distance += std::fabs(double(i) - (n - 1) / 2.0) / n;
-    }
-    if (type == "choice") {
-        answer["choice"] = options[best]["key"];
-        answer["probabilities"] = probabilities;
-        answer["confidence"] = std::max(0.0, (p[best] - 1.0/n) / (1.0 - 1.0/n));
+    if (type == "noul") {
+        answer["noul"] = p[1];
     } else {
-        answer["score"] = expected; answer["legend"] = legend;
+        json probabilities = json::object(), legend = json::object();
+        double expected = 0;
+        for (size_t i = 0; i < n; ++i) {
+            auto key = options[i]["key"].get<std::string>();
+            probabilities[key] = p[i]; legend[key] = options[i]["description"];
+            expected += i * p[i];
+        }
+        if (type == "choice") answer["choice"] = options[best]["key"];
+        else { answer["score"] = expected; answer["legend"] = legend; }
         answer["probabilities"] = probabilities;
-        answer["confidence"] = std::max(0.0, 1.0 - distance / uniform_distance);
     }
+    answer["confidence"] = concentration(p);
+    answer["answer_confidence"] = p[best];
     return answer;
 }
 // Structured integer value: the first most probable ordinal level.

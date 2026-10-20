@@ -1,4 +1,5 @@
 let runtime, handle = 0, routed = false, files = [], chain = Promise.resolve();
+const CALL_OPTIONS_SIZE = 40;
 let observer = 0, cancellation = 0, active, closing = false;
 const jobs = new Map();
 const fail = (message, status) => Object.assign(new Error(message), { status });
@@ -25,35 +26,33 @@ async function asset(url, limit, expectedHash) {
   }
   return bytes;
 }
-async function call(name, request, eventId, observe, job) {
+async function call(name, request, job) {
   const out = runtime._malloc(4), error = runtime._malloc(4);
-  let hook = 0, control = 0;
+  let control = 0;
   if (!out || !error) { if (out) runtime._free(out); if (error) runtime._free(error); throw fail('Out of WASM memory', 4); }
   runtime.HEAPU32[out >>> 2] = runtime.HEAPU32[error >>> 2] = 0;
   try {
-    if (observe) {
-      hook = runtime._malloc(16);
-      if (!hook) throw fail('Out of WASM memory', 4);
-      runtime.HEAPU32[hook >>> 2] = eventId >>> 0;
-      runtime.HEAPU32[(hook + 4) >>> 2] = Math.floor(eventId / 4294967296);
-      runtime.HEAPU32[(hook + 8) >>> 2] = observer;
-      runtime.HEAPU32[(hook + 12) >>> 2] = 0;
-    }
-    control = runtime._malloc(24);
-    if (!control) throw fail('Out of WASM memory', 4);
-    active = job;
-    const remaining = job.deadline ? Math.max(0, Math.ceil(job.deadline - performance.timeOrigin - performance.now())) : 0;
-    if (job.deadline && !remaining && !job.status) job.status = 6;
-    runtime.HEAPU32.set([24, 0, remaining, 0, cancellation, 0], control >>> 2);
     const info = name === 'dtl_info';
-    const status = await runtime.ccall(name, 'number', info ? ['number','number','number'] : ['number','string','number','number','number','number'],
-      info ? [routed ? 0 : handle, out, error] : [handle, request, hook, control, out, error], { async: !info });
+    if (!info) {
+      // wasm32 dtl_call_options: u32 size@0, u32 reserved@4, u64 request_id@8, u64 timeout_ms@16,
+      // on_event@24, event_user_data@28, should_cancel@32, cancel_user_data@36 (40 bytes).
+      control = runtime._malloc(CALL_OPTIONS_SIZE);
+      if (!control) throw fail('Out of WASM memory', 4);
+      active = job;
+      const remaining = job.deadline ? Math.max(0, Math.ceil(job.deadline - performance.timeOrigin - performance.now())) : 0;
+      if (job.deadline && !remaining && !job.status) job.status = 6;
+      const requestId = job.requestId ?? job.id;
+      runtime.HEAPU32.set([CALL_OPTIONS_SIZE, 0, requestId >>> 0, Math.floor(requestId / 4294967296), remaining, 0,
+        job.observe ? observer : 0, 0, cancellation, 0], control >>> 2);
+    }
+    const status = await runtime.ccall(name, 'number', info ? ['number','number','number'] : ['number','string','number','number','number'],
+      info ? [handle, out, error] : [handle, request, control, out, error], { async: !info });
     const result = runtime.HEAPU32[out >>> 2], message = runtime.HEAPU32[error >>> 2];
     try {
       if (status) throw fail(message ? runtime.UTF8ToString(message) : 'Laya operation failed', status);
       return runtime.UTF8ToString(result);
     } finally { runtime._dtl_free(result); runtime._dtl_free(message); }
-  } finally { active = undefined; if (control) runtime._free(control); if (hook) runtime._free(hook); runtime._free(out); runtime._free(error); }
+  } finally { active = undefined; if (control) runtime._free(control); runtime._free(out); runtime._free(error); }
 }
 async function init(options) {
   if (options.backend === 'webgpu') {
@@ -69,12 +68,22 @@ async function init(options) {
   const create = (await import(options.moduleUrl)).default;
   runtime = await create({ onAbort: () => { if (!closing) postMessage({ fatal: 'Laya WASM runtime aborted' }); }, locateFile: name => name.endsWith('.wasm') ? options.wasmUrl : new URL(name, options.moduleUrl).href,
     print: options.diagnostics ? text => postMessage({ diagnostic: String(text) }) : () => {}, printErr: options.diagnostics ? text => postMessage({ diagnostic: String(text) }) : () => {} });
-  if (runtime._dtl_abi_version() !== 1) throw new Error('Incompatible Laya WASM ABI');
-  const diagnostics = JSON.parse(await call('dtl_info', null, 0, false, {}));
+  if (runtime._dtl_abi_version() !== 2) throw new Error('Incompatible Laya WASM ABI');
+  const diagnostics = JSON.parse(await call('dtl_info', null, {}));
   const expectedBackend = options.backend === 'webgpu' ? 'webgpu' : 'wasm-cpu';
   if (diagnostics.backend !== expectedBackend) throw new Error(`Laya backend mismatch: expected ${expectedBackend}, got ${diagnostics.backend}`);
-  observer = runtime.addFunction(text => {
-    try { const event = JSON.parse(runtime.UTF8ToString(text)); postMessage({ id: event.request_id, event }); } catch {}
+  {
+    // Verify the wasm32 struct layout the worker writes against the runtime's own defaults.
+    const probe = runtime._malloc(CALL_OPTIONS_SIZE);
+    if (!probe) throw fail('Out of WASM memory', 4);
+    try {
+      runtime._dtl_default_call_options(probe);
+      if (runtime.HEAPU32[probe >>> 2] !== CALL_OPTIONS_SIZE) throw new Error('Incompatible Laya WASM ABI');
+    } finally { runtime._free(probe); }
+  }
+  observer = runtime.addFunction((text, user) => {
+    // Calls serialize, so the active job owns every event. Route by job id; the reported request_id may be caller-chosen.
+    try { const event = JSON.parse(runtime.UTF8ToString(text)); if (active) postMessage({ id: active.id, event }); } catch {}
   }, 'vii');
   cancellation = runtime.addFunction(() => active ? ((active.flag ? Atomics.load(active.flag, 0) : 0) || active.status || 0) : 0, 'ii');
   routed = !!options.models;
@@ -90,19 +99,30 @@ async function init(options) {
     runtime.FS.writeFile(path, bytes, { canOwn: true });
     files.push(path); models[id] = path; loaded.set(identity, path);
   }
-  const opts = runtime._malloc(16), out = runtime._malloc(4), error = runtime._malloc(4);
-  if (!opts || !out || !error) throw fail('Out of WASM memory', 4);
+  const out = runtime._malloc(4), error = runtime._malloc(4);
+  if (!out || !error) throw fail('Out of WASM memory', 4);
   try {
-    runtime.HEAPU32.set([16, 1, 1, 0], opts >>> 2); // single-threaded worker; no COOP/COEP requirement
     runtime.HEAPU32[out >>> 2] = runtime.HEAPU32[error >>> 2] = 0;
-    const input = routed ? JSON.stringify({ models, max_loaded: options.maxLoaded ?? 1 }) : files[0];
-    const status = await runtime.ccall(routed ? 'dtl_router_open' : 'dtl_open', 'number', ['string','number','number','number'], [input, opts, out, error], { async: true });
+    // Single-threaded worker; no COOP/COEP requirement.
+    const config = { threads: 1 };
+    if (options.contextTokens !== undefined) config.context_tokens = options.contextTokens;
+    if (options.overflow !== undefined) config.overflow = options.overflow;
+    if (options.temperatures !== undefined) config.temperatures = options.temperatures;
+    const routes = Object.create(null);
+    for (const [id, path] of Object.entries(models)) {
+      const route = {};
+      if (assets[id]?.contextTokens !== undefined) route.context_tokens = assets[id].contextTokens;
+      if (assets[id]?.temperatures !== undefined) route.temperatures = assets[id].temperatures;
+      routes[id] = Object.keys(route).length ? { path, config: route } : path;
+    }
+    const input = routed ? JSON.stringify({ models: routes, max_loaded: options.maxLoaded ?? 1, ...(options.auto ? { auto: options.auto } : {}) }) : files[0];
+    const status = await runtime.ccall(routed ? 'dtl_open_router' : 'dtl_open', 'number', ['string','string','number','number'], [input, JSON.stringify(config), out, error], { async: true });
     handle = runtime.HEAPU32[out >>> 2];
     const message = runtime.HEAPU32[error >>> 2];
     try { if (status) throw fail(message ? runtime.UTF8ToString(message) : 'Model loading failed', status); }
     finally { runtime._dtl_free(message); }
-  } finally { runtime._free(opts); runtime._free(out); runtime._free(error); }
-  return { backend: options.backend, abi: 1, threads: 1, runningCancellation: globalThis.crossOriginIsolated === true && options.backend === 'wasm', deadlines: true };
+  } finally { runtime._free(out); runtime._free(error); }
+  return { backend: options.backend, abi: 2, threads: 1, runningCancellation: globalThis.crossOriginIsolated === true && options.backend === 'wasm', deadlines: true };
 }
 onmessage = ({ data }) => {
   if (data.kind === 'cancel') { const job = jobs.get(data.id); if (job && !job.status) job.status = data.status; return; }
@@ -110,12 +130,12 @@ onmessage = ({ data }) => {
   chain = chain.then(async () => {
     // Give queued cancellation messages a chance to arrive before the next call.
     await new Promise(resolve => setTimeout(resolve, 0));
-    const { id, kind, request, observe } = data;
+    const { id, kind, request } = data;
     try {
       if (kind === 'init') { postMessage({ id, result: await init(data.options) }); return; }
       if (kind === 'close') {
         closing = true;
-        if (handle) await runtime.ccall(routed ? 'dtl_router_close' : 'dtl_close', null, ['number'], [handle], { async: true });
+        if (handle) await runtime.ccall('dtl_close', null, ['number'], [handle], { async: true });
         handle = 0;
         if (observer) runtime.removeFunction(observer);
         if (cancellation) runtime.removeFunction(cancellation);
@@ -123,8 +143,7 @@ onmessage = ({ data }) => {
         files = [];
         postMessage({ id, result: null }); self.close(); return;
       }
-      const name = kind === 'info' ? 'dtl_info' : routed ? 'dtl_router_execute_with_options' : kind === 'decide' ? 'dtl_decide_with_options' : 'dtl_execute_with_options';
-      postMessage({ id, result: await call(name, request, id, observe, data) });
+      postMessage({ id, result: await call(kind === 'info' ? 'dtl_info' : 'dtl_execute', request, data) });
     } catch (error) { postMessage({ id, error: error.message, status: error.status }); }
     finally { jobs.delete(id); }
   });

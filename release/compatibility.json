@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "package_version": "0.1.0",
-  "abi_version": 1,
+  "abi_version": 2,
   "runtime": {
     "repository": "https://github.com/ggml-org/llama.cpp.git",
     "path": "third_party/llama.cpp",
@@ -37,6 +37,10 @@
   "models": [
     "models/manifest.json"
   ],
+  "additional_models": [
+    "models/laya-multilingual.json",
+    "models/laya-typed-decisions.json"
+  ],
   "adapter": "src/backend_llama.cpp",
   "tested_backend": "linux-x86_64-cpu-avx2",
   "candidate_absolute_tolerance": 1e-06,
@@ -44,6 +48,7 @@
     "native_contracts",
     "binding_conformance",
     "upstream_reference",
+    "original_reference",
     "abi",
     "installed_packages",
     "sanitizers",

@@ -6,7 +6,7 @@ or model download. Linux x86-64 only; see the repository README for CPU and glib
 requirements. Python 3.10+.
 
 The package uses `ctypes`, so it needs no compiler. It loads the native library
-bundled in the wheel, or the system's `libducktape_laya.so.0`. Setting
+bundled in the wheel, or the system's `libducktape_laya.so.1`. Setting
 `DUCKTAPE_LAYA_LIB_DIR` selects a specific library instead; if that one cannot be
 loaded, import fails rather than falling back. Download the model separately and
 check its hash; see the repository README.
@@ -25,9 +25,17 @@ with ducktape_laya.Engine.open("/path/to/Laya-Q8_0.gguf") as engine:
 ```
 
 Requests are JSON values or JSON strings; a string is sent as is. `execute`
-accepts primitive and structured requests and lists of up to 32 requests; `decide`
-keeps the legacy primitive semantics (on a router it is strict, like `execute`).
-Results are parsed JSON.
+accepts primitive and structured requests and lists of up to 32 requests under one
+strict contract. Optional per-request `max_tokens` and `temperatures` are plain
+request keys. Results are parsed JSON.
+
+Open options are keyword-only and omitted when unset: `Engine.open(path, threads=0,
+context_tokens=None, temperatures=None)`. `context_tokens` is the prompt capacity
+(default 512, at most the model's trained length), and `temperatures` maps
+calibration keys such as `"choice"` or `"noul.2"` to positive overrides. Invalid
+values raise `LayaError` with status 1. `Engine.open_router(config, ...)` takes the
+same options, applied to every route; a route may be `"path.gguf"` or
+`{"path": ..., "config": {...}}`, whose config overrides them key by key.
 
 Errors: native failures and invalid request text raise `LayaError`, whose `status`
 matches the C ABI (`Status`). Calls after `close()` raise `EngineClosedError`, a
@@ -40,7 +48,7 @@ calls on one engine run one at a time, so open several engines for parallel
 inference. Per call, `timeout` (seconds, or `None`) sets a deadline (status 6),
 `cancel` takes a `CancelToken` whose `cancel()` stops the call from any thread
 (status 5), and `on_event` receives start/end/error events on the thread running
-the call. `execute_async` and `decide_async` run the call on a worker thread
+the call. `execute_async` runs the call on a worker thread
 (where `on_event` then runs), and cancelling the task cancels the native call.
 `close()` waits for running calls; called from an `on_event` callback, it returns
 at once and the model is released when the running call finishes. Engines not

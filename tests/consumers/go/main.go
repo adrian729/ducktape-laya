@@ -16,7 +16,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	engine, err := laya.Open(os.Args[1], 4)
+	engine, err := laya.Open(os.Args[1], &laya.Config{Threads: 4})
 	if err != nil {
 		return err
 	}

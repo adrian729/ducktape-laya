@@ -12,6 +12,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Description>Linux native Laya GGUF decisions backed by libducktape_laya.so.</Description>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DucktapeLaya.Tests" />
+  </ItemGroup>
   <ItemGroup Condition="'$(DucktapeLayaNativeLibrary)' != ''">
     <None Include="$(DucktapeLayaNativeLibrary)" Pack="true" PackagePath="runtimes/linux-x64/native/libducktape_laya.so" Link="runtimes/linux-x64/native/libducktape_laya.so" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

@@ -63,6 +63,6 @@ json runtime_info() {
         {"decision_types", {"choice", "noul", "score"}},
         {"features", {"structured_decisions", "sequential_batches", "routing", "observers", "cooperative_cancellation", "deadlines"}},
         {"limits", {{"request_bytes", 1048576}, {"questions_per_request", 32}, {"requests_per_batch", 32},
-                    {"questions_per_batch", 128}, {"tokens_per_question", 512}, {"routes", 16}, {"loaded_models", 4}}}};
+                    {"questions_per_batch", 128}, {"default_context_tokens", 512}, {"routes", 16}, {"loaded_models", 4}}}};
 }
 }

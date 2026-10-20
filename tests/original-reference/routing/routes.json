@@ -1,0 +1,232 @@
+[
+ {
+  "label": "english_text",
+  "state": {
+   "body": "I was charged twice, please refund."
+  },
+  "model": "english"
+ },
+ {
+  "label": "armenian_text",
+  "state": {
+   "body": "Հայերեն"
+  },
+  "model": "multilingual"
+ },
+ {
+  "label": "hindi_text",
+  "state": {
+   "body": "मुझसे दो बार शुल्क लिया गया"
+  },
+  "model": "multilingual"
+ },
+ {
+  "label": "japanese_text",
+  "state": {
+   "body": "二重に請求されました"
+  },
+  "model": "multilingual"
+ },
+ {
+  "label": "korean_text",
+  "state": {
+   "body": "두 번 청구되었습니다"
+  },
+  "model": "multilingual"
+ },
+ {
+  "label": "arabic_text",
+  "state": {
+   "body": "تم خصم المبلغ مرتين"
+  },
+  "model": "multilingual"
+ },
+ {
+  "label": "german_text",
+  "state": {
+   "body": "Der Kunde wurde zweimal belastet und moechte eine Rueckerstattung fuer die Rechnung die nicht korrekt ist"
+  },
+  "model": "multilingual"
+ },
+ {
+  "label": "explicit_lang_en",
+  "state": {
+   "body": "मुझसे दो बार"
+  },
+  "lang": "en",
+  "model": "english"
+ },
+ {
+  "label": "explicit_lang_de",
+  "state": {
+   "body": "hello there"
+  },
+  "lang": "de",
+  "model": "multilingual"
+ },
+ {
+  "label": "explicit_lang_eng_alias",
+  "state": {
+   "body": "hello"
+  },
+  "lang": "eng",
+  "model": "english"
+ },
+ {
+  "label": "explicit_lang_english_word",
+  "state": {
+   "body": "hello"
+  },
+  "lang": "English",
+  "model": "english"
+ },
+ {
+  "label": "explicit_lang_en_us",
+  "state": {
+   "body": "hello"
+  },
+  "lang": "en-US",
+  "model": "english"
+ },
+ {
+  "label": "explicit_lang_fr",
+  "state": {
+   "body": "hello"
+  },
+  "lang": "fr",
+  "model": "multilingual"
+ },
+ {
+  "label": "td_workflow_auto_off",
+  "state": {
+   "body": "I was charged twice"
+  },
+  "model": "english"
+ },
+ {
+  "label": "empty_state",
+  "state": {},
+  "model": "multilingual"
+ },
+ {
+  "label": "none_state",
+  "state": null,
+  "model": "multilingual"
+ },
+ {
+  "label": "no_questions_none",
+  "state": {
+   "body": "मुझसे दो बार"
+  },
+  "model": "multilingual"
+ },
+ {
+  "label": "unknown_latin_romanian",
+  "state": "Gătește-mi o rețetă de sarmale de post pentru mâine.",
+  "model": "multilingual"
+ },
+ {
+  "label": "unknown_latin_romanian_agent_request",
+  "state": "Exportă APK-ul pentru Android și pune-l pe Drive ca să-l instalez.",
+  "model": "multilingual"
+ },
+ {
+  "label": "unknown_latin_polish",
+  "state": "Klient został obciążony dwukrotnie i chce zwrot pieniędzy za fakturę",
+  "model": "multilingual"
+ },
+ {
+  "label": "unknown_latin_turkish",
+  "state": "Müşteriden iki kez ücret alındı ve para iadesi istiyor lütfen yardım",
+  "model": "multilingual"
+ },
+ {
+  "label": "unknown_latin_undecided_reason",
+  "state": "Müşteriden iki kez ücret alındı ve para iadesi istiyor",
+  "model": "multilingual"
+ },
+ {
+  "label": "english_still_english",
+  "state": "Please refund the duplicate charge on invoice 4411 today.",
+  "model": "english"
+ },
+ {
+  "label": "short_english_still_english",
+  "state": "refund me",
+  "model": "multilingual"
+ },
+ {
+  "label": "plain_ascii_es_1",
+  "state": "El pedido llego roto y nadie responde cuando escribo al soporte",
+  "model": "multilingual"
+ },
+ {
+  "label": "plain_ascii_it_1",
+  "state": "Il cliente e stato addebitato due volte e vuole un rimborso",
+  "model": "multilingual"
+ },
+ {
+  "label": "plain_ascii_pt_1",
+  "state": "O cliente foi cobrado duas vezes e quer o dinheiro de volta",
+  "model": "multilingual"
+ },
+ {
+  "label": "plain_ascii_fr_1",
+  "state": "Le client a ete facture deux fois et demande un remboursement",
+  "model": "multilingual"
+ },
+ {
+  "label": "accented_es",
+  "state": "La facturación tiene un error y necesito una corrección urgente",
+  "model": "multilingual"
+ },
+ {
+  "label": "accented_it",
+  "state": "La fattura è sbagliata, devo avere un rimborso per il pagamento",
+  "model": "multilingual"
+ },
+ {
+  "label": "accented_fr",
+  "state": "La commande est arrivée cassée et personne ne répond au support",
+  "model": "multilingual"
+ },
+ {
+  "label": "romance_control_1",
+  "state": "The customer was charged twice and wants a refund for this invoice",
+  "model": "english"
+ },
+ {
+  "label": "romance_control_2",
+  "state": "Our MI5 and UN contacts discussed the DOS attack in LA last month",
+  "model": "english"
+ },
+ {
+  "label": "shared_words_still_multilingual",
+  "state": "Cât e ora acum la Tokyo",
+  "model": "multilingual"
+ },
+ {
+  "label": "bundle_default_hindi",
+  "state": {
+   "m": "मुझसे दो बार"
+  },
+  "model": "multilingual"
+ },
+ {
+  "label": "payload_shape_hindi",
+  "state": {
+   "body": "मुझसे दो बार शुल्क लिया गया"
+  },
+  "model": "multilingual"
+ },
+ {
+  "label": "payload_shape_armenian_non_latin_percent",
+  "state": "Հայերեն abc",
+  "model": "multilingual"
+ },
+ {
+  "label": "payload_shape_unidentified_latin_percent",
+  "state": "Müşteriden iki kez ücret alındı ve para iadesi istiyor",
+  "model": "multilingual"
+ }
+]

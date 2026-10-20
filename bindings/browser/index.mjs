@@ -1,7 +1,7 @@
 const internal = Symbol('Laya');
 const bytes = text => new TextEncoder().encode(text).byteLength;
 const absolute = url => new URL(url, globalThis.location?.href).href;
-const queueFullError = () => Object.assign(queueFullError(), { code: 'ERR_LAYA_QUEUE_FULL' });
+const queueFullError = () => Object.assign(new Error('Laya queue is full'), { code: 'ERR_LAYA_QUEUE_FULL' });
 const exitedError = (message, status) => Object.assign(new Error(message), { code: 'ERR_LAYA_WORKER_EXITED', ...(status === undefined ? {} : { status }) });
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
 export const Status = Object.freeze({ OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
@@ -38,6 +38,11 @@ export class Laya {
     if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw invalid(RangeError, 'maxPending must be 1..1024');
     if (!Number.isSafeInteger(maxModelBytes) || maxModelBytes < 1) throw invalid(RangeError, 'maxModelBytes must be positive');
     if (!Number.isInteger(initializationTimeoutMs) || initializationTimeoutMs < 1 || initializationTimeoutMs > 86400000) throw invalid(RangeError, 'initializationTimeoutMs must be 1..86400000');
+    if (options.contextTokens !== undefined && (!Number.isSafeInteger(options.contextTokens) || options.contextTokens < 1)) throw invalid(RangeError, 'contextTokens must be a positive integer');
+    if (options.overflow !== undefined && !['reject', 'truncate_end', 'truncate_start', 'scan'].includes(options.overflow)) throw invalid(RangeError, 'overflow must be reject, truncate_end, truncate_start or scan');
+    const temperatureError = value => value !== undefined && (value === null || typeof value !== 'object' || Array.isArray(value) ||
+      Object.values(value).some(t => typeof t !== 'number' || !Number.isFinite(t) || t <= 0));
+    if (temperatureError(options.temperatures)) throw invalid(TypeError, 'temperatures must map names to finite positive numbers');
     if (!['wasm','webgpu','auto'].includes(backend)) throw invalid(TypeError, 'Invalid backend');
     if (onDiagnostic !== undefined && typeof onDiagnostic !== 'function') throw invalid(TypeError, 'onDiagnostic must be a function');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
@@ -77,7 +82,7 @@ export class Laya {
     }
     throw last;
   }
-  #send(kind, request, onEvent, options, { signal, timeoutMs = 0 } = {}) {
+  #send(kind, request, onEvent, options, { signal, timeoutMs = 0, requestId } = {}) {
     if (this.#closing && kind !== 'close') return Promise.reject(closedError());
     if (this.#dead) return Promise.reject(exitedError('Laya is closing or closed'));
     if (kind !== 'close' && this.#pending.size >= this.#limit) return Promise.reject(queueFullError());
@@ -99,12 +104,13 @@ export class Laya {
       this.#pending.set(id, { resolve, reject, onEvent, cleanup, stop, kind });
       if (timeoutMs) timer = setTimeout(() => stop(6), timeoutMs);
       signal?.addEventListener('abort', abort, { once: true });
-      try { this.#worker.postMessage({ id, kind, request, observe: !!onEvent, options, flag, deadline }); }
+      try { this.#worker.postMessage({ id, requestId, kind, request, observe: !!onEvent, options, flag, deadline }); }
       catch (error) { this.#pending.delete(id); cleanup(); reject(error); }
     });
   }
-  async #execute(kind, request, { onEvent, signal, timeoutMs = 0 } = {}) {
+  async execute(request, { onEvent, signal, timeoutMs = 0, requestId } = {}) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw invalid(RangeError, 'timeoutMs must be 0..86400000');
+    if (requestId !== undefined && (!Number.isSafeInteger(requestId) || requestId < 0)) throw invalid(RangeError, 'requestId must be a non-negative safe integer');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
     if (signal?.aborted) throw Object.assign(new Error('Request cancelled'), { status: 5 });
     if (onEvent !== undefined && typeof onEvent !== 'function') throw invalid(TypeError, 'onEvent must be a function');
@@ -112,16 +118,9 @@ export class Laya {
     if (this.#dead) throw exitedError('Laya is closing or closed');
     const text = typeof request === 'string' ? request : JSON.stringify(request);
     if (typeof text !== 'string' || bytes(text) > 1048576 || text.includes('\0')) throw invalid(TypeError, 'Invalid or oversized request');
-    return JSON.parse(await this.#send(kind, text, onEvent, undefined, { signal, timeoutMs }));
+    return JSON.parse(await this.#send('execute', text, onEvent, undefined, { signal, timeoutMs, requestId }));
   }
   info() { return this.#send('info').then(JSON.parse); }
-  execute(request, options) { return this.#execute('execute', request, options); }
-  decide(request, options) { return this.#execute('decide', request, options); }
-  decideStructured(request, options) { return this.execute(request, options); }
-  decideBatch(requests, options) {
-    if (!Array.isArray(requests)) return Promise.reject(invalid(TypeError, 'Batch must be an array'));
-    return this.execute(requests, options);
-  }
   /**
    * Terminates the worker and releases the model. Call it when done: the
    * worker holds the model memory until close() runs. Idempotent, and resolves
