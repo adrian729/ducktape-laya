@@ -1,6 +1,10 @@
 #include "platform.hpp"
 #include "errors.hpp"
 #include "build_config.hpp"
+#if defined(__aarch64__) && defined(__linux__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#endif
 namespace dtl {
 namespace {
 struct feature { const char *name; bool supported; };
@@ -28,6 +32,16 @@ std::vector<feature> required_features() {
     DTL_FEATURE("sse4.2");
 #endif
 #undef DTL_FEATURE
+#elif defined(__aarch64__) && defined(__linux__)
+    const unsigned long hwcap = getauxval(AT_HWCAP);
+#ifdef DTL_NEED_DOTPROD
+    out.push_back({"asimddp", (hwcap & HWCAP_ASIMDDP) != 0});
+#endif
+#ifdef DTL_NEED_FP16
+    out.push_back({"fphp", (hwcap & HWCAP_FPHP) != 0});
+    out.push_back({"asimdhp", (hwcap & HWCAP_ASIMDHP) != 0});
+#endif
+    (void)hwcap;
 #endif
     return out;
 }
