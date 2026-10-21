@@ -108,7 +108,8 @@ jobs:
       - name: Build the library and native tests with clang-cl
         shell: pwsh
         run: |
-          cmake -S . -B build -T ClangCL -A x64 -DDUCKTAPE_BUILD_NODE=OFF
+          # Strawberry Perl's patch.exe comes first on PATH and crashes; use the one from Git for Windows.
+          cmake -S . -B build -T ClangCL -A x64 -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
           cmake --build build --config Release --parallel 3
       - name: Model-free native tests
         shell: pwsh
