@@ -116,7 +116,7 @@ jobs:
         if: inputs.real_model && matrix.arch == 'x64'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user
       - name: Download and verify explicitly requested test model
-        if: inputs.real_model && matrix.arch == 'x64'
+        if: inputs.real_model
         run: |
           mkdir -p build-model
           python3 - <<'PY'
@@ -131,8 +131,8 @@ jobs:
         if: ${{ !inputs.real_model }}
         run: python3 scripts/validate.py ${{ matrix.arch == 'x64' && '--packages' || '' }} --output build-ci-report --jobs 2
       - name: Real-model and installed artifact checks
-        if: inputs.real_model && matrix.arch == 'x64'
-        run: python3 scripts/validate.py --model build-model/laya.gguf --packages --upstream-reference --output build-ci-report --jobs 2
+        if: inputs.real_model
+        run: python3 scripts/validate.py --model build-model/laya.gguf ${{ matrix.arch == 'x64' && '--packages' || '' }} --upstream-reference --output build-ci-report --jobs 2
       - name: Record exact outputs of the built library on this runner CPU
         if: inputs.real_model && matrix.arch == 'x64'
         run: |

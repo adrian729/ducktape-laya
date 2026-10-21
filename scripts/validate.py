@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import pathlib
+import platform
 import shutil
 import subprocess
 import sys
@@ -110,7 +111,9 @@ try:
     # Assert model-dependent tests were registered; an empty green suite is not evidence.
     registered = json.loads(subprocess.check_output(['ctest', '--test-dir', build, '--show-only=json-v1'], env=env))
     required = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing'}
-    if model: required |= {'real-model', 'real-features', 'real-control', 'real-faults', 'real-c-faults', 'cpu-guard'}
+    if model: required |= {'real-model', 'real-features', 'real-control', 'real-faults', 'real-c-faults'}
+    # The emulated-CPU guard test exercises the x86-64 AVX2 guard under QEMU.
+    if model and platform.machine() in ('x86_64', 'AMD64'): required |= {'cpu-guard'}
     if not required <= {test['name'] for test in registered['tests']}:
         raise RuntimeError('Required native tests are missing')
     run('native', ['ctest', '--test-dir', build, '--output-on-failure'], 'native_contracts' if model else None)
