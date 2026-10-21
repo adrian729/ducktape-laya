@@ -1,0 +1,27 @@
+name: Other platforms
+# Platform plan phase 1: native build and model-free tests on platforms other
+# than Linux. Not a release gate yet.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  macos:
+    name: macOS arm64 / model free
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Build the library and native tests
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_NODE=OFF
+          cmake --build build --parallel 3
+      - name: Exported symbols
+        run: nm -gU build/libducktape_laya.dylib | awk '{print $3}' | sort | tee build/exports.txt && diff build/exports.txt <(sort src/exports.macos)
+      - name: Model-free native tests
+        run: ctest --test-dir build --output-on-failure

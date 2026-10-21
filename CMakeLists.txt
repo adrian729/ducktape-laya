@@ -118,6 +118,12 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
   target_link_options(ducktape_laya PRIVATE "LINKER:--exclude-libs,ALL"
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/exports.map")
   set_property(TARGET ducktape_laya APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/exports.map)
+elseif(APPLE)
+  # The exports.map equivalent; macOS has no symbol versions, so the ABI is the
+  # install name's compatibility version (libducktape_laya.1.dylib).
+  target_link_options(ducktape_laya PRIVATE "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/src/exports.macos")
+  set_property(TARGET ducktape_laya APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/exports.macos)
+  set_target_properties(ducktape_laya PROPERTIES INSTALL_NAME_DIR "@rpath")
 endif()
 option(DUCKTAPE_BUILD_EXAMPLES "Build optional developer examples and forms" OFF)
 if(DUCKTAPE_BUILD_EXAMPLES)
@@ -223,7 +229,8 @@ if(DUCKTAPE_BUILD_NODE)
   target_link_libraries(ducktape_laya_node PRIVATE ducktape_laya)
   target_compile_definitions(ducktape_laya_node PRIVATE NAPI_VERSION=8 NODE_GYP_MODULE_NAME=ducktape_laya)
   set_target_properties(ducktape_laya_node PROPERTIES PREFIX "" SUFFIX ".node" OUTPUT_NAME ducktape_laya
-    BUILD_RPATH_USE_ORIGIN TRUE BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN;$ORIGIN/../..")
+    BUILD_RPATH_USE_ORIGIN TRUE BUILD_RPATH "$<IF:$<BOOL:${APPLE}>,@loader_path,$ORIGIN>"
+    INSTALL_RPATH "$<IF:$<BOOL:${APPLE}>,@loader_path;@loader_path/../..,$ORIGIN;$ORIGIN/../..>")
   dtl_record_native_build(ducktape_laya_node)
   install(TARGETS ducktape_laya_node LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/ducktape-laya/node)
   if(APPLE)
