@@ -25,7 +25,9 @@ def source_files():
             for name in sorted(filter(None, names)) if not (ROOT / name).is_dir()}
 
 # The shared library's file name in a build directory.
-LIBRARY = 'libducktape_laya.dylib' if sys.platform == 'darwin' else 'libducktape_laya.so'
+LIBRARY = {'darwin': 'libducktape_laya.dylib', 'win32': 'ducktape_laya.dll'}.get(sys.platform, 'libducktape_laya.so')
+# Executable suffix for test programs in a build directory.
+EXE = '.exe' if sys.platform == 'win32' else ''
 
 # Package platform names for the machine packaging runs on: (directory, wheel arch).
 PLATFORMS = {'x86_64': ('linux-x64', 'x86_64'), 'AMD64': ('linux-x64', 'x86_64'),

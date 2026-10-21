@@ -34,9 +34,10 @@ parser.add_argument('--cases', type=pathlib.Path, default=ROOT / 'tests/original
 parser.add_argument('--report', type=pathlib.Path)
 args = parser.parse_args()
 build = args.build_dir.resolve()
-consumer = build / 'laya-conformance-c'
+consumer = build / ('laya-conformance-c' + ('.exe' if sys.platform == 'win32' else ''))
 env = dict(os.environ, LD_LIBRARY_PATH=str(build) + ':' + os.environ.get('LD_LIBRARY_PATH', ''),
-           DYLD_LIBRARY_PATH=str(build) + ':' + os.environ.get('DYLD_LIBRARY_PATH', ''))
+           DYLD_LIBRARY_PATH=str(build) + ':' + os.environ.get('DYLD_LIBRARY_PATH', ''),
+           PATH=str(build) + os.pathsep + os.environ.get('PATH', ''))
 # The original runs each checkpoint at the sequence length it was trained with.
 config = json.dumps({'threads': 4, 'context_tokens': json.loads((args.cases / 'meta.json').read_text())['max_len']})
 

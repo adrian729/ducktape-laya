@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from compare_results import compare_results
-from release_support import ROOT, LIBRARY, check_record, find_manifest, read_json, sha256, git
+from release_support import ROOT, EXE, LIBRARY, check_record, find_manifest, read_json, sha256, git
 from reference_requests import comparable_answers, reference_key, reference_requests
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -28,9 +28,9 @@ tolerance = policy['budgets']['native_upstream_absolute_tolerance']
 report = {'schema_version': 1, 'status': 'not_run', 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'runtime': record['runtime'],
           'settings': {'threads': 4}, 'model_sha256': manifest['sha256'], 'absolute_tolerance': tolerance,
-          'binaries': {name: sha256(build / name) for name in ['laya-reference', 'laya-conformance-c', LIBRARY]},
+          'binaries': {name: sha256(build / name) for name in ['laya-reference' + EXE, 'laya-conformance-c' + EXE, LIBRARY]},
           'reference_source_sha256': sha256(ROOT / 'tests/upstream-reference.cpp'), 'fixtures': {}}
-env = dict(os.environ, LD_LIBRARY_PATH=str(build), DYLD_LIBRARY_PATH=str(build))
+env = dict(os.environ, LD_LIBRARY_PATH=str(build), DYLD_LIBRARY_PATH=str(build), PATH=str(build) + os.pathsep + os.environ.get('PATH', ''))
 # The model's applied and stored temperatures, from the core's own diagnostics.
 info = subprocess.run([sys.executable, '-c', 'import json, sys, ducktape_laya\n'
                        'with ducktape_laya.Engine.open(sys.argv[1], threads=1) as e: print(json.dumps(e.info()["model"]))', model],
@@ -49,7 +49,7 @@ try:
         outputs = {}
         for label, binary, request in [('adapter', 'laya-conformance-c', originals[key]),
                                        ('upstream', 'laya-reference', primitive)]:
-            process = subprocess.run([build / binary, model], input=json.dumps(request), capture_output=True,
+            process = subprocess.run([build / (binary + EXE), model], input=json.dumps(request), capture_output=True,
                                      text=True, timeout=180, env=env)
             if process.returncode:
                 raise RuntimeError(f'{key}/{label}: {process.stderr[-4000:]}')
