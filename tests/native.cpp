@@ -8,7 +8,8 @@ static void expect(bool ok, const char *message) {
     if (!ok) throw std::runtime_error(message);
 }
 int main(int argc, char **argv) {
-    const std::string self_path = std::filesystem::canonical(argv[0]).string();
+    // Forward slashes: the path goes into JSON, and Windows accepts them.
+    const std::string self_path = std::filesystem::canonical(argv[0]).generic_string();
     // A regular file that is not a model (lazy routes accept it until they load).
     auto self = [&](std::string text) {
         for (size_t at; (at = text.find("SELF")) != std::string::npos;) text.replace(at, 4, self_path);
