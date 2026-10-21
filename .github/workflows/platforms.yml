@@ -100,11 +100,26 @@ jobs:
     name: Windows x64 / native build and model-free tests
     runs-on: windows-2025
     timeout-minutes: 60
+    env:
+      DUCKTAPE_LAYA_LIB_DIR: ${{ github.workspace }}\build
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           submodules: recursive
           persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
       - name: Build and run the model-free native tests with clang-cl
         shell: cmd
         run: |
@@ -115,3 +130,26 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
           cmake --build build --parallel 3 || exit /b 1
           ctest --test-dir build --output-on-failure || exit /b 1
+      - name: Python
+        shell: bash
+        run: PYTHONPATH=bindings/python/src python -m unittest discover -s bindings/python/tests
+      - name: Rust
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:DUCKTAPE_LAYA_LIB_DIR;$env:PATH"
+          cargo test --locked --manifest-path bindings/rust/Cargo.toml
+      - name: Java
+        shell: pwsh
+        run: |
+          # build.sh with Windows classpath separators.
+          $lint = '-Xlint:all,-restricted,-serial,-missing-explicit-ctor,-module'
+          New-Item -ItemType Directory -Force bindings/java/target/classes, bindings/java/target/test-classes | Out-Null
+          javac --release 22 $lint -d bindings/java/target/classes (Get-ChildItem -Recurse bindings/java/src/main -Filter *.java).FullName
+          if ($LASTEXITCODE) { exit 1 }
+          javac --release 22 $lint -cp bindings/java/target/classes -d bindings/java/target/test-classes (Get-ChildItem -Recurse bindings/java/src/test -Filter *.java).FullName
+          if ($LASTEXITCODE) { exit 1 }
+          java --enable-native-access=ALL-UNNAMED -cp "bindings/java/target/classes;bindings/java/target/test-classes" io.github.adrian729.laya.LayaTest
+          if ($LASTEXITCODE) { exit 1 }
+      - name: .NET
+        shell: bash
+        run: dotnet test bindings/dotnet/DucktapeLaya.slnx -m:1

@@ -16,10 +16,11 @@ fn main() {
                 .trim(),
         )
     };
-    let name = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        "libducktape_laya.dylib"
-    } else {
-        "libducktape_laya.so"
+    // On Windows the linker needs the import library next to ducktape_laya.dll.
+    let name = match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("macos") => "libducktape_laya.dylib",
+        Ok("windows") => "ducktape_laya.lib",
+        _ => "libducktape_laya.so",
     };
     assert!(
         dir.join(name).is_file(),
