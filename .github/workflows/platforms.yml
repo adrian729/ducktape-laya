@@ -105,12 +105,13 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
-      - name: Build the library and native tests with clang-cl
-        shell: pwsh
+      - name: Build and run the model-free native tests with clang-cl
+        shell: cmd
         run: |
-          # Strawberry Perl's patch.exe comes first on PATH and crashes; use the one from Git for Windows.
-          cmake -S . -B build -T ClangCL -A x64 -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
-          cmake --build build --config Release --parallel 3
-      - name: Model-free native tests
-        shell: pwsh
-        run: ctest --test-dir build -C Release --output-on-failure
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
+          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
+          rem Strawberry Perl's patch.exe comes first on PATH and crashes; use the one from Git for Windows.
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
+          cmake --build build --parallel 3 || exit /b 1
+          ctest --test-dir build --output-on-failure || exit /b 1
