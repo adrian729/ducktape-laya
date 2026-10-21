@@ -27,6 +27,9 @@ def _open():
     if explicit:  # an explicit choice is honoured or fails; never a silent fallback
         path = pathlib.Path(explicit, _NAME)
         try:
+            # macOS dyld would otherwise fall back to DYLD_LIBRARY_PATH for a missing path.
+            if not path.is_file():
+                raise OSError('no such file')
             return ctypes.CDLL(str(path))
         except OSError as error:
             raise OSError(f'DUCKTAPE_LAYA_LIB_DIR is set but {path} could not be loaded: {error}') from None

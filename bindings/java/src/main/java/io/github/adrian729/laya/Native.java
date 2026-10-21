@@ -110,6 +110,9 @@ final class Native {
     }
 
     private static SymbolLookup open(Path path, Arena arena) {
+        // macOS dyld would otherwise fall back to DYLD_LIBRARY_PATH for a missing path.
+        if (!Files.isRegularFile(path))
+            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot load " + path + ": no such file");
         try {
             return SymbolLookup.libraryLookup(path, arena);
         } catch (RuntimeException e) {

@@ -81,7 +81,8 @@ internal static unsafe partial class Native
         LayaException? incompatible = null;
         foreach (var candidate in candidates)
         {
-            var loaded = overridden ? NativeLibrary.TryLoad(candidate, out var h) ? h : IntPtr.Zero
+            // A missing explicit path must fail; macOS dyld would otherwise search DYLD_LIBRARY_PATH.
+            var loaded = overridden ? System.IO.File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out var h) ? h : IntPtr.Zero
                                     : NativeLibrary.TryLoad(candidate, assembly, null, out h) ? h : IntPtr.Zero;
             if (loaded == IntPtr.Zero) continue;
             try { return (loaded, Validate(loaded)); }
