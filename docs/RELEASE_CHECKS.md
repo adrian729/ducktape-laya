@@ -92,9 +92,13 @@ python3 scripts/performance-budgets.py check build/bench-candidate.json
 Limits are the worst baseline value times a declared headroom (1.5 for time, 1.25
 for memory); leaks have none. The committed budgets in
 `release/budgets/native-performance.json` were frozen from a 0.1.0-era baseline
-(source commit `baaf568`, an ancestor of `v0.1.0`). 0.2.0 changes the library, so re-check them for the 0.2.0
-candidate and re-derive them from new baseline runs if the measured profile no
-longer matches. They detect regressions on the reference host, not
+(source commit `baaf568`, an ancestor of `v0.1.0`); a 0.2.0 build still met them
+on 2026-10-21. Each additional model has its own budget, named by
+`performance_budgets` in its manifest
+(`release/budgets/native-performance-<model id>.json`, derived 2026-10-21 from
+three 0.2.0 runs); `tests/benchmark.py` takes any pinned model, and
+check-candidate reads the benchmark report for each additional model from the
+evidence key `performance_<model id>`. They detect regressions on the reference host, not
 portable latency promises. Run without competing builds or inference and keep
 the reports as CI/PR artifacts.
 

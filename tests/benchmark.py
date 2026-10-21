@@ -23,7 +23,7 @@ import tempfile
 import threading
 import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from release_support import ROOT, binary_info, git, read_json, sha256, verify_model
+from release_support import ROOT, binary_info, check_record, find_manifest, git, read_json, sha256
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('model', type=pathlib.Path)
@@ -35,8 +35,7 @@ a = p.parse_args()
 if not 3 <= a.samples <= 1000 or not 1 <= a.threads <= 256: p.error('samples 3..1000; threads 1..256')
 if a.report.exists(): p.error('Report exists; choose a new path')
 model, build = a.model.resolve(), a.build.resolve()
-manifest = read_json(ROOT / 'models/manifest.json')
-verify_model(model, manifest)
+manifest = find_manifest(model, check_record())  # the primary or an additional pinned model
 library = c.CDLL(str(build / 'libducktape_laya.so'))
 CANCEL = c.CFUNCTYPE(c.c_uint32, c.c_void_p)
 EVENT = c.CFUNCTYPE(None, c.c_char_p, c.c_void_p)

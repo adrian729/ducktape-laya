@@ -23,15 +23,16 @@ def archive_tree(source, destination, prefix, epoch):
                     archive.add(path, arcname=prefix + '/' + path.relative_to(source).as_posix(), recursive=False, filter=normalize)
 
 
-def write_zip(destination, files, epoch):
+def write_zip(destination, files, epoch, first=()):
     """Deterministic zip: sorted entries, fixed timestamps and permissions.
 
-    files maps archive names to (bytes, executable)."""
+    files maps archive names to (bytes, executable); names in `first` come first,
+    in that order (a jar's manifest must lead for JarInputStream)."""
     import time
     import zipfile
     stamp = time.gmtime(max(epoch, 315532800))[:6]  # zip dates start in 1980
     with zipfile.ZipFile(destination, 'w') as archive:
-        for name in sorted(files):
+        for name in [*first, *sorted(set(files) - set(first))]:
             data, executable = files[name]
             info = zipfile.ZipInfo(name, stamp)
             info.compress_type = zipfile.ZIP_DEFLATED

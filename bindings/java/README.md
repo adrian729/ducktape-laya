@@ -50,4 +50,4 @@ bindings/java/build.sh            # compiles, writes bindings/java/target/duckta
 bindings/java/build.sh --no-test  # jar only
 ```
 
-`build.sh` needs JDK 22+ on `PATH` and uses `DUCKTAPE_LAYA_LIB_DIR`, defaulting to the checkout's `build` directory; set `LAYA_MODEL` to also run the real-model tests. Put the jar on your application's classpath and set `DUCKTAPE_LAYA_LIB_DIR` (or `-Dducktape.laya.library=/path/to/libducktape_laya.so`) when running, since this jar does not bundle the library. A `pom.xml` is provided for Maven users.
+`build.sh` needs JDK 22+ on `PATH` and uses `DUCKTAPE_LAYA_LIB_DIR`, defaulting to the checkout's `build` directory; set `LAYA_MODEL` to also run the real-model tests. Put the jar on your application's classpath and set `DUCKTAPE_LAYA_LIB_DIR` (or `-Dducktape.laya.library=/path/to/libducktape_laya.so`) when running, since this development jar does not bundle the library. The release jar built by `scripts/package-linux.py` (`ducktape-laya-VERSION.jar`, with sources and javadoc jars and a POM) bundles it and needs neither. A `pom.xml` is provided for Maven users.

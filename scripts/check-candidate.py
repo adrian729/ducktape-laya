@@ -245,13 +245,19 @@ def artifact_integrity():
     need(inventory['build_identities']['ducktape_laya']['binary_sha256'] == report['library_sha256'], 'packages: library differs from validated library')
 
 def performance():
-    report = load('performance')
-    tested_source(report, 'performance')
-    need(report['library_sha256'] == native()['library_sha256'], 'performance: not the candidate library')
-    result = subprocess.run([sys.executable, str(ROOT / 'scripts/performance-budgets.py'), 'check', str(paths['performance']),
-                             '--budgets', str(candidate_tree / 'release/budgets/native-performance.json')],
-                            capture_output=True, text=True)
-    need(result.returncode == 0, 'performance: ' + result.stdout.strip())
+    # The primary model's benchmark is evidence "performance"; each additional model's
+    # is "performance_<model id>", checked against the budget its manifest names.
+    checks = [('performance', 'release/budgets/native-performance.json')]
+    for name in record.get('additional_models', []):
+        manifest = read_json(candidate_tree / name)
+        checks.append((f'performance_{manifest["id"]}', manifest['performance_budgets']))
+    for evidence, budgets in checks:
+        report = load(evidence)
+        tested_source(report, 'performance')
+        need(report['library_sha256'] == native()['library_sha256'], f'{evidence}: not the candidate library')
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/performance-budgets.py'), 'check', str(paths[evidence]),
+                                 '--budgets', str(candidate_tree / budgets)], capture_output=True, text=True)
+        need(result.returncode == 0, f'{evidence}: ' + result.stdout.strip())
 
 def security_review():
     review = load('security_review')

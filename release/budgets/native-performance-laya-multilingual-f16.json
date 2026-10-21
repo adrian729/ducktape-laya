@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "identity": {
+    "profile": "native-cpu:avx+avx2+fma+f16c+bmi2+sse4.2",
+    "model_sha256": "2742df1845b29bff811082916da331b34ca214816f4fa65d7f56dd09a8f942db",
+    "threads": 4,
+    "cpu_model": "11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz",
+    "workloads": {
+      "small": "7c0a06a03e9ad1fd8850db3b7b1192ed4f6d8b8c5b052ed7b382f337ae793082",
+      "structured": "755e08bd66e15cd3f0fc6c2ad12b0347e8e270b8aa0afb17eb4b6f48cf06efcf",
+      "near_limit": "75db3bce5bccc488e25268f2d6b551422c1357872f0686964af1d8563a81776e",
+      "batch": "5e3264206febf6da8cf2db971858ba0b341535b7130ae235752500701ce71ef0"
+    }
+  },
+  "headroom": {
+    "latency": 1.5,
+    "memory": 1.25
+  },
+  "baseline_library_sha256": "275c2c21a0e24f7ecdb5566c750861393489ded3af96ebbf19ccf1ed2ba78c54",
+  "baseline_source_commit": "347585b8ca0781763d885249782ae77b79c5c004",
+  "leaks": {
+    "descriptors": 0,
+    "threads": 0
+  },
+  "limits": {
+    "open_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.6999024709220976,
+        0.5760582068469375,
+        0.7188274580985308
+      ],
+      "limit": 1.0782411871477962
+    },
+    "close_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.1673461850732565,
+        0.17944226088002324,
+        0.18105443799868226
+      ],
+      "limit": 0.2715816569980234
+    },
+    "peak_rss_kib": {
+      "kind": "memory",
+      "baseline": [
+        1607748,
+        1607932,
+        1608176
+      ],
+      "limit": 2010220.0
+    },
+    "steady_rss_kib": {
+      "kind": "memory",
+      "baseline": [
+        1272580,
+        1272644,
+        1272628
+      ],
+      "limit": 1590805.0
+    },
+    "closed_rss_kib": {
+      "kind": "memory",
+      "baseline": [
+        135576,
+        135640,
+        135620
+      ],
+      "limit": 169550.0
+    },
+    "cancellation_response_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.012119781924411654,
+        0.00643379776738584,
+        0.022483302978798747
+      ],
+      "limit": 0.03372495446819812
+    },
+    "deadline_overshoot_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.0027158819604665013,
+        0.009464008081704375,
+        0.005144546786323187
+      ],
+      "limit": 0.014196012122556563
+    },
+    "router_cold_load_call_seconds": {
+      "kind": "latency",
+      "baseline": [
+        1.4870826308615506,
+        1.4189020658377558,
+        1.3342542101163417
+      ],
+      "limit": 2.230623946292326
+    },
+    "two_engines_p95_seconds": {
+      "kind": "latency",
+      "baseline": [
+        1.3313613759819418,
+        1.137293729931116,
+        1.2068750539328903
+      ],
+      "limit": 1.9970420639729127
+    },
+    "small_first_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.48976304894313216,
+        0.452375530032441,
+        0.5331637400668114
+      ],
+      "limit": 0.7997456101002172
+    },
+    "small_p50_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.5655445118900388,
+        0.4114833330968395,
+        0.4932664470979944
+      ],
+      "limit": 0.8483167678350583
+    },
+    "small_p95_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.6387126420158893,
+        0.4928912550676614,
+        0.5905318120494485
+      ],
+      "limit": 0.9580689630238339
+    },
+    "structured_first_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.6553728189319372,
+        0.547763594891876,
+        0.4875001010950655
+      ],
+      "limit": 0.9830592283979058
+    },
+    "structured_p50_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.545073261950165,
+        0.4309321935288608,
+        0.504116469877772
+      ],
+      "limit": 0.8176098929252476
+    },
+    "structured_p95_seconds": {
+      "kind": "latency",
+      "baseline": [
+        0.7130464389920235,
+        0.510471026878804,
+        0.5402368651703
+      ],
+      "limit": 1.0695696584880352
+    },
+    "near_limit_first_seconds": {
+      "kind": "latency",
+      "baseline": [
+        2.432135790819302,
+        2.1440821399446577,
+        2.3742351687978953
+      ],
+      "limit": 3.6482036862289533
+    },
+    "near_limit_p50_seconds": {
+      "kind": "latency",
+      "baseline": [
+        2.1578579880297184,
+        2.0326449854765087,
+        2.2215314760105684
+      ],
+      "limit": 3.3322972140158527
+    },
+    "near_limit_p95_seconds": {
+      "kind": "latency",
+      "baseline": [
+        2.2492654528468847,
+        2.098137174034491,
+        2.3508570168633014
+      ],
+      "limit": 3.526285525294952
+    },
+    "batch_first_seconds": {
+      "kind": "latency",
+      "baseline": [
+        1.0877014910802245,
+        0.9644168149679899,
+        1.0357668469659984
+      ],
+      "limit": 1.6315522366203368
+    },
+    "batch_p50_seconds": {
+      "kind": "latency",
+      "baseline": [
+        1.3245235410286114,
+        0.9812543626176193,
+        1.0605559225659817
+      ],
+      "limit": 1.986785311542917
+    },
+    "batch_p95_seconds": {
+      "kind": "latency",
+      "baseline": [
+        1.6079522301442921,
+        1.016840553143993,
+        1.2332934059668332
+      ],
+      "limit": 2.411928345216438
+    }
+  },
+  "rationale": "Limits are the worst of the baseline runs times the headroom factor for that metric kind. They detect regressions on this reference host and profile; they are not portable latency promises."
+}

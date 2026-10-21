@@ -25,8 +25,8 @@ def _open():
             return ctypes.CDLL(str(path))
         except OSError as error:
             raise OSError(f'DUCKTAPE_LAYA_LIB_DIR is set but {path} could not be loaded: {error}') from None
-    if sys.platform != 'linux' or platform.machine() not in ('x86_64', 'AMD64'):
-        raise OSError(f'Unsupported platform {sys.platform}/{platform.machine()}; ducktape-laya ships Linux x86-64 only')
+    if sys.platform != 'linux' or platform.machine() not in ('x86_64', 'AMD64', 'aarch64', 'arm64'):
+        raise OSError(f'Unsupported platform {sys.platform}/{platform.machine()}; ducktape-laya supports Linux x86-64 and arm64')
     bundled = pathlib.Path(__file__).with_name('_native') / 'libducktape_laya.so'
     try:
         return ctypes.CDLL(str(bundled) if bundled.is_file() else 'libducktape_laya.so.1')

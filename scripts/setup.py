@@ -2,6 +2,7 @@
 """Build, install, and provision a local Ducktape Laya development setup."""
 import argparse
 import json
+import platform
 from pathlib import Path
 import shlex
 import shutil
@@ -52,7 +53,7 @@ def stage_node_package(prefix, libdir):
     shutil.copy2(ROOT / 'release/compatibility.json', package / 'compatibility.json')
     shutil.copy2(ROOT / 'models/manifest.json', package / 'model-manifest.json')
     shutil.copy2(ROOT / 'scripts/download-model.py', package / 'download-model.py')
-    addon = package / 'native/linux-x64'
+    addon = package / 'native' / ('linux-arm64' if platform.machine() in ('aarch64', 'arm64') else 'linux-x64')
     addon.mkdir(parents=True, exist_ok=True)
     shutil.copy2(libdir / 'ducktape-laya/node/ducktape_laya.node', addon / 'ducktape_laya.node')
     for name in ('libducktape_laya.so', 'libducktape_laya.so.1'):

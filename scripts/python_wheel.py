@@ -5,7 +5,8 @@ import pathlib
 from artifact_support import write_zip
 from release_support import ROOT
 
-TAG = 'py3-none-manylinux_2_38_x86_64'  # glibc 2.38 is the native library's floor
+from release_support import host_platform
+TAG = f'py3-none-manylinux_2_38_{host_platform()[1]}'  # glibc 2.38 is the native library's floor
 
 
 def build(out, version, library, epoch):

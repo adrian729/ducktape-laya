@@ -32,5 +32,6 @@
       "general.license.link": "https://www.apache.org/licenses/LICENSE-2.0"
     }
   },
-  "original_reference_cases": "tests/original-reference/multilingual"
+  "original_reference_cases": "tests/original-reference/multilingual",
+  "performance_budgets": "release/budgets/native-performance-laya-multilingual-f16.json"
 }

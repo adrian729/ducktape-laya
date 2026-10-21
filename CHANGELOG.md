@@ -20,6 +20,8 @@ C ABI 2 (`libducktape_laya.so.1`). Breaking before 1.0, hence the minor version.
 
 ### New features
 
+- **Linux arm64** builds (Armv8.2-A with dot product and half precision, checked at open like AVX2 on x86-64) and is tested in CI with and without the real model. Packaging on arm64 produces linux-arm64 packages (tarball, npm, wheel, jar, NuGet), and the Node, Python, Java and .NET loaders pick the library for their architecture; releases publish x86-64 packages only until arm64 is release-qualified.
+
 - **Open config:** `threads`, `context_tokens` (prompt capacity, 32 up to the model's trained length, default 512, replacing the fixed 512), `overflow` and `temperatures`, for an engine, for every route of a router, and per route. Requests may set `max_tokens`, `temperatures`, `overflow` and `max_windows`. Temperatures must be finite and positive after conversion to a 32-bit float (`1e-50` and `1e39` are rejected). Routes share a loaded model only when their path and configured values are equal, and each keeps its own default `overflow`.
 - **Long input:** overflow policies `reject` (default), `truncate_end`, `truncate_start` and `scan`. Except under `reject`, over-long instructions and options are shortened as llama.cpp's decision server does; the question and options must still fit the limit on their own under every policy. Whenever the effective policy (the request's, or the engine's or route's default) is not `reject`, `usage` reports `state_tokens`, `state_tokens_dropped`, `truncated_questions` and `windows` (the most state windows any question used); scanned answers carry `window`. `"aggregate": "all"` makes a scanned `noul` question take the minimum over windows.
 - **Choices:** `choice` criteria may be a list of labels; a single-option `choice` (and a one-value schema `enum`) is answered without inference.
@@ -62,6 +64,7 @@ Changes to behavior that 0.1.0 already had:
 
 - New `original_reference` gate: the original Laya's recorded results, at each checkpoint's trained length.
 - `validate.py --extra-model` qualifies the additional models against the original and upstream references; `check-candidate.py` requires them.
+- Release packages also include the Java jar (library bundled) with sources and javadoc jars and a POM, and the NuGet package (library bundled); both are byte-reproducible and tested installed, as is a Go consumer built against the tarball. The new models have their own performance budgets.
 - `validate.py --packages` works without a model (`tests/package-smoke.py`), and CI runs it. `validate.py` records the Rust, Go, Java, .NET and Python versions, runs `tests/download-model.py`, and with a model requires the `cpu-guard` test.
 - The rollback rehearsal handles an ABI break by building each side's consumer from its own source commit.
 - `scripts/release-assets.py`: `assemble` builds the GitHub release asset set (renamed inventories and SBOMs, `gates.json`, `SHA256SUMS`) from the qualified package directories; `retain` turns downloaded release assets into the last-known-good package directory for `tests/rollback.py`.
