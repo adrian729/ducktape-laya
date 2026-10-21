@@ -97,7 +97,7 @@ jobs:
           retention-days: 14
 
   windows:
-    name: Windows x64 / model free (exploratory)
+    name: Windows x64 / native build and model-free tests
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
