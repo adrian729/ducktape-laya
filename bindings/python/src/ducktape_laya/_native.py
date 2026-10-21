@@ -17,19 +17,24 @@ class CallOptions(ctypes.Structure):
                 ('should_cancel', CANCEL_CALLBACK), ('cancel_user_data', ctypes.c_void_p)]
 
 
+# libducktape_laya.so (soname .so.1) on Linux, .dylib (install name .1.dylib) on macOS.
+_NAME, _VERSIONED = (('libducktape_laya.dylib', 'libducktape_laya.1.dylib') if sys.platform == 'darwin'
+                     else ('libducktape_laya.so', 'libducktape_laya.so.1'))
+
+
 def _open():
     explicit = os.environ.get('DUCKTAPE_LAYA_LIB_DIR')
     if explicit:  # an explicit choice is honoured or fails; never a silent fallback
-        path = pathlib.Path(explicit, 'libducktape_laya.so')
+        path = pathlib.Path(explicit, _NAME)
         try:
             return ctypes.CDLL(str(path))
         except OSError as error:
             raise OSError(f'DUCKTAPE_LAYA_LIB_DIR is set but {path} could not be loaded: {error}') from None
     if sys.platform != 'linux' or platform.machine() not in ('x86_64', 'AMD64', 'aarch64', 'arm64'):
         raise OSError(f'Unsupported platform {sys.platform}/{platform.machine()}; ducktape-laya supports Linux x86-64 and arm64')
-    bundled = pathlib.Path(__file__).with_name('_native') / 'libducktape_laya.so'
+    bundled = pathlib.Path(__file__).with_name('_native') / _NAME
     try:
-        return ctypes.CDLL(str(bundled) if bundled.is_file() else 'libducktape_laya.so.1')
+        return ctypes.CDLL(str(bundled) if bundled.is_file() else _VERSIONED)
     except OSError as error:
         raise OSError('Native ducktape-laya library not found. Install a wheel that bundles it, '
                       f'or set DUCKTAPE_LAYA_LIB_DIR to its library directory: {error}') from None
