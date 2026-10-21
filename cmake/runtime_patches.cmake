@@ -66,7 +66,7 @@ function(dtl_use_patched_sources target)
     get_filename_component(original_dir "${UPSTREAM}/${path}" DIRECTORY)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
       set_source_files_properties("${DTL_PATCH_ROOT}/${path}" TARGET_DIRECTORY ${target}
-        PROPERTIES COMPILE_OPTIONS "-iquote;${original_dir}")
+        PROPERTIES COMPILE_OPTIONS "$<IF:$<STREQUAL:${CMAKE_C_COMPILER_FRONTEND_VARIANT},MSVC>,/clang:-iquote${original_dir},-iquote;${original_dir}>")
     else()
       set_source_files_properties("${DTL_PATCH_ROOT}/${path}" TARGET_DIRECTORY ${target}
         PROPERTIES INCLUDE_DIRECTORIES "${original_dir}")

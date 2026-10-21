@@ -1,0 +1,3 @@
+# LF everywhere: patch and source hashes, scripts and fixtures must be byte-identical
+# on every platform (Git for Windows would otherwise check out CRLF).
+* text=auto eol=lf

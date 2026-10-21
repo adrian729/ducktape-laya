@@ -65,9 +65,15 @@ string(JSON DTL_PATCHES_JSON GET "${DTL_RELEASE_RECORD}" runtime patches)
 # Normalize paths embedded by compiler diagnostics/debug metadata.
 option(DUCKTAPE_REPRODUCIBLE_PATHS "Normalize source/build paths in compiled artifacts" ON)
 if(DUCKTAPE_REPRODUCIBLE_PATHS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  add_compile_options("-ffile-prefix-map=${UPSTREAM}=./third_party/llama.cpp"
-    "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
-    "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=./build")
+  # clang-cl takes driver options through /clang: (a bare -f... would read as a file).
+  if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(DTL_DRIVER_OPTION "/clang:")
+  else()
+    set(DTL_DRIVER_OPTION "")
+  endif()
+  add_compile_options("${DTL_DRIVER_OPTION}-ffile-prefix-map=${UPSTREAM}=./third_party/llama.cpp"
+    "${DTL_DRIVER_OPTION}-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
+    "${DTL_DRIVER_OPTION}-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=./build")
 endif()
 add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
 # Upstream Git discovery can find the parent project's repository in an archive.

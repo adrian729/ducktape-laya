@@ -33,7 +33,8 @@ Native packages (C/C++, Rust, Node.js, Electron) need:
   (`DTL_UNSUPPORTED_PLATFORM`) and names the missing feature.
 - **System libraries:** glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29`, as in
   Ubuntu 24.04+, Debian 13+ and Fedora 39+. Tested on Ubuntu 24.04 and 26.04.
-  Windows is not supported.
+  Windows is not supported yet: the library builds with clang-cl and passes the
+  model-free native tests in CI, but the bindings are not ported.
 - **Linux arm64 (0.2.0, from a checkout):** CI builds and tests it on Ubuntu
   24.04 arm64, including real-model agreement with llama.cpp and the original
   Laya and the installed packages (tarball, npm, wheel, jar, NuGet). It needs
