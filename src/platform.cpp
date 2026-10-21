@@ -6,15 +6,39 @@
 #include <sys/auxv.h>
 #elif defined(__aarch64__) && defined(__APPLE__)
 #include <sys/sysctl.h>
+#elif defined(_WIN32) && defined(__x86_64__)
+#include <intrin.h>
+#include <cstring>
 #endif
 namespace dtl {
 namespace {
 struct feature { const char *name; bool supported; };
+#if defined(_WIN32) && defined(__x86_64__)
+// __builtin_cpu_supports needs compiler-rt, which clang-cl does not link by
+// default; read the same CPUID bits (and the OS's AVX state for AVX users).
+__attribute__((target("xsave"))) bool x86_supports(const char *name) {
+    int leaf1[4], leaf7[4];
+    __cpuid(leaf1, 1);
+    __cpuidex(leaf7, 7, 0);
+    const bool avx_state = (leaf1[2] & (1 << 27)) && (_xgetbv(0) & 6) == 6;
+    if (!std::strcmp(name, "avx")) return (leaf1[2] & (1 << 28)) && avx_state;
+    if (!std::strcmp(name, "avx2")) return (leaf7[1] & (1 << 5)) && avx_state;
+    if (!std::strcmp(name, "fma")) return (leaf1[2] & (1 << 12)) && avx_state;
+    if (!std::strcmp(name, "f16c")) return leaf1[2] & (1 << 29);
+    if (!std::strcmp(name, "bmi2")) return leaf7[1] & (1 << 8);
+    if (!std::strcmp(name, "sse4.2")) return leaf1[2] & (1 << 20);
+    return false;
+}
+#endif
 std::vector<feature> required_features() {
     std::vector<feature> out;
 #if defined(__x86_64__) && !defined(__EMSCRIPTEN__)
+#ifdef _WIN32
+#define DTL_FEATURE(name) out.push_back({name, x86_supports(name)})
+#else
     __builtin_cpu_init();
 #define DTL_FEATURE(name) out.push_back({name, bool(__builtin_cpu_supports(name))})
+#endif
 #ifdef DTL_NEED_AVX
     DTL_FEATURE("avx");
 #endif
