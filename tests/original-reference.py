@@ -35,7 +35,8 @@ parser.add_argument('--report', type=pathlib.Path)
 args = parser.parse_args()
 build = args.build_dir.resolve()
 consumer = build / 'laya-conformance-c'
-env = dict(os.environ, LD_LIBRARY_PATH=str(build) + ':' + os.environ.get('LD_LIBRARY_PATH', ''))
+env = dict(os.environ, LD_LIBRARY_PATH=str(build) + ':' + os.environ.get('LD_LIBRARY_PATH', ''),
+           DYLD_LIBRARY_PATH=str(build) + ':' + os.environ.get('DYLD_LIBRARY_PATH', ''))
 # The original runs each checkpoint at the sequence length it was trained with.
 config = json.dumps({'threads': 4, 'context_tokens': json.loads((args.cases / 'meta.json').read_text())['max_len']})
 

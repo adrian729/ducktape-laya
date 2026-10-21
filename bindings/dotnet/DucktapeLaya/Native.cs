@@ -22,7 +22,9 @@ internal unsafe struct DtlCallOptions
 internal static unsafe partial class Native
 {
     const string Lib = "ducktape_laya";
-    const string FileName = "libducktape_laya.so";
+    // libducktape_laya.so (soname .so.1) on Linux, libducktape_laya.dylib (install name .1.dylib) on macOS.
+    static readonly string FileName = OperatingSystem.IsMacOS() ? "libducktape_laya.dylib" : "libducktape_laya.so";
+    static readonly string VersionedName = OperatingSystem.IsMacOS() ? "libducktape_laya.1.dylib" : "libducktape_laya.so.1";
 
     static readonly object Gate = new();
     static bool _resolverSet, _ready;
@@ -75,11 +77,12 @@ internal static unsafe partial class Native
         var overridden = !string.IsNullOrEmpty(dir);
         var candidates = overridden
             ? new[] { System.IO.Path.Combine(dir!, FileName) }
-            : new[] { FileName + ".1", FileName };
+            : new[] { VersionedName, FileName };
         LayaException? incompatible = null;
         foreach (var candidate in candidates)
         {
-            var loaded = overridden ? NativeLibrary.TryLoad(candidate, out var h) ? h : IntPtr.Zero
+            // A missing explicit path must fail; macOS dyld would otherwise search DYLD_LIBRARY_PATH.
+            var loaded = overridden ? System.IO.File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out var h) ? h : IntPtr.Zero
                                     : NativeLibrary.TryLoad(candidate, assembly, null, out h) ? h : IntPtr.Zero;
             if (loaded == IntPtr.Zero) continue;
             try { return (loaded, Validate(loaded)); }

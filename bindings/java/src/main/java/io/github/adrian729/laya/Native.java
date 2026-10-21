@@ -9,7 +9,8 @@ import java.util.Locale;
 
 /** Locates libducktape_laya and binds its C ABI. */
 final class Native {
-    static final String LIB = "libducktape_laya.so";
+    /** libducktape_laya.so on Linux, libducktape_laya.dylib on macOS. */
+    static final String LIB = System.mapLibraryName("ducktape_laya");
     /** Bundled library resource for this JVM's architecture: /native/linux-x64/ or /native/linux-arm64/. */
     static String bundled(String arch) {
         return "/native/linux-" + (arch.equals("aarch64") || arch.equals("arm64") ? "arm64" : "x64") + "/" + LIB;
@@ -96,7 +97,8 @@ final class Native {
         Path bundled = extractBundled(bundled(arch));
         if (bundled != null) return open(bundled, global);
         RuntimeException last = null;
-        for (String name : new String[] {LIB + ".1", System.mapLibraryName("ducktape_laya")}) {
+        String versioned = LIB.endsWith(".dylib") ? "libducktape_laya.1.dylib" : LIB + ".1";
+        for (String name : new String[] {versioned, LIB}) {
             try {
                 return SymbolLookup.libraryLookup(name, global);
             } catch (RuntimeException e) {
@@ -108,6 +110,9 @@ final class Native {
     }
 
     private static SymbolLookup open(Path path, Arena arena) {
+        // macOS dyld would otherwise fall back to DYLD_LIBRARY_PATH for a missing path.
+        if (!Files.isRegularFile(path))
+            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot load " + path + ": no such file");
         try {
             return SymbolLookup.libraryLookup(path, arena);
         } catch (RuntimeException e) {

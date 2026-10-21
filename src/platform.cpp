@@ -4,6 +4,8 @@
 #if defined(__aarch64__) && defined(__linux__)
 #include <asm/hwcap.h>
 #include <sys/auxv.h>
+#elif defined(__aarch64__) && defined(__APPLE__)
+#include <sys/sysctl.h>
 #endif
 namespace dtl {
 namespace {
@@ -42,6 +44,18 @@ std::vector<feature> required_features() {
     out.push_back({"asimdhp", (hwcap & HWCAP_ASIMDHP) != 0});
 #endif
     (void)hwcap;
+#elif defined(__aarch64__) && defined(__APPLE__)
+    auto has = [](const char *name) {
+        int value = 0;
+        size_t size = sizeof(value);
+        return sysctlbyname(name, &value, &size, nullptr, 0) == 0 && value != 0;
+    };
+#ifdef DTL_NEED_DOTPROD
+    out.push_back({"asimddp", has("hw.optional.arm.FEAT_DotProd")});
+#endif
+#ifdef DTL_NEED_FP16
+    out.push_back({"fphp", has("hw.optional.arm.FEAT_FP16")});
+#endif
 #endif
     return out;
 }

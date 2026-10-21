@@ -1,0 +1,97 @@
+name: Other platforms
+# Platform plan phase 1: native build and model-free tests on platforms other
+# than Linux. Not a release gate yet.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      real_model:
+        description: Download the pinned test model and run the real-model checks
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  macos:
+    name: macOS arm64 / ${{ inputs.real_model && 'real model' || 'model free' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DUCKTAPE_LAYA_LIB_DIR: ${{ github.workspace }}/build
+      DYLD_LIBRARY_PATH: ${{ github.workspace }}/build
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.21.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
+      - name: Download and verify explicitly requested test model
+        if: inputs.real_model
+        run: |
+          mkdir -p build-model
+          python3 - <<'PY'
+          import json, pathlib, urllib.request
+          model = json.loads(pathlib.Path('models/manifest.json').read_text())
+          urllib.request.urlretrieve(model['url'], 'build-model/laya.gguf')
+          PY
+          python3 scripts/verify-model.py build-model/laya.gguf
+          echo "LAYA_MODEL=$PWD/build-model/laya.gguf" >> "$GITHUB_ENV"
+      - name: Build the library, Node addon and native tests
+        run: |
+          node_include="$(dirname "$(dirname "$(which node)")")/include/node"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_NODE=ON "-DNODE_INCLUDE_DIR=$node_include" \
+            ${LAYA_MODEL:+"-DDUCKTAPE_TEST_MODEL=$LAYA_MODEL" -DDUCKTAPE_BUILD_REFERENCE_PROBE=ON}
+          cmake --build build --parallel 3
+      - name: Exported symbols
+        run: nm -gU build/libducktape_laya.dylib | awk '{print $3}' | sort | tee build/exports.txt && diff build/exports.txt <(sort src/exports.macos)
+      - name: Native tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Agreement with the original Laya and with llama.cpp
+        if: inputs.real_model
+        run: |
+          python3 tests/original-reference.py "$LAYA_MODEL" --build-dir build --report build/original-reference.json
+          python3 tests/compare-native-reference.py "$LAYA_MODEL" --build build --report build/upstream-reference.json
+      - name: Python
+        run: PYTHONPATH=bindings/python/src python3 -m unittest discover -s bindings/python/tests
+      - name: Rust
+        run: cargo test --locked --manifest-path bindings/rust/Cargo.toml
+      - name: Go
+        run: CGO_CFLAGS="-I$PWD/include" CGO_LDFLAGS="-L$PWD/build" go -C bindings/go test -count=1 ./...
+      - name: Java
+        run: bash bindings/java/build.sh
+      - name: .NET
+        run: dotnet test bindings/dotnet/DucktapeLaya.slnx -m:1
+      - name: Node
+        run: DUCKTAPE_LAYA_ADDON="$PWD/build/ducktape_laya.node" node --test bindings/node/test.cjs
+      - name: Retain reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-arm64-${{ inputs.real_model && 'real-model' || 'model-free' }}
+          path: |
+            build/original-reference.json
+            build/upstream-reference.json
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 14

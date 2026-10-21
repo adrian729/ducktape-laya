@@ -16,9 +16,15 @@ fn main() {
                 .trim(),
         )
     };
+    let name = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        "libducktape_laya.dylib"
+    } else {
+        "libducktape_laya.so"
+    };
     assert!(
-        dir.join("libducktape_laya.so").is_file(),
-        "DUCKTAPE_LAYA_LIB_DIR must contain libducktape_laya.so: {}",
+        dir.join(name).is_file(),
+        "DUCKTAPE_LAYA_LIB_DIR must contain {}: {}",
+        name,
         dir.display()
     );
     println!("cargo:rustc-link-search=native={}", dir.display());
