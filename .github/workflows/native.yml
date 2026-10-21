@@ -76,8 +76,8 @@ jobs:
             node: 26.7.0
             runner: ubuntu-24.04
             arch: x64
-          # Linux arm64 (platform plan phase 1): native build, ctest and every binding
-          # suite without a model; packages are x86-64 only so far.
+          # Linux arm64: native build, ctest, every binding suite and per-platform
+          # packages (linux-arm64 tarball, npm, wheel, jar, nupkg).
           - compiler: gcc
             cc: gcc
             cxx: g++
@@ -129,10 +129,10 @@ jobs:
         run: npm ci --ignore-scripts --prefix tests/typescript
       - name: Model-free checks
         if: ${{ !inputs.real_model }}
-        run: python3 scripts/validate.py ${{ matrix.arch == 'x64' && '--packages' || '' }} --output build-ci-report --jobs 2
+        run: python3 scripts/validate.py --packages --output build-ci-report --jobs 2
       - name: Real-model and installed artifact checks
         if: inputs.real_model
-        run: python3 scripts/validate.py --model build-model/laya.gguf ${{ matrix.arch == 'x64' && '--packages' || '' }} --upstream-reference --output build-ci-report --jobs 2
+        run: python3 scripts/validate.py --model build-model/laya.gguf --packages --upstream-reference --output build-ci-report --jobs 2
       - name: Record exact outputs of the built library on this runner CPU
         if: inputs.real_model && matrix.arch == 'x64'
         run: |

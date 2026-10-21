@@ -70,7 +70,7 @@ internal static unsafe partial class Native
         var dir = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
         var assembly = typeof(Native).Assembly;
         // An explicit override never falls back to other locations. Otherwise the soname comes first (as in
-        // the Python and Java bindings), then the plain name; the NuGet runtimes/linux-x64/native layout is
+        // the Python and Java bindings), then the plain name; the NuGet runtimes/<rid>/native layout (linux-x64, linux-arm64) is
         // found by default probing. A library of the wrong ABI is skipped in favour of the next candidate.
         var overridden = !string.IsNullOrEmpty(dir);
         var candidates = overridden

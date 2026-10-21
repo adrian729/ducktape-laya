@@ -23,14 +23,15 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('artifacts', type=pathlib.Path)
 a = p.parse_args()
 artifacts = a.artifacts.resolve()
-version = verify_inventory(artifacts)['package_version']
+inventory = verify_inventory(artifacts)
+version, platform_dir = inventory['package_version'], inventory['platform']
 abi = read_json(root / 'release/compatibility.json')['abi_version']
 env = {k: v for k, v in os.environ.items() if k not in ('DUCKTAPE_LAYA_ADDON', 'DUCKTAPE_LAYA_LIB_DIR', 'LD_LIBRARY_PATH', 'PYTHONPATH')}
 with tempfile.TemporaryDirectory(prefix='ducktape-smoke-') as directory:
     directory = pathlib.Path(directory)
-    with tarfile.open(artifacts / f'ducktape-laya-{version}-linux-x64.tar.gz') as tar:
+    with tarfile.open(artifacts / f'ducktape-laya-{version}-{platform_dir}.tar.gz') as tar:
         tar.extractall(directory, filter='data')
-    native = directory / f'ducktape-laya-{version}-linux-x64'
+    native = directory / f'ducktape-laya-{version}-{platform_dir}'
     libdir = next(native.glob('lib*/libducktape_laya.so')).parent
     program = directory / 'abi'
     subprocess.run(['cc', '-x', 'c', '-', f'-I{native / "include"}', f'-L{libdir}', '-lducktape_laya', '-o', str(program)],

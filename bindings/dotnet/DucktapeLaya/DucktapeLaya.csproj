@@ -29,7 +29,10 @@
   <ItemGroup>
     <InternalsVisibleTo Include="DucktapeLaya.Tests" />
   </ItemGroup>
+  <PropertyGroup>
+    <DucktapeLayaRuntime Condition="'$(DucktapeLayaRuntime)' == ''">linux-x64</DucktapeLayaRuntime>
+  </PropertyGroup>
   <ItemGroup Condition="'$(DucktapeLayaNativeLibrary)' != ''">
-    <None Include="$(DucktapeLayaNativeLibrary)" Pack="true" PackagePath="runtimes/linux-x64/native/libducktape_laya.so" Link="runtimes/linux-x64/native/libducktape_laya.so" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(DucktapeLayaNativeLibrary)" Pack="true" PackagePath="runtimes/$(DucktapeLayaRuntime)/native/libducktape_laya.so" Link="runtimes/$(DucktapeLayaRuntime)/native/libducktape_laya.so" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

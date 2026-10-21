@@ -23,6 +23,16 @@ def source_files():
     return {name: sha256(ROOT / name) if (ROOT / name).is_file() else None
             for name in sorted(filter(None, names)) if not (ROOT / name).is_dir()}
 
+# Package platform names for the machine packaging runs on: (directory, wheel arch).
+PLATFORMS = {'x86_64': ('linux-x64', 'x86_64'), 'AMD64': ('linux-x64', 'x86_64'),
+             'aarch64': ('linux-arm64', 'aarch64'), 'arm64': ('linux-arm64', 'aarch64')}
+
+def host_platform():
+    import platform
+    if platform.machine() not in PLATFORMS:
+        raise ValueError(f'Packages are built for Linux x86-64 and arm64, not {platform.machine()}')
+    return PLATFORMS[platform.machine()]
+
 def verify_model(path, manifest):
     path = pathlib.Path(path)
     if path.stat().st_size != manifest['size_bytes'] or sha256(path) != manifest['sha256']:

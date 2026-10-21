@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import re
 import tempfile
-from release_support import ROOT, check_record, sha256, git, binary_info, source_identity, native_build_identity, require_runtime_identity, require_uninstrumented_binary
+from release_support import ROOT, host_platform, check_record, sha256, git, binary_info, source_identity, native_build_identity, require_runtime_identity, require_uninstrumented_binary
 from artifact_support import write_zip, archive_tree
 import java_package
 import python_wheel
@@ -34,6 +34,7 @@ def normalize_nupkg(source, destination, epoch):
 
 record = check_record()
 version = record['package_version']
+platform_dir = host_platform()[0]
 epoch = int(os.environ.get('SOURCE_DATE_EPOCH', git(ROOT, 'show', '-s', '--format=%ct', 'HEAD')))
 if epoch < 0 or epoch > 4294967295: p.error('SOURCE_DATE_EPOCH outside gzip timestamp range')
 build, out = a.build.resolve(), a.output.resolve()
@@ -58,7 +59,7 @@ if not (build / 'ducktape_laya.node').is_file():
     p.error('Build the Node addon before packaging')
 with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     directory = pathlib.Path(directory)
-    native = directory / f'ducktape-laya-{version}-linux-x64'
+    native = directory / f'ducktape-laya-{version}-{platform_dir}'
     subprocess.run(['cmake', '--install', str(build), '--prefix', str(native)], check=True, capture_output=True)
     archive_tree(native, out / (native.name + '.tar.gz'), native.name, epoch)
     package = directory / 'npm'
@@ -71,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     shutil.copy(ROOT / 'release/compatibility.json', package / 'compatibility.json')
     shutil.copy(ROOT / 'models/manifest.json', package / 'model-manifest.json')
     shutil.copy(ROOT / 'scripts/download-model.py', package / 'download-model.py')
-    addon = package / 'native/linux-x64'
+    addon = package / 'native' / platform_dir
     addon.mkdir(parents=True)
     installed_addon = next(native.glob('lib*/ducktape-laya/node/ducktape_laya.node'))
     installed_libdir = installed_addon.parents[2]
@@ -91,18 +92,18 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         shutil.copy(ROOT / f'bindings/rust/target/package/{name}-{version}.crate', out)
     python_wheel.build(out, version, installed_libdir / 'libducktape_laya.so', epoch)
     java_package.build(out, version, installed_libdir / 'libducktape_laya.so', epoch)
-    # NuGet: the library at runtimes/linux-x64/native/, packed from source like the crates.
+    # NuGet: the library at runtimes/<platform>/native/, packed from source like the crates.
     nuget = directory / 'nuget'
     subprocess.run(['dotnet', 'pack', str(ROOT / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj'), '-c', 'Release', '-m:1',
                     '-o', str(nuget), f'-p:DucktapeLayaNativeLibrary={installed_libdir / "libducktape_laya.so"}',
-                    '-p:ContinuousIntegrationBuild=true', '--nologo'],
+                    f'-p:DucktapeLayaRuntime={platform_dir}', '-p:ContinuousIntegrationBuild=true', '--nologo'],
                    cwd=ROOT, env=dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1'), check=True, capture_output=True)
     normalize_nupkg(nuget / f'DucktapeLaya.{version}.nupkg', out / f'DucktapeLaya.{version}.nupkg', epoch)
     cache = {}
     for line in (build / 'CMakeCache.txt').read_text().splitlines():
         match = re.match(r'([^:#]+):[^=]+=(.*)', line)
         if match: cache[match[1]] = match[2]
-    isa = {key: value for key, value in cache.items() if key.startswith(('GGML_AVX', 'GGML_FMA', 'GGML_F16C', 'GGML_BMI', 'GGML_SSE', 'GGML_NATIVE'))}
+    isa = {key: value for key, value in cache.items() if key.startswith(('GGML_AVX', 'GGML_FMA', 'GGML_F16C', 'GGML_BMI', 'GGML_SSE', 'GGML_NATIVE', 'GGML_CPU_ARM_ARCH'))}
     symbols = subprocess.check_output(['readelf', '--version-info', str(build / 'libducktape_laya.so')], text=True)
     requirements = sorted(set(re.findall(r'Name: ((?:GLIBC|GLIBCXX|CXXABI)_[0-9.]+)', symbols)))
     # The wheel tag and the declared floors must cover what the library actually needs.
@@ -119,7 +120,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     inventory = {'schema_version': 2, 'package_version': version, 'packaging_source_commit': git(ROOT, 'rev-parse', 'HEAD'),
         'packaging_source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'runtime': record['runtime'],
         'build_source': source, 'build_identities': identities,
-        'diagnostics': diagnostics, 'platform': 'linux-x64', 'source_date_epoch': epoch, 'cpu_build_options': isa,
+        'diagnostics': diagnostics, 'platform': platform_dir, 'source_date_epoch': epoch, 'cpu_build_options': isa,
         'toolchain': {'compiler': compiler, 'build_type': cache.get('CMAKE_BUILD_TYPE'), 'cxx_flags': cache.get('CMAKE_CXX_FLAGS'), 'required_runtime_symbol_versions': requirements},
         'reproducibility_scope': 'deterministic packaging of identical build inputs; independent compilation is a separate gate',
         'artifacts': {f.name: {'sha256': sha256(f), 'bytes': f.stat().st_size} for f in sorted(out.iterdir())},

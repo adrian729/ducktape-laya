@@ -10,7 +10,10 @@ import java.util.Locale;
 /** Locates libducktape_laya and binds its C ABI. */
 final class Native {
     static final String LIB = "libducktape_laya.so";
-    static final String BUNDLED = "/native/linux-x64/" + LIB;
+    /** Bundled library resource for this JVM's architecture: /native/linux-x64/ or /native/linux-arm64/. */
+    static String bundled(String arch) {
+        return "/native/linux-" + (arch.equals("aarch64") || arch.equals("arm64") ? "arm64" : "x64") + "/" + LIB;
+    }
     static final AddressLayout PTR = ValueLayout.ADDRESS;
     /** dtl_call_options: struct_size, reserved, request_id, timeout_ms, on_event, event_user_data, should_cancel, cancel_user_data. */
     static final StructLayout CALL_OPTIONS = MemoryLayout.structLayout(
@@ -87,10 +90,10 @@ final class Native {
         if (dir != null && !dir.isEmpty()) return open(Path.of(dir, LIB), global);
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-        if (!os.contains("linux") || !(arch.equals("amd64") || arch.equals("x86_64")))
+        if (!os.contains("linux") || !(arch.equals("amd64") || arch.equals("x86_64") || arch.equals("aarch64") || arch.equals("arm64")))
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM,
-                "ducktape-laya supports Linux x86-64 only (found " + os + "/" + arch + ")");
-        Path bundled = extractBundled();
+                "ducktape-laya supports Linux x86-64 and arm64 (found " + os + "/" + arch + ")");
+        Path bundled = extractBundled(bundled(arch));
         if (bundled != null) return open(bundled, global);
         RuntimeException last = null;
         for (String name : new String[] {LIB + ".1", System.mapLibraryName("ducktape_laya")}) {
@@ -112,8 +115,8 @@ final class Native {
         }
     }
 
-    private static Path extractBundled() {
-        try (InputStream in = Native.class.getResourceAsStream(BUNDLED)) {
+    private static Path extractBundled(String resource) {
+        try (InputStream in = Native.class.getResourceAsStream(resource)) {
             if (in == null) return null;
             Path dir = Files.createTempDirectory("ducktape-laya");
             Path file = dir.resolve(LIB);

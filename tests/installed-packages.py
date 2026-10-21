@@ -19,20 +19,21 @@ p.add_argument('artifacts', type=pathlib.Path)
 p.add_argument('model', type=pathlib.Path)
 a = p.parse_args()
 artifacts, model = a.artifacts.resolve(), a.model.resolve()
-version = verify_inventory(artifacts)['package_version']
+inventory = verify_inventory(artifacts)
+version, platform_dir = inventory['package_version'], inventory['platform']
 request = (root / 'tests/fixtures/primitive.json').read_bytes()
 with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
     directory = pathlib.Path(directory)
-    for artifact in list(artifacts.glob('*.crate')) + list(artifacts.glob('*linux-x64.tar.gz')):
+    for artifact in list(artifacts.glob('*.crate')) + list(artifacts.glob(f'*{platform_dir}.tar.gz')):
         with tarfile.open(artifact) as tar:
             tar.extractall(directory, filter='data')
-    native = directory / f'ducktape-laya-{version}-linux-x64'
+    native = directory / f'ducktape-laya-{version}-{platform_dir}'
     subprocess.run(['python3', str(root / 'tests/installed-native.py'), str(native), str(model)], check=True)
     app = directory / 'application'
     app.mkdir()
     (app / 'package.json').write_text('{"private":true}')
     subprocess.run(['npm', 'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', str(artifacts / f'ducktape-laya-{version}.tgz')], cwd=app, check=True, capture_output=True)
-    addon = app / 'node_modules/ducktape-laya/native/linux-x64/ducktape_laya.node'
+    addon = app / f'node_modules/ducktape-laya/native/{platform_dir}/ducktape_laya.node'
     dynamic = subprocess.check_output(['readelf', '-d', str(addon)], text=True)
     for line in dynamic.splitlines():
         if 'RPATH' in line or 'RUNPATH' in line:

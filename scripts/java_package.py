@@ -1,6 +1,6 @@
 """Build the Maven artifacts around an installed native library (build tooling only).
 
-ducktape-laya-VERSION.jar bundles libducktape_laya.so at native/linux-x64/, which
+ducktape-laya-VERSION.jar bundles libducktape_laya.so at native/<platform>/, which
 Native.java extracts when no library is configured; the sources and javadoc jars
 and the POM are what Maven Central requires next to it. Signing is a publication
 step."""
@@ -8,7 +8,7 @@ import pathlib
 import subprocess
 import tempfile
 from artifact_support import write_zip
-from release_support import ROOT
+from release_support import ROOT, host_platform
 
 GROUP, ARTIFACT, MODULE = 'io.github.adrian729', 'ducktape-laya', 'io.github.adrian729.laya'
 POM = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -61,7 +61,7 @@ def build(out, version, library, epoch):
         subprocess.run(['javadoc', '--release', '22', '-quiet', '-notimestamp', '-Xdoclint:none', '-d', str(docs),
                         *map(str, sources)], check=True, capture_output=True)
         files = {path.relative_to(classes).as_posix(): (path.read_bytes(), False) for path in sorted(classes.rglob('*.class'))}
-        files['native/linux-x64/libducktape_laya.so'] = (pathlib.Path(library).read_bytes(), True)
+        files[f'native/{host_platform()[0]}/libducktape_laya.so'] = (pathlib.Path(library).read_bytes(), True)
         write_zip(out / f'{ARTIFACT}-{version}.jar', {**files, **legal, lead[0]: (manifest, False)}, epoch, lead)
         write_zip(out / f'{ARTIFACT}-{version}-sources.jar',
                   {**{path.relative_to(source).as_posix(): (path.read_bytes(), False) for path in sources}, **legal,
