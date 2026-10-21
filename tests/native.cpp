@@ -1,4 +1,5 @@
 #include "ducktape_laya.hpp"
+#include <filesystem>
 #include <future>
 #include <iostream>
 #include <stdexcept>
@@ -7,6 +8,12 @@ static void expect(bool ok, const char *message) {
     if (!ok) throw std::runtime_error(message);
 }
 int main(int argc, char **argv) {
+    const std::string self_path = std::filesystem::canonical(argv[0]).string();
+    // A regular file that is not a model (lazy routes accept it until they load).
+    auto self = [&](std::string text) {
+        for (size_t at; (at = text.find("SELF")) != std::string::npos;) text.replace(at, 4, self_path);
+        return text;
+    };
     try {
         expect(dtl_abi_version() == 2, "ABI version");
         const auto runtime = ducktape::info();
@@ -21,11 +28,11 @@ int main(int argc, char **argv) {
         expect(dtl_open("missing.gguf", "{\"bogus\":1}", &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "unknown config key"); dtl_free(error);
         expect(dtl_open("missing.gguf", "{\"threads\":257}", &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "threads bound"); dtl_free(error);
         expect(dtl_open("missing.gguf", "{", &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "malformed config"); dtl_free(error);
-        expect(dtl_open_router("{\"models\":{\"a\":\"/proc/self/exe\"}}", "{\"bogus\":1}", &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "router unknown config key"); dtl_free(error);
-        expect(dtl_open_router("{\"models\":{\"a\":{\"path\":\"/proc/self/exe\",\"config\":{\"bogus\":1}}}}", nullptr, &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "route unknown config key"); dtl_free(error);
+        expect(dtl_open_router(self("{\"models\":{\"a\":\"SELF\"}}").c_str(), "{\"bogus\":1}", &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "router unknown config key"); dtl_free(error);
+        expect(dtl_open_router(self("{\"models\":{\"a\":{\"path\":\"SELF\",\"config\":{\"bogus\":1}}}}").c_str(), nullptr, &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "route unknown config key"); dtl_free(error);
         {
             // A router reports runtime info only, without a model section.
-            auto router = ducktape::engine::open_router(R"({"models":{"a":"/proc/self/exe"}})");
+            auto router = ducktape::engine::open_router(self(R"({"models":{"a":"SELF"}})").c_str());
             const auto info = router.info();
             expect(info.find("\"abi_version\":2") != std::string::npos && info.find("\"model\"") == std::string::npos, "router info has no model");
         }
