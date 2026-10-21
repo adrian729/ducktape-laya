@@ -33,7 +33,12 @@ Native packages (C/C++, Rust, Node.js, Electron) need:
   (`DTL_UNSUPPORTED_PLATFORM`) and names the missing feature.
 - **System libraries:** glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29`, as in
   Ubuntu 24.04+, Debian 13+ and Fedora 39+. Tested on Ubuntu 24.04 and 26.04.
-  macOS, Windows and Arm are not supported.
+  macOS and Windows are not supported.
+- **Linux arm64 (from source, 0.2.0):** CI builds and tests it on Ubuntu 24.04
+  arm64, including real-model agreement with llama.cpp and the original Laya.
+  It needs Armv8.2-A with dot product and half precision (Graviton2+, Ampere
+  Altra, Cortex-A76 / Raspberry Pi 5); opening an engine elsewhere fails with
+  status 7. Packages are x86-64 only so far, so build it from a checkout.
 - **Memory:** about 0.5 GB per open engine with the English model and the default 512-token context (measured natively: 475 MiB after opening, 600 MiB while deciding). Plan for 1 GB per engine. Other models and longer contexts need more; see [other checkpoints](#other-laya-checkpoints).
 - **Disk:** 449 MB for the English model, plus 15 MB for the library or npm package.
 - **Model:** `Laya-Q8_0.gguf`, downloaded separately (see below).
@@ -82,7 +87,8 @@ options. The wizard is optional; the manual steps follow.
 ## Manual setup
 
 You need CMake 3.22+, a C/C++17 compiler and Git. The default Linux x86-64 build
-requires AVX2, FMA, F16C, BMI2 and SSE4.2.
+requires AVX2, FMA, F16C, BMI2 and SSE4.2; the Linux arm64 build requires
+Armv8.2-A with dot product and half precision.
 
 ```sh
 git clone --recurse-submodules https://github.com/adrian729/ducktape-laya.git
