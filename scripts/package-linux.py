@@ -66,6 +66,13 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     package.mkdir()
     for name in ['package.json', 'README.md', 'index.cjs', 'index.d.ts', 'worker.cjs', 'resolve-addon.cjs']:
         shutil.copy(ROOT / 'bindings/node' / name, package / name)
+    # The package holds one platform's addon; declare that CPU so npm refuses others.
+    cpu = platform_dir.split('-', 1)[1]
+    manifest = (package / 'package.json').read_text()
+    if cpu != 'x64':
+        manifest = re.sub(r'"cpu": \[\s*"x64"\s*\]', f'"cpu": [\n    "{cpu}"\n  ]', manifest)
+        if f'"{cpu}"' not in manifest: p.error('Could not set the npm package cpu field')
+        (package / 'package.json').write_text(manifest)
     for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
         shutil.copy(ROOT / name, package / name)
     shutil.copytree(ROOT / 'licenses', package / 'licenses')
