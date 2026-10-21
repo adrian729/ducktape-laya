@@ -108,7 +108,7 @@ jobs:
       - name: Build the library and native tests with clang-cl
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -T ClangCL -A x64 -DDUCKTAPE_BUILD_NODE=OFF
+          cmake -S . -B build -T ClangCL -A x64 -DDUCKTAPE_BUILD_NODE=OFF
           cmake --build build --config Release --parallel 3
       - name: Model-free native tests
         shell: pwsh
