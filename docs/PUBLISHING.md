@@ -22,7 +22,7 @@ All names above were unclaimed on 2026-10-19.
 These are code changes; they need no accounts.
 
 - Versions are already 0.2.0 in `release/compatibility.json` and every binding manifest. For later releases, bump them together: `check_record` rejects any mismatch, including the Python, Java and .NET versions.
-- Write the release notes: move the `0.2.0 (unreleased)` section of [CHANGELOG.md](../CHANGELOG.md) under the release version and date, and use it for the GitHub release text.
+- Write the release notes: give the unreleased section of [CHANGELOG.md](../CHANGELOG.md) its version and date, and use it for the GitHub release text.
 - Python: the real wheel comes only from `scripts/python_wheel.py` (run by `scripts/package-linux.py`), which bundles the native library. Building `bindings/python` with its `pyproject.toml` alone (`pip wheel`, `python -m build`) produces a wheel without the library; never upload that.
 - Java and .NET: `scripts/package-linux.py` builds `ducktape-laya-VERSION.jar`
   (library at `native/linux-x64/`), the sources and javadoc jars and the POM

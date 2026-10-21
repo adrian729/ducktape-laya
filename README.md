@@ -10,9 +10,9 @@ Embed local Laya decisions in C/C++, Rust, Node.js and Electron, Python, Go, Jav
 **Status:**
 
 - **0.1.0 (published):** on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0), npm (`ducktape-laya`, `ducktape-laya-browser`) and crates.io (`ducktape-laya`, `ducktape-laya-sys`). C ABI 1, English Q8_0 model, Linux x86-64; the browser build is [experimental](docs/BROWSER.md).
-- **0.2.0 (main, unreleased):** C ABI 2 with a breaking API change ([migration](docs/COMPATIBILITY.md#migrating-from-010-abi-1-to-020-abi-2), [changelog](CHANGELOG.md)), new features (below), and the multilingual and typed-decisions models next to the English one. The Python, Go, Java and .NET bindings exist only here and are not published yet. All three models are held to the same qualification gates: agreement with the original Laya's recorded results and with upstream llama.cpp. 0.2.0 has not been qualified as a release yet.
+- **0.2.0 (2026-10-22):** C ABI 2 with a breaking API change ([migration](docs/COMPATIBILITY.md#migrating-from-010-abi-1-to-020-abi-2), [changelog](CHANGELOG.md)), new features (below), and the multilingual and typed-decisions models next to the English one, all held to the same gates: agreement with the original Laya's recorded results and with upstream llama.cpp. Published like 0.1.0 (GitHub Releases, npm, crates.io) for Linux x86-64. The Python wheel, the Java jars and the NuGet package are attested files on the GitHub release; they are not on PyPI, Maven Central or NuGet yet. Linux arm64, macOS and Windows build from a checkout (see the requirements below).
 
-This README and the guides in `docs/` describe main. Registry installs (`npm install`, `cargo add`) and the v0.1.0 tarball give 0.1.0 with the ABI 1 API; to use 0.2.0 now, build from a checkout.
+This README and the guides in `docs/` describe main, which is 0.2.0 until the next release.
 
 ## Features
 

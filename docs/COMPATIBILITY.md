@@ -1,6 +1,6 @@
 # Compatibility and release policy
 
-Version 0.1.0 (ABI 1, `libducktape_laya.so.0`) is released from tag `v0.1.0` (candidate `b375b04`). The `main` branch is 0.2.0, unreleased, with ABI 2 (`libducktape_laya.so.1`); [CHANGELOG.md](../CHANGELOG.md) lists the changes. A passing demo or a model-less test does not establish release readiness. Runtime/model combinations are identified by `release/compatibility.json`, immutable model manifests and applied patch hashes.
+Version 0.1.0 (ABI 1, `libducktape_laya.so.0`) is released from tag `v0.1.0` (candidate `b375b04`). Version 0.2.0 (ABI 2, `libducktape_laya.so.1`) is released from tag `v0.2.0`; [CHANGELOG.md](../CHANGELOG.md) lists the changes. A passing demo or a model-less test does not establish release readiness. Runtime/model combinations are identified by `release/compatibility.json`, immutable model manifests and applied patch hashes.
 
 The C ABI owns shared behavior. Additive functions/status codes keep the ABI version; changes to existing layouts, ownership or semantics require a new ABI and SONAME. Bindings follow package semantic versions, and released artifacts must be immutable. Before 1.0, a breaking change bumps the minor version (0.1.0 to 0.2.0) and comes with migration notes; after 1.0, the major version. Do not silently replace artifacts under an existing version.
 
