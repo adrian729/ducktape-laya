@@ -5,6 +5,7 @@ import re
 import json
 import pathlib
 import subprocess
+import sys
 import tomllib
 import tempfile
 
@@ -22,6 +23,9 @@ def source_files():
     names = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
     return {name: sha256(ROOT / name) if (ROOT / name).is_file() else None
             for name in sorted(filter(None, names)) if not (ROOT / name).is_dir()}
+
+# The shared library's file name in a build directory.
+LIBRARY = 'libducktape_laya.dylib' if sys.platform == 'darwin' else 'libducktape_laya.so'
 
 # Package platform names for the machine packaging runs on: (directory, wheel arch).
 PLATFORMS = {'x86_64': ('linux-x64', 'x86_64'), 'AMD64': ('linux-x64', 'x86_64'),
@@ -156,7 +160,7 @@ def require_uninstrumented_binary(path):
 def binary_info(build):
     """Inspect the built ABI without a model; detect stale/incompatible artifacts."""
     import ctypes
-    library = ctypes.CDLL(str(pathlib.Path(build).resolve() / 'libducktape_laya.so'))
+    library = ctypes.CDLL(str(pathlib.Path(build).resolve() / LIBRARY))
     library.dtl_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)]
     library.dtl_info.restype = ctypes.c_int32
     library.dtl_free.argtypes = [ctypes.c_void_p]
