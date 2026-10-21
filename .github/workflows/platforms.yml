@@ -148,9 +148,9 @@ jobs:
         shell: pwsh
         run: |
           python tests/original-reference.py $env:LAYA_MODEL --build-dir build --report build/original-reference.json
-          if ($LASTEXITCODE) { exit 1 }
+          $original = $LASTEXITCODE
           python tests/compare-native-reference.py $env:LAYA_MODEL --build build --report build/upstream-reference.json
-          if ($LASTEXITCODE) { exit 1 }
+          if ($LASTEXITCODE -or $original) { exit 1 }
       - name: Python
         shell: bash
         run: PYTHONPATH=bindings/python/src python -m unittest discover -s bindings/python/tests
