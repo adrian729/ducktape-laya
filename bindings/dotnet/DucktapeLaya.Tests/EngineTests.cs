@@ -18,6 +18,17 @@ public class EngineTests
     static string WithKey(string json, string key, string value) => "{" + $"\"{key}\":\"{value}\"," + json[1..];
 
     [Fact]
+    public void MissingExplicitLibraryDoesNotFallBack()
+    {
+        // The real library is loadable by name (DUCKTAPE_LAYA_LIB_DIR in the tests), yet an explicit
+        // path to a missing file must not resolve to it through the loader's search path.
+        var missing = Path.Combine(Path.GetTempPath(), "ducktape-laya-missing", Native.FileName);
+        Assert.Equal(IntPtr.Zero, Native.LoadExplicit(missing));
+        var real = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
+        if (!string.IsNullOrEmpty(real)) Assert.NotEqual(IntPtr.Zero, Native.LoadExplicit(Path.Combine(real, Native.FileName)));
+    }
+
+    [Fact]
     public void RejectsBadPath() => Assert.Throws<LayaException>(() => LayaEngine.Open("missing.gguf", Two));
 
     [Fact]

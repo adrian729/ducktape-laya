@@ -23,7 +23,7 @@ internal static unsafe partial class Native
 {
     const string Lib = "ducktape_laya";
     // libducktape_laya.so (soname .so.1) on Linux, libducktape_laya.dylib (install name .1.dylib) on macOS.
-    static readonly string FileName = OperatingSystem.IsMacOS() ? "libducktape_laya.dylib"
+    internal static readonly string FileName = OperatingSystem.IsMacOS() ? "libducktape_laya.dylib"
         : OperatingSystem.IsWindows() ? "ducktape_laya.dll" : "libducktape_laya.so";
     static readonly string VersionedName = OperatingSystem.IsMacOS() ? "libducktape_laya.1.dylib"
         : OperatingSystem.IsWindows() ? "ducktape_laya.dll" : "libducktape_laya.so.1";
@@ -69,6 +69,11 @@ internal static unsafe partial class Native
         return cancel;
     }
 
+    /// <summary>Loads exactly this file, or returns zero. A missing explicit path must fail:
+    /// macOS dyld would otherwise find a library of the same name on DYLD_LIBRARY_PATH.</summary>
+    internal static IntPtr LoadExplicit(string path) =>
+        System.IO.File.Exists(path) && NativeLibrary.TryLoad(path, out var handle) ? handle : IntPtr.Zero;
+
     static (IntPtr, IntPtr) Load()
     {
         var dir = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
@@ -83,9 +88,8 @@ internal static unsafe partial class Native
         LayaException? incompatible = null;
         foreach (var candidate in candidates)
         {
-            // A missing explicit path must fail; macOS dyld would otherwise search DYLD_LIBRARY_PATH.
-            var loaded = overridden ? System.IO.File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out var h) ? h : IntPtr.Zero
-                                    : NativeLibrary.TryLoad(candidate, assembly, null, out h) ? h : IntPtr.Zero;
+            var loaded = overridden ? LoadExplicit(candidate)
+                                    : NativeLibrary.TryLoad(candidate, assembly, null, out var h) ? h : IntPtr.Zero;
             if (loaded == IntPtr.Zero) continue;
             try { return (loaded, Validate(loaded)); }
             catch (LayaException ex)
