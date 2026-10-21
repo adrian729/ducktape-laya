@@ -20,7 +20,7 @@ C ABI 2 (`libducktape_laya.so.1`). Breaking before 1.0, hence the minor version.
 
 ### New features
 
-- **Windows x64 (in progress):** the library builds with clang-cl and passes the model-free native tests in CI; bindings and packages are not ported yet. Text files are checked out with LF everywhere (`.gitattributes`), so patch and source hashes match on Windows.
+- **Windows x64 (in progress):** the library builds with clang-cl; the model-free native tests and the Python, Rust, Java and .NET suites pass in CI (the loaders find `ducktape_laya.dll`, Rust links its import library). Node, Go, packages and real-model checks are not ported yet. Text files are checked out with LF everywhere (`.gitattributes`), so patch and source hashes match on Windows.
 - **macOS on Apple silicon** builds from a checkout and is tested in CI (macOS 15 arm64) with and without the real model; the library exports only `dtl_*`, uses an `@rpath` install name and checks dot product and FP16 at open. The Python, Java, .NET and Rust loaders find `libducktape_laya.dylib`. No macOS packages yet.
 - **Linux arm64** builds (Armv8.2-A with dot product and half precision, checked at open like AVX2 on x86-64) and is tested in CI with and without the real model. Packaging on arm64 produces linux-arm64 packages (tarball, npm, wheel, jar, NuGet), and the Node, Python, Java and .NET loaders pick the library for their architecture; releases publish x86-64 packages only until arm64 is release-qualified.
 
