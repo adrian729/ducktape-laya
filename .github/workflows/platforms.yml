@@ -97,7 +97,7 @@ jobs:
           retention-days: 14
 
   windows:
-    name: Windows x64 / native build and model-free tests
+    name: Windows x64 / ${{ inputs.real_model && 'real model' || 'model free' }}
     runs-on: windows-2025
     timeout-minutes: 60
     env:
@@ -120,16 +120,35 @@ jobs:
         run: |
           rustup toolchain install 1.98.0 --profile minimal
           rustup override set 1.98.0
-      - name: Build and run the model-free native tests with clang-cl
+      - name: Download and verify explicitly requested test model
+        if: inputs.real_model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build-model | Out-Null
+          python -c "import json, pathlib, urllib.request; m = json.loads(pathlib.Path('models/manifest.json').read_text()); urllib.request.urlretrieve(m['url'], 'build-model/laya.gguf')"
+          python scripts/verify-model.py build-model/laya.gguf
+          if ($LASTEXITCODE) { exit 1 }
+          "LAYA_MODEL=$((Resolve-Path build-model/laya.gguf).Path.Replace('\', '/'))" >> $env:GITHUB_ENV
+      - name: Build and run the native tests with clang-cl
         shell: cmd
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
           rem Strawberry Perl's patch.exe comes first on PATH and crashes; use the one from Git for Windows.
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
+          set "EXTRA="
+          if defined LAYA_MODEL set "EXTRA=-DDUCKTAPE_TEST_MODEL=%LAYA_MODEL% -DDUCKTAPE_BUILD_REFERENCE_PROBE=ON"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" %EXTRA% || exit /b 1
           cmake --build build --parallel 3 || exit /b 1
           ctest --test-dir build --output-on-failure || exit /b 1
+      - name: Agreement with the original Laya and with llama.cpp
+        if: inputs.real_model
+        shell: pwsh
+        run: |
+          python tests/original-reference.py $env:LAYA_MODEL --build-dir build --report build/original-reference.json
+          if ($LASTEXITCODE) { exit 1 }
+          python tests/compare-native-reference.py $env:LAYA_MODEL --build build --report build/upstream-reference.json
+          if ($LASTEXITCODE) { exit 1 }
       - name: Python
         shell: bash
         run: PYTHONPATH=bindings/python/src python -m unittest discover -s bindings/python/tests
@@ -153,3 +172,14 @@ jobs:
       - name: .NET
         shell: bash
         run: dotnet test bindings/dotnet/DucktapeLaya.slnx -m:1
+      - name: Retain reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-x64-${{ inputs.real_model && 'real-model' || 'model-free' }}
+          path: |
+            build/original-reference.json
+            build/upstream-reference.json
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 14
