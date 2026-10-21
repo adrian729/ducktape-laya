@@ -10,13 +10,28 @@ import subprocess
 import re
 import tempfile
 from release_support import ROOT, check_record, sha256, git, binary_info, source_identity, native_build_identity, require_runtime_identity, require_uninstrumented_binary
-from artifact_support import archive_tree
+from artifact_support import write_zip, archive_tree
+import java_package
 import python_wheel
 
 p = argparse.ArgumentParser()
 p.add_argument('--build', type=pathlib.Path, default=ROOT / 'build')
 p.add_argument('--output', type=pathlib.Path, required=True)
 a = p.parse_args()
+def normalize_nupkg(source, destination, epoch):
+    """Rewrite a nupkg deterministically: NuGet stamps entries with the pack time and
+    gives relationships random IDs. Entry order and contents are otherwise kept."""
+    import hashlib
+    import zipfile
+    with zipfile.ZipFile(source) as archive:
+        names = archive.namelist()
+        files = {name: (archive.read(name), False) for name in names}
+    rels = files['_rels/.rels'][0].decode()
+    rels = re.sub(r'Target="([^"]+)" Id="[^"]+"',
+                  lambda m: f'Target="{m[1]}" Id="R{hashlib.sha256(m[1].encode()).hexdigest()[:16].upper()}"', rels)
+    files['_rels/.rels'] = (rels.encode(), False)
+    write_zip(destination, files, epoch, names)
+
 record = check_record()
 version = record['package_version']
 epoch = int(os.environ.get('SOURCE_DATE_EPOCH', git(ROOT, 'show', '-s', '--format=%ct', 'HEAD')))
@@ -75,6 +90,14 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True)
         shutil.copy(ROOT / f'bindings/rust/target/package/{name}-{version}.crate', out)
     python_wheel.build(out, version, installed_libdir / 'libducktape_laya.so', epoch)
+    java_package.build(out, version, installed_libdir / 'libducktape_laya.so', epoch)
+    # NuGet: the library at runtimes/linux-x64/native/, packed from source like the crates.
+    nuget = directory / 'nuget'
+    subprocess.run(['dotnet', 'pack', str(ROOT / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj'), '-c', 'Release', '-m:1',
+                    '-o', str(nuget), f'-p:DucktapeLayaNativeLibrary={installed_libdir / "libducktape_laya.so"}',
+                    '-p:ContinuousIntegrationBuild=true', '--nologo'],
+                   cwd=ROOT, env=dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1'), check=True, capture_output=True)
+    normalize_nupkg(nuget / f'DucktapeLaya.{version}.nupkg', out / f'DucktapeLaya.{version}.nupkg', epoch)
     cache = {}
     for line in (build / 'CMakeCache.txt').read_text().splitlines():
         match = re.match(r'([^:#]+):[^=]+=(.*)', line)

@@ -32,5 +32,6 @@
       "general.license.link": "https://www.apache.org/licenses/LICENSE-2.0"
     }
   },
-  "original_reference_cases": "tests/original-reference/typed-decisions"
+  "original_reference_cases": "tests/original-reference/typed-decisions",
+  "performance_budgets": "release/budgets/native-performance-laya-typed-decisions-q8_0.json"
 }

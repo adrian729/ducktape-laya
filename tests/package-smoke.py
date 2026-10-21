@@ -2,7 +2,8 @@
 """Load each local package outside the checkout without a model.
 
 The native tarball links and runs a C program, the npm package loads its addon,
-and the wheel imports its bundled library; each must report the record's ABI.
+and the wheel and the Maven jar load their bundled library; each must report the
+record's ABI.
 tests/installed-packages.py runs the real-model checks."""
 import argparse
 import json
@@ -49,6 +50,14 @@ with tempfile.TemporaryDirectory(prefix='ducktape-smoke-') as directory:
     subprocess.run([str(venv / 'bin/pip'), 'install', '--quiet', '--no-index', str(wheel)], check=True)
     reported['wheel'] = subprocess.check_output([str(venv / 'bin/python'), '-c', 'import ducktape_laya; print(ducktape_laya.runtime_info()["abi_version"], end="")'],
                                                 cwd=directory, env=env, text=True)
+    # The Maven jar extracts its bundled library when no library is configured.
+    probe = directory / 'Probe.java'
+    probe.write_text('public class Probe { public static void main(String[] a) {\n'
+                     '  String info = io.github.adrian729.laya.Laya.runtimeInfo();\n'
+                     '  System.out.print(info.replaceAll("(?s).*.abi_version.:[ ]*([0-9]+).*", "$1")); } }\n')
+    reported['jar'] = subprocess.check_output(['java', '--enable-native-access=ALL-UNNAMED', '-cp',
+                                               str(artifacts / f'ducktape-laya-{version}.jar'), str(probe)],
+                                              cwd=directory, env=env, text=True)
 bad = {name: value for name, value in reported.items() if value != str(abi)}
 if bad:
     raise SystemExit(f'Packages report the wrong ABI (expected {abi}): {bad}')

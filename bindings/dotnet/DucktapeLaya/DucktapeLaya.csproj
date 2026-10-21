@@ -11,7 +11,21 @@
     <IsAotCompatible>true</IsAotCompatible>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Description>Linux native Laya GGUF decisions backed by libducktape_laya.so.</Description>
+    <Authors>adrian729</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/adrian729/ducktape-laya</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/adrian729/ducktape-laya</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>laya;gguf;llama.cpp;classification;decisions</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Deterministic>true</Deterministic>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="" Visible="false" />
+    <None Include="../../../THIRD_PARTY_NOTICES.md" Pack="true" PackagePath="" Visible="false" />
+    <None Include="../../../LICENSE" Pack="true" PackagePath="" Visible="false" />
+    <None Include="../../../licenses/*" Pack="true" PackagePath="licenses/" Visible="false" />
+  </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="DucktapeLaya.Tests" />
   </ItemGroup>

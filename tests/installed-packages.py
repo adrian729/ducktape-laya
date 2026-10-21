@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
 import re
 import subprocess
 import tarfile
@@ -75,4 +76,40 @@ ducktape-laya-sys = {{ path = "{sys_crate}" }}
     python = json.loads(subprocess.check_output([str(venv / 'bin/python'), str(root / 'tests/consumers/python/consumer.py'), str(model)],
                                                 cwd=app, env=env, input=request))
     assert python == rust
-print('Installed npm, Rust crate and Python wheel consumers: exact real-model agreement, no repository paths or inference server')
+    # The Maven jar bundles the library as well.
+    jar = artifacts / f'ducktape-laya-{version}.jar'
+    java = json.loads(subprocess.check_output(['java', '--enable-native-access=ALL-UNNAMED', '-cp', str(jar),
+                                               str(root / 'tests/consumers/java/Consumer.java'), str(model)],
+                                              cwd=app, env=env, input=request))
+    assert java == rust
+    # The NuGet package, restored from a local feed holding only the candidate package.
+    dotnet = directory / 'dotnet'
+    dotnet.mkdir()
+    shutil.copy(root / 'tests/consumers/dotnet/Program.cs', dotnet / 'Program.cs')
+    (dotnet / 'Consumer.csproj').write_text(f'''<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+  <ItemGroup><PackageReference Include="DucktapeLaya" Version="{version}" /></ItemGroup>
+</Project>
+''')
+    feed = directory / 'feed'
+    feed.mkdir()
+    shutil.copy(artifacts / f'DucktapeLaya.{version}.nupkg', feed)
+    (dotnet / 'nuget.config').write_text(f'''<configuration><packageSources><clear /><add key="local" value="{feed}" /></packageSources></configuration>''')
+    dotnet_env = dict(env, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1', NUGET_PACKAGES=str(directory / 'nuget-packages'))
+    subprocess.run(['dotnet', 'build', '-c', 'Release', '-o', str(dotnet / 'out'), '-m:1'], cwd=dotnet, env=dotnet_env,
+                   check=True, capture_output=True)
+    net = json.loads(subprocess.check_output(['dotnet', str(dotnet / 'out/Consumer.dll'), str(model)], cwd=app, env=dotnet_env, input=request))
+    assert net == rust
+    # Go is distributed as source: the module outside the checkout, linked against the tarball.
+    go = directory / 'go'
+    shutil.copytree(root / 'bindings/go', go / 'binding')
+    shutil.copytree(root / 'tests/consumers/go', go / 'consumer')
+    module = (go / 'consumer/go.mod').read_text()
+    (go / 'consumer/go.mod').write_text(module.replace('../../../bindings/go', '../binding'))
+    go_env = dict(env, GOTOOLCHAIN='local', GOFLAGS='-mod=mod', CGO_CFLAGS=f'-I{native / "include"}', CGO_LDFLAGS=f'-L{libdir}')
+    subprocess.run(['go', 'build', '-o', str(go / 'consumer-bin'), '.'], cwd=go / 'consumer', env=go_env, check=True, capture_output=True)
+    golang = json.loads(subprocess.check_output([str(go / 'consumer-bin'), str(model)], cwd=app,
+                                                env=dict(env, LD_LIBRARY_PATH=str(libdir)), input=request))
+    assert golang == rust
+print('Installed npm, Rust crate, Python wheel, Maven jar, NuGet and Go consumers: exact real-model agreement, '
+      'no repository paths or inference server')

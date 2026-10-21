@@ -53,6 +53,11 @@ def check_record(root=ROOT):
         info = tomllib.loads((root / 'bindings/rust' / package / 'Cargo.toml').read_text())
         if info['package']['version'] != version:
             raise ValueError(f'Rust package version mismatch: {package}')
+    msrv = read_json(root / 'release/qualification.json')['platforms']['native']['rust_msrv']
+    for package in ['ducktape-laya', 'ducktape-laya-sys']:
+        declared = tomllib.loads((root / 'bindings/rust' / package / 'Cargo.toml').read_text())['package'].get('rust-version')
+        if not declared or not msrv.startswith(declared):
+            raise ValueError(f'Rust rust-version {declared} does not match the qualified MSRV {msrv}: {package}')
     safe = tomllib.loads((root / 'bindings/rust/ducktape-laya/Cargo.toml').read_text())
     if safe['dependencies']['ducktape-laya-sys']['version'] != version:
         raise ValueError('Rust ducktape-laya-sys dependency version mismatch')
@@ -83,6 +88,8 @@ def check_record(root=ROOT):
         model = read_json(root / name)
         if model['conversion']['llama_cpp_commit'] != expected:
             raise ValueError(f'Model converter runtime mismatch: {name}')
+        if not model.get('performance_budgets', '').startswith('release/budgets/'):
+            raise ValueError(f'Model performance budgets not declared: {name}')
         if len(model['sha256']) != 64 or len(model['source']['revision']) != 40:
             raise ValueError(f'Model must identify immutable artifact: {name}')
     return record

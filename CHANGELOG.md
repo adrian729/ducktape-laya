@@ -62,6 +62,7 @@ Changes to behavior that 0.1.0 already had:
 
 - New `original_reference` gate: the original Laya's recorded results, at each checkpoint's trained length.
 - `validate.py --extra-model` qualifies the additional models against the original and upstream references; `check-candidate.py` requires them.
+- Release packages also include the Java jar (library bundled) with sources and javadoc jars and a POM, and the NuGet package (library bundled); both are byte-reproducible and tested installed, as is a Go consumer built against the tarball. The new models have their own performance budgets.
 - `validate.py --packages` works without a model (`tests/package-smoke.py`), and CI runs it. `validate.py` records the Rust, Go, Java, .NET and Python versions, runs `tests/download-model.py`, and with a model requires the `cpu-guard` test.
 - The rollback rehearsal handles an ABI break by building each side's consumer from its own source commit.
 - `scripts/release-assets.py`: `assemble` builds the GitHub release asset set (renamed inventories and SBOMs, `gates.json`, `SHA256SUMS`) from the qualified package directories; `retain` turns downloaded release assets into the last-known-good package directory for `tests/rollback.py`.

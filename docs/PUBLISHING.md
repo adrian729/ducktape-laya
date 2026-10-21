@@ -11,9 +11,9 @@ Where each package is published, and what is still missing. Publication follows 
 | `ducktape-laya-browser` | npm | Published | Same process |
 | `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Same process |
 | `ducktape-laya` (Python wheel) | PyPI | — | Wheel is built and tested; PyPI setup missing |
-| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | No account needed; publishing is a tag. Release-tarball consumer test missing |
-| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Packaging and Central setup missing |
-| `DucktapeLaya` (.NET) | NuGet | — | Packaging and NuGet setup missing |
+| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | No account needed; publishing is a tag. Tested against the release tarball |
+| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Jar (with the library), sources and javadoc jars and POM are built and tested; signing and Central setup missing |
+| `DucktapeLaya` (.NET) | NuGet | — | Package (with the library) is built and tested; NuGet setup missing |
 
 All names above were unclaimed on 2026-10-19.
 
@@ -24,18 +24,15 @@ These are code changes; they need no accounts.
 - Versions are already 0.2.0 in `release/compatibility.json` and every binding manifest. For later releases, bump them together: `check_record` rejects any mismatch, including the Python, Java and .NET versions.
 - Write the release notes: move the `0.2.0 (unreleased)` section of [CHANGELOG.md](../CHANGELOG.md) under the release version and date, and use it for the GitHub release text.
 - Python: the real wheel comes only from `scripts/python_wheel.py` (run by `scripts/package-linux.py`), which bundles the native library. Building `bindings/python` with its `pyproject.toml` alone (`pip wheel`, `python -m build`) produces a wheel without the library; never upload that.
-- Java: build the release jar in `scripts/package-linux.py` with the native
-  library at `native/linux-x64/libducktape_laya.so` (the loader already looks
-  there). Maven Central also requires a sources jar, a javadoc jar, and `pom.xml`
-  metadata: `url`, `licenses`, `developers` and `scm`. Add the jar to
-  `tests/installed-packages.py`.
-- .NET: build the `.nupkg` in `scripts/package-linux.py` with `dotnet pack -p:DucktapeLayaNativeLibrary=...`, which places the library at `runtimes/linux-x64/native/`. Without that property, `dotnet pack` succeeds but the package has no native library. Add a consumer that installs it from a local
-  feed to `tests/installed-packages.py`. Add NuGet metadata: license expression,
-  project URL, readme and description.
-- Go: add a consumer test that builds against the release tarball's `include`
-  and `lib` directories, not the checkout. Publishing itself needs only the tag
-  (below); this test is what should come first.
-- Set `rust-version` in the crates; 0.1.0 declares none and was tested with 1.98.
+- Java and .NET: `scripts/package-linux.py` builds `ducktape-laya-VERSION.jar`
+  (library at `native/linux-x64/`), the sources and javadoc jars and the POM
+  (`scripts/java_package.py`), and `DucktapeLaya.VERSION.nupkg` (library at
+  `runtimes/linux-x64/native/`), all byte-reproducible.
+  `tests/installed-packages.py` runs both, and a Go consumer built against the
+  tarball, outside the checkout. A plain `dotnet pack` without
+  `-p:DucktapeLayaNativeLibrary=...` produces a package without the library;
+  never upload that. Maven Central requires the four Java files to be
+  GPG-signed at upload.
 
 ## One-time maintainer setup
 
