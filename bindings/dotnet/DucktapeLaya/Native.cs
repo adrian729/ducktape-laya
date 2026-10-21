@@ -23,8 +23,10 @@ internal static unsafe partial class Native
 {
     const string Lib = "ducktape_laya";
     // libducktape_laya.so (soname .so.1) on Linux, libducktape_laya.dylib (install name .1.dylib) on macOS.
-    static readonly string FileName = OperatingSystem.IsMacOS() ? "libducktape_laya.dylib" : "libducktape_laya.so";
-    static readonly string VersionedName = OperatingSystem.IsMacOS() ? "libducktape_laya.1.dylib" : "libducktape_laya.so.1";
+    static readonly string FileName = OperatingSystem.IsMacOS() ? "libducktape_laya.dylib"
+        : OperatingSystem.IsWindows() ? "ducktape_laya.dll" : "libducktape_laya.so";
+    static readonly string VersionedName = OperatingSystem.IsMacOS() ? "libducktape_laya.1.dylib"
+        : OperatingSystem.IsWindows() ? "ducktape_laya.dll" : "libducktape_laya.so.1";
 
     static readonly object Gate = new();
     static bool _resolverSet, _ready;

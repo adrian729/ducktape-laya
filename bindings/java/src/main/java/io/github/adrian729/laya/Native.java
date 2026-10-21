@@ -97,7 +97,7 @@ final class Native {
         Path bundled = extractBundled(bundled(arch));
         if (bundled != null) return open(bundled, global);
         RuntimeException last = null;
-        String versioned = LIB.endsWith(".dylib") ? "libducktape_laya.1.dylib" : LIB + ".1";
+        String versioned = LIB.endsWith(".dylib") ? "libducktape_laya.1.dylib" : LIB.endsWith(".dll") ? LIB : LIB + ".1";
         for (String name : new String[] {versioned, LIB}) {
             try {
                 return SymbolLookup.libraryLookup(name, global);

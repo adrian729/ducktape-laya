@@ -19,6 +19,7 @@ class CallOptions(ctypes.Structure):
 
 # libducktape_laya.so (soname .so.1) on Linux, .dylib (install name .1.dylib) on macOS.
 _NAME, _VERSIONED = (('libducktape_laya.dylib', 'libducktape_laya.1.dylib') if sys.platform == 'darwin'
+                     else ('ducktape_laya.dll', 'ducktape_laya.dll') if sys.platform == 'win32'
                      else ('libducktape_laya.so', 'libducktape_laya.so.1'))
 
 
