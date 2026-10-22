@@ -53,7 +53,7 @@ Native packages (C/C++, Rust, Node.js, Electron) need:
   macOS 15 arm64, with and without the real model (agreement with llama.cpp and
   the original Laya, every binding suite). Build it from a checkout and point
   the bindings at `libducktape_laya.dylib` with `DUCKTAPE_LAYA_LIB_DIR`. CI
-  builds and tests macOS packages (macOS 13+), but none are released yet. Intel
+  builds and tests macOS packages (macOS 14+), but none are released yet. Intel
   Macs are not supported.
 - **Memory:** about 0.5 GB per open engine with the English model and the default 512-token context (measured natively: 475 MiB after opening, 600 MiB while deciding). Plan for 1 GB per engine. Other models and longer contexts need more; see [other checkpoints](#other-laya-checkpoints).
 - **Disk:** 449 MB for the English model, plus 15 MB for the library or npm package.

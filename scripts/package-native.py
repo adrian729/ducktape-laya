@@ -141,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         toolchain['required_runtime_symbol_versions'] = requirements
     elif target.os == 'darwin':
         info = {name: macho_info(build / name) for name in [target.library, 'ducktape_laya.node']}
-        # The wheel tag (macosx_13_0) promises the deployment target the library was linked for.
+        # The wheel tag (macosx_14_0) promises the deployment target the library was linked for.
         wheel_macos = tuple(map(int, re.search(r'macosx_(\d+)_(\d+)', target.wheel).groups()))
         for name, item in info.items():
             if not item['minimum_os'] or tuple(map(int, item['minimum_os'].split('.'))) > wheel_macos:

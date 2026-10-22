@@ -363,6 +363,7 @@ jobs:
           path: |
             ${{ runner.temp }}/repro/report.json
             ${{ runner.temp }}/repro/*.log
+            ${{ runner.temp }}/repro/*/install/bin/ducktape_laya.dll
           if-no-files-found: ignore
           retention-days: 14
 

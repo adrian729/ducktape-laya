@@ -61,6 +61,15 @@ def pom(version):
     return text
 
 
+# javadoc writes text with the platform's line separator; every platform's javadoc jar must be the same.
+TEXT = {'.html', '.css', '.js', '.svg', '.txt', '.md', ''}
+
+
+def lf(path):
+    data = path.read_bytes()
+    return data.replace(b'\r\n', b'\n') if path.suffix in TEXT else data
+
+
 # The manifest must lead the jar for JarInputStream.
 LEAD = ('META-INF/MANIFEST.MF',)
 
@@ -93,6 +102,6 @@ def build(out, version, library, epoch, target):
                   {**{path.relative_to(source).as_posix(): (path.read_bytes(), False) for path in sources}, **legal,
                    lead[0]: (manifest, False)}, epoch, lead)
         write_zip(out / f'{ARTIFACT}-{version}-javadoc.jar',
-                  {**{path.relative_to(docs).as_posix(): (path.read_bytes(), False) for path in sorted(docs.rglob('*')) if path.is_file()},
+                  {**{path.relative_to(docs).as_posix(): (lf(path), False) for path in sorted(docs.rglob('*')) if path.is_file()},
                    lead[0]: (manifest, False)}, epoch, lead)
     (out / f'{ARTIFACT}-{version}.pom').write_text(pom(version), encoding='utf-8')

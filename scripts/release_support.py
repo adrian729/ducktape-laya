@@ -44,7 +44,7 @@ TARGETS = [Target(t) for t in [
      'wheel': 'manylinux_2_38_aarch64', 'nuget': 'linux-arm64', 'library': 'libducktape_laya.so',
      'node_libraries': ['libducktape_laya.so', 'libducktape_laya.so.1'], 'archive': '.tar.gz'},
     {'name': 'macos-arm64', 'os': 'darwin', 'machines': ('arm64',), 'npm': 'darwin-arm64',
-     'wheel': 'macosx_13_0_arm64', 'nuget': 'osx-arm64', 'library': 'libducktape_laya.dylib',
+     'wheel': 'macosx_14_0_arm64', 'nuget': 'osx-arm64', 'library': 'libducktape_laya.dylib',
      'node_libraries': ['libducktape_laya.1.dylib'], 'archive': '.tar.gz'},
     {'name': 'windows-x64', 'os': 'win32', 'machines': ('AMD64', 'x86_64'), 'npm': 'win32-x64',
      'wheel': 'win_amd64', 'nuget': 'win-x64', 'library': 'ducktape_laya.dll',

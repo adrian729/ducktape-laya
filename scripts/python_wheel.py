@@ -10,7 +10,7 @@ CLASSIFIERS = {'linux': 'Operating System :: POSIX :: Linux', 'darwin': 'Operati
 
 
 def tag(target):
-    """The wheel tag: manylinux_2_38 (the library's glibc floor), macosx_13_0 or win_amd64."""
+    """The wheel tag: manylinux_2_38 (the library's glibc floor), macosx_14_0 or win_amd64."""
     return f'py3-none-{target.wheel}'
 
 

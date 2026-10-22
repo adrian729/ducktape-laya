@@ -117,7 +117,7 @@ The output holds that platform's packages, each installable on its own:
 | `ducktape-laya-VERSION-PLATFORM.tar.gz` (`.zip` on Windows) | The `cmake --install` tree: headers, the shared library (on Windows `bin/ducktape_laya.dll` and the import library `lib/ducktape_laya.lib`), CMake config, pkg-config file, the Node addon, model manifest, `download-model.py`, licences |
 | `ducktape-laya-VERSION.tgz` | npm package with this platform's addon and library in `native/<platform>-<arch>/` (`linux-x64`, `linux-arm64`, `darwin-arm64`, `win32-x64`); `os` and `cpu` name this platform |
 | `ducktape-laya-sys-VERSION.crate`, `ducktape-laya-VERSION.crate` | Rust source crates (the same on every platform) |
-| `ducktape_laya-VERSION-py3-none-TAG.whl` | Python wheel bundling the library in `ducktape_laya/_native/`; `TAG` is `manylinux_2_38_x86_64`, `manylinux_2_38_aarch64`, `macosx_13_0_arm64` or `win_amd64`. The Python files are the same in every wheel |
+| `ducktape_laya-VERSION-py3-none-TAG.whl` | Python wheel bundling the library in `ducktape_laya/_native/`; `TAG` is `manylinux_2_38_x86_64`, `manylinux_2_38_aarch64`, `macosx_14_0_arm64` or `win_amd64`. The Python files are the same in every wheel |
 | `ducktape-laya-VERSION.jar`, `-sources.jar`, `-javadoc.jar`, `.pom` | Maven files; the jar bundles the library at `native/<platform>/` (`native/windows-x64/ducktape_laya.dll`, ...) |
 | `DucktapeLaya.VERSION.nupkg` | NuGet package with the library at `runtimes/<rid>/native/` (`linux-x64`, `linux-arm64`, `osx-arm64`, `win-x64`) |
 | `sbom.cdx.json`, `inventory.json` | CycloneDX inventory; SHA-256 checksums, source/runtime identity, build identities, toolchain, and `payload`: every native file inside the npm, jar, NuGet and wheel packages with its SHA-256 |
@@ -125,7 +125,7 @@ The output holds that platform's packages, each installable on its own:
 Existing output directories are rejected. No script publishes anything or
 downloads a model. The packager checks each binary before it ships it: on Linux
 the GLIBC/GLIBCXX symbol versions against the wheel tag and declared floors, on
-macOS the deployment target (13.0, the wheel tag), on Windows that the DLL
+macOS the deployment target (14.0, the wheel tag), on Windows that the DLL
 exports exactly the `dtl_*` functions and imports no sanitizer or debug runtime.
 The inventory records those requirements (`required_runtime_symbol_versions`,
 `minimum_macos`, `linked_libraries`).

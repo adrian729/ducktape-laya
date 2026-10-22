@@ -2,8 +2,9 @@ cmake_minimum_required(VERSION 3.22)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/release/compatibility.json" DTL_RELEASE_RECORD)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/release/compatibility.json")
 string(JSON DTL_VERSION GET "${DTL_RELEASE_RECORD}" package_version)
-# The macOS packages promise macOS 13 (wheel tag macosx_13_0); scripts/package-native.py checks the binaries.
-set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
+# The macOS packages promise macOS 14 (wheel tag macosx_14_0; floating-point std::to_chars needs
+# macOS 13.3, and wheel tags name only major versions); scripts/package-native.py checks the binaries.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version")
 project(ducktape_laya VERSION ${DTL_VERSION} LANGUAGES C CXX)
 include(cmake/source_identity.cmake)
 set(CMAKE_CXX_STANDARD 17)
