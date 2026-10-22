@@ -52,8 +52,13 @@ target_link_libraries(cpp PRIVATE ducktape::laya)
     if target.os == 'win32' and not (shutil.which('pkg-config') and shutil.which(compiler)):
         print('pkg-config consumer: skipped, pkg-config or MinGW-w64 gcc is not installed on this Windows machine')
     else:
-        pc_env = dict(env, PKG_CONFIG_PATH=str(pc[0].parent))
-        flags = subprocess.check_output([tool('pkg-config'), '--cflags', '--libs', 'ducktape-laya'], env=pc_env, text=True)
+        # Keep every flag: some pkg-config implementations drop directories they take for system ones.
+        pc_env = dict(env, PKG_CONFIG_PATH=str(pc[0].parent), PKG_CONFIG_ALLOW_SYSTEM_CFLAGS='1', PKG_CONFIG_ALLOW_SYSTEM_LIBS='1')
+        flags = ' '.join(subprocess.check_output([tool('pkg-config'), option, 'ducktape-laya'], env=pc_env, text=True).strip()
+                         for option in ('--cflags', '--libs'))
+        print(f'pkg-config consumer: {tool("pkg-config")} gives {flags}')
+        if '-I' not in flags:
+            raise SystemExit(f'{tool("pkg-config")} gave no include directory: {flags}')
         program = tmp / ('pc-consumer' + ('.exe' if target.os == 'win32' else ''))
         subprocess.run([tool(compiler), str(tmp / 'c.c'), *shlex.split(flags, posix=target.os != 'win32'), '-o', str(program)], check=True)
         run_env = with_library_path(env, library_directory(prefix, target), target)
