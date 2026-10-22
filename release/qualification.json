@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "status": "qualification_target",
-  "scope": "linux-x86_64-native-and-browser",
+  "scope": "release-targets-and-linux-browser",
   "platforms": {
     "native": {
       "architecture": "x86_64",
@@ -47,10 +47,31 @@
       ],
       "default_launch_flags_required": true,
       "isolated_and_nonisolated_pages": true
+    },
+    "targets": {
+      "linux-arm64": {
+        "runner": "ubuntu-24.04-arm",
+        "node_versions": [
+          "24.21.0"
+        ],
+        "electron_versions": [
+          "44.7.2"
+        ]
+      },
+      "windows-x64": {
+        "runner": "windows-2025",
+        "node_versions": [
+          "24.21.0"
+        ],
+        "electron_versions": [
+          "44.7.2"
+        ]
+      }
     }
   },
   "budgets": {
     "routine_stress_seconds": 3600,
+    "short_stress_seconds": 600,
     "candidate_soak_seconds": 28800,
     "fuzz_seconds_per_target": 3600,
     "baseline_runs": 3,
@@ -280,6 +301,122 @@
         "tests/compare-browser.py"
       ],
       "acceptance": "Identified native/WASM/WebGPU profiles preserve ordered result structures and metadata. Report finite numeric drift and changed decisions on identical model bytes and fixtures; no cross-profile equivalence promise. Each backend must separately pass strict upstream agreement."
+    }
+  },
+  "target_gates": {
+    "native_contracts": {
+      "implementation": [
+        "src/laya.cpp",
+        "src/backend_llama.cpp"
+      ],
+      "checks": [
+        "tests/native.cpp",
+        "tests/features.cpp",
+        "tests/control.cpp",
+        "tests/decision.cpp",
+        "scripts/validate.py"
+      ],
+      "acceptance": "Every registered model-free and real-model native test passes on the target's CI runner (scripts/validate.py). Fault injection (real-faults, real-c-faults) is registered on Linux only and the QEMU CPU guard on Linux x86-64 only; the report records them as skipped with that reason."
+    },
+    "binding_conformance": {
+      "implementation": [
+        "include/ducktape_laya.hpp",
+        "bindings/rust",
+        "bindings/node",
+        "bindings/python",
+        "bindings/go",
+        "bindings/java",
+        "bindings/dotnet"
+      ],
+      "checks": [
+        "tests/parity.py",
+        "tests/consumers"
+      ],
+      "acceptance": "As for tier 1, on the target: exact ordered outputs across all eight consumers of the same native binary; every binding suite passes."
+    },
+    "upstream_reference": {
+      "implementation": [
+        "src/backend_llama.cpp"
+      ],
+      "checks": [
+        "tests/upstream-reference.cpp",
+        "tests/compare-native-reference.py"
+      ],
+      "acceptance": "Same-model upstream agreement on the target within the declared tolerance, for the models the target lists (the primary English model)."
+    },
+    "original_reference": {
+      "implementation": [
+        "src/backend_llama.cpp",
+        "src/python_json.hpp",
+        "src/decision.hpp",
+        "src/language.cpp"
+      ],
+      "checks": [
+        "tests/original-reference.py",
+        "tests/original-reference"
+      ],
+      "acceptance": "As for tier 1, on the target; only the deviations the target lists under known_deviations may exceed 0.05, each within its own cap."
+    },
+    "abi": {
+      "implementation": [
+        "include/ducktape_laya.h"
+      ],
+      "checks": [
+        "scripts/check-abi.py",
+        "tests/abi-layout.py"
+      ],
+      "acceptance": "The library exports exactly the header's dtl_* functions (ELF dynamic symbols or PE export table) and the layouts match ABI 2."
+    },
+    "installed_packages": {
+      "implementation": [
+        "scripts/package-native.py",
+        "scripts/assemble-packages.py"
+      ],
+      "checks": [
+        "tests/installed-packages.py",
+        "tests/electron/run.cjs"
+      ],
+      "acceptance": "The target's own packages (scripts/validate.py --packages) and the assembled multi-platform release packages install and agree exactly outside the checkout on the target's runner; where the target lists electron, the released npm package works in Electron as a directory and from ASAR."
+    },
+    "artifact_integrity": {
+      "implementation": [
+        "scripts/package-native.py",
+        "scripts/assemble-packages.py"
+      ],
+      "checks": [
+        "tests/packaging-identity.py",
+        "tests/package-assembly.py",
+        "scripts/check-candidate.py"
+      ],
+      "acceptance": "The target's fragment was packaged from the candidate with the validated library and Node addon, and the release packages carry exactly that fragment's native files."
+    },
+    "reproducibility": {
+      "implementation": [
+        "scripts/check-reproducibility.py"
+      ],
+      "checks": [
+        "scripts/check-reproducibility.py"
+      ],
+      "acceptance": "Two independent builds of one source snapshot on the target's runner install identical files, and they contain the validated library."
+    },
+    "short_stress": {
+      "implementation": [
+        "src/execution.hpp"
+      ],
+      "checks": [
+        "tests/stress.cpp",
+        "scripts/check-stress.py"
+      ],
+      "acceptance": "A stress run of at least budgets.short_stress_seconds on the validated library, with the tier-1 resource limits (thread and descriptor or handle counts back to baseline, closed memory within +128 MiB, late growth within 32 MiB)."
+    },
+    "cross_profile_drift": {
+      "implementation": [
+        "src/backend_llama.cpp"
+      ],
+      "checks": [
+        "tests/compare-profiles.py"
+      ],
+      "acceptance": "Fixture outputs on the target compared with the tier-1 profile's: identical structure and metadata, numeric drift reported, and no changed decision."
     }
   },
   "publication_gates": [

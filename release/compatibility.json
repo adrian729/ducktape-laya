@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "package_version": "0.2.0",
   "abi_version": 2,
   "runtime": {
@@ -42,7 +42,6 @@
     "models/laya-typed-decisions.json"
   ],
   "adapter": "src/backend_llama.cpp",
-  "tested_backend": "linux-x86_64-cpu-avx2",
   "candidate_absolute_tolerance": 1e-06,
   "required_release_gates": [
     "native_contracts",
@@ -63,5 +62,158 @@
     "performance",
     "security_review",
     "upgrade_rollback"
+  ],
+  "targets": [
+    {
+      "platform": "linux-x64",
+      "tier": 1,
+      "os": "linux",
+      "architecture": "x86_64",
+      "cpu_baseline": {
+        "isa": "x86-64 with AVX2, FMA, F16C and BMI2",
+        "required_cpu_features": [
+          "avx",
+          "avx2",
+          "fma",
+          "f16c",
+          "bmi2",
+          "sse4.2"
+        ]
+      },
+      "numerical_profile": {
+        "runtime_id": "native-cpu:avx+avx2+fma+f16c+bmi2+sse4.2",
+        "compiler": "gcc",
+        "math_library": "glibc"
+      },
+      "models": [
+        "models/manifest.json",
+        "models/laya-multilingual.json",
+        "models/laya-typed-decisions.json"
+      ],
+      "build": {
+        "qualified_on": "release host",
+        "built_by": ".github/workflows/native.yml",
+        "runner": "ubuntu-24.04",
+        "node_headers": "26.7.0"
+      },
+      "known_deviations": [],
+      "electron": true,
+      "required_gates": [
+        "native_contracts",
+        "binding_conformance",
+        "upstream_reference",
+        "original_reference",
+        "abi",
+        "installed_packages",
+        "sanitizers",
+        "stress",
+        "linux_matrix",
+        "browser_wasm",
+        "browser_webgpu",
+        "license_inventory",
+        "reproducibility",
+        "cross_profile_drift",
+        "artifact_integrity",
+        "performance",
+        "security_review",
+        "upgrade_rollback"
+      ]
+    },
+    {
+      "platform": "linux-arm64",
+      "tier": 2,
+      "os": "linux",
+      "architecture": "aarch64",
+      "cpu_baseline": {
+        "isa": "armv8.2-a with dot product and FP16",
+        "required_cpu_features": [
+          "asimddp",
+          "fphp",
+          "asimdhp"
+        ]
+      },
+      "numerical_profile": {
+        "runtime_id": "native-cpu:asimddp+fphp+asimdhp",
+        "compiler": "gcc",
+        "math_library": "glibc"
+      },
+      "models": [
+        "models/manifest.json"
+      ],
+      "build": {
+        "qualified_on": "ci",
+        "built_by": ".github/workflows/native.yml",
+        "runner": "ubuntu-24.04-arm",
+        "node_headers": "24.21.0"
+      },
+      "known_deviations": [],
+      "electron": true,
+      "required_gates": [
+        "native_contracts",
+        "binding_conformance",
+        "upstream_reference",
+        "original_reference",
+        "abi",
+        "installed_packages",
+        "artifact_integrity",
+        "reproducibility",
+        "short_stress",
+        "cross_profile_drift"
+      ]
+    },
+    {
+      "platform": "windows-x64",
+      "tier": 2,
+      "os": "windows",
+      "architecture": "x86_64",
+      "cpu_baseline": {
+        "isa": "x86-64 with AVX2, FMA, F16C and BMI2",
+        "required_cpu_features": [
+          "avx",
+          "avx2",
+          "fma",
+          "f16c",
+          "bmi2",
+          "sse4.2"
+        ]
+      },
+      "numerical_profile": {
+        "runtime_id": "native-cpu:avx+avx2+fma+f16c+bmi2+sse4.2",
+        "compiler": "clang-cl",
+        "math_library": "ucrt"
+      },
+      "models": [
+        "models/manifest.json"
+      ],
+      "build": {
+        "qualified_on": "ci",
+        "built_by": ".github/workflows/native.yml",
+        "runner": "windows-2025",
+        "node_headers": "24.21.0"
+      },
+      "known_deviations": [
+        {
+          "cases": "english",
+          "case": "json_escaping",
+          "question": "spam",
+          "max_probability_drift": 0.06,
+          "reason": "Windows C runtime erff/sinf/cosf round differently from glibc; upstream llama.cpp uses the platform libm on CPU. Measured 0.0541 (Linux x86-64 0.0373); deterministic.",
+          "documented_in": "docs/COMPATIBILITY.md#known-deviations"
+        }
+      ],
+      "electron": true,
+      "required_gates": [
+        "native_contracts",
+        "binding_conformance",
+        "upstream_reference",
+        "original_reference",
+        "abi",
+        "installed_packages",
+        "artifact_integrity",
+        "reproducibility",
+        "short_stress",
+        "cross_profile_drift"
+      ]
+    }
   ]
 }

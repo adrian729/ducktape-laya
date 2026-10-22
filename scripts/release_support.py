@@ -75,9 +75,10 @@ def git(root, *args):
 
 def check_record(root=ROOT):
     record = read_json(root / 'release/compatibility.json')
-    if record['schema_version'] != 1:
+    if record['schema_version'] != 2:
         raise ValueError('Unsupported compatibility record schema')
     check_qualification(record, root)
+    check_targets(record, root)
     runtime = root / record['runtime']['path']
     expected = record['runtime']['commit']
     if git(runtime, 'rev-parse', 'HEAD') != expected:
@@ -136,6 +137,66 @@ def check_record(root=ROOT):
             raise ValueError(f'Model must identify immutable artifact: {name}')
     return record
 
+# Release targets a record may name (release_support.TARGETS names that are qualified releases).
+RELEASE_PLATFORMS = ('linux-x64', 'linux-arm64', 'windows-x64')
+
+def record_target(record, platform):
+    """The release target entry of record['targets'] for this package platform."""
+    for item in record['targets']:
+        if item['platform'] == platform: return item
+    raise ValueError(f'{platform} is not a release target')
+
+def check_targets(record, root=ROOT):
+    """Release targets: one tier-1 linux-x64 with exactly the required release gates, tier-2
+    targets with gates from the policy's target_gates, the primary model on every target."""
+    policy = read_json(root / 'release/qualification.json')
+    targets = record.get('targets')
+    if not isinstance(targets, list) or not targets:
+        raise ValueError('The record lists no release targets')
+    names = [item.get('platform') for item in targets]
+    if len(set(names)) != len(names) or not set(names) <= set(RELEASE_PLATFORMS):
+        raise ValueError(f'Release targets must be distinct and among {RELEASE_PLATFORMS}: {names}')
+    first = [item for item in targets if item.get('tier') == 1]
+    if len(first) != 1 or first[0]['platform'] != 'linux-x64':
+        raise ValueError('Exactly one tier-1 target, linux-x64, is required')
+    models = set(record['models'] + record.get('additional_models', []))
+    for item in targets:
+        name, tier, gates = item['platform'], item.get('tier'), item.get('required_gates')
+        if tier not in (1, 2) or type(tier) is not int:
+            raise ValueError(f'{name}: tier must be 1 or 2')
+        if not isinstance(gates, list) or not gates or len(gates) != len(set(gates)):
+            raise ValueError(f'{name}: required gates must be a non-empty list without duplicates')
+        if tier == 1 and set(gates) != set(record['required_release_gates']):
+            raise ValueError(f'{name}: tier-1 gates differ from required_release_gates')
+        if tier == 2 and not set(gates) <= set(policy['target_gates']):
+            raise ValueError(f'{name}: unknown tier-2 gates {sorted(set(gates) - set(policy["target_gates"]))}')
+        listed = item.get('models')
+        if not isinstance(listed, list) or record['models'][0] not in listed or not set(listed) <= models:
+            raise ValueError(f'{name}: models must include the primary model and only pinned models')
+        if tier == 1 and set(listed) != models:
+            raise ValueError(f'{name}: the tier-1 target qualifies every pinned model')
+        if tier == 2 and name not in policy['platforms'].get('targets', {}):
+            raise ValueError(f'{name}: no runner and versions in release/qualification.json platforms.targets')
+        profile, baseline, build = item.get('numerical_profile', {}), item.get('cpu_baseline', {}), item.get('build', {})
+        if not profile.get('runtime_id') or not profile.get('compiler') or not profile.get('math_library'):
+            raise ValueError(f'{name}: incomplete numerical profile')
+        features = baseline.get('required_cpu_features')
+        if not isinstance(features, list) or not features or profile['runtime_id'] != 'native-cpu:' + '+'.join(features):
+            raise ValueError(f'{name}: CPU baseline does not match the numerical profile')
+        if not build.get('built_by') or not (root / build['built_by']).is_file() or not build.get('node_headers'):
+            raise ValueError(f'{name}: build workflow or Node headers missing')
+        if type(item.get('electron')) is not bool:
+            raise ValueError(f'{name}: electron must be true or false')
+        for deviation in item.get('known_deviations', []):
+            cap = deviation.get('max_probability_drift')
+            if (not all(isinstance(deviation.get(key), str) and deviation[key] for key in ('cases', 'case', 'question', 'reason'))
+                    or type(cap) is not float or not math.isfinite(cap) or not 0.05 < cap < 0.1):
+                raise ValueError(f'{name}: malformed known deviation {deviation}')
+            document = deviation.get('documented_in', '').split('#')[0]
+            if not document or not (root / document).is_file():
+                raise ValueError(f'{name}: known deviation is not documented')
+    return targets
+
 def find_manifest(path, record, root=ROOT):
     """The pinned manifest (primary or additional) that a local model file matches."""
     for name in [*record['models'], *record.get('additional_models', [])]:
@@ -156,17 +217,22 @@ def check_qualification(record, root=ROOT):
     gates = policy['qualification_gates']
     if len(required) != len(set(required)) or set(required) != set(gates):
         raise ValueError('Required release gates differ from qualification policy')
-    for name, gate in gates.items():
+    targets = policy.get('target_gates')
+    if not isinstance(targets, dict) or not targets:
+        raise ValueError('Missing target gate definitions')
+    for name, gate in [*gates.items(), *targets.items()]:
         if not gate.get('acceptance') or not gate.get('implementation') or not gate.get('checks'):
             raise ValueError('Incomplete qualification gate: ' + name)
         for path in gate['implementation'] + gate['checks']:
             resolved = (root / path).resolve()
             if not resolved.is_relative_to(root.resolve()) or not resolved.exists():
                 raise ValueError('Missing/outside qualification reference: ' + path)
-    for key in ['routine_stress_seconds', 'candidate_soak_seconds', 'fuzz_seconds_per_target', 'baseline_runs']:
-        value = policy['budgets'][key]
+    for key in ['routine_stress_seconds', 'candidate_soak_seconds', 'fuzz_seconds_per_target', 'baseline_runs', 'short_stress_seconds']:
+        value = policy['budgets'].get(key)
         if type(value) is not int or value <= 0:
             raise ValueError('Invalid qualification budget: ' + key)
+    if policy['budgets']['short_stress_seconds'] >= policy['budgets']['routine_stress_seconds']:
+        raise ValueError('The short stress budget must be shorter than routine stress')
     if policy.get('numerical_contract', {}).get('policy') != 'distinct_profiles':
         raise ValueError('Unsupported numerical contract')
     binding = policy['budgets'].get('native_binding_absolute_tolerance')

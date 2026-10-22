@@ -26,15 +26,19 @@ TRUNCATED = {'long_state', 'many_options'}
 UNSUPPORTED = {
     'shortlist_many_options': 'embedding shortlist (not planned)',
 }
-# (sys.platform, case set, case, question) -> documented deviation of one answer on one
-# platform, with its own cap; every other answer there stays at MAX_PROBABILITY_DRIFT.
-# See docs/COMPATIBILITY.md, "Known deviations".
-KNOWN_DEVIATIONS = {
-    ('win32', 'english', 'json_escaping', 'spam'): {
-        'max_probability_drift': 0.06,
-        'reason': 'Windows C runtime erff/sinf/cosf round differently from glibc; upstream llama.cpp uses the '
-                  'platform libm on CPU. Measured 0.0541 (Linux x86-64 0.0373); deterministic.'},
-}
+# (case set, case, question) -> documented deviation of one answer on this platform, with
+# its own cap; every other answer stays at MAX_PROBABILITY_DRIFT. The deviations are the
+# release target's known_deviations in release/compatibility.json (docs/COMPATIBILITY.md,
+# "Known deviations"); a platform that is not a release target has none.
+sys.path.insert(0, str(ROOT / 'scripts'))
+from release_support import RELEASE_PLATFORMS, host_target, read_json, record_target  # noqa: E402
+try:
+    PLATFORM = host_target().name
+except ValueError:
+    PLATFORM = None
+KNOWN_DEVIATIONS = {} if PLATFORM not in RELEASE_PLATFORMS else {
+    (item['cases'], item['case'], item['question']): item
+    for item in record_target(read_json(ROOT / 'release/compatibility.json'), PLATFORM).get('known_deviations', [])}
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('model', type=pathlib.Path)
@@ -83,8 +87,8 @@ def compare(expected, got):
 failures, answers = [], []
 report: dict = {'cases': {}, 'model': str(args.model), 'config': json.loads(config), 'thresholds': {
     'max_probability_drift': MAX_PROBABILITY_DRIFT, 'near_tie': NEAR_TIE,
-    'known_deviations': {'/'.join(key[2:]): value for key, value in KNOWN_DEVIATIONS.items()
-                         if key[:2] == (sys.platform, args.cases.resolve().name)}}}
+    'known_deviations': {'/'.join(key[1:]): value for key, value in KNOWN_DEVIATIONS.items()
+                         if key[0] == args.cases.resolve().name}}, 'platform': PLATFORM}
 for path in sorted(args.cases.glob('case_*.json')):
     case = json.loads(path.read_text())
     name = case['name']
@@ -119,7 +123,7 @@ for path in sorted(args.cases.glob('case_*.json')):
         answers.append(drift)
         entry['answers'][qid] = {'type': expected['type'], 'max_probability_drift': round(drift, 6),
                                  'decision_changed': changed, 'near_tie': near}
-        known = KNOWN_DEVIATIONS.get((sys.platform, args.cases.resolve().name, name, qid))
+        known = KNOWN_DEVIATIONS.get((args.cases.resolve().name, name, qid))
         limit = known['max_probability_drift'] if known else MAX_PROBABILITY_DRIFT
         if known and drift > MAX_PROBABILITY_DRIFT:
             entry['answers'][qid]['known_deviation'] = known
