@@ -33,6 +33,12 @@ Each backend needs:
   [QUALIFICATION.md](QUALIFICATION.md), run on CI or listed hardware for that
   backend.
 
+### More release targets and release provenance
+
+- **macOS arm64 as the next tier-2 target.** It builds, passes the real-model checks and packages its own fragment in CI (`platforms.yml`), but is not in the CI release assembly or `release/compatibility.json` `targets`. Promoting it means moving the macOS job into `native.yml` beside Linux and Windows, adding its fragment to the candidate run's assembly, its short stress and reproducibility jobs, and a `targets` entry; the tier-2 checks in `scripts/release_targets.py` already apply per target.
+- **Build-provenance attestations.** The release attestation (`attest-release`) states that published assets are the qualified ones; it is not build provenance. The candidate run's assembly job could sign SLSA build provenance for every native artifact (`actions/attest-build-provenance`, needs `id-token: write` and `attestations: write`, only when dispatched from `main`).
+- **Registry installation on every target.** The release host can install the published packages only for Linux x86-64. A `registry-check.yml` dispatched with a tag would install from npm, PyPI, NuGet and Maven Central on `windows-2025` and `ubuntu-24.04-arm` and run a real-model consumer: the `registry_installation` publication gate for the tier-2 targets.
+
 ### Higher-precision model variants
 
 `ggml-org/Laya-GGUF` also has `Laya-BF16.gguf`: the same English model at roughly
