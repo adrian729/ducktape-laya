@@ -7,9 +7,9 @@ Where each package is published, and what is still missing. Publication follows 
 | Package | Channel | 0.1.0 | 0.2.0 (main) |
 | --- | --- | --- | --- |
 | Native tarball, SBOMs, inventories | GitHub Releases | Published, attested | Same process |
-| `ducktape-laya` (Node.js) | npm | Published | Same process |
-| `ducktape-laya-browser` | npm | Published | Same process |
-| `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Same process |
+| `ducktape-laya` (Node.js) | npm | Published | `publish-release` workflow (trusted publishing) |
+| `ducktape-laya-browser` | npm | Published | `publish-release` workflow (trusted publishing) |
+| `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | `publish-release` workflow (trusted publishing, repackaged from the tag and compared) |
 | `ducktape-laya` (Python wheel) | PyPI | — | `publish-release` workflow (trusted publishing) |
 | `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | No account needed; publishing is a tag. Tested against the release tarball |
 | `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | `publish-release` workflow (signs at upload; token and key in the `release` environment) |
@@ -36,11 +36,10 @@ These are code changes; they need no accounts.
 
 ## One-time maintainer setup
 
-Each registry needs the maintainer's account. PyPI, NuGet and Maven Central are
-published by the `publish-release` workflow from the GitHub environment
-`release` (required reviewer: the maintainer; deployments only from `main` and
-`v*` tags). The trusted publisher entries below must name exactly that
-repository, workflow file and environment.
+Each registry needs the maintainer's account. Every registry is published by
+the `publish-release` workflow from the GitHub environment `release`
+(deployments only from `main` and `v*` tags). The trusted publisher entries
+below must name exactly that repository, workflow file and environment.
 
 - **PyPI:** a pending trusted publisher (pypi.org, Account → Publishing) for
   project `ducktape-laya`, owner `adrian729`, repository `ducktape-laya`,
@@ -64,9 +63,13 @@ repository, workflow file and environment.
 - **Go:** no account. Pushing the tag `bindings/go/vX.Y.Z` (subdirectory module
   tags carry the path prefix) makes the module available through the proxy and
   pkg.go.dev.
-- **npm, crates.io:** already set up and published by the maintainer. Both also
-  support trusted publishing and could move into `publish-release`; npm then no
-  longer needs an OTP for each publish.
+- **npm:** a trusted publisher (package settings → Trusted Publisher → GitHub
+  Actions) on both `ducktape-laya` and `ducktape-laya-browser`, with the same
+  repository, workflow and environment. npm then needs no token or OTP.
+- **crates.io:** a trusted publisher (crate settings → Trusted Publishing) on both
+  `ducktape-laya-sys` and `ducktape-laya`, with the same repository, workflow and
+  environment. After the first release through the workflow, "Require trusted
+  publishing for all new versions" can be enabled on both.
 
 ## The publish-release workflow
 
@@ -74,11 +77,14 @@ repository, workflow file and environment.
 downloads its files from the GitHub release with
 `scripts/verify-release-assets.sh`, which checks them against `SHA256SUMS`, a
 `release_ready` `gates.json` for the tagged commit and the `attest-release`
-attestation, and then uploads exactly those bytes: the wheel to PyPI, the
-`.nupkg` to NuGet, and the jar, sources jar, javadoc jar and POM to Maven
-Central, signed and checksummed in the job. Each registry can be selected
-separately, so a failed upload can be retried alone. Every job waits for
-approval in the `release` environment.
+attestation, and then uploads exactly those bytes: both npm tarballs, the wheel
+to PyPI, the `.nupkg` to NuGet, and the jar, sources jar, javadoc jar and POM to
+Maven Central, signed and checksummed in the job. crates.io accepts only `cargo
+publish`, which packages the crates again: that job repackages them from the
+tag with the pinned toolchain, requires byte-identical `.crate` files, and then
+publishes `-sys` first. Each registry can be selected separately, and the npm
+and crates.io jobs skip versions that are already published, so a failed run
+can be retried.
 
 ## Release-day order
 
@@ -97,7 +103,7 @@ approval in the `release` environment.
    on any extra asset.
 5. Run the `attest-release` workflow from `main` for the tag, then check one asset with
    `gh attestation verify` (see [SECURITY.md](../SECURITY.md)).
-6. Run the `publish-release` workflow from `main` for the tag (PyPI, NuGet, Maven Central) and approve its jobs. Publish the npm tarballs from the release assets with `npm publish`, and the crates with `cargo publish` at the tag, `-sys` before the safe crate.
+6. Run the `publish-release` workflow from `main` for the tag.
 7. Push `bindings/go/vX.Y.Z` at the same commit.
 8. Download every package from its registry into a clean directory, check its bytes against `SHA256SUMS` and its attestation (`scripts/verify-release-assets.sh` downloads and checks the release copies) (crates, which `cargo publish` rebuilds, against the tagged source instead), and run a real-model consumer.
 9. Update the README status and requirements tables, and the version in the README's install snippets.
