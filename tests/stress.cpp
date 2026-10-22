@@ -56,9 +56,10 @@ static bool settled(long fds, long threads) {
     return false;
 }
 static void stable_baseline() {
-    // Wait (up to 120 s) until the thread and handle counts hold for 5 s.
+    // The loader's worker threads (three after start-up) retire 30 s after its last work.
+    // Wait (up to 180 s) until the thread and handle counts have held for 40 s.
     long threads = thread_count(), fds = descriptor_count();
-    for (int stable = 0, i = 0; stable < 50 && i < 1200; ++i) {
+    for (int stable = 0, i = 0; stable < 400 && i < 1800; ++i) {
         Sleep(100);
         const long t = thread_count(), f = descriptor_count();
         stable = (t == threads && f == fds) ? stable + 1 : 0;
@@ -165,7 +166,10 @@ int main(int argc, char **argv) {
           const bool counts = settled(baseline_fds, baseline_threads);
           const long current_rss = rss_kib();
           if (current_rss < 0 || current_rss > baseline_rss + 128 * 1024 || !counts)
-              throw std::runtime_error("Post-close resource growth exceeded the declared bound");
+              throw std::runtime_error("Post-close resource growth exceeded the declared bound after round " + std::to_string(completed) +
+                                       ": memory " + std::to_string(current_rss) + " KiB (baseline " + std::to_string(baseline_rss) +
+                                       "), descriptors " + std::to_string(descriptor_count()) + " (" + std::to_string(baseline_fds) +
+                                       "), threads " + std::to_string(thread_count()) + " (" + std::to_string(baseline_threads) + ")");
           maximum_closed_rss = std::max(maximum_closed_rss, current_rss);
           closed_rss.push_back(current_rss);
           if (elapsed_seconds() - last_progress >= 60) {
