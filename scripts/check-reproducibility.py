@@ -19,6 +19,10 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=pathlib.Path, required=True)
 p.add_argument('--jobs', type=int, default=2)
 p.add_argument('--node-include', type=pathlib.Path)
+# The release library is built with gcc; name the compiler explicitly so an exported
+# CC/CXX (e.g. CC=clang in a developer shell) cannot silently build something else.
+p.add_argument('--cc', default='gcc', help='C compiler (default gcc, as the release library)')
+p.add_argument('--cxx', default='g++', help='C++ compiler (default g++, as the release library)')
 a = p.parse_args()
 if a.jobs < 1: p.error('--jobs must be positive')
 record = check_record()
@@ -26,6 +30,12 @@ out = a.output.resolve()
 out.mkdir(parents=True, exist_ok=False)
 node_include = a.node_include or pathlib.Path(shutil.which('node')).resolve().parents[1] / 'include/node'
 if not (node_include / 'node_api.h').is_file(): p.error('Supply --node-include with node_api.h')
+compilers = {}
+for name in (a.cc, a.cxx):
+    path = shutil.which(name)
+    if not path: p.error(f'Compiler not found: {name}')
+    compilers[name] = {'path': str(pathlib.Path(path).resolve()),
+                       'version': subprocess.check_output([path, '--version'], text=True).splitlines()[0]}
 snapshot = out / 'snapshot'
 snapshot.mkdir()
 # Capture tracked files once; include staged new files and report any dirty state.
@@ -50,7 +60,7 @@ report = {'schema_version': 1, 'status': 'running', 'source_commit': git(ROOT, '
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')),
           'snapshot_sha256': hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
           'runtime': record['runtime'], 'scope': 'installed native and Node files; same toolchain/options, different source/build/install roots',
-          'source_files': manifest, 'builds': {}}
+          'compilers': compilers, 'source_files': manifest, 'builds': {}}
 def save():
     (out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 save()
@@ -61,12 +71,14 @@ try:
         commands = [
             ['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
              '-DDUCKTAPE_BUILD_TESTS=OFF', '-DDUCKTAPE_BUILD_NODE=ON', f'-DNODE_INCLUDE_DIR={node_include}',
-             f'-DDUCKTAPE_LLAMA_REVISION={record["runtime"]["commit"]}', '-DGGML_CCACHE=OFF'],
+             f'-DDUCKTAPE_LLAMA_REVISION={record["runtime"]["commit"]}', '-DGGML_CCACHE=OFF',
+             f'-DCMAKE_C_COMPILER={compilers[a.cc]["path"]}', f'-DCMAKE_CXX_COMPILER={compilers[a.cxx]["path"]}'],
             ['cmake', '--build', str(build), '--parallel', str(a.jobs)],
             ['cmake', '--install', str(build), '--prefix', str(install)]]
+        env = {k: v for k, v in os.environ.items() if k not in ('CC', 'CXX')}
         with (out / f'{label}.log').open('w') as log:
             for command in commands:
-                subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT)
+                subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT, env=env)
         header = (build / 'third_party/llama.cpp/ggml/src/ggml-version.h').read_text()
         if not re.search(r'#define GGML_COMMIT\s+"' + record['runtime']['commit'] + '"', header):
             raise RuntimeError('Generated GGML identity does not match the runtime pin')
