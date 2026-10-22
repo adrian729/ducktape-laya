@@ -9,7 +9,9 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from release_support import require_uninstrumented_binary, ROOT, browser_build_identity, sha256, source_identity, native_build_identity, require_runtime_identity
+from release_support import (LIBRARY, require_uninstrumented_binary, ROOT, browser_build_identity, sha256, source_identity, native_build_identity,
+                             require_runtime_identity)
+WINDOWS = sys.platform == 'win32'
 
 from artifact_support import verify_inventory
 
@@ -106,6 +108,8 @@ class RuntimeIdentityTests(unittest.TestCase):
 
 
 class InstrumentationTests(unittest.TestCase):
+    @unittest.skipIf(WINDOWS, 'builds ELF shared libraries with clang -fPIC -fsanitize; Windows sanitizer runtimes are '
+                              'rejected by their imported DLL names (release_support.DIAGNOSTIC_RUNTIME), not tested here')
     def test_instrumented_library_is_rejected_before_loading(self):
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory)
@@ -138,6 +142,8 @@ class NativeIdentityTests(unittest.TestCase):
         (self.root / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.22)
 project(identity_fixture C)
 include(cmake/source_identity.cmake)
+# Windows: an import library for the addon to link (the fixture has no dllexport).
+set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 add_library(ducktape_laya SHARED src/core.c)
 dtl_record_native_build(ducktape_laya)
 add_library(ducktape_laya_node MODULE bindings/node/addon.c)
@@ -146,13 +152,14 @@ target_link_libraries(ducktape_laya_node PRIVATE ducktape_laya)
 dtl_record_native_build(ducktape_laya_node)
 ''')
         self.build = self.root / 'build'
-        self.run_cmake('-S', self.root, '-B', self.build)
+        # Ninja on Windows: a single-configuration build tree like the real one.
+        self.run_cmake('-S', self.root, '-B', self.build, *(['-G', 'Ninja'] if WINDOWS else []))
         self.run_cmake('--build', self.build)
 
     def run_cmake(self, *args):
         subprocess.run(['cmake', *map(str, args)], check=True, capture_output=True)
 
-    def check(self, target='ducktape_laya', binary='libducktape_laya.so'):
+    def check(self, target='ducktape_laya', binary=LIBRARY):
         return native_build_identity(self.build, target, binary, source_identity(self.root))
 
     def test_partial_rebuild_does_not_accept_stale_addon(self):
