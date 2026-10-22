@@ -373,6 +373,8 @@ jobs:
           path: |
             ${{ runner.temp }}/repro/report.json
             ${{ runner.temp }}/repro/*.log
+            ${{ runner.temp }}/repro/first/install/bin/*.dll
+            ${{ runner.temp }}/repro/first/install/lib/**/*.node
           if-no-files-found: ignore
           retention-days: ${{ inputs.candidate && 30 || 14 }}
           overwrite: true

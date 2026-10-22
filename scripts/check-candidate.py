@@ -264,7 +264,6 @@ def reproducibility():
 
 def artifact_integrity():
     report, _, inventory = packages()
-    browser_package()
     for run in ('packaging-identities', 'browser-backend-identities'):
         need(report['runs'][run]['exit_code'] == 0, f'native: {run} failed')
     need(inventory['build_identities']['ducktape_laya']['binary_sha256'] == report['library_sha256'], 'packages: library differs from validated library')
@@ -281,6 +280,7 @@ def artifact_integrity():
          'release packages: linux-x64 library or addon is not the locally validated one')
     for platform in ctx.targets:
         ctx.release_payload(platform)
+    browser_package()
 
 def performance():
     # The primary model's benchmark is evidence "performance"; each additional model's
