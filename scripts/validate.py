@@ -120,6 +120,12 @@ try:
     run('typescript-consumers', [sys.executable, ROOT / 'tests/typescript/check.py'])
     run('packaging-identities', [sys.executable, ROOT / 'tests/packaging-identity.py'])
     run('package-assembly', [sys.executable, ROOT / 'tests/package-assembly.py'])
+    run('fetch-ci-evidence', [sys.executable, ROOT / 'tests/fetch-ci-evidence.py'])
+    # The release checker and the release assets run on the Linux release host and in
+    # attest-release (bash, jq and GNU sha256sum); they are not exercised on Windows.
+    for label in ('release-targets', 'release-assets'):
+        if WINDOWS: skip(label, 'release checks run on the Linux release host and in attest-release (bash, jq, sha256sum)')
+        else: run(label, [sys.executable, ROOT / f'tests/{label}.py'])
     run('browser-backend-identities', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-backend.mjs'])
     run('browser-lifecycle', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-lifecycle.mjs'])
     run('browser-binding', ['node', '--experimental-vm-modules', '--test', ROOT / 'bindings/browser/test.mjs'])
