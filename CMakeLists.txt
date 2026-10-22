@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.22)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/release/compatibility.json" DTL_RELEASE_RECORD)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/release/compatibility.json")
 string(JSON DTL_VERSION GET "${DTL_RELEASE_RECORD}" package_version)
+# The macOS packages promise macOS 13 (wheel tag macosx_13_0); scripts/package-native.py checks the binaries.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
 project(ducktape_laya VERSION ${DTL_VERSION} LANGUAGES C CXX)
 include(cmake/source_identity.cmake)
 set(CMAKE_CXX_STANDARD 17)
@@ -68,6 +70,10 @@ if(DUCKTAPE_REPRODUCIBLE_PATHS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   # clang-cl takes driver options through /clang: (a bare -f... would read as a file).
   if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     set(DTL_DRIVER_OPTION "/clang:")
+    # Deterministic PE files: no timestamps in objects, and a content hash instead of the
+    # link time in the DLL, addon and import library headers.
+    add_compile_options(/Brepro)
+    add_link_options(/Brepro)
   else()
     set(DTL_DRIVER_OPTION "")
   endif()

@@ -23,6 +23,8 @@ p.add_argument('--node-include', type=pathlib.Path)
 # CC/CXX (e.g. CC=clang in a developer shell) cannot silently build something else.
 p.add_argument('--cc', default='gcc', help='C compiler (default gcc, as the release library)')
 p.add_argument('--cxx', default='g++', help='C++ compiler (default g++, as the release library)')
+p.add_argument('--cmake-arg', action='append', default=[], help='Extra configure argument for both builds, repeatable '
+               '(on Windows: -GNinja, -DNODE_LIB=..., -DDTL_PATCH_EXECUTABLE=...)')
 a = p.parse_args()
 if a.jobs < 1: p.error('--jobs must be positive')
 record = check_record()
@@ -60,7 +62,7 @@ report = {'schema_version': 1, 'status': 'running', 'source_commit': git(ROOT, '
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')),
           'snapshot_sha256': hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
           'runtime': record['runtime'], 'scope': 'installed native and Node files; same toolchain/options, different source/build/install roots',
-          'compilers': compilers, 'source_files': manifest, 'builds': {}}
+          'compilers': compilers, 'cmake_arguments': a.cmake_arg, 'source_files': manifest, 'builds': {}}
 def save():
     (out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 save()
@@ -72,7 +74,7 @@ try:
             ['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
              '-DDUCKTAPE_BUILD_TESTS=OFF', '-DDUCKTAPE_BUILD_NODE=ON', f'-DNODE_INCLUDE_DIR={node_include}',
              f'-DDUCKTAPE_LLAMA_REVISION={record["runtime"]["commit"]}', '-DGGML_CCACHE=OFF',
-             f'-DCMAKE_C_COMPILER={compilers[a.cc]["path"]}', f'-DCMAKE_CXX_COMPILER={compilers[a.cxx]["path"]}'],
+             f'-DCMAKE_C_COMPILER={compilers[a.cc]["path"]}', f'-DCMAKE_CXX_COMPILER={compilers[a.cxx]["path"]}', *a.cmake_arg],
             ['cmake', '--build', str(build), '--parallel', str(a.jobs)],
             ['cmake', '--install', str(build), '--prefix', str(install)]]
         env = {k: v for k, v in os.environ.items() if k not in ('CC', 'CXX')}
