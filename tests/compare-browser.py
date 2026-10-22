@@ -5,7 +5,7 @@ import json
 import pathlib
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
-from compare_results import compare_results, js_object_order, measure_profile_drift
+from compare_results import compare_results, decision_paths, js_object_order, measure_profile_drift
 from release_support import sha256
 p=argparse.ArgumentParser()
 p.add_argument('report',type=pathlib.Path)
@@ -34,17 +34,7 @@ require(set(reference) == set(report['results']), 'Fixture set changed')
 # Fixture enumeration is not result-object ordering. Permit changed predictions
 # only at schema-defined decision fields; metadata and token usage remain exact.
 ordered = {name: report['results'][name] for name in reference}
-decisions = []
-for name, value in reference.items():
-    cases = enumerate(value) if isinstance(value, list) else [(None, value)]
-    for index, result in cases:
-        prefix = (name,) if index is None else (name, index)
-        for question, answer in result['answers'].items():
-            if answer['type'] == 'choice':
-                decisions.append(prefix + ('answers', question, 'choice'))
-        for field in result.get('values', {}):
-            decisions.append(prefix + ('values', field))
-drift = measure_profile_drift(reference, ordered, decisions)
+drift = measure_profile_drift(reference, ordered, decision_paths(reference))
 print(json.dumps({'comparison': 'cross_profile_drift', 'probability_equivalence': False,
                   'browser_backend': report['backend'],
                   'browser_runtime': report.get('info'),

@@ -82,3 +82,19 @@ def measure_profile_drift(expected, actual, decision_paths=(), path='$'):
     strict. This must never replace same-backend upstream conformance checks.
     """
     return _walk(expected, actual, path, frozenset(decision_paths))
+
+
+def decision_paths(reference):
+    """Schema-defined decision fields of fixture results {name: result or [results]}: each
+    choice answer's choice and each structured value. Paths as measure_profile_drift takes them."""
+    decisions = []
+    for name, value in reference.items():
+        cases = enumerate(value) if isinstance(value, list) else [(None, value)]
+        for index, result in cases:
+            prefix = (name,) if index is None else (name, index)
+            for question, answer in result['answers'].items():
+                if answer['type'] == 'choice':
+                    decisions.append(prefix + ('answers', question, 'choice'))
+            for field in result.get('values', {}):
+                decisions.append(prefix + ('values', field))
+    return decisions
