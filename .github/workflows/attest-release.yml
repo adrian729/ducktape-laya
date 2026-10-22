@@ -2,8 +2,11 @@ name: attest-release
 
 # Signs a statement, through GitHub's Sigstore attestations, that a published
 # release's assets are the ones its gates.json qualified. It builds nothing: the
-# predicate records the release, tag commit and qualification report, not build
-# provenance.
+# predicate records the release, tag commit, qualification report and the tier of
+# each release target, not build provenance. The packages are built on
+# GitHub-hosted runners in the release candidate run and qualified on the release
+# host, which requires its own Linux x86-64 build to be byte-identical to CI's
+# (docs/RELEASE_CHECKS.md).
 on:
   workflow_dispatch:
     inputs:
@@ -22,6 +25,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
+      # The checks come from main, like this workflow (scripts/check-release-assets.sh).
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: checks
+          persist-credentials: false
       - name: Download and check release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -29,38 +37,18 @@ jobs:
         run: |
           set -euo pipefail
           gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D assets
-          cd assets
-          sha256sum -c SHA256SUMS
           commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
-          # The qualified commit must be the tagged one, checked by a clean checker.
-          jq -e --arg commit "$commit" '.release_ready == true and .candidate_commit == $commit and .checker_tree_dirty == false
-            and ([.gates[].status] | all(. == "passed"))' gates.json > /dev/null
-          # The published inventories are the qualified ones, were packaged from the tagged
-          # commit, and every artifact they list is published with the listed hash (the
-          # SBOMs are published under a prefixed name).
-          allowed="gates.json"
-          for pair in native:native-inventory.json:native-sbom.cdx.json browser:npm-browser-inventory.json:npm-browser-sbom.cdx.json; do
-            label=${pair%%:*}; rest=${pair#*:}; inventory=${rest%%:*}; sbom=${rest#*:}
-            jq -e --arg label "$label" --arg sum "$(sha256sum "$inventory" | cut -d' ' -f1)" \
-              '.inventories_sha256[$label] == $sum' gates.json > /dev/null
-            jq -e --arg commit "$commit" '.packaging_source_commit == $commit' "$inventory" > /dev/null
-            allowed="$allowed $inventory"
-            jq -r '.artifacts | to_entries[] | "\(if (.value | type) == "object" then .value.sha256 else .value end)  \(.key)"' "$inventory" |
-              while read -r sum name; do
-                [ "$name" = sbom.cdx.json ] && name=$sbom
-                echo "$sum  $name" | sha256sum -c --quiet -
-              done
-            allowed="$allowed $sbom $(jq -r '.artifacts | keys[] | select(. != "sbom.cdx.json")' "$inventory" | tr '\n' ' ')"
-          done
-          # Nothing outside the qualified inventories is attested.
-          for name in $(cut -d' ' -f3 SHA256SUMS); do
-            case " $allowed " in *" $name "*) ;; *) echo "Unqualified asset: $name"; exit 1 ;; esac
-          done
-          jq -n --arg tag "$TAG" --arg commit "$commit" --arg gates "$(sha256sum gates.json | cut -d' ' -f1)" \
-            --arg repo "$GITHUB_REPOSITORY" \
-            '{release: $tag, repository: $repo, source_commit: $commit, gates_sha256: $gates, release_ready: true}' > ../predicate.json
-          grep -v ' gates.json$' SHA256SUMS > ../subjects.txt
-          cat ../predicate.json ../subjects.txt
+          # Every asset listed once in SHA256SUMS with matching bytes; gates.json qualifies the
+          # tagged commit (every gate of every release target passed, clean checker); the
+          # inventories are the qualified ones, packaged from that commit, every artifact they
+          # list published with its hash, the native platforms exactly the qualified targets;
+          # nothing else.
+          checks/scripts/check-release-assets.sh assets "$commit"
+          jq -n --arg tag "$TAG" --arg commit "$commit" --arg gates "$(sha256sum assets/gates.json | cut -d' ' -f1)" \
+            --arg repo "$GITHUB_REPOSITORY" --argjson targets "$(jq -c '(.targets // {}) | map_values(.tier)' assets/gates.json)" \
+            '{release: $tag, repository: $repo, source_commit: $commit, gates_sha256: $gates, release_ready: true, targets: $targets}' > predicate.json
+          grep -v ' gates.json$' assets/SHA256SUMS > subjects.txt
+          cat predicate.json subjects.txt
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: subjects.txt

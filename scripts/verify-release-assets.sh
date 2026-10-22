@@ -3,9 +3,10 @@
 # checks, before anything is uploaded to a registry, that each one is the file
 # that was qualified and attested:
 #   - its SHA-256 is listed in the release's SHA256SUMS;
-#   - the release's gates.json is release_ready, every gate passed, it was
-#     produced by a clean checker for the tagged commit, and it is the gates.json
-#     listed in SHA256SUMS;
+#   - the release's gates.json is release_ready, every gate (and, from schema 2,
+#     every release target's gate) passed, it was produced by a clean checker for
+#     the tagged commit (scripts/release-gates.jq, shared with attest-release),
+#     and it is the gates.json listed in SHA256SUMS;
 #   - the file has an attest-release attestation for this release, tag commit and
 #     gates.json.
 # Only the named assets are written to OUTPUT_DIR (SHA256SUMS and gates.json are
@@ -30,8 +31,7 @@ gh release download "$tag" -R "$repo" -D "$meta" -p SHA256SUMS -p gates.json
 commit=$(gh api "repos/$repo/commits/$tag" --jq .sha)
 
 (cd "$meta" && grep '  gates.json$' SHA256SUMS | sha256sum -c --quiet -)
-jq -e --arg commit "$commit" '.release_ready == true and .candidate_commit == $commit and .checker_tree_dirty == false
-  and ([.gates[].status] | all(. == "passed"))' "$meta/gates.json" > /dev/null ||
+jq -e --arg commit "$commit" -f "$(dirname "$0")/release-gates.jq" "$meta/gates.json" > /dev/null ||
   { echo "gates.json does not qualify $tag ($commit)" >&2; exit 1; }
 gates=$(sha256sum "$meta/gates.json" | cut -d' ' -f1)
 

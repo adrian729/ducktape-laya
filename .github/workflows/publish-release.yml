@@ -1,7 +1,8 @@
 name: publish-release
 
-# Uploads the exact files of a published, attested GitHub release to npm, PyPI,
-# NuGet, Maven Central and crates.io. Every job downloads its files from the
+# Uploads the exact files of a published, attested GitHub release to npm, PyPI
+# (one wheel per release target), NuGet, Maven Central and crates.io; the npm, jar
+# and NuGet packages carry every release target's native library. Every job downloads its files from the
 # release and checks them against SHA256SUMS, the qualified gates.json and the
 # attest-release attestation (scripts/verify-release-assets.sh) before uploading.
 # crates.io accepts only `cargo publish`, which packages the crates again, so that
@@ -26,7 +27,7 @@ on:
         type: boolean
         default: true
       pypi:
-        description: Publish the wheel to PyPI
+        description: Publish the wheels (one per release target) to PyPI
         type: boolean
         default: true
       nuget:
@@ -163,20 +164,26 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Download and verify the wheel
+      - name: Download and verify the wheels
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          # The platform tag follows the glibc the library was built against.
-          wheel=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-            grep -Ex "ducktape_laya-${TAG#v}-py3-none-manylinux_[0-9]+_[0-9]+_x86_64\.whl")
-          [ "$(wc -l <<< "$wheel")" = 1 ] || { echo "Expected one wheel, found: $wheel"; exit 1; }
-          scripts/verify-release-assets.sh "$TAG" dist "$wheel"
+          # The qualified native inventory names one wheel per release target (0.1.0 and 0.2.0:
+          # one Linux x86-64 wheel, no platforms list); it is verified like the wheels.
+          scripts/verify-release-assets.sh "$TAG" meta native-inventory.json
+          mapfile -t wheels < <(jq -r --arg v "${TAG#v}" \
+            '.artifacts | keys[] | select(startswith("ducktape_laya-\($v)-py3-none-") and endswith(".whl"))' meta/native-inventory.json)
+          expected=$(jq '(.platforms // ["linux-x64"]) | length' meta/native-inventory.json)
+          [ "${#wheels[@]}" = "$expected" ] || { echo "Expected $expected wheels, found: ${wheels[*]}"; exit 1; }
+          scripts/verify-release-assets.sh "$TAG" dist "${wheels[@]}"
+      # skip-existing: a run that failed after uploading some wheels can be retried; the
+      # release-day registry check compares every uploaded wheel with SHA256SUMS.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist/
+          skip-existing: true
 
   nuget:
     if: github.ref == 'refs/heads/main' && inputs.nuget
