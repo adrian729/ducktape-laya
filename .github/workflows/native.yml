@@ -415,12 +415,17 @@ jobs:
           - platform: linux-x64
             runner: ubuntu-24.04
             python: python3
+            shell: bash
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
             python: python3
+            shell: bash
+          # PowerShell on Windows: Strawberry Perl's pkg-config.bat does not run from Git Bash.
+          # The commands below are written for both shells.
           - platform: windows-x64
             runner: windows-2025
             python: python
+            shell: pwsh
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
@@ -428,7 +433,7 @@ jobs:
       GOTOOLCHAIN: local
     defaults:
       run:
-        shell: bash
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -452,9 +457,8 @@ jobs:
           cache: false
       - name: Install pinned Rust toolchain and fetch the consumer's locked dependencies
         if: inputs.real_model
-        run: |
-          rustup toolchain install 1.98.0 --profile minimal
-          rustup override set 1.98.0
+        run: >-
+          rustup toolchain install 1.98.0 --profile minimal && rustup override set 1.98.0 &&
           cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -464,21 +468,20 @@ jobs:
         run: ${{ matrix.python }} tests/package-smoke.py assembled --platform ${{ matrix.platform }}
       - name: Download and verify explicitly requested test model
         if: inputs.real_model
-        run: |
-          mkdir -p build-model
-          ${{ matrix.python }} -c "import json, pathlib, urllib.request; m = json.loads(pathlib.Path('models/manifest.json').read_text()); urllib.request.urlretrieve(m['url'], 'build-model/laya.gguf')"
+        run: >-
+          ${{ matrix.python }} -c "import json, pathlib, urllib.request; pathlib.Path('build-model').mkdir(); m = json.loads(pathlib.Path('models/manifest.json').read_text()); urllib.request.urlretrieve(m['url'], 'build-model/laya.gguf')" &&
           ${{ matrix.python }} scripts/verify-model.py build-model/laya.gguf
       - name: Installed packages with the real model
         if: inputs.real_model
-        run: |
-          mkdir -p build-report
-          ${{ matrix.python }} tests/installed-packages.py assembled build-model/laya.gguf --platform ${{ matrix.platform }} \
-            --report build-report/installed.json
+        run: >-
+          ${{ matrix.python }} tests/installed-packages.py assembled build-model/laya.gguf --platform ${{ matrix.platform }}
+          --report build-report/installed.json
       - name: Electron consumer of the multi-platform npm package, directory and ASAR
         if: inputs.real_model && matrix.platform == 'windows-x64'
-        run: |
-          npm ci --prefix tests/electron --no-audit --no-fund
-          node tests/electron/run.cjs assembled/ducktape-laya-*.tgz build-model/laya.gguf build-report/electron.json
+        run: >-
+          npm ci --prefix tests/electron --no-audit --no-fund &&
+          node tests/electron/run.cjs assembled/ducktape-laya-$(${{ matrix.python }} -c "import json; print(json.load(open('assembled/inventory.json'))['package_version'])").tgz
+          build-model/laya.gguf build-report/electron.json
       - name: Retain reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

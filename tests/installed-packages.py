@@ -47,6 +47,7 @@ def record(name, output):
 
 def save():
     if a.report:
+        a.report.parent.mkdir(parents=True, exist_ok=True)
         a.report.write_text(json.dumps(report, indent=2) + '\n')
 
 
