@@ -10,12 +10,13 @@ import math
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import urllib.request
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 from compare_results import compare_results, js_object_order
-from release_support import binary_info, sha256, source_identity
+from release_support import LIBRARY, binary_info, sha256, source_identity
 
 parser = argparse.ArgumentParser()
 parser.add_argument('model', type=pathlib.Path)
@@ -43,21 +44,39 @@ if args.server_url:
     if not isinstance(body, dict) or 'questions' not in body or 'schema' in body:
         parser.error('--server-url requires a primitive question fixture')
 env = dict(os.environ)
-env['LD_LIBRARY_PATH'] = str(build) + ':' + env.get('LD_LIBRARY_PATH', '')
+windows = sys.platform == 'win32'
+exe = '.exe' if windows else ''
+if windows:
+    # Windows finds DLLs on PATH; the Python consumer reads and writes UTF-8.
+    env['PATH'] = str(build) + os.pathsep + env.get('PATH', '')
+    env['PYTHONUTF8'] = '1'
+else:
+    env['LD_LIBRARY_PATH'] = str(build) + ':' + env.get('LD_LIBRARY_PATH', '')
 env['DUCKTAPE_LAYA_LIB_DIR'] = str(build)
 env['DUCKTAPE_LAYA_ADDON'] = str(build / 'ducktape_laya.node')
 env['PYTHONPATH'] = str(root / 'bindings/python/src')
 env.update(DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
 # Compiled consumers are built once, outside the per-fixture loop and its timeout.
-subprocess.run(['bash', str(root / 'bindings/java/build.sh'), '--no-test'], check=True, env=env, capture_output=True)
+if windows:
+    # build.sh --no-test without bash (the bash found first on Windows can be WSL's).
+    java = root / 'bindings/java/target'
+    shutil.rmtree(java, ignore_errors=True)
+    (java / 'classes').mkdir(parents=True)
+    subprocess.run(['javac', '--release', '22', '-d', str(java / 'classes')] +
+                   [str(path) for path in sorted((root / 'bindings/java/src/main').rglob('*.java'))],
+                   check=True, env=env, capture_output=True)
+    subprocess.run(['jar', '--create', '--file', str(java / 'ducktape-laya.jar'), '-C', str(java / 'classes'), '.'],
+                   check=True, env=env, capture_output=True)
+else:
+    subprocess.run(['bash', str(root / 'bindings/java/build.sh'), '--no-test'], check=True, env=env, capture_output=True)
 env.update(CGO_CFLAGS='-I' + str(root / 'include'), CGO_LDFLAGS='-L' + str(build), GOTOOLCHAIN='local')
-subprocess.run(['go', 'build', '-o', str(build / 'conformance-go'), '.'], cwd=root / 'tests/consumers/go',
+subprocess.run(['go', 'build', '-o', str(build / ('conformance-go' + exe)), '.'], cwd=root / 'tests/consumers/go',
                check=True, env=env, capture_output=True)
 subprocess.run(['dotnet', 'build', str(root / 'tests/consumers/dotnet/Consumer.csproj'), '-c', 'Release', '-m:1',
                 '-o', str(build / 'conformance-dotnet')], check=True, env=env, capture_output=True)
 commands = {
-    'C': [str(build / 'laya-conformance-c'), model],
-    'C++': [str(build / 'laya-conformance-cpp'), model],
+    'C': [str(build / ('laya-conformance-c' + exe)), model],
+    'C++': [str(build / ('laya-conformance-cpp' + exe)), model],
     'Rust': ['cargo', 'run', '--locked', '--offline', '--quiet', '--manifest-path',
              str(root / 'tests/consumers/rust/Cargo.toml'), '--target-dir',
              str(build / 'conformance-rust'), '--', model],
@@ -66,7 +85,7 @@ commands = {
     'Java': ['java', '--enable-native-access=ALL-UNNAMED', '-cp', str(root / 'bindings/java/target/ducktape-laya.jar'),
              str(root / 'tests/consumers/java/Consumer.java'), model],
     '.NET': ['dotnet', str(build / 'conformance-dotnet/Consumer.dll'), model],
-    'Go': [str(build / 'conformance-go'), model],
+    'Go': [str(build / ('conformance-go' + exe)), model],
 }
 # Second pass: open config (context, overflow, calibration temperatures) through every binding.
 OPEN_CONFIG = {'threads': 4, 'context_tokens': 256, 'overflow': 'truncate_end',
@@ -74,7 +93,7 @@ OPEN_CONFIG = {'threads': 4, 'context_tokens': 256, 'overflow': 'truncate_end',
 OPEN_CONFIG_FIXTURE = root / 'tests/fixtures/options.json'
 report = {'fixtures': {}, 'model_sha256': sha256(args.model),
           'fixture_hashes': {fixture.name: sha256(fixture) for fixture in fixtures},
-          'runtime': binary_info(build), 'library_sha256': sha256(build / 'libducktape_laya.so'),
+          'runtime': binary_info(build), 'library_sha256': sha256(build / LIBRARY),
           'source_identity': source_identity(), 'settings': {'threads': 4}}
 def run_bindings(fixture, label, config=None):
     request = fixture.read_bytes()

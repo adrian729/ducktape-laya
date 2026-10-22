@@ -13,7 +13,11 @@ async function main() {
   try {
     const app = path.join(directory, 'application'); mkdirSync(app);
     writeFileSync(path.join(app, 'package.json'), JSON.stringify({ name: 'ducktape-test-consumer', version: '1.0.0', main: 'main.cjs' }));
-    let result = spawnSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--offline', artifact], { cwd: app, encoding: 'utf8' });
+    const install = ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--offline'];
+    // npm on Windows is a .cmd script, which needs a shell.
+    let result = process.platform === 'win32'
+      ? spawnSync(`npm ${install.join(' ')} "${artifact}"`, { cwd: app, encoding: 'utf8', shell: true })
+      : spawnSync('npm', [...install, artifact], { cwd: app, encoding: 'utf8' });
     if (result.status) throw new Error(result.stderr);
     writeFileSync(path.join(app, 'main.cjs'), `
 const { app } = require('electron');
