@@ -62,6 +62,9 @@ env.pop('LAYA_MODEL', None)
 if model: env['LAYA_MODEL'] = str(model)
 # Windows finds the DLL (for ctypes, Rust and Go test programs) on PATH.
 if WINDOWS: env['PATH'] = str(build) + os.pathsep + env.get('PATH', '')
+# vcvars64.bat sets Platform=x64, which MSBuild reads as the solution platform (.NET has Any CPU).
+if WINDOWS:
+    for key in [key for key in env if key.upper() == 'PLATFORM']: env.pop(key)
 report = {'schema_version': 1, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')),
           'runtime': record['runtime'], 'model': manifest if model else None,
