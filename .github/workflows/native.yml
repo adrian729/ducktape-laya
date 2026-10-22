@@ -1,6 +1,15 @@
 name: Native checks
-# Linux x86-64 and arm64 (validate.py), Windows x64, the multi-platform packages
-# assembled from their fragments, and Windows build reproducibility.
+# Linux x86-64 and arm64 and Windows x64 (scripts/validate.py on each), the
+# multi-platform packages assembled from their fragments and installed on every
+# platform, and build reproducibility.
+#
+# A release candidate run (dispatch with candidate=true on the exact candidate
+# commit, see docs/RELEASE_CHECKS.md) also runs the tier-2 targets' short stress
+# and reproducibility and keeps every target's evidence for
+# scripts/fetch-ci-evidence.py: evidence-<platform> (validate.py report and
+# outputs), packages-<platform> (fragments), packages-assembled (the release
+# packages), installed-<platform>-real-model, stress-<platform> and
+# reproducibility-<platform>.
 on:
   push:
   pull_request:
@@ -8,6 +17,10 @@ on:
     inputs:
       real_model:
         description: Download the pinned test model and run native artifact checks
+        type: boolean
+        default: false
+      candidate:
+        description: Release candidate run (implies the real model; adds the tier-2 stress and reproducibility evidence)
         type: boolean
         default: false
 permissions:
@@ -59,7 +72,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
   native:
-    name: ${{ matrix.compiler }} / Node ${{ matrix.node }} / ${{ matrix.arch }} / ${{ inputs.real_model && 'real model' || 'model free' }}
+    name: ${{ matrix.compiler }} / Node ${{ matrix.node }} / ${{ matrix.arch }} / ${{ (inputs.real_model || inputs.candidate) && 'real model' || 'model free' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
     strategy:
@@ -72,12 +85,14 @@ jobs:
             node: 24.21.0
             runner: ubuntu-24.04
             arch: x64
+          # The release platform's fragment and evidence (gcc, the release compiler).
           - compiler: gcc
             cc: gcc
             cxx: g++
             node: 26.7.0
             runner: ubuntu-24.04
             arch: x64
+            platform: linux-x64
           # Linux arm64: native build, ctest, every binding suite and per-platform
           # packages (linux-arm64 tarball, npm, wheel, jar, nupkg) with scripts/package-native.py.
           - compiler: gcc
@@ -86,6 +101,7 @@ jobs:
             node: 24.21.0
             runner: ubuntu-24.04-arm
             arch: arm64
+            platform: linux-arm64
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
@@ -117,10 +133,10 @@ jobs:
           go-version: '1.27.2'
           cache: false
       - name: Install QEMU user mode for the emulated-CPU guard test
-        if: inputs.real_model && matrix.arch == 'x64'
+        if: (inputs.real_model || inputs.candidate) && matrix.arch == 'x64'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user
       - name: Download and verify explicitly requested test model
-        if: inputs.real_model
+        if: (inputs.real_model || inputs.candidate)
         run: |
           mkdir -p build-model
           python3 - <<'PY'
@@ -132,27 +148,52 @@ jobs:
       - name: Install locked TypeScript consumer test tools
         run: npm ci --ignore-scripts --prefix tests/typescript
       - name: Model-free checks
-        if: ${{ !inputs.real_model }}
+        if: ${{ !(inputs.real_model || inputs.candidate) }}
         run: python3 scripts/validate.py --packages --output build-ci-report --jobs 2
       - name: Real-model and installed artifact checks
-        if: inputs.real_model
+        if: (inputs.real_model || inputs.candidate)
         run: python3 scripts/validate.py --model build-model/laya.gguf --packages --upstream-reference --output build-ci-report --jobs 2
       - name: Record exact outputs of the built library on this runner CPU
-        if: inputs.real_model && matrix.arch == 'x64'
+        if: (inputs.real_model || inputs.candidate) && matrix.arch == 'x64'
         run: |
           python3 tests/cross-host.py bundle --build build-validation --output build-ci-report/cross-host/bundle
           python3 tests/cross-host.py record --bundle build-ci-report/cross-host/bundle \
             --model build-model/laya.gguf --report build-ci-report/cross-host/record.json
+      - name: Short stress run on the validated library (tier-2 target)
+        if: inputs.candidate && matrix.platform == 'linux-arm64'
+        run: python3 scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 2
       # The gcc builds' packages (the release compiler) are this platform's fragment for
       # scripts/assemble-packages.py, which the assemble job below merges with Windows.
       - name: Retain this platform's packages
-        if: matrix.compiler == 'gcc'
+        if: matrix.platform
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: packages-linux-${{ matrix.arch }}
+          name: packages-${{ matrix.platform }}
           path: build-ci-report/packages/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          overwrite: true
+      - name: Retain this platform's release evidence
+        if: inputs.candidate && matrix.platform
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ matrix.platform }}
+          path: |
+            build-ci-report/
+            !build-ci-report/packages/
+            !build-ci-report/assembled/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+      - name: Retain the stress report
+        if: inputs.candidate && matrix.platform == 'linux-arm64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stress-${{ matrix.platform }}
+          path: build-stress/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
       - name: Retain logs and explicit gate report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -160,14 +201,14 @@ jobs:
           name: native-${{ matrix.arch }}-${{ matrix.compiler }}-node-${{ matrix.node }}
           path: build-ci-report/
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          overwrite: true
 
   windows:
-    name: Windows x64 / ${{ inputs.real_model && 'real model' || 'model free' }}
+    name: Windows x64 / ${{ (inputs.real_model || inputs.candidate) && 'real model' || 'model free' }}
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
-      DUCKTAPE_LAYA_LIB_DIR: ${{ github.workspace }}\build
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
       # The test and release scripts read UTF-8 files with Python's default encoding.
@@ -200,6 +241,8 @@ jobs:
           rustup override set 1.98.0
           cargo fetch --locked --manifest-path bindings/rust/Cargo.toml
           cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
+      - name: Install locked TypeScript consumer test tools
+        run: npm ci --ignore-scripts --prefix tests/typescript
       - name: Node-API headers and node.lib for this Node, checked against its SHASUMS256.txt
         shell: pwsh
         run: |
@@ -207,7 +250,7 @@ jobs:
           if ($LASTEXITCODE) { exit 1 }
           $sdk | ForEach-Object { $_.Replace('\', '/') } >> $env:GITHUB_ENV
       - name: Download and verify explicitly requested test model
-        if: inputs.real_model
+        if: (inputs.real_model || inputs.candidate)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build-model | Out-Null
@@ -215,127 +258,85 @@ jobs:
           python scripts/verify-model.py build-model/laya.gguf
           if ($LASTEXITCODE) { exit 1 }
           "LAYA_MODEL=$((Resolve-Path build-model/laya.gguf).Path.Replace('\', '/'))" >> $env:GITHUB_ENV
-      - name: Build, check exports and run the native tests with clang-cl
+      # scripts/validate.py as on Linux, with clang-cl: native tests, exports, ABI layouts,
+      # every binding suite, the packages loaded outside the checkout; with the model also
+      # exact agreement between all eight bindings, the original Laya and llama.cpp
+      # references and the installed packages. Linux-only tests are listed as skipped.
+      - name: Validate with clang-cl
         shell: cmd
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
+          set "MODEL="
+          if defined LAYA_MODEL set "MODEL=--model %LAYA_MODEL% --upstream-reference"
           rem Strawberry Perl's patch.exe comes first on PATH and crashes; use the one from Git for Windows.
-          set "EXTRA="
-          if defined LAYA_MODEL set "EXTRA=-DDUCKTAPE_TEST_MODEL=%LAYA_MODEL% -DDUCKTAPE_BUILD_REFERENCE_PROBE=ON"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=ON "-DNODE_INCLUDE_DIR=%NODE_INCLUDE_DIR%" "-DNODE_LIB=%NODE_LIB%" "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" %EXTRA% || exit /b 1
-          cmake --build build --parallel 3 || exit /b 1
-          dumpbin /nologo /exports build\ducktape_laya.dll > build\exports-dumpbin.txt || exit /b 1
-          ctest --test-dir build --output-on-failure || exit /b 1
-      - name: Exported symbols
-        shell: bash
+          python scripts/validate.py %MODEL% --packages --output build-ci-report --jobs 3 --node-include "%NODE_INCLUDE_DIR%" --node-lib "%NODE_LIB%" --cmake-arg=-GNinja "--cmake-arg=-DCMAKE_C_COMPILER=%CLANG%" "--cmake-arg=-DCMAKE_CXX_COMPILER=%CLANG%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
+      - name: Short stress run on the validated library (tier-2 target)
+        if: inputs.candidate
+        shell: cmd
         run: |
-          tr -d '\r' < build/exports-dumpbin.txt | awk '/ordinal +hint +RVA +name/ { table = 1; next } table && /Summary/ { table = 0 } table && NF == 4 { print $4 }' | sort > build/exports.txt
-          cat build/exports.txt
-          sed 's/^_//' src/exports.macos | sort | diff build/exports.txt -
-      - name: Agreement with the original Laya and with llama.cpp
-        if: inputs.real_model
-        shell: pwsh
-        run: |
-          python tests/original-reference.py $env:LAYA_MODEL --build-dir build --report build/original-reference.json
-          $original = $LASTEXITCODE
-          python tests/compare-native-reference.py $env:LAYA_MODEL --build build --report build/upstream-reference.json
-          if ($LASTEXITCODE -or $original) { exit 1 }
-      - name: Python
-        shell: bash
-        run: PYTHONPATH=bindings/python/src python -m unittest discover -s bindings/python/tests
-      - name: Rust
-        shell: pwsh
-        run: |
-          $env:PATH = "$env:DUCKTAPE_LAYA_LIB_DIR;$env:PATH"
-          cargo test --locked --manifest-path bindings/rust/Cargo.toml
-      - name: Java
-        shell: pwsh
-        run: |
-          # build.sh with Windows classpath separators.
-          $lint = '-Xlint:all,-restricted,-serial,-missing-explicit-ctor,-module'
-          New-Item -ItemType Directory -Force bindings/java/target/classes, bindings/java/target/test-classes | Out-Null
-          javac --release 22 $lint -d bindings/java/target/classes (Get-ChildItem -Recurse bindings/java/src/main -Filter *.java).FullName
-          if ($LASTEXITCODE) { exit 1 }
-          javac --release 22 $lint -cp bindings/java/target/classes -d bindings/java/target/test-classes (Get-ChildItem -Recurse bindings/java/src/test -Filter *.java).FullName
-          if ($LASTEXITCODE) { exit 1 }
-          java --enable-native-access=ALL-UNNAMED -cp "bindings/java/target/classes;bindings/java/target/test-classes" io.github.adrian729.laya.LayaTest
-          if ($LASTEXITCODE) { exit 1 }
-      - name: .NET
-        shell: bash
-        run: dotnet test bindings/dotnet/DucktapeLaya.slnx -m:1
-      - name: Go
-        shell: pwsh
-        run: |
-          # cgo with the runner's MinGW-w64 gcc; it links ducktape_laya.lib and runs with the DLL on PATH.
-          Get-Command gcc | Format-List Source
-          gcc --version
-          $env:PATH = "$env:DUCKTAPE_LAYA_LIB_DIR;$env:PATH"
-          $env:CGO_CFLAGS = "-I$PWD/include"
-          $env:CGO_LDFLAGS = "-L$env:DUCKTAPE_LAYA_LIB_DIR"
-          go -C bindings/go test -count=1 ./...
-          if ($LASTEXITCODE) { exit 1 }
-      - name: Node
-        shell: pwsh
-        run: |
-          $env:DUCKTAPE_LAYA_ADDON = "$env:DUCKTAPE_LAYA_LIB_DIR\ducktape_laya.node"
-          node --test bindings/node/test.cjs
-          if ($LASTEXITCODE) { exit 1 }
-      - name: Packages (zip, npm, crates, wheel, jar, NuGet), loaded outside the checkout
-        shell: pwsh
-        run: |
-          python scripts/package-native.py --build build --output build/packages
-          if ($LASTEXITCODE) { exit 1 }
-          python tests/package-smoke.py build/packages
-          if ($LASTEXITCODE) { exit 1 }
-          "NPM_PACKAGE=$((Get-Item build/packages/ducktape-laya-*.tgz).FullName)" >> $env:GITHUB_ENV
-      - name: Installed packages with the real model
-        if: inputs.real_model
-        shell: pwsh
-        run: |
-          python tests/installed-packages.py build/packages $env:LAYA_MODEL
-          if ($LASTEXITCODE) { exit 1 }
-      - name: Exact agreement between all bindings
-        if: inputs.real_model
-        shell: pwsh
-        run: |
-          python tests/parity.py $env:LAYA_MODEL --build-dir build --report build/parity.json
-          if ($LASTEXITCODE) { exit 1 }
-      - name: Electron consumer, directory and ASAR
-        if: inputs.real_model
-        shell: pwsh
-        run: |
-          npm ci --prefix tests/electron --no-audit --no-fund
-          if ($LASTEXITCODE) { exit 1 }
-          node tests/electron/run.cjs $env:NPM_PACKAGE $env:LAYA_MODEL build/electron.json
-          if ($LASTEXITCODE) { exit 1 }
-      - name: Retain reports
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
+          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          python scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 3 || exit /b 1
+      - name: Retain logs and explicit gate report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-x64-${{ inputs.real_model && 'real-model' || 'model-free' }}
+          name: windows-x64-${{ (inputs.real_model || inputs.candidate) && 'real-model' || 'model-free' }}
           path: |
-            build/original-reference.json
-            build/upstream-reference.json
-            build/parity.json
-            build/electron.json
-            build/exports.txt
-            build/Testing/Temporary/LastTest.log
-          if-no-files-found: ignore
-          retention-days: 14
+            build-ci-report/
+            !build-ci-report/packages/
+            !build-ci-report/assembled/
+            build-validation/Testing/Temporary/LastTest.log
+            build-stress/
+          if-no-files-found: warn
+          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          overwrite: true
       - name: Retain this platform's packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: packages-windows-x64
-          path: build/packages/
+          path: build-ci-report/packages/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          overwrite: true
+      - name: Retain this platform's release evidence
+        if: inputs.candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-windows-x64
+          path: |
+            build-ci-report/
+            !build-ci-report/packages/
+            !build-ci-report/assembled/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+      - name: Retain the stress report
+        if: inputs.candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stress-windows-x64
+          path: build-stress/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
-  windows-reproducibility:
-    name: Windows x64 / independent builds
-    runs-on: windows-2025
+  # Two independent builds of one source snapshot install identical files: Windows on every
+  # run, and in a candidate run every tier-2 target (Linux x86-64 is checked on the release host).
+  reproducibility:
+    name: ${{ matrix.platform }} / independent builds
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Unmatched include entries would add jobs, so the whole list is chosen at once.
+        include: >-
+          ${{ fromJSON(inputs.candidate
+          && '[{"platform": "linux-arm64", "runner": "ubuntu-24.04-arm"}, {"platform": "windows-x64", "runner": "windows-2025"}]'
+          || '[{"platform": "windows-x64", "runner": "windows-2025"}]') }}
     env:
       PYTHONUTF8: '1'
     steps:
@@ -347,29 +348,34 @@ jobs:
         with:
           node-version: 24.21.0
       - name: Node-API headers and node.lib for this Node, checked against its SHASUMS256.txt
+        if: matrix.platform == 'windows-x64'
         shell: pwsh
         run: |
           $sdk = python scripts/fetch-node-sdk.py build-node-sdk --lib
           if ($LASTEXITCODE) { exit 1 }
           $sdk | ForEach-Object { $_.Replace('\', '/') } >> $env:GITHUB_ENV
       - name: Compile one source snapshot in two directories with clang-cl and compare the installed files
+        if: matrix.platform == 'windows-x64'
         shell: cmd
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
           python scripts/check-reproducibility.py --output "%RUNNER_TEMP%\repro" --jobs 3 --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
+      - name: Compile one source snapshot in two directories with gcc and compare the installed files
+        if: matrix.platform == 'linux-arm64'
+        run: python3 scripts/check-reproducibility.py --output "$RUNNER_TEMP/repro" --jobs 4 --cc gcc --cxx g++
       - name: Retain the report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-x64-reproducibility
+          name: reproducibility-${{ matrix.platform }}
           path: |
             ${{ runner.temp }}/repro/report.json
             ${{ runner.temp }}/repro/*.log
-            ${{ runner.temp }}/repro/*/install/bin/ducktape_laya.dll
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          overwrite: true
 
   # The release packages: every platform's fragment merged into one npm package, one jar
   # and one NuGet package (scripts/assemble-packages.py), next to each platform's archive
@@ -401,10 +407,11 @@ jobs:
           name: packages-assembled
           path: assembled/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          overwrite: true
 
   assembled:
-    name: Multi-platform packages on ${{ matrix.platform }} / ${{ inputs.real_model && 'real model' || 'model free' }}
+    name: Multi-platform packages on ${{ matrix.platform }} / ${{ (inputs.real_model || inputs.candidate) && 'real model' || 'model free' }}
     needs: assemble
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -451,12 +458,12 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: inputs.real_model
+        if: (inputs.real_model || inputs.candidate)
         with:
           go-version: '1.27.2'
           cache: false
       - name: Install pinned Rust toolchain and fetch the consumer's locked dependencies
-        if: inputs.real_model
+        if: (inputs.real_model || inputs.candidate)
         run: >-
           rustup toolchain install 1.98.0 --profile minimal && rustup override set 1.98.0 &&
           cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
@@ -467,17 +474,25 @@ jobs:
       - name: Load every package outside the checkout
         run: ${{ matrix.python }} tests/package-smoke.py assembled --platform ${{ matrix.platform }}
       - name: Download and verify explicitly requested test model
-        if: inputs.real_model
+        if: (inputs.real_model || inputs.candidate)
         run: >-
           ${{ matrix.python }} -c "import json, pathlib, urllib.request; pathlib.Path('build-model').mkdir(); m = json.loads(pathlib.Path('models/manifest.json').read_text()); urllib.request.urlretrieve(m['url'], 'build-model/laya.gguf')" &&
           ${{ matrix.python }} scripts/verify-model.py build-model/laya.gguf
       - name: Installed packages with the real model
-        if: inputs.real_model
+        if: (inputs.real_model || inputs.candidate)
         run: >-
           ${{ matrix.python }} tests/installed-packages.py assembled build-model/laya.gguf --platform ${{ matrix.platform }}
           --report build-report/installed.json
+      # Electron's Chromium sandbox needs unprivileged user namespaces, which Ubuntu 24.04
+      # restricts through AppArmor; the arm64 image also lacks some of Chromium's libraries.
+      - name: Electron prerequisites on Linux
+        if: (inputs.real_model || inputs.candidate) && runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libnss3 libasound2t64 libgtk-3-0t64 libgbm1 libxss1
       - name: Electron consumer of the multi-platform npm package, directory and ASAR
-        if: inputs.real_model && matrix.platform == 'windows-x64'
+        if: (inputs.real_model || inputs.candidate)
         run: >-
           npm ci --prefix tests/electron --no-audit --no-fund &&
           node tests/electron/run.cjs assembled/ducktape-laya-$(${{ matrix.python }} -c "import json; print(json.load(open('assembled/inventory.json'))['package_version'])").tgz
@@ -486,7 +501,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: installed-${{ matrix.platform }}-${{ inputs.real_model && 'real-model' || 'model-free' }}
+          name: installed-${{ matrix.platform }}-${{ (inputs.real_model || inputs.candidate) && 'real-model' || 'model-free' }}
           path: build-report/
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          overwrite: true
