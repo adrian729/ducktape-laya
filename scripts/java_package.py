@@ -104,4 +104,5 @@ def build(out, version, library, epoch, target):
         write_zip(out / f'{ARTIFACT}-{version}-javadoc.jar',
                   {**{path.relative_to(docs).as_posix(): (lf(path), False) for path in sorted(docs.rglob('*')) if path.is_file()},
                    lead[0]: (manifest, False)}, epoch, lead)
-    (out / f'{ARTIFACT}-{version}.pom').write_text(pom(version), encoding='utf-8')
+    # LF on every platform: Windows would otherwise write CRLF.
+    (out / f'{ARTIFACT}-{version}.pom').write_text(pom(version), encoding='utf-8', newline='\n')

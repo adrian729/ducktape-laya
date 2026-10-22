@@ -29,12 +29,16 @@ p.add_argument('--output', type=pathlib.Path, required=True)
 a = p.parse_args()
 def normalize_nupkg(source, destination, epoch):
     """Rewrite a nupkg deterministically: NuGet stamps entries with the pack time and
-    gives relationships random IDs. Entry order and contents are otherwise kept."""
+    gives relationships random IDs, and writes its XML parts with the platform's line
+    separator (CRLF on Windows). Entry order and contents are otherwise kept."""
     import hashlib
     import zipfile
     with zipfile.ZipFile(source) as archive:
         names = archive.namelist()
         files = {name: (archive.read(name), False) for name in names}
+    for name in names:
+        if name in ('_rels/.rels', '[Content_Types].xml') or name.endswith(('.nuspec', '.psmdcp')):
+            files[name] = (files[name][0].replace(b'\r\n', b'\n'), False)
     rels = files['_rels/.rels'][0].decode()
     rels = re.sub(r'Target="([^"]+)" Id="[^"]+"',
                   lambda m: f'Target="{m[1]}" Id="R{hashlib.sha256(m[1].encode()).hexdigest()[:16].upper()}"', rels)
@@ -87,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     for name in ['README.md', 'index.cjs', 'index.d.ts', 'worker.cjs', 'resolve-addon.cjs']:
         shutil.copy(ROOT / 'bindings/node' / name, package / name)
     # The package holds one platform's addon; declare that OS and CPU so npm refuses others.
-    (package / 'package.json').write_text(set_npm_platforms((ROOT / 'bindings/node/package.json').read_text(), [target]))
+    (package / 'package.json').write_text(set_npm_platforms((ROOT / 'bindings/node/package.json').read_text(), [target]), newline='\n')
     for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
         shutil.copy(ROOT / name, package / name)
     shutil.copytree(ROOT / 'licenses', package / 'licenses')
@@ -172,5 +176,5 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         'payload': native_payload(out, version, target),
         'components': [{'name': 'ducktape-laya', 'license': 'MIT'}, {'name': 'llama.cpp/ggml', 'license': 'MIT', 'revision': record['runtime']['commit']}, {'name': 'nlohmann-json', 'license': 'MIT'}, {'name': 'llamafile-cpu-kernels', 'license': 'MIT'}, {'name': 'laya-language-data', 'license': 'Apache-2.0'}],
         'status': 'local unsigned development artifacts; not release approval'}
-    (out / 'inventory.json').write_text(json.dumps(inventory, indent=2)+'\n')
+    (out / 'inventory.json').write_text(json.dumps(inventory, indent=2)+'\n', newline='\n')
 print(out)

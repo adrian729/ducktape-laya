@@ -224,7 +224,7 @@ inventory = {'schema_version': 2, 'kind': 'multi-platform', 'package_version': v
                  for f in fragments},
              'artifacts': {f.name: {'sha256': sha256(f), 'bytes': f.stat().st_size} for f in sorted(out.iterdir())},
              'status': 'local unsigned development artifacts; not release approval'}
-(out / 'inventory.json').write_text(json.dumps(inventory, indent=2) + '\n')
+(out / 'inventory.json').write_text(json.dumps(inventory, indent=2) + '\n', newline='\n')
 out.chmod(0o755)
 out.rename(a.output)
 print(a.output.resolve())

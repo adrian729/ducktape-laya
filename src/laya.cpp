@@ -113,6 +113,13 @@ void count_windows(size_t &total, const question &q) {
     total += q.overflow_report().value("windows", size_t(0));
     require(total <= max_call_windows, "the call needs more than " + std::to_string(max_call_windows) + " forward passes");
 }
+#ifdef _WIN32
+}
+// clang-cl names an anonymous namespace after the source path on its command line, and the
+// DLL keeps the RTTI name of the parser callback below: outside one, the DLL does not depend
+// on the build directory (scripts/check-reproducibility.py compares two).
+namespace dtl_json {
+#endif
 json read_json(const char *text) {
     require(text, "JSON input is required");
     size_t n = 0;
@@ -133,6 +140,11 @@ json read_json(const char *text) {
         });
     } catch (const json::exception &e) { throw failure(DTL_INVALID_ARGUMENT, e.what()); }
 }
+#ifdef _WIN32
+}
+using dtl_json::read_json;
+namespace {
+#endif
 void keys(const json &value, std::initializer_list<const char *> allowed, const std::string &where) {
     require(value.is_object(), where + " must be an object");
     for (auto &[key, ignored] : value.items()) {

@@ -30,4 +30,4 @@ def document(record, browser=False):
         'dependencies': [{'ref': 'ducktape-laya', 'dependsOn': [component['bom-ref'] for component in components]}]}
 
 def write(path, record, browser=False):
-    path.write_text(json.dumps(document(record, browser), indent=2) + '\n')
+    path.write_text(json.dumps(document(record, browser), indent=2) + '\n', newline='\n')
