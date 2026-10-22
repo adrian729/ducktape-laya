@@ -9,17 +9,83 @@
 #include <string>
 #include <thread>
 #include <vector>
+#ifdef _WIN32
+// Windows: committed private bytes for memory (the working set is trimmed by the OS and
+// would hide or fake growth), the handle count for descriptors, threads from a snapshot.
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <psapi.h>
+#include <tlhelp32.h>
+#pragma comment(lib, "psapi.lib")
+static const char *const memory_metric = "PrivateUsage";
+static long rss_kib() {
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&counters), sizeof counters)) return -1;
+    return long(counters.PrivateUsage / 1024);
+}
+static long peak_kib() {
+    PROCESS_MEMORY_COUNTERS counters{};
+    return GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof counters) ? long(counters.PeakPagefileUsage / 1024) : -1;
+}
+static long descriptor_count() {
+    DWORD count = 0;
+    return GetProcessHandleCount(GetCurrentProcess(), &count) ? long(count) : -1;
+}
+static long thread_count() {
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return -1;
+    THREADENTRY32 entry{}; entry.dwSize = sizeof entry;
+    long count = 0;
+    for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry))
+        if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++count;
+    CloseHandle(snapshot);
+    return count;
+}
+static unsigned long process_id() { return GetCurrentProcessId(); }
+// Windows' own thread pools (the parallel loader, I/O completion) start and retire worker
+// threads on their own schedule. Counts must return exactly to the baseline; they get up
+// to 60 s to do so, and every wait is reported.
+static unsigned settle_waits = 0;
+static bool settled(long fds, long threads) {
+    for (int i = 0; i < 600; ++i) {
+        if (descriptor_count() == fds && thread_count() == threads) return true;
+        if (i == 0) ++settle_waits;
+        Sleep(100);
+    }
+    return false;
+}
+static void stable_baseline() {
+    // Wait (up to 120 s) until the thread and handle counts hold for 5 s.
+    long threads = thread_count(), fds = descriptor_count();
+    for (int stable = 0, i = 0; stable < 50 && i < 1200; ++i) {
+        Sleep(100);
+        const long t = thread_count(), f = descriptor_count();
+        stable = (t == threads && f == fds) ? stable + 1 : 0;
+        threads = t; fds = f;
+    }
+}
+#else
 #include <sys/resource.h>
 #include <unistd.h>
-static const std::string request = R"({"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
+static const char *const memory_metric = "VmRSS";
 static long rss_kib() {
     std::ifstream file("/proc/self/status"); std::string name;
     while (file >> name) { if (name == "VmRSS:") { long value; file >> value; return value; } std::getline(file, name); }
     return -1;
 }
+static long peak_kib() { struct rusage usage{}; getrusage(RUSAGE_SELF, &usage); return usage.ru_maxrss; }
 static size_t entries(const char *path) {
     size_t n = 0; for (const auto &entry : std::filesystem::directory_iterator(path)) { (void) entry; ++n; } return n;
 }
+static long descriptor_count() { return (long) entries("/proc/self/fd"); }
+static long thread_count() { return (long) entries("/proc/self/task"); }
+static unsigned long process_id() { return (unsigned long) ::getpid(); }
+static const unsigned settle_waits = 0;
+static bool settled(long fds, long threads) { return descriptor_count() == fds && thread_count() == threads; }
+static void stable_baseline() {}
+#endif
+static const std::string request = R"({"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
 int main(int argc, char **argv) {
     if (argc < 2 || argc > 4) return 2;
     try {
@@ -43,16 +109,18 @@ int main(int argc, char **argv) {
         { auto warm = ducktape::engine::open(argv[1], settings); expected = warm.execute(request); }
         // Distinct canonical paths (hard links, same filesystem as the model) force real
         // router loads and evictions with one loaded model.
-        const auto links = std::filesystem::current_path() / ("stress-router-" + std::to_string(::getpid()));
+        const auto links = std::filesystem::current_path() / ("stress-router-" + std::to_string(process_id()));
         std::filesystem::create_directory(links);
         struct cleanup { std::filesystem::path path; ~cleanup() { std::error_code e; std::filesystem::remove_all(path, e); } } remove_links{links};
         for (const char *name : {"a.gguf", "b.gguf"}) std::filesystem::create_hard_link(std::filesystem::canonical(argv[1]), links / name);
-        const auto router_config = "{\"models\":{\"a\":\"" + (links / "a.gguf").string() + "\",\"b\":\"" +
-                                   (links / "b.gguf").string() + "\"},\"max_loaded\":1}";
+        // Forward slashes and UTF-8: a Windows path's backslashes would be JSON escapes.
+        const auto router_config = "{\"models\":{\"a\":\"" + (links / "a.gguf").generic_u8string() + "\",\"b\":\"" +
+                                   (links / "b.gguf").generic_u8string() + "\"},\"max_loaded\":1}";
         const auto routed = [&](const char *id) { return request.substr(0, request.size() - 1) + ",\"model\":\"" + id + "\"}"; };
         const auto routed_expected = [&](const char *id) { return expected.substr(0, expected.size() - 1) + ",\"model\":\"" + id + "\"}"; };
-        const auto baseline_rss = rss_kib(), baseline_fds = (long) entries("/proc/self/fd"), baseline_threads = (long) entries("/proc/self/task");
-        if (baseline_rss < 0) throw std::runtime_error("Could not measure baseline RSS");
+        stable_baseline();
+        const auto baseline_rss = rss_kib(), baseline_fds = descriptor_count(), baseline_threads = thread_count();
+        if (baseline_rss < 0 || baseline_fds < 0 || baseline_threads < 0) throw std::runtime_error("Could not measure baseline resources");
         unsigned completed = 0;
         long maximum_closed_rss = baseline_rss;
         std::vector<long> closed_rss;
@@ -94,9 +162,9 @@ int main(int argc, char **argv) {
             }
           }
           // Measure after destruction so a temporarily resident model is not a leak.
+          const bool counts = settled(baseline_fds, baseline_threads);
           const long current_rss = rss_kib();
-          if (current_rss < 0 || current_rss > baseline_rss + 128 * 1024 ||
-              (long) entries("/proc/self/fd") != baseline_fds || (long) entries("/proc/self/task") != baseline_threads)
+          if (current_rss < 0 || current_rss > baseline_rss + 128 * 1024 || !counts)
               throw std::runtime_error("Post-close resource growth exceeded the declared bound");
           maximum_closed_rss = std::max(maximum_closed_rss, current_rss);
           closed_rss.push_back(current_rss);
@@ -130,8 +198,8 @@ int main(int argc, char **argv) {
         const long late_median = quarter ? median(closed_rss.size() - quarter, closed_rss.size()) : baseline_rss;
         if (closed_rss.size() >= 40 && late_median > warm_median + 32 * 1024)
             throw std::runtime_error("Sustained post-warmup closed RSS growth exceeded 32 MiB");
-        const auto final_rss = rss_kib(), final_fds = (long) entries("/proc/self/fd"), final_threads = (long) entries("/proc/self/task");
-        struct rusage usage{}; getrusage(RUSAGE_SELF, &usage);
+        settled(baseline_fds, baseline_threads);
+        const auto final_rss = rss_kib(), final_fds = descriptor_count(), final_threads = thread_count();
         const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         // Allocators can retain arenas: this is a bounded-growth regression gate,
         // not proof that every byte was returned to the OS. Sanitizers are separate.
@@ -141,7 +209,8 @@ int main(int argc, char **argv) {
                   << ",\"inference_threads\":2,\"max_closed_rss_kib\":" << maximum_closed_rss
                   << ",\"concurrent_calls\":12,\"baseline_rss_kib\":" << baseline_rss
                   << ",\"warm_median_closed_rss_kib\":" << warm_median << ",\"late_median_closed_rss_kib\":" << late_median
-                  << ",\"final_rss_kib\":" << final_rss << ",\"peak_rss_kib\":" << usage.ru_maxrss
-                  << ",\"fds\":" << final_fds << ",\"threads\":" << final_threads << ",\"elapsed_seconds\":" << elapsed << "}\n";
+                  << ",\"final_rss_kib\":" << final_rss << ",\"peak_rss_kib\":" << peak_kib()
+                  << ",\"fds\":" << final_fds << ",\"threads\":" << final_threads << ",\"elapsed_seconds\":" << elapsed
+                  << ",\"memory_metric\":\"" << memory_metric << "\",\"settle_waits\":" << settle_waits << "}\n";
     } catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
 }

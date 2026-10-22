@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import tarfile
-from release_support import ROOT, check_record, git, sha256
+from release_support import ROOT, check_record, git, host_target, sha256
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=pathlib.Path, required=True)
@@ -63,6 +63,10 @@ report = {'schema_version': 1, 'status': 'running', 'source_commit': git(ROOT, '
           'snapshot_sha256': hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
           'runtime': record['runtime'], 'scope': 'installed native and Node files; same toolchain/options, different source/build/install roots',
           'compilers': compilers, 'cmake_arguments': a.cmake_arg, 'source_files': manifest, 'builds': {}}
+try:
+    report['target_platform'] = host_target().name
+except ValueError:
+    report['target_platform'] = None
 def save():
     (out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 save()
@@ -89,7 +93,7 @@ try:
             if path.is_symlink(): value = {'symlink': os.readlink(path)}
             elif path.is_file(): value = {'sha256': sha256(path), 'mode': path.stat().st_mode & 0o777}
             else: continue
-            files[str(path.relative_to(install))] = value
+            files[path.relative_to(install).as_posix()] = value
         report['builds'][label] = files
         save()
     first, second = report['builds'].values()

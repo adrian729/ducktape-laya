@@ -5,6 +5,7 @@ import os
 import pathlib
 import shlex
 import subprocess
+import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -34,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-abi-layout-') as directory:
         'Rust': shlex.split(os.environ.get('RUSTC', 'rustc')) + ['--edition=2021', str(rust_source)],
     }
     for language, command in probes.items():
-        binary = tmp / language.replace('+', 'p')
+        binary = tmp / (language.replace('+', 'p') + ('.exe' if sys.platform == 'win32' else ''))
         subprocess.run(command + ['-o', str(binary)], check=True, capture_output=True, text=True)
         output = subprocess.check_output([binary], text=True)
         actual = {line.split()[0]: list(map(int, line.split()[1:])) for line in output.splitlines()}
