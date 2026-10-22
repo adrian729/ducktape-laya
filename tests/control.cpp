@@ -89,12 +89,36 @@ int main(int argc, char **argv) {
     catch (const ducktape::error &e) { CHECK(e.status == DTL_DEADLINE_EXCEEDED); }
     CHECK(engine.execute(request) == baseline); // aborted CPU graph must be reusable
     options.timeout_ms = 0;
-    std::thread stopper([&] { std::this_thread::sleep_for(std::chrono::milliseconds(25)); cancel = true; });
-    dtl_status status = DTL_OK;
-    try { engine.execute(request, options); }
-    catch (const ducktape::error &e) { status = e.status; }
-    stopper.join();
-    CHECK(status == DTL_CANCELLED);
+    {
+        // Cross-thread cancellation that must land mid-request. A timed sleep races the request on a
+        // fast host. Instead the callback, polled from inside the evaluation, reports that work has
+        // started and holds that poll (bounded) until another thread has set the cancel flag, so the
+        // request cannot finish before the cancel is visible and must end DTL_CANCELLED.
+        struct gate { std::atomic<bool> *cancel; std::atomic<unsigned> polls{0}; std::atomic<bool> started{false}, finished{false}; };
+        gate g{&cancel};
+        const auto until = [](auto &&done) {
+            const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            while (!done() && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        };
+        options.cancel_user_data = &g;
+        options.should_cancel = [](void *p) -> uint32_t {
+            auto *x = static_cast<gate *>(p);
+            if (++x->polls == 5) {
+                x->started = true;
+                const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                while (!x->cancel->load() && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return x->cancel->load() ? 5 : 0;
+        };
+        std::thread stopper([&] { until([&] { return g.started.load() || g.finished.load(); }); cancel = true; });
+        dtl_status status = DTL_OK;
+        try { engine.execute(request, options); }
+        catch (const ducktape::error &e) { status = e.status; }
+        g.finished = true;
+        stopper.join();
+        CHECK(g.started.load()); // work was in flight when the cancel was issued
+        CHECK(status == DTL_CANCELLED);
+    }
     CHECK(engine.execute(request) == baseline);
     // A one-shot cancellation callback must remain latched after backend abort.
     std::atomic<unsigned> calls{0};
