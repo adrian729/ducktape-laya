@@ -127,3 +127,16 @@ def verify_inventory(directory):
                 path.stat().st_size != identity['bytes'] or sha256(path) != identity.get('sha256')):
             raise ValueError('Artifact size/hash mismatch: ' + name)
     return inventory
+
+
+def platform_section(inventory, platform):
+    """One platform's identities in a package inventory: a multi-platform (assembled) inventory's
+    fragments[platform], or a single-platform inventory itself (package-native.py output, or a
+    0.1.0/0.2.0 release's native-inventory.json, which has no platform field)."""
+    if inventory.get('kind') == 'multi-platform':
+        if platform not in inventory.get('fragments', {}):
+            raise ValueError(f'The packages hold no {platform} fragment')
+        return inventory['fragments'][platform]
+    if inventory.get('platform', 'linux-x64') != platform:
+        raise ValueError(f'The packages are for {inventory.get("platform")}, not {platform}')
+    return inventory

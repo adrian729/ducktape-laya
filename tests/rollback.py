@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Rehearse upgrade and rollback of installed native packages outside the checkout.
 
-Installs retained last-known-good (LKG) Linux packages and the candidate side by
+Installs retained last-known-good (LKG) Linux x86-64 packages and the candidate (a
+single-platform or multi-platform package directory) side by
 side, switches an application's `current` link LKG -> candidate -> LKG, and runs
 one C consumer at each step. Rollback must restore the LKG library identity and
 byte-identical outputs on every fixture. When both sides have the same ABI, one
@@ -21,7 +22,7 @@ import sys
 import tarfile
 import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from artifact_support import verify_inventory
+from artifact_support import platform_section, verify_inventory
 from release_support import ROOT, read_json, sha256, verify_model
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -92,7 +93,7 @@ try:
                                               capture_output=True, check=True, timeout=600).stdout.decode()
                        for name, body in inputs[label].items()}
             library = sha256(lib / 'libducktape_laya.so')
-            expected = inventories[label]['build_identities']['ducktape_laya']['binary_sha256']
+            expected = platform_section(inventories[label], 'linux-x64')['build_identities']['ducktape_laya']['binary_sha256']
             if library != expected: raise AssertionError(f'{label}: installed library is not the inventoried library')
             info = subprocess.run([sys.executable, '-c', 'import json,sys; sys.path.insert(0, sys.argv[2]); '
                                    'from release_support import binary_info; print(json.dumps(binary_info(sys.argv[1])))',

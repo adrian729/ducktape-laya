@@ -3,14 +3,19 @@
 
 The evidence manifest maps evidence names to report paths produced by the
 runners in docs/RELEASE_CHECKS.md. The candidate is the clean HEAD commit, the
-packages from the native validation report and the browser package inventory.
+packages from the native validation report, the release packages the CI
+candidate run assembled (scripts/fetch-ci-evidence.py) and the browser package
+inventory. The CI linux-x64 library and Node addon must be byte-identical to the
+locally validated ones. Every release target in release/compatibility.json is
+evaluated: the tier-1 target with the gates below, each tier-2 target with its
+own gates from CI evidence (scripts/release_targets.py).
 Each required gate passes only if its evidence exists, passed, and is bound to
 that candidate (source commit, library, package, asset and model hashes). Hours-long
 gates (soak, stress, fuzz, sanitizers, performance, upgrade rehearsals) may reuse
 evidence from an ancestor commit when no library input and none of that gate's own
 harness files changed since; the report lists every reuse.
 Missing evidence is not_run; mismatched or failed evidence is failed.
-`release_ready` is true only when every required gate passed. Publication gates
+`release_ready` is true only when every gate of every target passed. Publication gates
 (signing, registry installation, retained rollback artifacts) are separate.
 """
 import argparse
@@ -22,8 +27,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import zipfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from release_support import ROOT, check_record, git, read_json, sha256, source_identity
+from release_targets import Context, Missing, Mismatch, evaluate_targets, need, run_gate
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('evidence', type=pathlib.Path, help='JSON object: evidence name -> report path (relative to the manifest)')
@@ -45,18 +52,8 @@ base = a.evidence.resolve().parent
 paths = {key: (base / value).resolve() for key, value in read_json(a.evidence).items()}
 dirty = False  # Evidence must come from a clean candidate tree; checked per report.
 source = source_identity(candidate_tree)['sha256']
-
-class Missing(Exception): pass
-class Mismatch(Exception): pass
-def need(condition, message):
-    if not condition: raise Mismatch(message)
-def load(name):
-    path = paths.get(name)
-    if not path or not path.is_file(): raise Missing(f'{name} evidence missing')
-    return json.loads(path.read_text())
-def same_source(report, name, key='source_commit', dirty_key='source_tracked_dirty'):
-    need(report.get(key) == commit, f'{name}: source {report.get(key)} is not candidate {commit}')
-    need(report.get(dirty_key) is False, f'{name}: produced from a dirty tree')
+ctx = Context(commit, source, record, policy, candidate_tree, paths)
+load, same_source = ctx.load, ctx.same_source
 
 # Inputs of the library under test, and of each reusable gate's harness.
 LIBRARY_INPUTS = ['src/*', 'include/*', 'cmake/*', 'patches/*', 'CMakeLists.txt', 'release/compatibility.json',
@@ -126,8 +123,22 @@ def native_gate(gate):
                 model_id = read_json(candidate_tree / name)['id']
                 status = report.get('additional_model_gates', {}).get(model_id, {}).get(gate, 'not_run')
                 need(status == 'passed', f'native: {gate} for {model_id} {status}')
+        if gate == 'original_reference':
+            # Only the tier-1 target's documented deviations (none today) may exceed the limit.
+            result = json.loads((paths['native'].parent / 'original-reference.json').read_text())
+            allowed = {f'{d["case"]}/{d["question"]}' for d in ctx.targets['linux-x64']['known_deviations']}
+            need(result['summary']['status'] == 'passed' and set(result['summary'].get('known_deviations_used', [])) <= allowed,
+                 'native: original reference used an undocumented deviation')
         if gate == 'installed_packages':
             packages()
+            # The shipped (CI-assembled) packages, installed here and on the CI linux-x64 runner.
+            directory, _ = ctx.release_packages()
+            for name in ('installed_release', 'linux-x64:installed'):
+                installed = load(name) if name == 'installed_release' else ctx.ci_json(name)
+                same_source(installed, name)
+                need(installed['status'] == 'passed' and installed['platform'] == 'linux-x64', f'{name}: failed or not linux-x64')
+                need(installed['artifact_inventory_sha256'] == sha256(directory / 'inventory.json'), f'{name}: not the release packages')
+                need(installed['model_sha256'] == manifest_model['sha256'], f'{name}: model differs')
     return check
 
 def sanitizers():
@@ -149,7 +160,8 @@ def stress():
         need(report['model_sha256'] == manifest_model['sha256'], f'{name}: model differs')
 
 def linux_matrix():
-    _, directory, _ = packages()
+    # Userspaces and Electron run the shipped release packages.
+    directory, _ = ctx.release_packages()
     userspaces = load('userspaces')
     need(userspaces['status'] == 'passed' and userspaces['artifact_inventory_sha256'] == sha256(directory / 'inventory.json'),
          'userspaces: failed or not the candidate packages')
@@ -213,10 +225,13 @@ def cross_profile_drift():
         need(browser['backends'][backend]['cross_profile_drift']['status'] == 'passed', f'drift: {backend} comparison failed')
     need(report['gates']['binding_conformance']['status'] == 'passed', 'drift: native conformance failed')
 
+LICENSE_TEXTS = {'LICENSE', 'THIRD_PARTY_NOTICES.md', 'Apache-2.0.txt', 'llama.cpp-MIT.txt', 'nlohmann-json-MIT.txt'}
 def license_inventory():
     _, directory, inventory = packages()
     package = browser_package()
-    for label, names, folder in (('native', inventory['artifacts'], directory), ('browser', package['artifacts'], paths['browser_package'].parent)):
+    release, shipped = ctx.release_packages()
+    for label, names, folder in (('native', inventory['artifacts'], directory), ('release', shipped['artifacts'], release),
+                                 ('browser', package['artifacts'], paths['browser_package'].parent)):
         need('sbom.cdx.json' in names, f'{label}: SBOM missing from inventory')
         sbom = json.loads((folder / 'sbom.cdx.json').read_text())
         for component in sbom['components']:
@@ -225,7 +240,17 @@ def license_inventory():
                     need(sha256(candidate_tree / prop['name'].split(':', 2)[2]) == prop['value'], f'{label}: SBOM notice hash is stale')
     with tarfile.open(directory / f'ducktape-laya-{inventory["package_version"]}-linux-x64.tar.gz') as archive:
         members = {pathlib.PurePosixPath(m).name for m in archive.getnames()}
-    need({'LICENSE', 'THIRD_PARTY_NOTICES.md', 'Apache-2.0.txt', 'llama.cpp-MIT.txt', 'nlohmann-json-MIT.txt'} <= members, 'native archive lacks license texts')
+    need(LICENSE_TEXTS <= members, 'native archive lacks license texts')
+    # Every platform's shipped archive (tar.gz or zip) carries the license texts.
+    for platform, section in shipped['fragments'].items():
+        name = section['archive']
+        if name.endswith('.zip'):
+            with zipfile.ZipFile(release / name) as archive:
+                members = {pathlib.PurePosixPath(m).name for m in archive.namelist()}
+        else:
+            with tarfile.open(release / name) as archive:
+                members = {pathlib.PurePosixPath(m).name for m in archive.getnames()}
+        need(LICENSE_TEXTS <= members, f'{name} lacks license texts')
     review = load('security_review')
     need(review.get('model_licence'), 'license review missing')
 
@@ -243,6 +268,19 @@ def artifact_integrity():
     for run in ('packaging-identities', 'browser-backend-identities'):
         need(report['runs'][run]['exit_code'] == 0, f'native: {run} failed')
     need(inventory['build_identities']['ducktape_laya']['binary_sha256'] == report['library_sha256'], 'packages: library differs from validated library')
+    # The shipped linux-x64 library and Node addon are the locally qualified bytes: CI must
+    # reproduce this host's build exactly (a difference is not environmental; stop and report).
+    addon = inventory['build_identities']['ducktape_laya_node']['binary_sha256']
+    need(report.get('addon_sha256') == addon, 'packages: Node addon differs from validated addon')
+    _, ci = ctx.target_native('linux-x64')
+    need(ci['library_sha256'] == report['library_sha256'], 'CI linux-x64 library differs from the locally validated library')
+    need(ci['addon_sha256'] == addon, 'CI linux-x64 Node addon differs from the locally validated addon')
+    _, fragment = ctx.fragment('linux-x64')
+    identities = fragment['build_identities']
+    need(identities['ducktape_laya']['binary_sha256'] == report['library_sha256'] and identities['ducktape_laya_node']['binary_sha256'] == addon,
+         'release packages: linux-x64 library or addon is not the locally validated one')
+    for platform in ctx.targets:
+        ctx.release_payload(platform)
 
 def performance():
     # The primary model's benchmark is evidence "performance"; each additional model's
@@ -276,8 +314,8 @@ def upgrade_rollback():
     need(all(model['gates'][g]['status'] == 'passed' for g in ('native_contracts', 'binding_conformance', 'abi')) and
          model.get('comparison', {}).get('status') in ('passed', 'failed'), 'model upgrade: candidate checks did not complete')
     rollback = load('rollback')
-    need(rollback['status'] == 'passed' and rollback['candidate_inventory_sha256'] == sha256(packages()[1] / 'inventory.json'),
-         'rollback: failed or not rehearsed with the candidate packages')
+    need(rollback['status'] == 'passed' and rollback['candidate_inventory_sha256'] == sha256(ctx.release_packages()[0] / 'inventory.json'),
+         'rollback: failed or not rehearsed with the release packages')
     version = lambda text: tuple(int(part) for part in text.split('.'))
     need(rollback.get('previous_inventory_sha256') != rollback['candidate_inventory_sha256'] and
          version(rollback.get('previous_version', '0.0.0')) < version(rollback.get('candidate_version', '0.0.0')),
@@ -295,27 +333,26 @@ GATES = {'native_contracts': native_gate('native_contracts'), 'binding_conforman
          'upgrade_rollback': upgrade_rollback}
 if set(GATES) != set(record['required_release_gates']):
     raise SystemExit('Gate checker does not match release/compatibility.json required gates')
-result = {'schema_version': 1, 'candidate_commit': commit, 'checker_commit': git(ROOT, 'rev-parse', 'HEAD'),
+result = {'schema_version': 2, 'candidate_commit': commit, 'checker_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'checker_tree_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'source_identity_sha256': source,
           'model_sha256': manifest_model['sha256'], 'evidence': {k: str(v) for k, v in paths.items()}, 'gates': {}}
+# Release-level (tier-1) gates, then every target's.
 for gate, check in GATES.items():
-    try:
-        check()
-        result['gates'][gate] = {'status': 'passed'}
-    except Missing as error:
-        result['gates'][gate] = {'status': 'not_run', 'detail': str(error)}
-    except (Mismatch, KeyError, ValueError, OSError) as error:
-        result['gates'][gate] = {'status': 'failed', 'detail': f'{type(error).__name__}: {error}'}
-result['release_ready'] = all(g['status'] == 'passed' for g in result['gates'].values())
+    result['gates'][gate] = run_gate(check)
+result['targets'] = evaluate_targets(ctx, result['gates'])
+result['release_ready'] = (all(g['status'] == 'passed' for g in result['gates'].values()) and
+                           all(g['status'] == 'passed' for t in result['targets'].values() for g in t['gates'].values()))
 # The package inventories this report qualified; attest-release.yml checks the
-# published native-inventory.json and npm-browser-inventory.json against them.
+# published native-inventory.json (the CI-assembled release packages) and
+# npm-browser-inventory.json against them.
 result['inventories_sha256'] = {}
-for label, path in (('native', paths.get('native') and paths['native'].parent / 'packages/inventory.json'),
-                    ('browser', paths.get('browser_package'))):
+for label, path in (('native', paths.get('release_packages')), ('browser', paths.get('browser_package'))):
     if path and path.is_file(): result['inventories_sha256'][label] = sha256(path)
 result['reused_evidence'] = reused
 result['publication_gates'] = {gate: 'not_run' for gate in policy['publication_gates']}
 a.report.write_text(json.dumps(result, indent=2) + '\n')
 shutil.rmtree(candidate_tree, ignore_errors=True)
-print(json.dumps({'release_ready': result['release_ready'], 'gates': {k: v['status'] for k, v in result['gates'].items()}}, indent=2))
+print(json.dumps({'release_ready': result['release_ready'], 'gates': {k: v['status'] for k, v in result['gates'].items()},
+                  'targets': {p: {k: v['status'] for k, v in t['gates'].items()} for p, t in result['targets'].items() if t['tier'] != 1}},
+                 indent=2))
 raise SystemExit(0 if result['release_ready'] else 1)
