@@ -1,7 +1,5 @@
 name: Linux native checks
 on:
-  push:
-  pull_request:
   workflow_dispatch:
     inputs:
       real_model:

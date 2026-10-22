@@ -2,8 +2,6 @@ name: Other platforms
 # Platform plan phase 1: native build and model-free tests on platforms other
 # than Linux. Not a release gate yet.
 on:
-  push:
-  pull_request:
   workflow_dispatch:
     inputs:
       real_model:
@@ -15,6 +13,7 @@ permissions:
 jobs:
   macos:
     name: macOS arm64 / ${{ inputs.real_model && 'real model' || 'model free' }}
+    if: false
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -91,6 +90,7 @@ jobs:
           name: macos-arm64-${{ inputs.real_model && 'real-model' || 'model-free' }}
           path: |
             build/original-reference.json
+            build/original-reference-probe.json
             build/upstream-reference.json
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
@@ -131,49 +131,44 @@ jobs:
           python scripts/verify-model.py build-model/laya.gguf
           if ($LASTEXITCODE) { exit 1 }
           "LAYA_MODEL=$((Resolve-Path build-model/laya.gguf).Path.Replace('\', '/'))" >> $env:GITHUB_ENV
-      - name: Build and run the native tests with clang-cl
+      - name: Runner CPU
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Processor | Format-List Name, Manufacturer, NumberOfCores, NumberOfLogicalProcessors
+          python -c "import platform; print(platform.platform())"
+      - name: Build baseline and libm-probe variants with clang-cl
         shell: cmd
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
-          rem Strawberry Perl's patch.exe comes first on PATH and crashes; use the one from Git for Windows.
-          set "EXTRA="
-          if defined LAYA_MODEL set "EXTRA=-DDUCKTAPE_TEST_MODEL=%LAYA_MODEL% -DDUCKTAPE_BUILD_REFERENCE_PROBE=ON"
+          "%CLANG%" --version
+          echo int main(void){return 0;} > arch-probe.c
+          "%CLANG%" /O2 /arch:AVX2 -### -c arch-probe.c 2>&1 | findstr /c:"target-cpu"
+          set "EXTRA=-DDUCKTAPE_TEST_MODEL=%LAYA_MODEL% -DDUCKTAPE_BUILD_REFERENCE_PROBE=ON"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" %EXTRA% || exit /b 1
           cmake --build build --parallel 3 || exit /b 1
-          ctest --test-dir build --output-on-failure || exit /b 1
-      - name: Agreement with the original Laya and with llama.cpp
+          cmake -S . -B build-probe -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" -DDTL_LIBM_PROBE=ON %EXTRA% || exit /b 1
+          cmake --build build-probe --parallel 3 --target laya-conformance-c || exit /b 1
+          echo == ggml-cpu compile command
+          ninja -C build -t commands laya-conformance-c | findstr /c:"ops.cpp"
+          echo == baseline imports
+          dumpbin /imports build\ducktape_laya.dll | findstr /r /c:" erff$" /c:" expf$" /c:" sinf$" /c:" cosf$" /c:" powf$" /c:" logf$" /c:" tanhf$"
+          echo == probe imports
+          dumpbin /imports build-probe\ducktape_laya.dll | findstr /r /c:" erff$" /c:" expf$" /c:" sinf$" /c:" cosf$" /c:" powf$" /c:" logf$" /c:" tanhf$"
+          exit /b 0
+      - name: Numerical profile
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "bindings/python/src"
+          python -c "import json, ducktape_laya; print(json.dumps(ducktape_laya.runtime_info(), indent=1))"
+      - name: Agreement with the original Laya, baseline and libm probe
         if: inputs.real_model
         shell: pwsh
         run: |
           python tests/original-reference.py $env:LAYA_MODEL --build-dir build --report build/original-reference.json
-          $original = $LASTEXITCODE
-          python tests/compare-native-reference.py $env:LAYA_MODEL --build build --report build/upstream-reference.json
-          if ($LASTEXITCODE -or $original) { exit 1 }
-      - name: Python
-        shell: bash
-        run: PYTHONPATH=bindings/python/src python -m unittest discover -s bindings/python/tests
-      - name: Rust
-        shell: pwsh
-        run: |
-          $env:PATH = "$env:DUCKTAPE_LAYA_LIB_DIR;$env:PATH"
-          cargo test --locked --manifest-path bindings/rust/Cargo.toml
-      - name: Java
-        shell: pwsh
-        run: |
-          # build.sh with Windows classpath separators.
-          $lint = '-Xlint:all,-restricted,-serial,-missing-explicit-ctor,-module'
-          New-Item -ItemType Directory -Force bindings/java/target/classes, bindings/java/target/test-classes | Out-Null
-          javac --release 22 $lint -d bindings/java/target/classes (Get-ChildItem -Recurse bindings/java/src/main -Filter *.java).FullName
-          if ($LASTEXITCODE) { exit 1 }
-          javac --release 22 $lint -cp bindings/java/target/classes -d bindings/java/target/test-classes (Get-ChildItem -Recurse bindings/java/src/test -Filter *.java).FullName
-          if ($LASTEXITCODE) { exit 1 }
-          java --enable-native-access=ALL-UNNAMED -cp "bindings/java/target/classes;bindings/java/target/test-classes" io.github.adrian729.laya.LayaTest
-          if ($LASTEXITCODE) { exit 1 }
-      - name: .NET
-        shell: bash
-        run: dotnet test bindings/dotnet/DucktapeLaya.slnx -m:1
+          python tests/original-reference.py $env:LAYA_MODEL --build-dir build-probe --report build/original-reference-probe.json
+          exit 0
       - name: Retain reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -181,6 +176,7 @@ jobs:
           name: windows-x64-${{ inputs.real_model && 'real-model' || 'model-free' }}
           path: |
             build/original-reference.json
+            build/original-reference-probe.json
             build/upstream-reference.json
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore

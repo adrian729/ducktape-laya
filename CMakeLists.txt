@@ -75,6 +75,15 @@ if(DUCKTAPE_REPRODUCIBLE_PATHS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     "${DTL_DRIVER_OPTION}-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
     "${DTL_DRIVER_OPTION}-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=./build")
 endif()
+# Experiment only: take float libm results out of the comparison (cmake/libm-probe.h).
+option(DTL_LIBM_PROBE "Force-include cmake/libm-probe.h everywhere" OFF)
+if(DTL_LIBM_PROBE)
+  if(MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/libm-probe.h>")
+  else()
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/cmake/libm-probe.h>")
+  endif()
+endif()
 add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
 # Upstream Git discovery can find the parent project's repository in an archive.
 # Normalize its generated metadata to the explicit runtime identity instead.
