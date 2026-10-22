@@ -1,9 +1,11 @@
-# Linux packaging
+# Packaging
 
-Native delivery currently targets Linux x86-64. The default CPU build requires
-AVX2/FMA/F16C/BMI2/SSE4.2. A release must declare its CPU profile, system-library
-requirements and supported userspaces; a build on one host does not establish a
-minimum distribution baseline. See [COMPATIBILITY.md](COMPATIBILITY.md).
+Released native packages target Linux x86-64. Linux arm64, macOS arm64 and
+Windows x64 are packaged and tested in CI with the same scripts but not yet
+released (see [Package artifacts](#package-artifacts)). The default x86-64 CPU
+build requires AVX2/FMA/F16C/BMI2/SSE4.2. A release must declare its CPU profile,
+system-library requirements and supported userspaces; a build on one host does
+not establish a minimum distribution baseline. See [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ## Native installation
 
@@ -92,23 +94,93 @@ its original source-checkpoint revision remains unknown rather than inferred.
 Package publication, signing and broad production readiness remain separate
 release gates. Public source availability does not imply a published package release.
 
-## npm, Rust and Python artifacts
+## Package artifacts
 
-`scripts/package-linux.py` builds every native artifact in one run, so it needs a
+`scripts/package-native.py` builds every package for the platform it runs on, in
+one run: `linux-x64`, `linux-arm64`, `macos-arm64` or `windows-x64`. It needs a
 build with the Node addon (`DUCKTAPE_BUILD_NODE=ON`), `npm` (it runs `npm pack`),
 Cargo with the locked dependencies already fetched (it runs `cargo package
---locked --offline`), `readelf` and Python 3.11+. There is no wheel-only mode.
+--locked --offline`), a JDK (`javac`, `javadoc`), the .NET SDK (`dotnet pack`),
+Python 3.11+ and, on Linux, `readelf`. There is no wheel-only mode.
 
 ```sh
 # Build with DUCKTAPE_BUILD_NODE=ON and NODE_INCLUDE_DIR first.
-python3 scripts/package-linux.py --build build --output build/packages-0.2.0
+python3 scripts/package-native.py --build build --output build/packages-0.2.0
+python3 tests/package-smoke.py build/packages-0.2.0
 python3 tests/installed-packages.py build/packages-0.2.0 /path/to/approved.gguf
 ```
 
-The output contains a native installation tarball, an npm tarball with its own
-Node-API addon/shared library/worker/types, two normalized `.crate` files, a
-`manylinux_2_38` Python wheel that bundles the shared library, and an inventory with SHA-256 checksums and source/runtime identity. Existing output
-directories are rejected. No script publishes anything or downloads a model.
+The output holds that platform's packages, each installable on its own:
+
+| File | Contents |
+| --- | --- |
+| `ducktape-laya-VERSION-PLATFORM.tar.gz` (`.zip` on Windows) | The `cmake --install` tree: headers, the shared library (on Windows `bin/ducktape_laya.dll` and the import library `lib/ducktape_laya.lib`), CMake config, pkg-config file, the Node addon, model manifest, `download-model.py`, licences |
+| `ducktape-laya-VERSION.tgz` | npm package with this platform's addon and library in `native/<platform>-<arch>/` (`linux-x64`, `linux-arm64`, `darwin-arm64`, `win32-x64`); `os` and `cpu` name this platform |
+| `ducktape-laya-sys-VERSION.crate`, `ducktape-laya-VERSION.crate` | Rust source crates (the same on every platform) |
+| `ducktape_laya-VERSION-py3-none-TAG.whl` | Python wheel bundling the library in `ducktape_laya/_native/`; `TAG` is `manylinux_2_38_x86_64`, `manylinux_2_38_aarch64`, `macosx_13_0_arm64` or `win_amd64`. The Python files are the same in every wheel |
+| `ducktape-laya-VERSION.jar`, `-sources.jar`, `-javadoc.jar`, `.pom` | Maven files; the jar bundles the library at `native/<platform>/` (`native/windows-x64/ducktape_laya.dll`, ...) |
+| `DucktapeLaya.VERSION.nupkg` | NuGet package with the library at `runtimes/<rid>/native/` (`linux-x64`, `linux-arm64`, `osx-arm64`, `win-x64`) |
+| `sbom.cdx.json`, `inventory.json` | CycloneDX inventory; SHA-256 checksums, source/runtime identity, build identities, toolchain, and `payload`: every native file inside the npm, jar, NuGet and wheel packages with its SHA-256 |
+
+Existing output directories are rejected. No script publishes anything or
+downloads a model. The packager checks each binary before it ships it: on Linux
+the GLIBC/GLIBCXX symbol versions against the wheel tag and declared floors, on
+macOS the deployment target (13.0, the wheel tag), on Windows that the DLL
+exports exactly the `dtl_*` functions and imports no sanitizer or debug runtime.
+The inventory records those requirements (`required_runtime_symbol_versions`,
+`minimum_macos`, `linked_libraries`).
+
+### Multi-platform packages
+
+A release ships one npm package, one jar and one NuGet package for all
+platforms. `scripts/assemble-packages.py` builds them from the per-platform
+outputs (one per runner), with only the Python standard library:
+
+```sh
+python3 scripts/assemble-packages.py --output build/release-packages \
+  packages-linux-x64 packages-linux-arm64 packages-windows-x64
+python3 tests/package-smoke.py build/release-packages
+```
+
+The result holds every platform's archive and wheel unchanged; one
+`ducktape-laya-VERSION.tgz` with each platform's `native/<platform>-<arch>/` and
+`os`/`cpu` listing all of them (npm checks the two lists separately, so an
+unlisted combination such as Intel macOS installs but fails at load with a clear
+error); one jar with each `native/<platform>/`; one NuGet package with each
+`runtimes/<rid>/native/`; the crates, sources and javadoc jars, POM and SBOM once;
+and an inventory with the sorted `platforms` and, per platform, its fragment
+inventory's hash, build identities, diagnostics, toolchain, archive, wheel and
+payload. Everything but each platform's native files must be identical in every
+input, compared by entries (compressed bytes differ between hosts' zlib), and
+each platform's native files must be its recorded payload; fragments of
+different commits, build sources or `SOURCE_DATE_EPOCH` are refused. The output
+depends only on the inputs' contents and the assembling host's zlib: sorted
+entries, fixed timestamps and permissions. `tests/package-smoke.py` and
+`tests/installed-packages.py` take either kind of directory and test the files
+for the machine they run on.
+
+CI (`.github/workflows/native.yml`) keeps each runner's output as the artifact
+`packages-<platform>` (`packages-linux-x64` from the gcc build,
+`packages-linux-arm64`, `packages-windows-x64`; `platforms.yml` keeps
+`packages-macos-arm64`), assembles the three in `packages-assembled`, and loads
+the assembled packages on every runner; with the real model each runner runs
+all installed consumers, and Windows the Electron consumer.
+
+### Windows
+
+The zip's `bin/ducktape_laya.dll` needs the Microsoft Visual C++ Redistributable
+(the C++ runtime is linked dynamically, `/MD`); it is not bundled. C and C++
+applications link `lib/ducktape_laya.lib` through the CMake package
+(`find_package(ducktape_laya)`, as for Linux) and ship the DLL next to their
+executable or put `bin` on `PATH`; Windows has no run path. MinGW-w64 toolchains
+(and cgo) can use `lib/pkgconfig/ducktape-laya.pc`, whose `-lducktape_laya` finds
+the import library. The installed-package test builds the CMake consumers with
+Visual Studio's MSVC, against the clang-cl-built DLL. The archive's Node addon
+in `lib/ducktape-laya/node` loads only with `bin` on `PATH`; use the npm package,
+which keeps the DLL next to the addon. The jar extracts the DLL once per library
+content into the user's temporary directory and reuses it (a loaded DLL cannot be
+deleted at exit); elsewhere it extracts a per-process copy that is deleted at exit.
+
 To use the local npm tarball in an application without the wizard:
 
 ```sh
@@ -147,7 +219,8 @@ python3 tests/packaging-identity.py
 node --experimental-vm-modules --test tests/browser-backend.mjs tests/browser-lifecycle.mjs
 ```
 
-The npm package selects its bundled Linux x64 addon. Source-checkout users must
+The npm package selects the addon in `native/<platform>-<arch>/` for the running
+platform. Source-checkout users must
 supply `addonPath` or `DUCKTAPE_LAYA_ADDON`; installed users need neither. For
 Electron, unpack `node_modules/ducktape-laya` in the application's packager
 configuration (for example `asarUnpack: ["**/node_modules/ducktape-laya/**"]`
@@ -164,11 +237,14 @@ or `pkg-config` when the variable is absent. It no longer assumes a monorepo
 published manifest. Before publication, the artifact consumer test uses a local
 Cargo patch to the extracted sys crate, never a path into this repository.
 
-Installed C/C++, pkg-config, npm, Rust and Python wheel consumers must perform real-model
-inference outside the checkout and agree on outputs. Local development artifacts
+Installed C/C++, pkg-config, npm, Rust, Python wheel, Maven, NuGet and Go consumers
+must perform real-model inference outside the checkout and agree exactly on
+outputs (`tests/installed-packages.py --report` records each consumer's output hash). Local development artifacts
 are unsigned and may include explicitly recorded dirty source inputs.
 
-Native tarballs normalize ownership, timestamps, ordering and gzip headers.
+Native tarballs normalize ownership, timestamps, ordering and gzip headers; the
+Windows zip and the jar, wheel and NuGet packages normalize timestamps, ordering
+and permissions.
 `SOURCE_DATE_EPOCH` defaults to the packaging commit timestamp. Identical
 build/source inputs must produce deterministic packages; independent compilation
 is checked separately below. Inventories record CMake ISA options, compiler flags
@@ -233,11 +309,20 @@ normalized; generated GGML identity uses the explicit runtime pin. Keep Node
 build/install RPATHs relative to `$ORIGIN`, and package the installed addon.
 Installed consumer tests reject absolute library search paths.
 
+On Windows, clang-cl builds with `/Brepro` (no timestamps in objects; a content
+hash instead of the link time in the DLL, addon and import library), and CI runs
+the same check from a Visual Studio x64 developer prompt:
+
+```bat
+python scripts/check-reproducibility.py --output build-repro --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
+```
+
 This check covers identical inputs and toolchains, not different compilers or
 architectures. Keep its reports in CI/PR artifacts or ignored build directories.
 A reproducible build is one release requirement, not a substitute for runtime,
 platform or installed-consumer checks.
 
 Native packaging rejects binaries exposing sanitizer, libFuzzer coverage or LLVM
-profile instrumentation symbols before loading them. Use separate diagnostic
+profile instrumentation symbols (on Windows and macOS also binaries that load a
+sanitizer or debug runtime) before loading them. Use separate diagnostic
 builds for testing and rebuild uninstrumented release artifacts for distribution.

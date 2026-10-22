@@ -40,7 +40,9 @@ Native packages (C/C++, Rust, Node.js, Electron) need:
   llama.cpp is exact, and agreement with the original Laya holds within one
   [documented deviation](docs/COMPATIBILITY.md). Point the bindings at
   `ducktape_laya.dll` with `DUCKTAPE_LAYA_LIB_DIR`; the DLL needs the Microsoft
-  Visual C++ Redistributable. There are no Windows packages yet.
+  Visual C++ Redistributable. CI builds and tests Windows packages (zip, wheel,
+  npm, jar, NuGet; [packaging](docs/PACKAGING.md#package-artifacts)), but none
+  are released yet.
 - **Linux arm64 (0.2.0, from a checkout):** CI builds and tests it on Ubuntu
   24.04 arm64, including real-model agreement with llama.cpp and the original
   Laya and the installed packages (tarball, npm, wheel, jar, NuGet). It needs
@@ -50,8 +52,9 @@ Native packages (C/C++, Rust, Node.js, Electron) need:
 - **macOS on Apple silicon (0.2.0, from a checkout):** CI builds and tests it on
   macOS 15 arm64, with and without the real model (agreement with llama.cpp and
   the original Laya, every binding suite). Build it from a checkout and point
-  the bindings at `libducktape_laya.dylib` with `DUCKTAPE_LAYA_LIB_DIR`; there
-  are no macOS packages yet. Intel Macs are not supported.
+  the bindings at `libducktape_laya.dylib` with `DUCKTAPE_LAYA_LIB_DIR`. CI
+  builds and tests macOS packages (macOS 13+), but none are released yet. Intel
+  Macs are not supported.
 - **Memory:** about 0.5 GB per open engine with the English model and the default 512-token context (measured natively: 475 MiB after opening, 600 MiB while deciding). Plan for 1 GB per engine. Other models and longer contexts need more; see [other checkpoints](#other-laya-checkpoints).
 - **Disk:** 449 MB for the English model, plus 15 MB for the library or npm package.
 - **Model:** `Laya-Q8_0.gguf`, downloaded separately (see below).

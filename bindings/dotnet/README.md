@@ -7,11 +7,11 @@ No model or runtime download occurs. Model files are application-owned resources
 ## Library resolution
 
 1. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`. When this variable is set it is authoritative: if that file cannot be loaded, a `DllNotFoundException` naming the path is thrown, and if it is incompatible, a `LayaException`; nothing else is tried.
-2. Otherwise `libducktape_laya.so.1`, then `libducktape_laya.so`, each through .NET's default native library probing, which covers `runtimes/linux-x64/native/` next to the application (the NuGet layout) and the system loader.
+2. Otherwise `libducktape_laya.so.1`, then `libducktape_laya.so` (on macOS `libducktape_laya.1.dylib`, then `libducktape_laya.dylib`; on Windows `ducktape_laya.dll`), each through .NET's default native library probing, which covers `runtimes/<rid>/native/` next to the application (the NuGet layout: `linux-x64`, `linux-arm64`, `osx-arm64`, `win-x64`) and the system loader.
 
 A library must report `dtl_abi_version() == 2` and export `dtl_cancel_flag`. Without the override, an incompatible candidate is skipped for the next one; if none loads, the call fails with `DllNotFoundException`, and if only incompatible ones load, with `LayaException` (`UnsupportedPlatform`). Load failures are reported on every call, not just the first.
 
-To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project. Without it, `dotnet pack` still succeeds but produces a package without the native library. `scripts/package-linux.py` builds the release package (`DucktapeLaya.VERSION.nupkg`, library included, byte-reproducible).
+To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project. Without it, `dotnet pack` still succeeds but produces a package without the native library. `scripts/package-native.py` builds the package for the platform it runs on (`DucktapeLaya.VERSION.nupkg`, library included under its own file name, byte-reproducible), and `scripts/assemble-packages.py` merges the platforms' packages into one with every `runtimes/<rid>/native/`. Published releases carry Linux x86-64 only until the other platforms are release-qualified.
 
 ## From a checkout
 

@@ -23,11 +23,15 @@ These are code changes; they need no accounts.
 
 - Versions are already 0.2.0 in `release/compatibility.json` and every binding manifest. For later releases, bump them together: `check_record` rejects any mismatch, including the Python, Java and .NET versions.
 - Write the release notes: give the unreleased section of [CHANGELOG.md](../CHANGELOG.md) its version and date, and use it for the GitHub release text.
-- Python: the real wheel comes only from `scripts/python_wheel.py` (run by `scripts/package-linux.py`), which bundles the native library. Building `bindings/python` with its `pyproject.toml` alone (`pip wheel`, `python -m build`) produces a wheel without the library; never upload that.
-- Java and .NET: `scripts/package-linux.py` builds `ducktape-laya-VERSION.jar`
-  (library at `native/linux-x64/`), the sources and javadoc jars and the POM
+- Python: the real wheel comes only from `scripts/python_wheel.py` (run by `scripts/package-native.py`, one wheel per platform), which bundles the native library. Building `bindings/python` with its `pyproject.toml` alone (`pip wheel`, `python -m build`) produces a wheel without the library; never upload that.
+- Java and .NET: `scripts/package-native.py` builds `ducktape-laya-VERSION.jar`
+  (library at `native/<platform>/`), the sources and javadoc jars and the POM
   (`scripts/java_package.py`), and `DucktapeLaya.VERSION.nupkg` (library at
-  `runtimes/linux-x64/native/`), all byte-reproducible.
+  `runtimes/<rid>/native/`), all byte-reproducible on one host.
+  `scripts/assemble-packages.py` merges the platforms' outputs into one npm
+  package, one jar and one NuGet package carrying every platform
+  ([PACKAGING.md](PACKAGING.md#multi-platform-packages)); releases still publish
+  the Linux x86-64 packages until the release checks cover the other platforms.
   `tests/installed-packages.py` runs both, and a Go consumer built against the
   tarball, outside the checkout. A plain `dotnet pack` without
   `-p:DucktapeLayaNativeLibrary=...` produces a package without the library;

@@ -8,7 +8,7 @@ The library is located in this order:
 
 1. system property `ducktape.laya.library` (full path to the `.so`)
 2. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`
-3. a copy bundled in the jar at `/native/linux-x64/libducktape_laya.so`, extracted to a temp file
+3. a copy bundled in the jar at `/native/<platform>/` (`linux-x64/libducktape_laya.so`, `linux-arm64/libducktape_laya.so`, `macos-arm64/libducktape_laya.dylib`, `windows-x64/ducktape_laya.dll`), extracted to a temporary file that is deleted at exit; on Windows, where a loaded DLL cannot be deleted, to one shared copy per library content in the user's temporary directory, checked byte for byte before use
 4. the default loader path (`libducktape_laya.so.1`, then `libducktape_laya.so`)
 
 An explicit override (1 or 2) is honoured or fails; it never falls back to later steps. The Linux x86-64 check applies only when no override is given. After loading, the binding requires `dtl_abi_version() == 2` and the `dtl_cancel_flag` symbol. Loading is lazy (first API call, including `Laya.runtimeInfo()`), not in a static initializer: a failure is cached and every API call throws a fresh `LayaException` with `UNSUPPORTED_PLATFORM` (status 7) whose message includes the cause.
@@ -50,4 +50,4 @@ bindings/java/build.sh            # compiles, writes bindings/java/target/duckta
 bindings/java/build.sh --no-test  # jar only
 ```
 
-`build.sh` needs JDK 22+ on `PATH` and uses `DUCKTAPE_LAYA_LIB_DIR`, defaulting to the checkout's `build` directory; set `LAYA_MODEL` to also run the real-model tests. Put the jar on your application's classpath and set `DUCKTAPE_LAYA_LIB_DIR` (or `-Dducktape.laya.library=/path/to/libducktape_laya.so`) when running, since this development jar does not bundle the library. The release jar built by `scripts/package-linux.py` (`ducktape-laya-VERSION.jar`, with sources and javadoc jars and a POM) bundles it and needs neither. A `pom.xml` is provided for Maven users.
+`build.sh` needs JDK 22+ on `PATH` and uses `DUCKTAPE_LAYA_LIB_DIR`, defaulting to the checkout's `build` directory; set `LAYA_MODEL` to also run the real-model tests. Put the jar on your application's classpath and set `DUCKTAPE_LAYA_LIB_DIR` (or `-Dducktape.laya.library=/path/to/libducktape_laya.so`) when running, since this development jar does not bundle the library. The release jar built by `scripts/package-native.py` (`ducktape-laya-VERSION.jar`, with sources and javadoc jars and a POM) bundles it and needs neither; `scripts/assemble-packages.py` merges the platforms' jars into one. Published releases carry Linux x86-64 only until the other platforms are release-qualified. A `pom.xml` is provided for Maven users.

@@ -5,7 +5,7 @@ Local Laya GGUF decisions (`choice`, `noul`, ordinal `score`) for Node.js and El
 ## Requirements
 
 - Linux x86-64 with AVX2, FMA, F16C, BMI2 and SSE4.2; glibc 2.38+ (Ubuntu 24.04+, Debian 13+, Fedora 39+). See the [repository README](https://github.com/adrian729/ducktape-laya#requirements).
-- Windows x64 and macOS on Apple silicon: no prebuilt addon in this package yet. Build it from a checkout (see the [repository README](https://github.com/adrian729/ducktape-laya#manual-setup)) and pass `addonPath` or set `DUCKTAPE_LAYA_ADDON`; on Windows, keep `ducktape_laya.dll` next to `ducktape_laya.node`.
+- Windows x64, Linux arm64 and macOS on Apple silicon: the published 0.2.0 package has no addon for them. Packages built from main carry one addon per platform in `native/<platform>-<arch>/` (`linux-x64`, `linux-arm64`, `darwin-arm64`, `win32-x64`) and pick the one for the running platform; they are not published until those platforms are release-qualified. Otherwise build the addon from a checkout (see the [repository README](https://github.com/adrian729/ducktape-laya#manual-setup)) and pass `addonPath` or set `DUCKTAPE_LAYA_ADDON`; on Windows, keep `ducktape_laya.dll` next to `ducktape_laya.node`. Windows needs the Microsoft Visual C++ Redistributable.
 - Node.js 20+ (tested on 24 and 26) or Electron (tested with 44). The native addon is prebuilt; no compiler.
 - A Laya GGUF model, downloaded separately. The package includes `download-model.py` and `model-manifest.json`; `python3 node_modules/ducktape-laya/download-model.py resources` downloads the pinned English model and verifies its hash.
 
