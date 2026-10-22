@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import re
 import tempfile
-from release_support import (ROOT, host_target, check_record, sha256, git, binary_info, source_identity, native_build_identity,
+from release_support import (ROOT, build_environment, host_target, check_record, sha256, git, binary_info, source_identity, native_build_identity,
                              require_runtime_identity, require_uninstrumented_binary, pe_info, macho_info)
 from artifact_support import write_zip, archive_tree, archive_zip, set_npm_platforms, native_payload
 import java_package
@@ -169,6 +169,8 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         toolchain['linked_libraries'] = {name: sorted(item['imports']) for name, item in info.items()}
         toolchain['delay_loaded_libraries'] = {name: sorted(item['delay_imports']) for name, item in info.items()}
     compiler = subprocess.check_output([cache['CMAKE_CXX_COMPILER'], '--version'], text=True).splitlines()[0]
+    # The runner image and, on Windows, the MSVC toolset and SDK whose libraries the DLL links.
+    if build_environment(): toolchain['build_environment'] = build_environment()
     sbom.write(out / 'sbom.cdx.json', record)
     inventory = {'schema_version': 2, 'package_version': version, 'packaging_source_commit': git(ROOT, 'rev-parse', 'HEAD'),
         'packaging_source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'runtime': record['runtime'],

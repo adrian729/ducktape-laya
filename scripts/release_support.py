@@ -51,6 +51,15 @@ TARGETS = [Target(t) for t in [
      'node_libraries': ['ducktape_laya.dll'], 'archive': '.zip'},
 ]]
 
+# Toolchain environment a build ran in, beyond the compiler's own version: the GitHub runner
+# image, and on Windows the MSVC toolset and Windows SDK whose libraries are linked into the DLL.
+BUILD_ENVIRONMENT = ('ImageOS', 'ImageVersion', 'VCToolsVersion', 'WindowsSDKVersion', 'VSCMD_VER')
+
+def build_environment():
+    """The toolchain environment variables that are set (none on an ordinary Linux host)."""
+    import os
+    return {key: os.environ[key].strip().rstrip('\\') for key in BUILD_ENVIRONMENT if os.environ.get(key)}
+
 def target(name):
     for item in TARGETS:
         if item.name == name: return item

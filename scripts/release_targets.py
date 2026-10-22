@@ -270,6 +270,10 @@ def target_gates(ctx, platform):
         ctx.same_source(report, f'{platform} reproducibility')
         need(report.get('status') == 'passed' and report.get('differences') == [], f'{platform}: reproduced builds differ')
         need(report.get('target_platform') == platform, f'{platform}: reproducibility ran on {report.get("target_platform")}')
+        # Windows DLLs link the image's MSVC and SDK libraries: reproduce on the validated build's runner image.
+        need(report.get('build_environment') == native.get('build_environment'),
+             f'{platform}: reproduced with toolchain environment {report.get("build_environment")}, '
+             f'not the validated build\'s {native.get("build_environment")}')
         builds = report.get('builds', {})
         need(len(builds) == 2, f'{platform}: reproducibility needs two builds')
         for label, files in builds.items():

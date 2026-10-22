@@ -162,6 +162,10 @@ jobs:
       - name: Short stress run on the validated library (tier-2 target)
         if: inputs.candidate && matrix.platform == 'linux-arm64'
         run: python3 scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 2
+      # On the validated build's runner: another image may link other toolchain libraries.
+      - name: Two independent builds of one source snapshot (tier-2 target)
+        if: inputs.candidate && matrix.platform == 'linux-arm64'
+        run: python3 scripts/check-reproducibility.py --output build-repro --jobs 4 --cc gcc --cxx g++
       # The gcc builds' packages (the release compiler) are this platform's fragment for
       # scripts/assemble-packages.py, which the assemble job below merges with Windows.
       - name: Retain this platform's packages
@@ -191,6 +195,17 @@ jobs:
         with:
           name: stress-${{ matrix.platform }}
           path: build-stress/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+      - name: Retain the reproducibility report
+        if: inputs.candidate && matrix.platform == 'linux-arm64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reproducibility-${{ matrix.platform }}
+          path: |
+            build-repro/report.json
+            build-repro/*.log
           if-no-files-found: error
           retention-days: 30
           overwrite: true
@@ -279,6 +294,16 @@ jobs:
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           python scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 3 || exit /b 1
+      # On the validated build's runner: the DLL links the image's MSVC and SDK libraries, so a
+      # build on another image version differs.
+      - name: Two independent builds of one source snapshot with clang-cl (tier-2 target)
+        if: inputs.candidate
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
+          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
+          python scripts/check-reproducibility.py --output "%RUNNER_TEMP%\repro" --jobs 3 --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
       - name: Retain logs and explicit gate report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -322,21 +347,27 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: true
+      - name: Retain the reproducibility report
+        if: inputs.candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reproducibility-windows-x64
+          path: |
+            ${{ runner.temp }}/repro/report.json
+            ${{ runner.temp }}/repro/*.log
+            ${{ runner.temp }}/repro/first/install/bin/*.dll
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
-  # Two independent builds of one source snapshot install identical files: Windows on every
-  # run, and in a candidate run every tier-2 target (Linux x86-64 is checked on the release host).
+  # Two independent builds of one source snapshot install identical files, on Windows on every
+  # push. (A candidate run does this inside each tier-2 target's validation job instead, on the
+  # validated build's runner; Linux x86-64 is checked on the release host.)
   reproducibility:
-    name: ${{ matrix.platform }} / independent builds
-    runs-on: ${{ matrix.runner }}
+    name: Windows x64 / independent builds
+    if: ${{ !inputs.candidate }}
+    runs-on: windows-2025
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        # Unmatched include entries would add jobs, so the whole list is chosen at once.
-        include: >-
-          ${{ fromJSON(inputs.candidate
-          && '[{"platform": "linux-arm64", "runner": "ubuntu-24.04-arm"}, {"platform": "windows-x64", "runner": "windows-2025"}]'
-          || '[{"platform": "windows-x64", "runner": "windows-2025"}]') }}
     env:
       PYTHONUTF8: '1'
     steps:
@@ -348,36 +379,30 @@ jobs:
         with:
           node-version: 24.21.0
       - name: Node-API headers and node.lib for this Node, checked against its SHASUMS256.txt
-        if: matrix.platform == 'windows-x64'
         shell: pwsh
         run: |
           $sdk = python scripts/fetch-node-sdk.py build-node-sdk --lib
           if ($LASTEXITCODE) { exit 1 }
           $sdk | ForEach-Object { $_.Replace('\', '/') } >> $env:GITHUB_ENV
       - name: Compile one source snapshot in two directories with clang-cl and compare the installed files
-        if: matrix.platform == 'windows-x64'
         shell: cmd
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
           python scripts/check-reproducibility.py --output "%RUNNER_TEMP%\repro" --jobs 3 --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
-      - name: Compile one source snapshot in two directories with gcc and compare the installed files
-        if: matrix.platform == 'linux-arm64'
-        run: python3 scripts/check-reproducibility.py --output "$RUNNER_TEMP/repro" --jobs 4 --cc gcc --cxx g++
       - name: Retain the report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: reproducibility-${{ matrix.platform }}
+          name: windows-x64-reproducibility
           path: |
             ${{ runner.temp }}/repro/report.json
             ${{ runner.temp }}/repro/*.log
             ${{ runner.temp }}/repro/first/install/bin/*.dll
             ${{ runner.temp }}/repro/first/install/lib/**/*.node
           if-no-files-found: ignore
-          retention-days: ${{ inputs.candidate && 30 || 14 }}
-          overwrite: true
+          retention-days: 14
 
   # The release packages: every platform's fragment merged into one npm package, one jar
   # and one NuGet package (scripts/assemble-packages.py), next to each platform's archive

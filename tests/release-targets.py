@@ -162,6 +162,13 @@ class Targets(unittest.TestCase):
         self.world.edit('reproducibility-linux-arm64/report.json', lambda r: r.update(target_platform='windows-x64'))
         self.assertGate('linux-arm64', 'reproducibility', 'failed', 'ran on windows-x64')
 
+    def test_reproduced_in_another_environment(self):
+        self.world.edit('evidence-windows-x64/report.json', lambda r: r.update(build_environment={'ImageVersion': '20261007.264'}))
+        self.world.edit('reproducibility-windows-x64/report.json', lambda r: r.update(build_environment={'ImageVersion': '20261021.278'}))
+        self.assertGate('windows-x64', 'reproducibility', 'failed', 'toolchain environment')
+        self.world.edit('reproducibility-windows-x64/report.json', lambda r: r.update(build_environment={'ImageVersion': '20261007.264'}))
+        self.assertGate('windows-x64', 'reproducibility', 'passed')
+
     def test_deviations(self):
         self.world.edit('evidence-linux-arm64/original-reference.json', lambda r: r['summary'].update(known_deviations_used=['json_escaping/spam']))
         self.assertGate('linux-arm64', 'original_reference', 'failed', 'undocumented deviations')

@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 import time
-from release_support import (EXE, LIBRARY, ROOT, check_record, find_manifest, git, host_target, read_json, sha256, verify_model, source_files,
+from release_support import (EXE, LIBRARY, ROOT, build_environment, check_record, find_manifest, git, host_target, read_json, sha256, verify_model, source_files,
                              binary_info, require_runtime_identity)
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -70,6 +70,7 @@ report = {'schema_version': 1, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'runtime': record['runtime'], 'model': manifest if model else None,
           'additional_models': [m for _, m in extra_models], 'additional_model_gates': {},
           'mode': 'real_model' if model else 'model_free', 'release_ready': False, 'platform': PLATFORM, 'skipped': {},
+          'build_environment': build_environment(),
           'node_version': subprocess.check_output(['node', '--version'], text=True).strip(),
           'toolchains': {name: (subprocess.run(command, capture_output=True, text=True).stdout or '').strip().splitlines()[:1]
                          if shutil.which(command[0]) else []

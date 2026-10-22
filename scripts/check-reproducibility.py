@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import tarfile
-from release_support import ROOT, check_record, git, host_target, sha256
+from release_support import ROOT, build_environment, check_record, git, host_target, sha256
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=pathlib.Path, required=True)
@@ -62,7 +62,8 @@ report = {'schema_version': 1, 'status': 'running', 'source_commit': git(ROOT, '
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')),
           'snapshot_sha256': hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
           'runtime': record['runtime'], 'scope': 'installed native and Node files; same toolchain/options, different source/build/install roots',
-          'compilers': compilers, 'cmake_arguments': a.cmake_arg, 'source_files': manifest, 'builds': {}}
+          'compilers': compilers, 'cmake_arguments': a.cmake_arg, 'build_environment': build_environment(),
+          'source_files': manifest, 'builds': {}}
 try:
     report['target_platform'] = host_target().name
 except ValueError:
