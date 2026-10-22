@@ -155,7 +155,10 @@ input, compared by entries (compressed bytes differ between hosts' zlib), and
 each platform's native files must be its recorded payload; fragments of
 different commits, build sources or `SOURCE_DATE_EPOCH` are refused. The output
 depends only on the inputs' contents and the assembling host's zlib: sorted
-entries, fixed timestamps and permissions. `tests/package-smoke.py` and
+entries, fixed timestamps and permissions. Text is written with LF on every
+platform, the NuGet assembly is packed without a PDB, and CI uses the exact same
+JDK everywhere (javadoc output changes between patch releases), so the shared
+files come out the same on every runner. `tests/package-smoke.py` and
 `tests/installed-packages.py` take either kind of directory and test the files
 for the machine they run on.
 
