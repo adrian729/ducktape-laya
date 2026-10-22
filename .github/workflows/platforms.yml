@@ -1,6 +1,6 @@
 name: Other platforms
-# Platform plan phase 1: native build and model-free tests on platforms other
-# than Linux. Not a release gate yet.
+# Platform plan phases 1 and 2: native build and model-free tests on platforms
+# other than Linux, and the real-model checks on dispatch. Not a release gate yet.
 on:
   push:
   pull_request:
@@ -106,11 +106,15 @@ jobs:
       DOTNET_NOLOGO: '1'
       # The test and release scripts read UTF-8 files with Python's default encoding.
       PYTHONUTF8: '1'
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           submodules: recursive
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.21.0
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
@@ -118,10 +122,21 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
-      - name: Install pinned Rust toolchain
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Install pinned Rust toolchain and fetch locked test dependencies
         run: |
           rustup toolchain install 1.98.0 --profile minimal
           rustup override set 1.98.0
+          cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
+      - name: Node-API headers and node.lib for this Node, checked against its SHASUMS256.txt
+        shell: pwsh
+        run: |
+          $sdk = python scripts/fetch-node-sdk.py build-node-sdk --lib
+          if ($LASTEXITCODE) { exit 1 }
+          $sdk | ForEach-Object { $_.Replace('\', '/') } >> $env:GITHUB_ENV
       - name: Download and verify explicitly requested test model
         if: inputs.real_model
         shell: pwsh
@@ -131,7 +146,7 @@ jobs:
           python scripts/verify-model.py build-model/laya.gguf
           if ($LASTEXITCODE) { exit 1 }
           "LAYA_MODEL=$((Resolve-Path build-model/laya.gguf).Path.Replace('\', '/'))" >> $env:GITHUB_ENV
-      - name: Build and run the native tests with clang-cl
+      - name: Build, check exports and run the native tests with clang-cl
         shell: cmd
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
@@ -140,9 +155,16 @@ jobs:
           rem Strawberry Perl's patch.exe comes first on PATH and crashes; use the one from Git for Windows.
           set "EXTRA="
           if defined LAYA_MODEL set "EXTRA=-DDUCKTAPE_TEST_MODEL=%LAYA_MODEL% -DDUCKTAPE_BUILD_REFERENCE_PROBE=ON"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" %EXTRA% || exit /b 1
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=ON "-DNODE_INCLUDE_DIR=%NODE_INCLUDE_DIR%" "-DNODE_LIB=%NODE_LIB%" "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" %EXTRA% || exit /b 1
           cmake --build build --parallel 3 || exit /b 1
+          dumpbin /nologo /exports build\ducktape_laya.dll > build\exports-dumpbin.txt || exit /b 1
           ctest --test-dir build --output-on-failure || exit /b 1
+      - name: Exported symbols
+        shell: bash
+        run: |
+          tr -d '\r' < build/exports-dumpbin.txt | awk '/ordinal +hint +RVA +name/ { table = 1; next } table && /Summary/ { table = 0 } table && NF == 4 { print $4 }' | sort > build/exports.txt
+          cat build/exports.txt
+          sed 's/^_//' src/exports.macos | sort | diff build/exports.txt -
       - name: Agreement with the original Laya and with llama.cpp
         if: inputs.real_model
         shell: pwsh
@@ -174,6 +196,51 @@ jobs:
       - name: .NET
         shell: bash
         run: dotnet test bindings/dotnet/DucktapeLaya.slnx -m:1
+      - name: Go
+        shell: pwsh
+        run: |
+          # cgo with the runner's MinGW-w64 gcc; it links ducktape_laya.lib and runs with the DLL on PATH.
+          Get-Command gcc | Format-List Source
+          gcc --version
+          $env:PATH = "$env:DUCKTAPE_LAYA_LIB_DIR;$env:PATH"
+          $env:CGO_CFLAGS = "-I$PWD/include"
+          $env:CGO_LDFLAGS = "-L$env:DUCKTAPE_LAYA_LIB_DIR"
+          go -C bindings/go test -count=1 ./...
+          if ($LASTEXITCODE) { exit 1 }
+      - name: Node
+        shell: pwsh
+        run: |
+          $env:DUCKTAPE_LAYA_ADDON = "$env:DUCKTAPE_LAYA_LIB_DIR\ducktape_laya.node"
+          node --test bindings/node/test.cjs
+          if ($LASTEXITCODE) { exit 1 }
+      - name: Installed npm package finds native/win32-x64 and the DLL next to the addon
+        shell: pwsh
+        run: |
+          $package = python tests/node-package.py build build/npm
+          if ($LASTEXITCODE) { exit 1 }
+          "NPM_PACKAGE=$package" >> $env:GITHUB_ENV
+          $app = Join-Path $env:RUNNER_TEMP npm-consumer
+          New-Item -ItemType Directory -Force $app | Out-Null
+          Set-Content (Join-Path $app package.json) '{ "name": "consumer", "version": "1.0.0", "private": true }'
+          Push-Location $app
+          npm install --offline --ignore-scripts --no-audit --no-fund $package
+          if ($LASTEXITCODE) { exit 1 }
+          node -e "const addon = require('ducktape-laya/resolve-addon.cjs')(); if (!addon.endsWith('\\native\\win32-x64\\ducktape_laya.node')) throw new Error(addon); const info = require('ducktape-laya').Laya.runtimeInfo(); if (info.abi_version !== 2) throw new Error('ABI ' + info.abi_version); console.log(addon)"
+          if ($LASTEXITCODE) { exit 1 }
+      - name: Exact agreement between all bindings
+        if: inputs.real_model
+        shell: pwsh
+        run: |
+          python tests/parity.py $env:LAYA_MODEL --build-dir build --report build/parity.json
+          if ($LASTEXITCODE) { exit 1 }
+      - name: Electron consumer, directory and ASAR
+        if: inputs.real_model
+        shell: pwsh
+        run: |
+          npm ci --prefix tests/electron --no-audit --no-fund
+          if ($LASTEXITCODE) { exit 1 }
+          node tests/electron/run.cjs $env:NPM_PACKAGE $env:LAYA_MODEL build/electron.json
+          if ($LASTEXITCODE) { exit 1 }
       - name: Retain reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -182,6 +249,9 @@ jobs:
           path: |
             build/original-reference.json
             build/upstream-reference.json
+            build/parity.json
+            build/electron.json
+            build/exports.txt
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 14
