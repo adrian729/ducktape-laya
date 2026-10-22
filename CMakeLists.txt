@@ -231,7 +231,7 @@ if(DUCKTAPE_BUILD_TESTS)
   endif()
 endif()
 
-option(DUCKTAPE_BUILD_NODE "Build Node-API addon (supply NODE_INCLUDE_DIR)" OFF)
+option(DUCKTAPE_BUILD_NODE "Build Node-API addon (supply NODE_INCLUDE_DIR, and NODE_LIB on Windows)" OFF)
 if(DUCKTAPE_BUILD_NODE)
   find_path(NODE_INCLUDE_DIR node_api.h REQUIRED)
   add_library(ducktape_laya_node MODULE bindings/node/addon.cpp)
@@ -245,6 +245,20 @@ if(DUCKTAPE_BUILD_NODE)
   install(TARGETS ducktape_laya_node LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/ducktape-laya/node)
   if(APPLE)
     target_link_options(ducktape_laya_node PRIVATE "LINKER:-undefined,dynamic_lookup")
+  elseif(WIN32)
+    # Node-API lives in the host executable. Link the Node distribution's import
+    # library (scripts/fetch-node-sdk.py) and delay-load it, so the hook binds the
+    # imports to whichever executable loaded the addon: node.exe or Electron's.
+    set(NODE_LIB "" CACHE FILEPATH "node.lib from the Node distribution (win-x64/node.lib)")
+    if(NOT EXISTS "${NODE_LIB}")
+      message(FATAL_ERROR "The Windows Node addon needs NODE_LIB (see scripts/fetch-node-sdk.py)")
+    endif()
+    target_sources(ducktape_laya_node PRIVATE bindings/node/win_delay_load_hook.cpp)
+    target_link_libraries(ducktape_laya_node PRIVATE "${NODE_LIB}" delayimp)
+    # The addon's own import library would default to ducktape_laya.lib, the
+    # library's import library, which the Rust and Go bindings link.
+    target_link_options(ducktape_laya_node PRIVATE "LINKER:/DELAYLOAD:node.exe"
+      "LINKER:/IMPLIB:${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/ducktape_laya_node.dir/ducktape_laya_node.lib")
   endif()
 endif()
 
