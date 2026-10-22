@@ -7,6 +7,7 @@ step."""
 import pathlib
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ElementTree
 from artifact_support import write_zip
 from release_support import ROOT, host_platform
 
@@ -31,6 +32,7 @@ POM = '''<?xml version="1.0" encoding="UTF-8"?>
   <developers>
     <developer>
       <id>adrian729</id>
+      <name>Adrián Sánchez Albanell</name>
       <url>https://github.com/adrian729</url>
     </developer>
   </developers>
@@ -41,6 +43,20 @@ POM = '''<?xml version="1.0" encoding="UTF-8"?>
   </scm>
 </project>
 '''
+
+# Elements Maven Central rejects a POM without (central.sonatype.org/publish/requirements).
+CENTRAL_REQUIRED = ['groupId', 'artifactId', 'version', 'name', 'description', 'url', 'licenses/license/name',
+                    'developers/developer/name', 'scm/url', 'scm/connection']
+
+
+def pom(version):
+    """The POM text, checked against Central's required elements."""
+    text = POM.format(group=GROUP, artifact=ARTIFACT, version=version)
+    root, ns = ElementTree.fromstring(text.encode('utf-8')), {'m': 'http://maven.apache.org/POM/4.0.0'}
+    missing = [path for path in CENTRAL_REQUIRED
+               if not (root.findtext('/'.join(f'm:{part}' for part in path.split('/')), namespaces=ns) or '').strip()]
+    if missing: raise ValueError(f'POM lacks elements Maven Central requires: {", ".join(missing)}')
+    return text
 
 
 def build(out, version, library, epoch):
@@ -69,4 +85,4 @@ def build(out, version, library, epoch):
         write_zip(out / f'{ARTIFACT}-{version}-javadoc.jar',
                   {**{path.relative_to(docs).as_posix(): (path.read_bytes(), False) for path in sorted(docs.rglob('*')) if path.is_file()},
                    lead[0]: (manifest, False)}, epoch, lead)
-    (out / f'{ARTIFACT}-{version}.pom').write_text(POM.format(group=GROUP, artifact=ARTIFACT, version=version))
+    (out / f'{ARTIFACT}-{version}.pom').write_text(pom(version), encoding='utf-8')
