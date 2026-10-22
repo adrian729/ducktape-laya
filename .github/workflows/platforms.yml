@@ -90,8 +90,7 @@ jobs:
           name: macos-arm64-${{ inputs.real_model && 'real-model' || 'model-free' }}
           path: |
             build/original-reference.json
-            build/original-reference-probe.json
-            build/original-reference-erff.json
+            build/original-reference*.json
             build/upstream-reference.json
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
@@ -149,18 +148,16 @@ jobs:
           set "EXTRA=-DDUCKTAPE_TEST_MODEL=%LAYA_MODEL% -DDUCKTAPE_BUILD_REFERENCE_PROBE=ON"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" %EXTRA% || exit /b 1
           cmake --build build --parallel 3 || exit /b 1
-          cmake -S . -B build-probe -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" -DDTL_LIBM_PROBE=ON %EXTRA% || exit /b 1
-          cmake --build build-probe --parallel 3 --target laya-conformance-c || exit /b 1
-          cmake -S . -B build-erff -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" -DDTL_LIBM_PROBE=ON -DDTL_LIBM_PROBE_ERFF_ONLY=ON %EXTRA% || exit /b 1
-          cmake --build build-erff --parallel 3 --target laya-conformance-c || exit /b 1
+          cmake -S . -B build-erff-expf -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" -DDTL_LIBM_PROBE=ON "-DDTL_LIBM_PROBE_FUNCS=ERFF;EXPF" %EXTRA% || exit /b 1
+          cmake --build build-erff-expf --parallel 3 --target laya-conformance-c || exit /b 1
+          cmake -S . -B build-erff-sincos -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" -DDTL_LIBM_PROBE=ON "-DDTL_LIBM_PROBE_FUNCS=ERFF;SINCOS" %EXTRA% || exit /b 1
+          cmake --build build-erff-sincos --parallel 3 --target laya-conformance-c || exit /b 1
+          cmake -S . -B build-erff-tanhf -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" -DDTL_LIBM_PROBE=ON "-DDTL_LIBM_PROBE_FUNCS=ERFF;TANHF" %EXTRA% || exit /b 1
+          cmake --build build-erff-tanhf --parallel 3 --target laya-conformance-c || exit /b 1
           echo == ggml-cpu compile command
           ninja -C build -t commands laya-conformance-c | findstr /c:"ops.cpp"
           echo == baseline imports
           dumpbin /imports build\ducktape_laya.dll | findstr /r /c:" erff$" /c:" expf$" /c:" sinf$" /c:" cosf$" /c:" powf$" /c:" logf$" /c:" tanhf$"
-          echo == erff-only imports
-          dumpbin /imports build-erff\ducktape_laya.dll | findstr /r /c:" erff$" /c:" expf$" /c:" sinf$" /c:" cosf$" /c:" powf$" /c:" logf$" /c:" tanhf$"
-          echo == probe imports
-          dumpbin /imports build-probe\ducktape_laya.dll | findstr /r /c:" erff$" /c:" expf$" /c:" sinf$" /c:" cosf$" /c:" powf$" /c:" logf$" /c:" tanhf$"
           exit /b 0
       - name: Numerical profile
         shell: pwsh
@@ -172,8 +169,9 @@ jobs:
         shell: pwsh
         run: |
           python tests/original-reference.py $env:LAYA_MODEL --build-dir build --report build/original-reference.json
-          python tests/original-reference.py $env:LAYA_MODEL --build-dir build-probe --report build/original-reference-probe.json
-          python tests/original-reference.py $env:LAYA_MODEL --build-dir build-erff --report build/original-reference-erff.json
+          python tests/original-reference.py $env:LAYA_MODEL --build-dir build-erff-expf --report build/original-reference-erff-expf.json
+          python tests/original-reference.py $env:LAYA_MODEL --build-dir build-erff-sincos --report build/original-reference-erff-sincos.json
+          python tests/original-reference.py $env:LAYA_MODEL --build-dir build-erff-tanhf --report build/original-reference-erff-tanhf.json
           exit 0
       - name: Retain reports
         if: always()
@@ -182,7 +180,7 @@ jobs:
           name: windows-x64-${{ inputs.real_model && 'real-model' || 'model-free' }}
           path: |
             build/original-reference.json
-            build/original-reference-probe.json
+            build/original-reference*.json
             build/upstream-reference.json
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore

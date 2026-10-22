@@ -17,14 +17,23 @@ static inline float dtl_probe_logf(float x) { return (float)log((double)x); }
 static inline float dtl_probe_tanhf(float x) { return (float)tanh((double)x); }
 static inline float dtl_probe_expm1f(float x) { return (float)expm1((double)x); }
 static inline float dtl_probe_log2f(float x) { return (float)log2((double)x); }
+/* DTL_PROBE_SUBSET: route only the functions whose DTL_PROBE_<NAME> is defined. */
+#if !defined(DTL_PROBE_SUBSET) || defined(DTL_PROBE_ERFF)
 #define erff(x) dtl_probe_erff(x)
-#ifndef DTL_LIBM_PROBE_ERFF_ONLY
+#endif
+#if !defined(DTL_PROBE_SUBSET) || defined(DTL_PROBE_EXPF)
 #define expf(x) dtl_probe_expf(x)
+#endif
+#if !defined(DTL_PROBE_SUBSET) || defined(DTL_PROBE_SINCOS)
 #define sinf(x) dtl_probe_sinf(x)
 #define cosf(x) dtl_probe_cosf(x)
+#endif
+#if !defined(DTL_PROBE_SUBSET) || defined(DTL_PROBE_TANHF)
+#define tanhf(x) dtl_probe_tanhf(x)
+#endif
+#ifndef DTL_PROBE_SUBSET
 #define powf(x, y) dtl_probe_powf(x, y)
 #define logf(x) dtl_probe_logf(x)
-#define tanhf(x) dtl_probe_tanhf(x)
 #define expm1f(x) dtl_probe_expm1f(x)
 #define log2f(x) dtl_probe_log2f(x)
 #endif
