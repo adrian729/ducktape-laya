@@ -19,7 +19,7 @@ import re
 import tempfile
 from release_support import (ROOT, host_target, check_record, sha256, git, binary_info, source_identity, native_build_identity,
                              require_runtime_identity, require_uninstrumented_binary, pe_info, macho_info)
-from artifact_support import write_zip, archive_tree, archive_zip, set_npm_platforms
+from artifact_support import write_zip, archive_tree, archive_zip, set_npm_platforms, native_payload
 import java_package
 import python_wheel
 
@@ -168,6 +168,8 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         'toolchain': {'compiler': compiler, 'build_type': cache.get('CMAKE_BUILD_TYPE'), 'cxx_flags': cache.get('CMAKE_CXX_FLAGS'), **toolchain},
         'reproducibility_scope': 'deterministic packaging of identical build inputs; independent compilation is a separate gate',
         'artifacts': {f.name: {'sha256': sha256(f), 'bytes': f.stat().st_size} for f in sorted(out.iterdir())},
+        # This platform's native files inside each package, by entry name (merged as they are by assemble-packages.py).
+        'payload': native_payload(out, version, target),
         'components': [{'name': 'ducktape-laya', 'license': 'MIT'}, {'name': 'llama.cpp/ggml', 'license': 'MIT', 'revision': record['runtime']['commit']}, {'name': 'nlohmann-json', 'license': 'MIT'}, {'name': 'llamafile-cpu-kernels', 'license': 'MIT'}, {'name': 'laya-language-data', 'license': 'Apache-2.0'}],
         'status': 'local unsigned development artifacts; not release approval'}
     (out / 'inventory.json').write_text(json.dumps(inventory, indent=2)+'\n')

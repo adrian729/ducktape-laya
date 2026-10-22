@@ -16,6 +16,7 @@ root = pathlib.Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser()
 p.add_argument('prefix', type=pathlib.Path)
 p.add_argument('model', type=pathlib.Path)
+p.add_argument('--outputs', type=pathlib.Path, help='Write each consumer\'s result here as JSON')
 a = p.parse_args()
 prefix, model = a.prefix.resolve(), a.model.resolve()
 target = host_target()
@@ -42,6 +43,7 @@ target_link_libraries(cpp PRIVATE ducktape::laya)
     results = [json.loads(subprocess.check_output([str(built_program(tmp / 'build', exe)), str(model)], input=fixture, env=env))
                for exe in ['c', 'cpp']]
     assert results[0] == results[1]
+    outputs = {'cmake_c': results[0], 'cmake_cpp': results[1]}
     pc = list(prefix.glob('lib*/pkgconfig/ducktape-laya.pc'))
     assert len(pc) == 1
     # pkg-config with a GNU-style compiler: cc on Linux and macOS, MinGW-w64 gcc (which links the
@@ -55,5 +57,8 @@ target_link_libraries(cpp PRIVATE ducktape::laya)
         program = tmp / ('pc-consumer' + ('.exe' if target.os == 'win32' else ''))
         subprocess.run([tool(compiler), str(tmp / 'c.c'), *shlex.split(flags, posix=target.os != 'win32'), '-o', str(program)], check=True)
         run_env = with_library_path(env, library_directory(prefix, target), target)
-        assert json.loads(subprocess.check_output([str(program), str(model)], env=run_env, input=fixture)) == results[0]
+        outputs['pkgconfig_c'] = json.loads(subprocess.check_output([str(program), str(model)], env=run_env, input=fixture))
+        assert outputs['pkgconfig_c'] == results[0]
+if a.outputs:
+    a.outputs.write_text(json.dumps(outputs) + '\n')
 print('Installed CMake C/C++ and pkg-config C consumers: real-model agreement')

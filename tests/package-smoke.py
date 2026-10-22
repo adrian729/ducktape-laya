@@ -21,9 +21,10 @@ from release_support import read_json
 root = pathlib.Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('artifacts', type=pathlib.Path)
+p.add_argument('--platform', help='Package platform to test (default: this machine\'s; it must be this machine\'s)')
 a = p.parse_args()
 artifacts = a.artifacts.resolve()
-inventory, version, target = host_packages(artifacts)
+inventory, version, target = host_packages(artifacts, a.platform)
 abi = read_json(root / 'release/compatibility.json')['abi_version']
 env = clean_environment()
 with tempfile.TemporaryDirectory(prefix='ducktape-smoke-') as directory:

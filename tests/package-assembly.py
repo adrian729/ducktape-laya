@@ -5,8 +5,8 @@ The fragments have the layout of scripts/package-native.py outputs, with small
 stand-in files. Checks the merged npm, jar and NuGet contents, that the result
 does not depend on the order of the fragments and is byte-identical when
 repeated, and that fragments of different candidates, a platform given twice,
-another platform's native files, differing shared files and files that differ
-from their inventory are refused."""
+another platform's native files, differing shared files, native files other than
+the recorded payload and files that differ from their inventory are refused."""
 import gzip
 import io
 import json
@@ -20,7 +20,7 @@ import zipfile
 
 root = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root / 'scripts'))
-from artifact_support import read_zip, set_npm_platforms, write_zip
+from artifact_support import native_payload, read_zip, set_npm_platforms, write_zip
 from release_support import TARGETS, sha256, target
 import java_package
 import python_wheel
@@ -29,8 +29,8 @@ VERSION, EPOCH = '9.8.7', 1700000000
 ASSEMBLE = root / 'scripts/assemble-packages.py'
 
 
-def tgz(path, entries):
-    with open(path, 'wb') as stream, gzip.GzipFile(filename='', mode='wb', fileobj=stream, mtime=0) as zipped:
+def tgz(path, entries, level=9):
+    with open(path, 'wb') as stream, gzip.GzipFile(filename='', mode='wb', fileobj=stream, mtime=0, compresslevel=level) as zipped:
         with tarfile.open(fileobj=zipped, mode='w') as archive:
             for name, data in entries.items():
                 info = tarfile.TarInfo(name)
@@ -47,8 +47,9 @@ def content_types(extensions):
     return '\n'.join(lines).encode()
 
 
-def fragment(directory, name, commit='a' * 40, shared=b'shared', foreign=None):
-    """A package-native.py-shaped output for one platform; foreign adds another platform's native file."""
+def fragment(directory, name, commit='a' * 40, shared=b'shared', foreign=None, level=9):
+    """A package-native.py-shaped output for one platform; foreign adds another platform's native file,
+    level compresses the shared archives differently (as another host's zlib would)."""
     item = target(name)
     out = directory / name
     out.mkdir()
@@ -69,13 +70,19 @@ def fragment(directory, name, commit='a' * 40, shared=b'shared', foreign=None):
              'package/services/metadata/core-properties/nuget.psmdcp': (b'core', False)}
     write_zip(out / f'DucktapeLaya.{VERSION}.nupkg', nupkg, EPOCH, list(nupkg))
     (out / f'ducktape-laya-{VERSION}-{name}{item.archive}').write_bytes(f'{name} archive'.encode())
-    (out / f'ducktape_laya-{VERSION}-{python_wheel.tag(item)}.whl').write_bytes(f'{name} wheel'.encode())
-    for file in (f'ducktape-laya-sys-{VERSION}.crate', f'ducktape-laya-{VERSION}.crate', f'ducktape-laya-{VERSION}-sources.jar',
-                 f'ducktape-laya-{VERSION}-javadoc.jar', f'ducktape-laya-{VERSION}.pom', 'sbom.cdx.json'):
+    write_zip(out / f'ducktape_laya-{VERSION}-{python_wheel.tag(item)}.whl',
+              {'ducktape_laya/__init__.py': (b'', False), f'ducktape_laya/_native/{item.library}': (library, True)}, EPOCH)
+    for file in (f'ducktape-laya-sys-{VERSION}.crate', f'ducktape-laya-{VERSION}.crate'):
+        tgz(out / file, {'crate/src/lib.rs': shared + file.encode()}, level)
+    for file in (f'ducktape-laya-{VERSION}-sources.jar', f'ducktape-laya-{VERSION}-javadoc.jar'):
+        with zipfile.ZipFile(out / file, 'w', zipfile.ZIP_DEFLATED, compresslevel=level) as archive:
+            archive.writestr(zipfile.ZipInfo('META-INF/MANIFEST.MF', (2023, 11, 14, 22, 13, 20)), shared + file.encode())
+    for file in (f'ducktape-laya-{VERSION}.pom', 'sbom.cdx.json'):
         (out / file).write_bytes(shared + file.encode())
     inventory = {'schema_version': 2, 'package_version': VERSION, 'packaging_source_commit': commit,
                  'packaging_source_tracked_dirty': False, 'runtime': {'commit': 'b' * 40}, 'build_source': {'sha256': 'c' * 64},
-                 'platform': name, 'source_date_epoch': EPOCH,
+                 'platform': name, 'source_date_epoch': EPOCH, 'build_identities': {}, 'diagnostics': {}, 'toolchain': {},
+                 'cpu_build_options': {}, 'payload': native_payload(out, VERSION, item),
                  'artifacts': {f.name: {'sha256': sha256(f), 'bytes': f.stat().st_size} for f in sorted(out.iterdir())}}
     (out / 'inventory.json').write_text(json.dumps(inventory, indent=2) + '\n')
     return out
@@ -94,7 +101,8 @@ def refused(output, fragments, message):
 with tempfile.TemporaryDirectory(prefix='ducktape-assembly-') as directory:
     directory = pathlib.Path(directory)
     names = [t.name for t in TARGETS]
-    fragments = [fragment(directory, name) for name in names]
+    # Shared archives compressed differently on one platform (another host's zlib) are still the same files.
+    fragments = [fragment(directory, name, level=1 if name == 'windows-x64' else 9) for name in names]
     first, second = directory / 'first', directory / 'second'
     result = assemble(first, *fragments)
     assert result.returncode == 0, result.stderr
@@ -104,11 +112,14 @@ with tempfile.TemporaryDirectory(prefix='ducktape-assembly-') as directory:
     assert files == sorted(path.name for path in second.iterdir())
     assert all((first / name).read_bytes() == (second / name).read_bytes() for name in files), 'fragment order changed the output'
     inventory = json.loads((first / 'inventory.json').read_text())
-    assert inventory['kind'] == 'multi-platform' and inventory['platforms'] == names, inventory['platforms']
+    assert inventory['kind'] == 'multi-platform' and inventory['platforms'] == sorted(names), inventory['platforms']
     assert set(inventory['artifacts']) == set(files) - {'inventory.json'}
     for item in TARGETS:
         assert f'ducktape-laya-{VERSION}-{item.name}{item.archive}' in files and f'ducktape_laya-{VERSION}-{python_wheel.tag(item)}.whl' in files
-        assert inventory['fragments'][item.name]['inventory_sha256'] == sha256(directory / item.name / 'inventory.json')
+        section = inventory['fragments'][item.name]
+        assert section['inventory_sha256'] == sha256(directory / item.name / 'inventory.json')
+        assert section['archive'] in files and section['wheel'] in files
+        assert section['payload'] == json.loads((directory / item.name / 'inventory.json').read_text())['payload']
     with tarfile.open(first / f'ducktape-laya-{VERSION}.tgz') as archive:
         members = {member.name: member for member in archive.getmembers()}
         manifest = json.loads(archive.extractfile('package/package.json').read())
@@ -143,5 +154,13 @@ with tempfile.TemporaryDirectory(prefix='ducktape-assembly-') as directory:
     with zipfile.ZipFile(tampered / f'{java_package.ARTIFACT}-{VERSION}.jar', 'a') as archive:
         archive.writestr('extra', b'x')
     refused(directory / 'tampered-out', [fragments[0], tampered], 'size/hash mismatch')
+    for kind in ('npm', 'java', 'nuget', 'wheel'):
+        wrong = directory / f'payload-{kind}'
+        shutil.copytree(fragments[3], wrong)
+        record = json.loads((wrong / 'inventory.json').read_text())
+        entry = next(iter(record['payload'][kind]))
+        record['payload'][kind][entry] = '0' * 64
+        (wrong / 'inventory.json').write_text(json.dumps(record))
+        refused(directory / f'payload-{kind}-out', [fragments[0], wrong], 'differ from its inventory payload')
     refused(first, [fragments[0]], 'exists')
 print(f'Package assembly: {len(TARGETS)} platforms merged deterministically; mismatched fragments refused')

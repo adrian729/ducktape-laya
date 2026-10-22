@@ -20,10 +20,14 @@ OVERRIDES = ('DUCKTAPE_LAYA_ADDON', 'DUCKTAPE_LAYA_LIB_DIR', 'LD_LIBRARY_PATH', 
              'PKG_CONFIG_PATH', 'LAYA_MODEL')
 
 
-def host_packages(directory):
-    """(inventory, version, target): the verified directory and this machine's package platform."""
+def host_packages(directory, platform=None):
+    """(inventory, version, target): the verified directory and this machine's package platform.
+
+    platform, when given, must be this machine's: packages are installed where they run."""
     inventory = verify_inventory(directory)
     target = host_target()
+    if platform and platform != target.name:
+        raise SystemExit(f'{platform} packages cannot be tested on this {target.name} machine')
     platforms = inventory.get('platforms') or [inventory['platform']]
     if target.name not in platforms:
         raise SystemExit(f'{directory} holds packages for {", ".join(platforms)}, not for this {target.name} machine')

@@ -13,18 +13,26 @@ The output directory holds:
 - ducktape-laya-VERSION.jar: one jar with every platform's native/<platform>/;
 - DucktapeLaya.VERSION.nupkg: one NuGet package with every platform's
   runtimes/<rid>/native/;
-- the platform-independent files once (both .crate files, the Maven sources and
-  javadoc jars and POM, the SBOM);
-- inventory.json: the artifacts, and each fragment's inventory with its hash.
+- the platform-independent files once, as the first fragment (in the order
+  linux-x64, linux-arm64, macos-arm64, windows-x64) has them: both .crate
+  files, the Maven sources and javadoc jars and POM, the SBOM;
+- inventory.json: the artifacts, the sorted platforms, and per platform its
+  fragment inventory's hash, build identities, diagnostics, toolchain, archive,
+  wheel and native payload (entry name to sha256 in the npm, jar, NuGet
+  package and wheel).
 
-Apart from each platform's own native files, the npm, jar and NuGet contents and
-the platform-independent files must be byte-identical in every fragment. The
-result depends only on the fragments' bytes (and this Python's zlib): sorted
-entries, fixed timestamps and permissions. Nothing is built, signed or published.
+Apart from each platform's own native files, the npm, jar and NuGet entries and
+the platform-independent files must be identical in every fragment. Archives
+are compared by their entries, not their compressed bytes, which differ between
+hosts' zlib builds. Each platform's native entries must be the payload its
+inventory records. The result depends only on the fragments' contents and this
+host's zlib: sorted entries, fixed timestamps and permissions. Nothing is built,
+signed or published.
 """
 import argparse
 import atexit
 import gzip
+import hashlib
 import io
 import json
 import pathlib
@@ -34,7 +42,7 @@ import tarfile
 import tempfile
 
 from release_support import TARGETS, target, sha256
-from artifact_support import read_zip, set_npm_platforms, verify_inventory, write_zip
+from artifact_support import PAYLOAD_PREFIXES, native_payload, read_tgz, read_zip, set_npm_platforms, verify_inventory, write_zip
 import java_package
 import python_wheel
 
@@ -90,27 +98,16 @@ def same(label, entries):
     return first
 
 
-def split(label, fragment, entries, prefix):
-    """(common entries, this platform's native entries); a fragment carries only its own platform."""
+def split(kind, fragment, entries, prefix):
+    """(common entries, this platform's native entries); a fragment carries only its own
+    platform, exactly the payload its inventory records."""
     natives = {name: value for name, value in entries.items() if name.startswith(prefix)}
-    own = {name: value for name, value in natives.items() if name.startswith(prefix + own_directory(label, fragment.target) + '/')}
+    own = {name: value for name, value in natives.items() if name.startswith(PAYLOAD_PREFIXES[kind](fragment.target))}
     if own.keys() != natives.keys() or not own:
-        raise SystemExit(f'{label}: {fragment.target.name} must carry native files for its own platform only: {sorted(natives)}')
+        raise SystemExit(f'{kind}: {fragment.target.name} must carry native files for its own platform only: {sorted(natives)}')
+    if {name: hashlib.sha256(data).hexdigest() for name, (data, _) in own.items()} != fragment.inventory['payload'][kind]:
+        raise SystemExit(f'{kind}: {fragment.target.name} native files differ from its inventory payload')
     return {name: value for name, value in entries.items() if name not in natives}, own
-
-
-def own_directory(label, item):
-    return {'npm': item.npm, 'jar': item.name, 'nupkg': item.nuget}[label]
-
-
-def read_tgz(path):
-    entries = {}
-    with tarfile.open(path, 'r:gz') as archive:
-        for member in archive.getmembers():
-            if not member.isfile():
-                raise SystemExit(f'{path.name}: unexpected entry {member.name}')
-            entries[member.name] = (archive.extractfile(member).read(), member.mode)
-    return entries
 
 
 def write_tgz(path, entries):
@@ -154,16 +151,26 @@ out = pathlib.Path(tempfile.mkdtemp(prefix=a.output.name + '.partial-', dir=a.ou
 atexit.register(shutil.rmtree, out, ignore_errors=True)
 everyone = [f.target for f in fragments]
 
-# Per-platform files, unchanged.
+# Per-platform files, unchanged; the wheel must carry the payload its inventory records.
 for fragment in fragments:
+    if native_payload(fragment.directory, version, fragment.target)['wheel'] != fragment.inventory['payload']['wheel']:
+        raise SystemExit(f'wheel: {fragment.target.name} native files differ from its inventory payload')
     for name in (f'ducktape-laya-{version}-{fragment.target.name}{fragment.target.archive}',
                  f'ducktape_laya-{version}-{python_wheel.tag(fragment.target)}.whl'):
         shutil.copy(fragment.path(name), out / name)
 
-# Platform-independent files: identical everywhere, written once.
+# Platform-independent files: the same contents everywhere, written once.
+def contents(path):
+    if path.suffix == '.crate':
+        return read_tgz(path)
+    if path.suffix == '.jar':
+        return read_zip(path)
+    return {path.name: (path.read_bytes(), False)}
+
+
 for name in (f'ducktape-laya-sys-{version}.crate', f'ducktape-laya-{version}.crate', f'{java_package.ARTIFACT}-{version}-sources.jar',
              f'{java_package.ARTIFACT}-{version}-javadoc.jar', f'{java_package.ARTIFACT}-{version}.pom', 'sbom.cdx.json'):
-    same(name, [{name: (f.path(name).read_bytes(), False)} for f in fragments])
+    same(name, [contents(f.path(name)) for f in fragments])
     shutil.copy(primary.path(name), out / name)
 
 # npm: one package.json naming every OS and CPU, and every platform's native directory.
@@ -181,7 +188,7 @@ write_tgz(out / name, {**same(name, commons), **merged})
 name = f'{java_package.ARTIFACT}-{version}.jar'
 merged, commons = {}, []
 for fragment in fragments:
-    common, natives = split('jar', fragment, read_zip(fragment.path(name)), 'native/')
+    common, natives = split('java', fragment, read_zip(fragment.path(name)), 'native/')
     commons.append(common)
     merged.update(natives)
 write_zip(out / name, {**same(name, commons), **merged}, epoch, java_package.LEAD)
@@ -190,7 +197,7 @@ write_zip(out / name, {**same(name, commons), **merged}, epoch, java_package.LEA
 name = f'DucktapeLaya.{version}.nupkg'
 merged, commons, types = {}, [], []
 for fragment in fragments:
-    common, natives = split('nupkg', fragment, read_zip(fragment.path(name)), 'runtimes/')
+    common, natives = split('nuget', fragment, read_zip(fragment.path(name)), 'runtimes/')
     types.append(common.pop(CONTENT_TYPES)[0].decode('utf-8'))
     commons.append(common)
     merged.update(natives)
@@ -207,9 +214,14 @@ inventory = {'schema_version': 2, 'kind': 'multi-platform', 'package_version': v
              'packaging_source_commit': primary.inventory['packaging_source_commit'],
              'packaging_source_tracked_dirty': any(f.inventory['packaging_source_tracked_dirty'] for f in fragments),
              'runtime': primary.inventory['runtime'], 'build_source': primary.inventory['build_source'],
-             'source_date_epoch': epoch, 'platforms': platforms,
-             'fragments': {f.target.name: {'inventory_sha256': sha256(f.directory / 'inventory.json'), 'inventory': f.inventory}
-                           for f in fragments},
+             'source_date_epoch': epoch, 'platforms': sorted(platforms),
+             'fragments': {f.target.name: {
+                 'inventory_sha256': sha256(f.directory / 'inventory.json'),
+                 **{key: f.inventory[key] for key in ('packaging_source_commit', 'packaging_source_tracked_dirty', 'build_identities',
+                                                      'diagnostics', 'toolchain', 'cpu_build_options')},
+                 'archive': f'ducktape-laya-{version}-{f.target.name}{f.target.archive}',
+                 'wheel': f'ducktape_laya-{version}-{python_wheel.tag(f.target)}.whl', 'payload': f.inventory['payload']}
+                 for f in fragments},
              'artifacts': {f.name: {'sha256': sha256(f), 'bytes': f.stat().st_size} for f in sorted(out.iterdir())},
              'status': 'local unsigned development artifacts; not release approval'}
 (out / 'inventory.json').write_text(json.dumps(inventory, indent=2) + '\n')

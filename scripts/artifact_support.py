@@ -39,6 +39,43 @@ def read_zip(path):
                 for info in archive.infolist() if not info.is_dir()}
 
 
+def read_tgz(path):
+    """The regular files of a tar.gz as {name: (bytes, mode)}, in archive order; other entries are refused."""
+    import tarfile
+    entries = {}
+    with tarfile.open(path, 'r:gz') as archive:
+        for member in archive.getmembers():
+            if not member.isfile():
+                raise ValueError(f'{pathlib.Path(path).name}: unexpected entry {member.name}')
+            entries[member.name] = (archive.extractfile(member).read(), member.mode)
+    return entries
+
+
+# Where each package carries a platform's native files.
+PAYLOAD_PREFIXES = {'npm': lambda t: f'package/native/{t.npm}/', 'java': lambda t: f'native/{t.name}/',
+                    'nuget': lambda t: f'runtimes/{t.nuget}/native/', 'wheel': lambda t: 'ducktape_laya/_native/'}
+
+
+def payload_names(target, version):
+    """The package file holding each kind of payload."""
+    return {'npm': f'ducktape-laya-{version}.tgz', 'java': f'ducktape-laya-{version}.jar',
+            'nuget': f'DucktapeLaya.{version}.nupkg', 'wheel': f'ducktape_laya-{version}-py3-none-{target.wheel}.whl'}
+
+
+def native_payload(directory, version, target):
+    """{npm|java|nuget|wheel: {entry name: sha256}} of this platform's native files in its packages."""
+    import hashlib
+    payload = {}
+    for kind, name in payload_names(target, version).items():
+        path = pathlib.Path(directory) / name
+        entries = read_tgz(path) if kind == 'npm' else read_zip(path)
+        prefix = PAYLOAD_PREFIXES[kind](target)
+        payload[kind] = {entry: hashlib.sha256(data).hexdigest() for entry, (data, _) in sorted(entries.items()) if entry.startswith(prefix)}
+        if not payload[kind]:
+            raise ValueError(f'{name} has no native files under {prefix}')
+    return payload
+
+
 def set_npm_platforms(manifest, targets):
     """package.json text with its os and cpu arrays naming exactly these targets.
 
