@@ -32,13 +32,32 @@ static long descriptor_count() {
     DWORD count = 0;
     return GetProcessHandleCount(GetCurrentProcess(), &count) ? long(count) : -1;
 }
+// Threads Windows starts for its own thread pools (the loader's workers, I/O and timer
+// workers) begin in ntdll.dll and retire on the pool's schedule, up to minutes later; they
+// are not counted. Every other thread (std::thread, ggml's workers, _beginthreadex) is.
+// A pool our code created and leaked would still show up as leaked handles.
+static const char *const thread_metric = "threads not started by ntdll (OS thread-pool workers excluded)";
+typedef LONG (NTAPI *query_thread_t)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+static bool os_pool_thread(DWORD id) {
+    static const auto query = reinterpret_cast<query_thread_t>(
+        reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread")));
+    static const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    const HANDLE thread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, id);
+    if (!thread || !query) { if (thread) CloseHandle(thread); return false; }
+    void *start = nullptr;
+    const bool known = query(thread, 9 /* ThreadQuerySetWin32StartAddress */, &start, sizeof start, nullptr) >= 0;
+    CloseHandle(thread);
+    HMODULE owner = nullptr;
+    return known && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       static_cast<LPCWSTR>(start), &owner) && owner == ntdll;
+}
 static long thread_count() {
     const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snapshot == INVALID_HANDLE_VALUE) return -1;
     THREADENTRY32 entry{}; entry.dwSize = sizeof entry;
     long count = 0;
     for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry))
-        if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++count;
+        if (entry.th32OwnerProcessID == GetCurrentProcessId() && !os_pool_thread(entry.th32ThreadID)) ++count;
     CloseHandle(snapshot);
     return count;
 }
@@ -70,6 +89,7 @@ static void stable_baseline() {
 #include <sys/resource.h>
 #include <unistd.h>
 static const char *const memory_metric = "VmRSS";
+static const char *const thread_metric = "threads (/proc/self/task)";
 static long rss_kib() {
     std::ifstream file("/proc/self/status"); std::string name;
     while (file >> name) { if (name == "VmRSS:") { long value; file >> value; return value; } std::getline(file, name); }
@@ -215,6 +235,7 @@ int main(int argc, char **argv) {
                   << ",\"warm_median_closed_rss_kib\":" << warm_median << ",\"late_median_closed_rss_kib\":" << late_median
                   << ",\"final_rss_kib\":" << final_rss << ",\"peak_rss_kib\":" << peak_kib()
                   << ",\"fds\":" << final_fds << ",\"threads\":" << final_threads << ",\"elapsed_seconds\":" << elapsed
-                  << ",\"memory_metric\":\"" << memory_metric << "\",\"settle_waits\":" << settle_waits << "}\n";
+                  << ",\"memory_metric\":\"" << memory_metric << "\",\"thread_metric\":\"" << thread_metric
+                  << "\",\"settle_waits\":" << settle_waits << "}\n";
     } catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
 }
