@@ -12,7 +12,7 @@ Where each package is published, and what is still missing. Publication follows 
 | `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Published |
 | `ducktape-laya` (Python wheel) | PyPI | — | Published |
 | `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | Published |
-| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Pending: a signing-secret problem. Until it is published, the jar, sources and javadoc jars and POM are on the GitHub release. Then the `publish-release` workflow (signs at upload; token and key in the `release` environment) |
+| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Published (`publish-release` signs at upload; token and key in the `release` environment) |
 | `DucktapeLaya` (.NET) | NuGet | — | Published |
 
 All names above were unclaimed on 2026-10-19.
