@@ -78,7 +78,8 @@ jobs:
             if [ "$(npm view "$name@${TAG#v}" version 2> /dev/null)" = "${TAG#v}" ]; then
               echo "$name@${TAG#v} is already published"
             else
-              npm publish "dist/$name-${TAG#v}.tgz" --access public
+              # "./": a bare "dir/file.tgz" is read as a GitHub owner/repository spec.
+              npm publish "./dist/$name-${TAG#v}.tgz" --access public
             fi
           done
 
