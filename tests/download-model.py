@@ -33,7 +33,8 @@ class DownloadModelTests(unittest.TestCase):
             first = subprocess.run(command, text=True, capture_output=True)
             self.assertEqual(first.returncode, 0, first.stderr)
             self.assertEqual(output.read_bytes(), payload)
-            self.assertEqual(output.stat().st_mode & 0o777, 0o644)
+            # POSIX permission bits; Windows reports only read-only or not (0o666 for a writable file).
+            self.assertEqual(output.stat().st_mode & 0o777, 0o666 if sys.platform == 'win32' else 0o644)
             second = subprocess.run(command, text=True, capture_output=True)
             self.assertEqual(second.returncode, 0, second.stderr)
             self.assertIn('Already verified', second.stdout)
