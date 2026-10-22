@@ -29,10 +29,12 @@ with tempfile.TemporaryDirectory(prefix='ducktape-abi-layout-') as directory:
     c.append('return 0; }'); rust.append('}')
     source = tmp / 'layout.c'; source.write_text('\n'.join(c))
     rust_source = tmp / 'layout.rs'; rust_source.write_text('\n'.join(rust))
+    # A Windows compiler variable is one path (with spaces and backslashes), not a shell word list.
+    words = (lambda value: [value]) if sys.platform == 'win32' else shlex.split
     probes = {
-        'C': shlex.split(os.environ.get('CC', 'cc')) + ['-std=c11', '-I', str(ROOT / 'include'), str(source)],
-        'C++': shlex.split(os.environ.get('CXX', 'c++')) + ['-x', 'c++', '-std=c++17', '-I', str(ROOT / 'include'), str(source)],
-        'Rust': shlex.split(os.environ.get('RUSTC', 'rustc')) + ['--edition=2021', str(rust_source)],
+        'C': words(os.environ.get('CC', 'cc')) + ['-std=c11', '-I', str(ROOT / 'include'), str(source)],
+        'C++': words(os.environ.get('CXX', 'c++')) + ['-x', 'c++', '-std=c++17', '-I', str(ROOT / 'include'), str(source)],
+        'Rust': words(os.environ.get('RUSTC', 'rustc')) + ['--edition=2021', str(rust_source)],
     }
     for language, command in probes.items():
         binary = tmp / (language.replace('+', 'p') + ('.exe' if sys.platform == 'win32' else ''))
