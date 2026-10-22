@@ -188,7 +188,7 @@ def main():
         # Refuse a clash before downloading anything.
         manifest = a.merge.resolve()
         current = json.loads(manifest.read_text()) if manifest.exists() else {}
-        added = {key: os.path.relpath(output / relative, manifest.parent) for key, relative in keys.items()}
+        added = {key: pathlib.Path(os.path.relpath(output / relative, manifest.parent)).as_posix() for key, relative in keys.items()}
         clashes = sorted(key for key in added if key in current and current[key] != added[key])
         if clashes and not a.replace:
             raise Refused(f'{manifest} already has {", ".join(clashes)} (pass --replace to overwrite)')
