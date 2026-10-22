@@ -97,11 +97,17 @@ binding, for Rails and Laravel backends. Add one when a user asks.
   (GEGLU-erf, `ggml-cpu/vec.h`) and `sinf`/`cosf` (RoPE cache,
   `ggml-cpu/ops.cpp`); with those computed as `(float)f((double)x)` Windows and
   Linux produce identical results on all 29 answers (max drift 0.039 on both).
-  Option: a runtime patch with C-runtime-independent, correctly rounded
-  `erff`/`sinf`/`cosf`, which makes every platform's arithmetic identical
-  but moves all platforms' results slightly (Linux 0.037 → 0.039) and needs
-  requalification and a performance check. Until then Windows is a separate
-  numerical profile and not release-qualified.
+  Neither library is wrong; the answer is fragile under Q8_0 activation
+  quantization. Upstream deliberately uses the platform libm on CPU and
+  hand-written approximations on Metal and Vulkan (#14445), so bit-identical
+  results across platforms are not an upstream goal. A runtime patch with our
+  own `erff`/`sinf`/`cosf` would make CPU platforms identical, but it would
+  move Linux from 0.037 to 0.039, diverge from stock llama.cpp arithmetic on
+  every upgrade, cost unmeasured time (`erff` runs about 3.4M times per
+  request) and still not cover GPU backends. Not planned: Windows stays a
+  separate numerical profile, buildable but not released. Releasing it is a
+  tolerance-policy question (whether one fragile answer at 0.054 should block a
+  platform), not a math patch.
 - **Loading a model from memory:** llama.cpp has no public load-from-buffer API.
   Workarounds (memfd, temporary files) add little real protection for encrypted
   assets. Revisit with mobile.
