@@ -10,10 +10,10 @@ Where each package is published, and what is still missing. Publication follows 
 | `ducktape-laya` (Node.js) | npm | Published | Same process |
 | `ducktape-laya-browser` | npm | Published | Same process |
 | `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Same process |
-| `ducktape-laya` (Python wheel) | PyPI | — | Wheel is built and tested; PyPI setup missing |
+| `ducktape-laya` (Python wheel) | PyPI | — | `publish-release` workflow (trusted publishing) |
 | `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | No account needed; publishing is a tag. Tested against the release tarball |
-| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Jar (with the library), sources and javadoc jars and POM are built and tested; signing and Central setup missing |
-| `DucktapeLaya` (.NET) | NuGet | — | Package (with the library) is built and tested; NuGet setup missing |
+| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | `publish-release` workflow (signs at upload; token and key in the `release` environment) |
+| `DucktapeLaya` (.NET) | NuGet | — | `publish-release` workflow (trusted publishing) |
 
 All names above were unclaimed on 2026-10-19.
 
@@ -36,33 +36,49 @@ These are code changes; they need no accounts.
 
 ## One-time maintainer setup
 
-Each registry needs the maintainer's account. Prefer trusted publishing
-(GitHub OIDC) over long-lived tokens where the registry supports it.
+Each registry needs the maintainer's account. PyPI, NuGet and Maven Central are
+published by the `publish-release` workflow from the GitHub environment
+`release` (required reviewer: the maintainer; deployments only from `main` and
+`v*` tags). The trusted publisher entries below must name exactly that
+repository, workflow file and environment.
 
-- **PyPI:** create the project through a pending trusted publisher for
-  `adrian729/ducktape-laya` and the publishing workflow, or upload once with a
-  scoped API token. PyPI requires 2FA on the account.
-- **Maven Central:** register at the Central Portal and verify the
-  `io.github.adrian729` namespace, which is automatic for a GitHub login. Central
-  requires PGP signatures on every file, so create and publish a signing key.
-  This is the only channel that requires signatures; the GitHub attestations do
-  not replace them.
-- **NuGet:** create a nuget.org account. Then either add a trusted publishing
-  policy for the repository and workflow, or create an API key scoped to
-  `DucktapeLaya`.
+- **PyPI:** a pending trusted publisher (pypi.org, Account → Publishing) for
+  project `ducktape-laya`, owner `adrian729`, repository `ducktape-laya`,
+  workflow `publish-release.yml`, environment `release`. It creates the project
+  at the first upload and does not reserve the name before that. PyPI requires
+  2FA on the account.
+- **NuGet:** a trusted publishing policy (nuget.org, user menu → Trusted
+  Publishing) with owner `adrian729`, repository `ducktape-laya`, workflow
+  `publish-release.yml`, environment `release`, and the nuget.org user name as
+  the `NUGET_USER` variable of the `release` environment (not a secret). The
+  policy becomes permanent at its first successful login; until then it expires
+  after about a week and has to be re-activated.
+- **Maven Central:** sign in to the Central Portal with GitHub, which verifies
+  the `io.github.adrian729` namespace. Central has no OIDC publishing and
+  requires a PGP signature on every file (the GitHub attestations do not replace
+  it), so the `release` environment holds four secrets: `CENTRAL_USERNAME` and
+  `CENTRAL_PASSWORD` (a Central Portal user token), `MAVEN_GPG_PRIVATE_KEY`
+  (armored secret key) and `MAVEN_GPG_PASSPHRASE`. Publish the public key to
+  `keyserver.ubuntu.com` so Central can verify the signatures. Set the secrets
+  with `gh secret set NAME --env release`, which prompts for the value.
 - **Go:** no account. Pushing the tag `bindings/go/vX.Y.Z` (subdirectory module
   tags carry the path prefix) makes the module available through the proxy and
   pkg.go.dev.
-- **npm, crates.io:** already set up. Both also support trusted publishing; npm
-  then no longer needs an OTP for each publish.
+- **npm, crates.io:** already set up and published by the maintainer. Both also
+  support trusted publishing and could move into `publish-release`; npm then no
+  longer needs an OTP for each publish.
 
-## Recommended: publish from CI
+## The publish-release workflow
 
-Add a `publish-release` workflow like `attest-release`. It would download the
-assets of a published GitHub release, check them against `SHA256SUMS` and a
-`release_ready` `gates.json`, then upload those exact files with trusted
-publishing: npm and PyPI files as they are, the `.nupkg` as built, and the crates through `cargo publish` from the tagged source (see above). The registries then serve the attested bytes, no maintainer token or OTP
-is handled locally, and every upload is logged in Actions.
+`publish-release` (run from `main`, input: the tag) builds nothing. Each job
+downloads its files from the GitHub release with
+`scripts/verify-release-assets.sh`, which checks them against `SHA256SUMS`, a
+`release_ready` `gates.json` for the tagged commit and the `attest-release`
+attestation, and then uploads exactly those bytes: the wheel to PyPI, the
+`.nupkg` to NuGet, and the jar, sources jar, javadoc jar and POM to Maven
+Central, signed and checksummed in the job. Each registry can be selected
+separately, so a failed upload can be retried alone. Every job waits for
+approval in the `release` environment.
 
 ## Release-day order
 
@@ -81,9 +97,9 @@ is handled locally, and every upload is logged in Actions.
    on any extra asset.
 5. Run the `attest-release` workflow from `main` for the tag, then check one asset with
    `gh attestation verify` (see [SECURITY.md](../SECURITY.md)).
-6. Publish to each registry from the release assets; publish the crates with `cargo publish` at the tag, `-sys` before the safe crate.
+6. Run the `publish-release` workflow from `main` for the tag (PyPI, NuGet, Maven Central) and approve its jobs. Publish the npm tarballs from the release assets with `npm publish`, and the crates with `cargo publish` at the tag, `-sys` before the safe crate.
 7. Push `bindings/go/vX.Y.Z` at the same commit.
-8. Download every package from its registry into a clean directory, check its bytes against `SHA256SUMS` and its attestation (crates, which `cargo publish` rebuilds, against the tagged source instead), and run a real-model consumer.
+8. Download every package from its registry into a clean directory, check its bytes against `SHA256SUMS` and its attestation (`scripts/verify-release-assets.sh` downloads and checks the release copies) (crates, which `cargo publish` rebuilds, against the tagged source instead), and run a real-model consumer.
 9. Update the README status and requirements tables, and the version in the README's install snippets.
 
 For the next release's rollback rehearsal, the published assets become the

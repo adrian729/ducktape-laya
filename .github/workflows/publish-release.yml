@@ -1,0 +1,175 @@
+name: publish-release
+
+# Uploads the exact files of a published, attested GitHub release to PyPI, NuGet
+# and Maven Central. It builds nothing: every job downloads its files from the
+# release and checks them against SHA256SUMS, the qualified gates.json and the
+# attest-release attestation (scripts/verify-release-assets.sh) before uploading.
+#
+# PyPI and NuGet use trusted publishing (GitHub OIDC); no token is stored. Maven
+# Central has no OIDC publishing and requires PGP signatures, so its job uses a
+# Central Portal user token and a signing key stored as secrets of the `release`
+# environment. Each job waits for approval in that environment.
+#
+# npm and crates.io are still published by the maintainer (docs/PUBLISHING.md).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (vX.Y.Z); run attest-release for it first
+        required: true
+      pypi:
+        description: Publish the wheel to PyPI
+        type: boolean
+        default: true
+      nuget:
+        description: Publish the .nupkg to NuGet
+        type: boolean
+        default: true
+      maven:
+        description: Publish the jar, sources jar, javadoc jar and POM to Maven Central
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  pypi:
+    # Only the workflow as merged on main may publish; a branch cannot bring its own.
+    if: github.ref == 'refs/heads/main' && inputs.pypi
+    runs-on: ubuntu-24.04
+    environment:
+      name: release
+      url: https://pypi.org/project/ducktape-laya/
+    permissions:
+      contents: read
+      id-token: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Download and verify the wheel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # The platform tag follows the glibc the library was built against.
+          wheel=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+            grep -Ex "ducktape_laya-${TAG#v}-py3-none-manylinux_[0-9]+_[0-9]+_x86_64\.whl")
+          [ "$(wc -l <<< "$wheel")" = 1 ] || { echo "Expected one wheel, found: $wheel"; exit 1; }
+          scripts/verify-release-assets.sh "$TAG" dist "$wheel"
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/
+
+  nuget:
+    if: github.ref == 'refs/heads/main' && inputs.nuget
+    runs-on: ubuntu-24.04
+    environment:
+      name: release
+      url: https://www.nuget.org/packages/DucktapeLaya/
+    permissions:
+      contents: read
+      id-token: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Download and verify the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: scripts/verify-release-assets.sh "$TAG" dist "DucktapeLaya.${TAG#v}.nupkg"
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      # Exchanges this job's OIDC token for a NuGet API key valid for one hour.
+      - uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        id: login
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Push
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          TAG: ${{ inputs.tag }}
+        run: dotnet nuget push "dist/DucktapeLaya.${TAG#v}.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+
+  maven:
+    if: github.ref == 'refs/heads/main' && inputs.maven
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment:
+      name: release
+      url: https://central.sonatype.com/artifact/io.github.adrian729/ducktape-laya
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Download and verify the Java files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          v=${TAG#v}
+          scripts/verify-release-assets.sh "$TAG" dist "ducktape-laya-$v.jar" "ducktape-laya-$v-sources.jar" \
+            "ducktape-laya-$v-javadoc.jar" "ducktape-laya-$v.pom"
+      - name: Sign and bundle
+        env:
+          TAG: ${{ inputs.tag }}
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          v=${TAG#v}
+          export GNUPGHOME=$RUNNER_TEMP/gnupg
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s\n' "$MAVEN_GPG_PRIVATE_KEY" | gpg --batch --import
+          # Central's layout: group/artifact/version/, each file with .asc, .md5 and .sha1.
+          dir=bundle/io/github/adrian729/ducktape-laya/$v
+          mkdir -p "$dir"
+          cp dist/* "$dir/"
+          cd "$dir"
+          for file in *; do
+            printf '%s' "$MAVEN_GPG_PASSPHRASE" |
+              gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --armor --detach-sign "$file"
+            gpg --batch --verify "$file.asc" "$file"
+            md5sum "$file" | cut -d' ' -f1 > "$file.md5"
+            sha1sum "$file" | cut -d' ' -f1 > "$file.sha1"
+          done
+          ls -l
+          cd "$GITHUB_WORKSPACE/bundle"
+          zip -qr -X ../central-bundle.zip io
+          rm -rf "$GNUPGHOME"
+      - name: Upload to the Central Portal and wait for publication
+        env:
+          TAG: ${{ inputs.tag }}
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+        run: |
+          set -euo pipefail
+          auth=$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)
+          echo "::add-mask::$auth"
+          api=https://central.sonatype.com/api/v1/publisher
+          # AUTOMATIC publishes once validation passes; a failed validation publishes nothing.
+          id=$(curl -sS --fail-with-body -X POST "$api/upload?name=ducktape-laya-${TAG#v}&publishingType=AUTOMATIC" \
+            -H "Authorization: Bearer $auth" -F "bundle=@central-bundle.zip")
+          echo "Deployment $id"
+          for _ in $(seq 120); do
+            status=$(curl -sS --fail-with-body -X POST "$api/status?id=$id" -H "Authorization: Bearer $auth")
+            state=$(jq -r .deploymentState <<< "$status")
+            echo "$(date +%T) $state"
+            case $state in
+              PUBLISHED) exit 0 ;;
+              FAILED) jq . <<< "$status"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          # Once publishing has started, Central finishes on its own; anything else is a failure.
+          [ "$state" = PUBLISHING ] || { echo "Deployment $id is still $state after an hour"; exit 1; }
+          echo "::warning::Deployment $id is still PUBLISHING after an hour; check the Central Portal."
