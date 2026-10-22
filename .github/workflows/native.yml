@@ -77,7 +77,7 @@ jobs:
             runner: ubuntu-24.04
             arch: x64
           # Linux arm64: native build, ctest, every binding suite and per-platform
-          # packages (linux-arm64 tarball, npm, wheel, jar, nupkg).
+          # packages (linux-arm64 tarball, npm, wheel, jar, nupkg) with scripts/package-native.py.
           - compiler: gcc
             cc: gcc
             cxx: g++
@@ -139,6 +139,16 @@ jobs:
           python3 tests/cross-host.py bundle --build build-validation --output build-ci-report/cross-host/bundle
           python3 tests/cross-host.py record --bundle build-ci-report/cross-host/bundle \
             --model build-model/laya.gguf --report build-ci-report/cross-host/record.json
+      # The gcc builds' packages (the release compiler) are this platform's fragment for
+      # scripts/assemble-packages.py; platforms.yml assembles them with macOS and Windows.
+      - name: Retain this platform's packages
+        if: matrix.compiler == 'gcc'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: packages-linux-${{ matrix.arch }}
+          path: build-ci-report/packages/
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain logs and explicit gate report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
