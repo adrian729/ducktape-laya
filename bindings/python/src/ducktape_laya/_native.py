@@ -22,6 +22,9 @@ _NAME, _VERSIONED = (('libducktape_laya.dylib', 'libducktape_laya.1.dylib') if s
                      else ('ducktape_laya.dll', 'ducktape_laya.dll') if sys.platform == 'win32'
                      else ('libducktape_laya.so', 'libducktape_laya.so.1'))
 
+# Platforms with a wheel; a wheel bundles its platform's library in _native/.
+_MACHINES = {'linux': ('x86_64', 'AMD64', 'aarch64', 'arm64'), 'darwin': ('arm64',), 'win32': ('AMD64',)}
+
 
 def _open():
     explicit = os.environ.get('DUCKTAPE_LAYA_LIB_DIR')
@@ -34,8 +37,9 @@ def _open():
             return ctypes.CDLL(str(path))
         except OSError as error:
             raise OSError(f'DUCKTAPE_LAYA_LIB_DIR is set but {path} could not be loaded: {error}') from None
-    if sys.platform != 'linux' or platform.machine() not in ('x86_64', 'AMD64', 'aarch64', 'arm64'):
-        raise OSError(f'Unsupported platform {sys.platform}/{platform.machine()}; ducktape-laya supports Linux x86-64 and arm64')
+    if platform.machine() not in _MACHINES.get(sys.platform, ()):
+        raise OSError(f'Unsupported platform {sys.platform}/{platform.machine()}; '
+                      'ducktape-laya supports Linux x86-64 and arm64, macOS arm64 and Windows x64')
     bundled = pathlib.Path(__file__).with_name('_native') / _NAME
     try:
         return ctypes.CDLL(str(bundled) if bundled.is_file() else _VERSIONED)

@@ -1,7 +1,7 @@
 {
   "name": "ducktape-laya",
   "version": "0.2.0",
-  "description": "Embedded Laya decision engine for Node.js (Linux x64 native addon)",
+  "description": "Embedded Laya decision engine for Node.js (bundled native addon)",
   "main": "index.cjs",
   "types": "index.d.ts",
   "engines": {

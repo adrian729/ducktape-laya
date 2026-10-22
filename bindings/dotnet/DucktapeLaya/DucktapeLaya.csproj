@@ -10,7 +10,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsAotCompatible>true</IsAotCompatible>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Description>Linux native Laya GGUF decisions backed by libducktape_laya.so.</Description>
+    <Description>Local Laya GGUF decisions (choice, noul, score) through the bundled ducktape-laya native library.</Description>
     <Authors>adrian729</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/adrian729/ducktape-laya</PackageProjectUrl>
@@ -29,10 +29,13 @@
   <ItemGroup>
     <InternalsVisibleTo Include="DucktapeLaya.Tests" />
   </ItemGroup>
+  <!-- The native library at runtimes/<rid>/native/ under its own file name: libducktape_laya.so (linux-x64,
+       linux-arm64), libducktape_laya.dylib (osx-arm64) or ducktape_laya.dll (win-x64). -->
   <PropertyGroup>
     <DucktapeLayaRuntime Condition="'$(DucktapeLayaRuntime)' == ''">linux-x64</DucktapeLayaRuntime>
+    <DucktapeLayaNativeFile>$([System.IO.Path]::GetFileName('$(DucktapeLayaNativeLibrary)'))</DucktapeLayaNativeFile>
   </PropertyGroup>
   <ItemGroup Condition="'$(DucktapeLayaNativeLibrary)' != ''">
-    <None Include="$(DucktapeLayaNativeLibrary)" Pack="true" PackagePath="runtimes/$(DucktapeLayaRuntime)/native/libducktape_laya.so" Link="runtimes/$(DucktapeLayaRuntime)/native/libducktape_laya.so" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(DucktapeLayaNativeLibrary)" Pack="true" PackagePath="runtimes/$(DucktapeLayaRuntime)/native/$(DucktapeLayaNativeFile)" Link="runtimes/$(DucktapeLayaRuntime)/native/$(DucktapeLayaNativeFile)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

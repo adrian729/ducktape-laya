@@ -30,7 +30,7 @@ public final class LayaTest {
     }
 
     static void eq(Object expected, Object actual, String what) {
-        if (!expected.equals(actual)) throw new AssertionError(what + ": expected <" + expected + "> but was <" + actual + ">");
+        if (!java.util.Objects.equals(expected, actual)) throw new AssertionError(what + ": expected <" + expected + "> but was <" + actual + ">");
     }
 
     static Throwable thrown(Case c) {
@@ -64,6 +64,16 @@ public final class LayaTest {
             check(!info.contains("\"max_tokens\""), "no max_tokens in info");
             check(Laya.runtimeInfo().contains("\"default_context_tokens\""), "runtime default_context_tokens");
         }
+    }
+
+    static void packagePlatforms() {
+        eq("linux-x64", Native.platform("linux", "amd64"), "Linux x86-64");
+        eq("linux-arm64", Native.platform("linux", "aarch64"), "Linux arm64");
+        eq("macos-arm64", Native.platform("mac os x", "aarch64"), "macOS arm64");
+        eq("windows-x64", Native.platform("windows server 2025", "amd64"), "Windows x64");
+        eq(null, Native.platform("mac os x", "x86_64"), "Intel macOS has no package");
+        eq(null, Native.platform("windows 11", "aarch64"), "Windows arm64 has no package");
+        eq(null, Native.platform("freebsd", "amd64"), "FreeBSD has no package");
     }
 
     static void configJson() {
@@ -418,9 +428,9 @@ public final class LayaTest {
             loadFailureChild();
             System.exit(0);
         }
-        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "configJson", "loadFailure", "pendingCloseFailsFast", "routerAutoValidation"};
+        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "packagePlatforms", "configJson", "loadFailure", "pendingCloseFailsFast", "routerAutoValidation"};
         Case[] cases = {LayaTest::diagnostics, LayaTest::rejectsBadPath, LayaTest::rejectsNul, LayaTest::rejectsInvalidUnicode,
-            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::configJson, LayaTest::loadFailure,
+            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::packagePlatforms, LayaTest::configJson, LayaTest::loadFailure,
             LayaTest::pendingCloseFailsFast, LayaTest::routerAutoValidation};
         List<String> failed = new ArrayList<>();
         int ran = 0;

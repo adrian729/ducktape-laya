@@ -5,15 +5,25 @@ import java.io.InputStream;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.nio.file.*;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.Locale;
 
 /** Locates libducktape_laya and binds its C ABI. */
 final class Native {
-    /** libducktape_laya.so on Linux, libducktape_laya.dylib on macOS. */
+    /** libducktape_laya.so on Linux, libducktape_laya.dylib on macOS, ducktape_laya.dll on Windows. */
     static final String LIB = System.mapLibraryName("ducktape_laya");
-    /** Bundled library resource for this JVM's architecture: /native/linux-x64/ or /native/linux-arm64/. */
-    static String bundled(String arch) {
-        return "/native/linux-" + (arch.equals("aarch64") || arch.equals("arm64") ? "arm64" : "x64") + "/" + LIB;
+    /** Package platform of a JVM's os.name and os.arch (the jar's native/&lt;platform&gt;/ directory),
+     *  or null where no package exists: linux-x64, linux-arm64, macos-arm64 or windows-x64. */
+    static String platform(String os, String arch) {
+        boolean x64 = arch.equals("amd64") || arch.equals("x86_64");
+        boolean arm64 = arch.equals("aarch64") || arch.equals("arm64");
+        if (os.contains("linux") && (x64 || arm64)) return x64 ? "linux-x64" : "linux-arm64";
+        if ((os.contains("mac") || os.contains("darwin")) && arm64) return "macos-arm64";
+        if (os.contains("windows") && x64) return "windows-x64";
+        return null;
     }
     static final AddressLayout PTR = ValueLayout.ADDRESS;
     /** dtl_call_options: struct_size, reserved, request_id, timeout_ms, on_event, event_user_data, should_cancel, cancel_user_data. */
@@ -91,10 +101,11 @@ final class Native {
         if (dir != null && !dir.isEmpty()) return open(Path.of(dir, LIB), global);
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-        if (!os.contains("linux") || !(arch.equals("amd64") || arch.equals("x86_64") || arch.equals("aarch64") || arch.equals("arm64")))
+        String platform = platform(os, arch);
+        if (platform == null)
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM,
-                "ducktape-laya supports Linux x86-64 and arm64 (found " + os + "/" + arch + ")");
-        Path bundled = extractBundled(bundled(arch));
+                "ducktape-laya supports Linux x86-64 and arm64, macOS arm64 and Windows x64 (found " + os + "/" + arch + ")");
+        Path bundled = extractBundled("/native/" + platform + "/" + LIB, os.contains("windows"));
         if (bundled != null) return open(bundled, global);
         RuntimeException last = null;
         String versioned = LIB.endsWith(".dylib") ? "libducktape_laya.1.dylib" : LIB.endsWith(".dll") ? LIB : LIB + ".1";
@@ -120,12 +131,14 @@ final class Native {
         }
     }
 
-    private static Path extractBundled(String resource) {
+    private static Path extractBundled(String resource, boolean windows) {
         try (InputStream in = Native.class.getResourceAsStream(resource)) {
             if (in == null) return null;
+            byte[] bytes = in.readAllBytes();
+            if (windows) return extractShared(bytes);
             Path dir = Files.createTempDirectory("ducktape-laya");
             Path file = dir.resolve(LIB);
-            Files.copy(in, file);
+            Files.write(file, bytes);
             // Hooks run in reverse registration order: the directory must be registered first.
             dir.toFile().deleteOnExit();
             file.toFile().deleteOnExit();
@@ -133,6 +146,38 @@ final class Native {
         } catch (IOException e) {
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot extract bundled library: " + e.getMessage(), e);
         }
+    }
+
+    /** Windows cannot delete a DLL while it is loaded, so a per-process copy would be left behind
+     *  on every run. Instead every process of the user shares one copy per library content, in
+     *  the user's own temporary directory, checked byte for byte before it is used. */
+    private static Path extractShared(byte[] bytes) throws IOException {
+        byte[] digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IOException(e);
+        }
+        Path dir = Path.of(System.getProperty("java.io.tmpdir"), "ducktape-laya-" + HexFormat.of().formatHex(digest, 0, 16));
+        Files.createDirectories(dir);
+        Path file = dir.resolve(LIB);
+        if (sameContent(file, bytes)) return file;
+        Path part = Files.createTempFile(dir, "ducktape_laya", ".part");
+        try {
+            Files.write(part, bytes);
+            Files.move(part, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            // Another process may have put the same copy in place and loaded it first.
+            if (!sameContent(file, bytes)) throw e;
+        } finally {
+            Files.deleteIfExists(part);
+        }
+        return file;
+    }
+
+    private static boolean sameContent(Path file, byte[] bytes) throws IOException {
+        return Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) && Files.size(file) == bytes.length
+            && Arrays.equals(Files.readAllBytes(file), bytes);
     }
 
     static void free(MemorySegment buffer) {
