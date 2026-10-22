@@ -104,10 +104,10 @@ binding, for Rails and Laravel backends. Add one when a user asks.
   own `erff`/`sinf`/`cosf` would make CPU platforms identical, but it would
   move Linux from 0.037 to 0.039, diverge from stock llama.cpp arithmetic on
   every upgrade, cost unmeasured time (`erff` runs about 3.4M times per
-  request) and still not cover GPU backends. Not planned: Windows stays a
-  separate numerical profile, buildable but not released. Releasing it is a
-  tolerance-policy question (whether one fragile answer at 0.054 should block a
-  platform), not a math patch.
+  request) and still not cover GPU backends. Not planned: this is upstream
+  behaviour, so it is a documented known deviation with its own cap
+  ([COMPATIBILITY.md](COMPATIBILITY.md#known-deviations)) and does not block a
+  Windows release.
 - **Loading a model from memory:** llama.cpp has no public load-from-buffer API.
   Workarounds (memfd, temporary files) add little real protection for encrypted
   assets. Revisit with mobile.

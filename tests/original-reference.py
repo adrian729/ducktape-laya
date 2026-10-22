@@ -26,6 +26,15 @@ TRUNCATED = {'long_state', 'many_options'}
 UNSUPPORTED = {
     'shortlist_many_options': 'embedding shortlist (not planned)',
 }
+# (sys.platform, case set, case, question) -> documented deviation of one answer on one
+# platform, with its own cap; every other answer there stays at MAX_PROBABILITY_DRIFT.
+# See docs/COMPATIBILITY.md, "Known deviations".
+KNOWN_DEVIATIONS = {
+    ('win32', 'english', 'json_escaping', 'spam'): {
+        'max_probability_drift': 0.06,
+        'reason': 'Windows C runtime erff/sinf/cosf round differently from glibc; upstream llama.cpp uses the '
+                  'platform libm on CPU. Measured 0.0541 (Linux x86-64 0.0373); deterministic.'},
+}
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('model', type=pathlib.Path)
@@ -73,7 +82,9 @@ def compare(expected, got):
 
 failures, answers = [], []
 report: dict = {'cases': {}, 'model': str(args.model), 'config': json.loads(config), 'thresholds': {
-    'max_probability_drift': MAX_PROBABILITY_DRIFT, 'near_tie': NEAR_TIE}}
+    'max_probability_drift': MAX_PROBABILITY_DRIFT, 'near_tie': NEAR_TIE,
+    'known_deviations': {'/'.join(key[2:]): value for key, value in KNOWN_DEVIATIONS.items()
+                         if key[:2] == (sys.platform, args.cases.resolve().name)}}}
 for path in sorted(args.cases.glob('case_*.json')):
     case = json.loads(path.read_text())
     name = case['name']
@@ -108,8 +119,13 @@ for path in sorted(args.cases.glob('case_*.json')):
         answers.append(drift)
         entry['answers'][qid] = {'type': expected['type'], 'max_probability_drift': round(drift, 6),
                                  'decision_changed': changed, 'near_tie': near}
-        if drift > MAX_PROBABILITY_DRIFT:
-            failures.append(f'{name}/{qid}: probability drift {drift:.4f} > {MAX_PROBABILITY_DRIFT}')
+        known = KNOWN_DEVIATIONS.get((sys.platform, args.cases.resolve().name, name, qid))
+        limit = known['max_probability_drift'] if known else MAX_PROBABILITY_DRIFT
+        if known and drift > MAX_PROBABILITY_DRIFT:
+            entry['answers'][qid]['known_deviation'] = known
+            report.setdefault('known_deviations_used', []).append(f'{name}/{qid}')
+        if drift > limit:
+            failures.append(f'{name}/{qid}: probability drift {drift:.4f} > {limit}')
         if changed and not near:
             failures.append(f'{name}/{qid}: decision differs from the original')
     entry['status'] = 'passed' if not any(f.startswith(name + '/') or f.startswith(name + ':') for f in failures) else 'failed'
@@ -117,7 +133,8 @@ for path in sorted(args.cases.glob('case_*.json')):
     print(f'{name}: {entry["status"]}, max drift {max(a["max_probability_drift"] for a in entry["answers"].values()):.4f}')
 report['summary'] = {'answers': len(answers), 'max_probability_drift': max(answers, default=0),
                      'mean_probability_drift': sum(answers) / len(answers) if answers else 0,
-                     'status': 'failed' if failures else 'passed', 'failures': failures}
+                     'status': 'failed' if failures else 'passed', 'failures': failures,
+                     'known_deviations_used': report.get('known_deviations_used', [])}
 if args.report:
     args.report.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
 print(json.dumps(report['summary'], indent=2))
