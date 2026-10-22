@@ -30,7 +30,7 @@ After supplying the model, the optional installed-consumer check is
 | `DUCKTAPE_TEST_MODEL` | empty | A local GGUF; registers the real-model tests (`real-model`, `real-features`, `real-faults`, `cpu-guard` when `qemu-x86_64` is found, ...) |
 | `DUCKTAPE_REAL_TEST_TIMEOUT` | `600` | Per-test timeout in seconds for the long real-model tests; raise it for instrumented builds |
 | `DUCKTAPE_BUILD_EXAMPLES` | `OFF` | Developer examples: `laya-decide`, `laya-decide-cpp` and the demo forms |
-| `DUCKTAPE_BUILD_NODE` | `OFF` | The Node-API addon; supply `NODE_INCLUDE_DIR` |
+| `DUCKTAPE_BUILD_NODE` | `OFF` | The Node-API addon; supply `NODE_INCLUDE_DIR`, and on Windows `NODE_LIB` (`scripts/fetch-node-sdk.py --lib` fetches both for your Node version) |
 | `DUCKTAPE_BUILD_FUZZERS` | `OFF` | Linux Clang libFuzzer target `laya-input-fuzzer`; instruments the library, never for artifacts |
 | `DUCKTAPE_BUILD_REFERENCE_PROBE` | `OFF` | Test-only `laya-reference` executable linking upstream server decision processing; never packaged |
 | `DUCKTAPE_REPRODUCIBLE_PATHS` | `ON` | With GCC or Clang, maps source and build paths out of compiled artifacts (`-ffile-prefix-map`) |

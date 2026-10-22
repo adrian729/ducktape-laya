@@ -33,9 +33,14 @@ Native packages (C/C++, Rust, Node.js, Electron) need:
   (`DTL_UNSUPPORTED_PLATFORM`) and names the missing feature.
 - **System libraries:** glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29`, as in
   Ubuntu 24.04+, Debian 13+ and Fedora 39+. Tested on Ubuntu 24.04 and 26.04.
-  Windows is not supported yet: the library builds with clang-cl, and the
-  model-free native tests and the Python, Rust, Java and .NET suites pass in CI;
-  Node, Go, packages and real-model checks are not ported.
+- **Windows x64 (from a checkout):** the same CPU features as Linux x86-64.
+  CI builds it with clang-cl on Windows Server 2025 and runs the native tests
+  and every binding (C, C++, Rust, Node, Electron, Python, Go, Java, .NET) with
+  and without the real model: all bindings agree exactly, agreement with
+  llama.cpp is exact, and agreement with the original Laya holds within one
+  [documented deviation](docs/COMPATIBILITY.md). Point the bindings at
+  `ducktape_laya.dll` with `DUCKTAPE_LAYA_LIB_DIR`; the DLL needs the Microsoft
+  Visual C++ Redistributable. There are no Windows packages yet.
 - **Linux arm64 (0.2.0, from a checkout):** CI builds and tests it on Ubuntu
   24.04 arm64, including real-model agreement with llama.cpp and the original
   Laya and the installed packages (tarball, npm, wheel, jar, NuGet). It needs
@@ -104,6 +109,20 @@ cd ducktape-laya
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j 3
 cmake --install build --prefix "$PWD/build/staging"
+```
+
+On Windows x64 (from a checkout, tested in CI but not released), build with
+Visual Studio's clang-cl and Ninja from an x64 Native Tools Command Prompt;
+CMake also needs a GNU `patch`, which Git for Windows includes. For the Node
+addon, `python scripts/fetch-node-sdk.py build-node-sdk --lib` downloads the
+Node-API headers and `node.lib` of your Node version and checks them against
+the release's `SHASUMS256.txt`; add `-DDUCKTAPE_BUILD_NODE=ON` with the
+`NODE_INCLUDE_DIR` and `NODE_LIB` it prints.
+
+```bat
+set "CLANG=%VCINSTALLDIR%Tools\Llvm\x64\bin\clang-cl.exe"
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
+cmake --build build -j 3
 ```
 
 The 449 MB model is not in Git or the native, npm or Rust packages. Download the

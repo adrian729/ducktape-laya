@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### New features
+
+- **Windows x64, Node and Go:** the Node addon builds with clang-cl. It links `node.lib` of the exact Node version (`scripts/fetch-node-sdk.py` downloads it with the Node-API headers and checks both against Node's `SHASUMS256.txt`) and delay-loads Node-API from the host executable, so it loads in Node and in Electron. The npm loader looks in `native/<platform>-<arch>/` for `linux-x64`, `linux-arm64`, `darwin-arm64` and `win32-x64`; on Windows `ducktape_laya.dll` sits next to the addon. The Go binding builds on Windows with MinGW-w64 gcc against the import library ([Windows setup](bindings/go/README.md#windows)). There are still no Windows packages.
+- **Windows x64 in CI:** besides the native tests and the Python, Rust, Java and .NET suites, CI now checks that the DLL exports exactly the `dtl_*` functions, runs the Node and Go suites, and with the real model gets exact agreement between all eight bindings (`tests/parity.py`) and runs the Electron consumer from a locally packed npm package, as a directory and from ASAR.
+
+### Fixes
+
+- **Non-ASCII router paths on Windows:** C ABI strings are UTF-8, but on Windows route paths were read as ANSI code page text, so a route with any non-ASCII character in its path did not open. `dtl_open` was not affected. Tests on every platform now open a model through a path with Latin-1, CJK and non-BMP characters, directly and as a route.
+
 ## 0.2.0 (2026-10-22)
 
 C ABI 2 (`libducktape_laya.so.1`). Breaking before 1.0, hence the minor version. Migration notes are in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#migrating-from-010-abi-1-to-020-abi-2).
