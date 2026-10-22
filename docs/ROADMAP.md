@@ -89,6 +89,19 @@ binding, for Rails and Laravel backends. Add one when a user asks.
   position and neighbours (up to 0.04 on the fixtures), most likely because
   matrix kernels tile rows differently. Not adopted. Revisit for GPU backends,
   where batching pays more, and only with results independent of the batch.
+- **Windows agreement with the original Laya:** the clang-cl build runs the
+  same ggml kernels as Linux x86-64 (AVX2, FMA, F16C, BMI2), agrees exactly
+  with upstream llama.cpp, but drifts 0.054 from the original Laya on one
+  fixture answer (`json_escaping/spam`; limit 0.05; Linux 0.037). Measured
+  2026-10-22: the whole gap comes from the C runtime's single-precision `erff`
+  (GEGLU-erf, `ggml-cpu/vec.h`) and `sinf`/`cosf` (RoPE cache,
+  `ggml-cpu/ops.cpp`); with those computed as `(float)f((double)x)` Windows and
+  Linux produce identical results on all 29 answers (max drift 0.039 on both).
+  Option: a runtime patch with C-runtime-independent, correctly rounded
+  `erff`/`sinf`/`cosf`, which makes every platform's arithmetic identical
+  but moves all platforms' results slightly (Linux 0.037 → 0.039) and needs
+  requalification and a performance check. Until then Windows is a separate
+  numerical profile and not release-qualified.
 - **Loading a model from memory:** llama.cpp has no public load-from-buffer API.
   Workarounds (memfd, temporary files) add little real protection for encrypted
   assets. Revisit with mobile.
