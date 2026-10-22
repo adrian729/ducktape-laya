@@ -117,10 +117,12 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         shutil.copy(ROOT / f'bindings/rust/target/package/{name}-{version}.crate', out)
     python_wheel.build(out, version, installed_library, epoch, target)
     java_package.build(out, version, installed_library, epoch, target)
-    # NuGet: the library at runtimes/<rid>/native/, packed from source like the crates.
+    # NuGet: the library at runtimes/<rid>/native/, packed from source like the crates. No PDB
+    # (none is shipped): its ID in the assembly hashes generated sources, whose line endings
+    # follow the host, and every platform must produce the same managed assembly.
     nuget = directory / 'nuget'
     subprocess.run([dotnet, 'pack', str(ROOT / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj'), '-c', 'Release', '-m:1',
-                    '-o', str(nuget), f'-p:DucktapeLayaNativeLibrary={installed_library}',
+                    '-o', str(nuget), f'-p:DucktapeLayaNativeLibrary={installed_library}', '-p:DebugType=none',
                     f'-p:DucktapeLayaRuntime={target.nuget}', '-p:ContinuousIntegrationBuild=true', '--nologo'],
                    cwd=ROOT, env=dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1'), check=True, capture_output=True)
     normalize_nupkg(nuget / f'DucktapeLaya.{version}.nupkg', out / f'DucktapeLaya.{version}.nupkg', epoch)
