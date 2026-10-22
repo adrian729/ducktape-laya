@@ -119,9 +119,12 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     java_package.build(out, version, installed_library, epoch, target)
     # NuGet: the library at runtimes/<rid>/native/, packed from source like the crates. No PDB
     # (none is shipped): its ID in the assembly hashes generated sources, whose line endings
-    # follow the host, and every platform must produce the same managed assembly.
+    # follow the host, and every platform must produce the same managed assembly. A private
+    # artifacts path: otherwise pack reuses any Release build already in the checkout's obj/
+    # (tests build one), with its own options and absolute paths.
     nuget = directory / 'nuget'
     subprocess.run([dotnet, 'pack', str(ROOT / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj'), '-c', 'Release', '-m:1',
+                    '--artifacts-path', str(directory / 'dotnet-build'),
                     '-o', str(nuget), f'-p:DucktapeLayaNativeLibrary={installed_library}', '-p:DebugType=none',
                     f'-p:DucktapeLayaRuntime={target.nuget}', '-p:ContinuousIntegrationBuild=true', '--nologo'],
                    cwd=ROOT, env=dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1'), check=True, capture_output=True)
