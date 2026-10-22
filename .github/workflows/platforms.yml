@@ -91,6 +91,7 @@ jobs:
           path: |
             build/original-reference.json
             build/original-reference-probe.json
+            build/original-reference-erff.json
             build/upstream-reference.json
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
@@ -150,10 +151,14 @@ jobs:
           cmake --build build --parallel 3 || exit /b 1
           cmake -S . -B build-probe -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" -DDTL_LIBM_PROBE=ON %EXTRA% || exit /b 1
           cmake --build build-probe --parallel 3 --target laya-conformance-c || exit /b 1
+          cmake -S . -B build-erff -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" -DDUCKTAPE_BUILD_NODE=OFF "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" -DDTL_LIBM_PROBE=ON -DDTL_LIBM_PROBE_ERFF_ONLY=ON %EXTRA% || exit /b 1
+          cmake --build build-erff --parallel 3 --target laya-conformance-c || exit /b 1
           echo == ggml-cpu compile command
           ninja -C build -t commands laya-conformance-c | findstr /c:"ops.cpp"
           echo == baseline imports
           dumpbin /imports build\ducktape_laya.dll | findstr /r /c:" erff$" /c:" expf$" /c:" sinf$" /c:" cosf$" /c:" powf$" /c:" logf$" /c:" tanhf$"
+          echo == erff-only imports
+          dumpbin /imports build-erff\ducktape_laya.dll | findstr /r /c:" erff$" /c:" expf$" /c:" sinf$" /c:" cosf$" /c:" powf$" /c:" logf$" /c:" tanhf$"
           echo == probe imports
           dumpbin /imports build-probe\ducktape_laya.dll | findstr /r /c:" erff$" /c:" expf$" /c:" sinf$" /c:" cosf$" /c:" powf$" /c:" logf$" /c:" tanhf$"
           exit /b 0
@@ -168,6 +173,7 @@ jobs:
         run: |
           python tests/original-reference.py $env:LAYA_MODEL --build-dir build --report build/original-reference.json
           python tests/original-reference.py $env:LAYA_MODEL --build-dir build-probe --report build/original-reference-probe.json
+          python tests/original-reference.py $env:LAYA_MODEL --build-dir build-erff --report build/original-reference-erff.json
           exit 0
       - name: Retain reports
         if: always()

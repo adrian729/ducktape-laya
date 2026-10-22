@@ -18,6 +18,7 @@ static inline float dtl_probe_tanhf(float x) { return (float)tanh((double)x); }
 static inline float dtl_probe_expm1f(float x) { return (float)expm1((double)x); }
 static inline float dtl_probe_log2f(float x) { return (float)log2((double)x); }
 #define erff(x) dtl_probe_erff(x)
+#ifndef DTL_LIBM_PROBE_ERFF_ONLY
 #define expf(x) dtl_probe_expf(x)
 #define sinf(x) dtl_probe_sinf(x)
 #define cosf(x) dtl_probe_cosf(x)
@@ -26,4 +27,5 @@ static inline float dtl_probe_log2f(float x) { return (float)log2((double)x); }
 #define tanhf(x) dtl_probe_tanhf(x)
 #define expm1f(x) dtl_probe_expm1f(x)
 #define log2f(x) dtl_probe_log2f(x)
+#endif
 #endif
