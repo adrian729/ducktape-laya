@@ -1,50 +1,61 @@
 #!/usr/bin/env python3
-"""Exercise local npm and normalized Rust crate artifacts outside the checkout."""
+"""Exercise the local package artifacts outside the checkout with the real model.
+
+Takes one platform's scripts/package-native.py output or a scripts/assemble-packages.py
+output and uses the files for this machine's platform: the native archive (CMake,
+pkg-config), the npm package, both crates against the archive, the wheel, the
+Maven jar, the NuGet package and the Go module against the archive. Every
+consumer must give exactly the same results."""
 import argparse
 import json
-import os
 import pathlib
-import shutil
 import re
+import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
-import sys
+
+from package_support import (EXE, clean_environment, extract_native, host_packages, library_directory, tool, venv_python,
+                             with_library_path)
+from release_support import macho_info
 
 root = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(root / 'scripts'))
-from artifact_support import verify_inventory
-p = argparse.ArgumentParser()
+p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('artifacts', type=pathlib.Path)
 p.add_argument('model', type=pathlib.Path)
 a = p.parse_args()
 artifacts, model = a.artifacts.resolve(), a.model.resolve()
-inventory = verify_inventory(artifacts)
-version, platform_dir = inventory['package_version'], inventory['platform']
+inventory, version, target = host_packages(artifacts)
 request = (root / 'tests/fixtures/primitive.json').read_bytes()
+env = clean_environment()
 with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
     directory = pathlib.Path(directory)
-    for artifact in list(artifacts.glob('*.crate')) + list(artifacts.glob(f'*{platform_dir}.tar.gz')):
+    for artifact in artifacts.glob('*.crate'):
         with tarfile.open(artifact) as tar:
             tar.extractall(directory, filter='data')
-    native = directory / f'ducktape-laya-{version}-{platform_dir}'
-    subprocess.run(['python3', str(root / 'tests/installed-native.py'), str(native), str(model)], check=True)
+    native = extract_native(artifacts, version, target, directory)
+    subprocess.run([sys.executable, str(root / 'tests/installed-native.py'), str(native), str(model)], check=True)
+    libdir = next(native.glob('lib*/pkgconfig/ducktape-laya.pc')).parent.parent
+    runtime = library_directory(native, target)
     app = directory / 'application'
     app.mkdir()
     (app / 'package.json').write_text('{"private":true}')
-    subprocess.run(['npm', 'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', str(artifacts / f'ducktape-laya-{version}.tgz')], cwd=app, check=True, capture_output=True)
-    addon = app / f'node_modules/ducktape-laya/native/{platform_dir}/ducktape_laya.node'
-    dynamic = subprocess.check_output(['readelf', '-d', str(addon)], text=True)
-    for line in dynamic.splitlines():
-        if 'RPATH' in line or 'RUNPATH' in line:
-            paths = re.search(r'\[(.*?)\]', line).group(1).split(':')
-            assert all(path.startswith('$ORIGIN') for path in paths), paths
+    subprocess.run([tool('npm'), 'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', str(artifacts / f'ducktape-laya-{version}.tgz')],
+                   cwd=app, check=True, capture_output=True)
+    addon = app / f'node_modules/ducktape-laya/native/{target.npm}/ducktape_laya.node'
+    # The addon finds the library next to itself: a relative run path (Windows looks in the addon's directory).
+    if target.os == 'linux':
+        dynamic = subprocess.check_output(['readelf', '-d', str(addon)], text=True)
+        for line in dynamic.splitlines():
+            if 'RPATH' in line or 'RUNPATH' in line:
+                paths = re.search(r'\[(.*?)\]', line).group(1).split(':')
+                assert all(path.startswith('$ORIGIN') for path in paths), paths
+    elif target.os == 'darwin':
+        paths = macho_info(addon)['rpaths']
+        assert paths and all(path.startswith('@loader_path') for path in paths), paths
     script = (root / 'tests/consumers/node.cjs').read_text().replace("require('../../bindings/node/index.cjs')", "require('ducktape-laya')")
     (app / 'test.cjs').write_text(script)
-    env = dict(os.environ)
-    env.pop('DUCKTAPE_LAYA_ADDON', None)
-    env.pop('DUCKTAPE_LAYA_LIB_DIR', None)
-    env.pop('LD_LIBRARY_PATH', None)
     node = json.loads(subprocess.check_output(['node', 'test.cjs', str(model)], cwd=app, env=env, input=request))
     (app / 'src').mkdir()
     (app / 'src/main.rs').write_text((root / 'tests/consumers/rust/src/main.rs').read_text())
@@ -57,24 +68,27 @@ name = "installed-consumer"
 version = "0.0.0"
 edition = "2021"
 [dependencies]
-ducktape-laya = {{ path = "{safe}" }}
+ducktape-laya = {{ path = "{safe.as_posix()}" }}
 serde_json = "1"
 [patch.crates-io]
-ducktape-laya-sys = {{ path = "{sys_crate}" }}
+ducktape-laya-sys = {{ path = "{sys_crate.as_posix()}" }}
 ''')
-    libdir = next(native.glob('lib*/pkgconfig/ducktape-laya.pc')).parent.parent
-    env['PKG_CONFIG_PATH'] = str(libdir / 'pkgconfig')
-    env['LD_LIBRARY_PATH'] = str(libdir)
-    rust = json.loads(subprocess.check_output(['cargo', 'run', '--offline', '--quiet', '--', str(model)], cwd=app, env=env, input=request))
+    # The sys crate finds the library through pkg-config where it is installed, otherwise
+    # through DUCKTAPE_LAYA_LIB_DIR (the directory with the import library on Windows).
+    if target.os != 'win32' and shutil.which('pkg-config'):
+        build_env = dict(env, PKG_CONFIG_PATH=str(libdir / 'pkgconfig'))
+    else:
+        build_env = dict(env, DUCKTAPE_LAYA_LIB_DIR=str(libdir))
+    subprocess.run([tool('cargo'), 'build', '--offline', '--quiet'], cwd=app, env=build_env, check=True)
+    rust = json.loads(subprocess.check_output([str(app / 'target/debug' / ('installed-consumer' + EXE)), str(model)],
+                                              cwd=app, env=with_library_path(env, runtime, target), input=request))
     assert node == rust
     # The wheel bundles the library; loader overrides must not be needed.
-    wheel, = artifacts.glob(f'ducktape_laya-{version}-*.whl')
+    wheel = artifacts / f'ducktape_laya-{version}-py3-none-{target.wheel}.whl'
     venv = directory / 'venv'
     subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
-    subprocess.run([str(venv / 'bin/python'), '-m', 'pip', 'install', '--quiet', '--no-index', str(wheel)], check=True)
-    for key in ['LD_LIBRARY_PATH', 'PKG_CONFIG_PATH', 'PYTHONPATH']:
-        env.pop(key, None)
-    python = json.loads(subprocess.check_output([str(venv / 'bin/python'), str(root / 'tests/consumers/python/consumer.py'), str(model)],
+    subprocess.run([str(venv_python(venv)), '-m', 'pip', 'install', '--quiet', '--no-index', str(wheel)], check=True)
+    python = json.loads(subprocess.check_output([str(venv_python(venv)), str(root / 'tests/consumers/python/consumer.py'), str(model)],
                                                 cwd=app, env=env, input=request))
     assert python == rust
     # The Maven jar bundles the library as well.
@@ -97,20 +111,22 @@ ducktape-laya-sys = {{ path = "{sys_crate}" }}
     shutil.copy(artifacts / f'DucktapeLaya.{version}.nupkg', feed)
     (dotnet / 'nuget.config').write_text(f'''<configuration><packageSources><clear /><add key="local" value="{feed}" /></packageSources></configuration>''')
     dotnet_env = dict(env, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1', NUGET_PACKAGES=str(directory / 'nuget-packages'))
-    subprocess.run(['dotnet', 'build', '-c', 'Release', '-o', str(dotnet / 'out'), '-m:1'], cwd=dotnet, env=dotnet_env,
+    subprocess.run([tool('dotnet'), 'build', '-c', 'Release', '-o', str(dotnet / 'out'), '-m:1'], cwd=dotnet, env=dotnet_env,
                    check=True, capture_output=True)
-    net = json.loads(subprocess.check_output(['dotnet', str(dotnet / 'out/Consumer.dll'), str(model)], cwd=app, env=dotnet_env, input=request))
+    net = json.loads(subprocess.check_output([tool('dotnet'), str(dotnet / 'out/Consumer.dll'), str(model)], cwd=app, env=dotnet_env, input=request))
     assert net == rust
-    # Go is distributed as source: the module outside the checkout, linked against the tarball.
+    # Go is distributed as source: the module outside the checkout, linked against the archive
+    # (on Windows by MinGW-w64 gcc against the import library).
     go = directory / 'go'
     shutil.copytree(root / 'bindings/go', go / 'binding')
     shutil.copytree(root / 'tests/consumers/go', go / 'consumer')
     module = (go / 'consumer/go.mod').read_text()
     (go / 'consumer/go.mod').write_text(module.replace('../../../bindings/go', '../binding'))
-    go_env = dict(env, GOTOOLCHAIN='local', GOFLAGS='-mod=mod', CGO_CFLAGS=f'-I{native / "include"}', CGO_LDFLAGS=f'-L{libdir}')
-    subprocess.run(['go', 'build', '-o', str(go / 'consumer-bin'), '.'], cwd=go / 'consumer', env=go_env, check=True, capture_output=True)
-    golang = json.loads(subprocess.check_output([str(go / 'consumer-bin'), str(model)], cwd=app,
-                                                env=dict(env, LD_LIBRARY_PATH=str(libdir)), input=request))
+    go_env = dict(env, GOTOOLCHAIN='local', GOFLAGS='-mod=mod', CGO_ENABLED='1',
+                  CGO_CFLAGS=f'-I{(native / "include").as_posix()}', CGO_LDFLAGS=f'-L{libdir.as_posix()}')
+    program = go / ('consumer-bin' + EXE)
+    subprocess.run([tool('go'), 'build', '-o', str(program), '.'], cwd=go / 'consumer', env=go_env, check=True, capture_output=True)
+    golang = json.loads(subprocess.check_output([str(program), str(model)], cwd=app, env=with_library_path(env, runtime, target), input=request))
     assert golang == rust
-print('Installed npm, Rust crate, Python wheel, Maven jar, NuGet and Go consumers: exact real-model agreement, '
+print(f'Installed npm, Rust crate, Python wheel, Maven jar, NuGet and Go consumers on {target.name}: exact real-model agreement, '
       'no repository paths or inference server')

@@ -4,9 +4,13 @@ import argparse
 import json
 import os
 import pathlib
+import shlex
 import shutil
 import subprocess
 import tempfile
+
+from package_support import built_program, clean_environment, cmake_consumer_options, library_directory, tool, with_library_path
+from release_support import host_target
 
 root = pathlib.Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser()
@@ -14,9 +18,12 @@ p.add_argument('prefix', type=pathlib.Path)
 p.add_argument('model', type=pathlib.Path)
 a = p.parse_args()
 prefix, model = a.prefix.resolve(), a.model.resolve()
+target = host_target()
 fixture = (root / 'tests/fixtures/primitive.json').read_bytes()
 # The installed package must satisfy a request for its own minor version.
 minor = '.'.join(json.loads((root / 'release/compatibility.json').read_text())['package_version'].split('.')[:2])
+# Windows has no run path: programs find the DLL in the prefix's bin/ through PATH.
+env = with_library_path(clean_environment(), library_directory(prefix, target), target) if target.os == 'win32' else clean_environment()
 with tempfile.TemporaryDirectory(prefix='ducktape-consumer-') as tmp:
     tmp = pathlib.Path(tmp)
     for source in ['c.c', 'cpp.cpp']:
@@ -29,16 +36,24 @@ add_executable(cpp cpp.cpp)
 target_link_libraries(c PRIVATE ducktape::laya)
 target_link_libraries(cpp PRIVATE ducktape::laya)
 ''')
-    subprocess.run(['cmake', '-S', str(tmp), '-B', str(tmp / 'build'), f'-DCMAKE_PREFIX_PATH={prefix}'], check=True, capture_output=True)
-    subprocess.run(['cmake', '--build', str(tmp / 'build')], check=True, capture_output=True)
-    results = [json.loads(subprocess.check_output([str(tmp / 'build' / exe), str(model)], input=fixture)) for exe in ['c', 'cpp']]
+    subprocess.run(['cmake', '-S', str(tmp), '-B', str(tmp / 'build'), f'-DCMAKE_PREFIX_PATH={prefix}', *cmake_consumer_options()],
+                   check=True, capture_output=True)
+    subprocess.run(['cmake', '--build', str(tmp / 'build'), '--config', 'Release'], check=True, capture_output=True)
+    results = [json.loads(subprocess.check_output([str(built_program(tmp / 'build', exe)), str(model)], input=fixture, env=env))
+               for exe in ['c', 'cpp']]
     assert results[0] == results[1]
     pc = list(prefix.glob('lib*/pkgconfig/ducktape-laya.pc'))
     assert len(pc) == 1
-    env = dict(os.environ, PKG_CONFIG_PATH=str(pc[0].parent))
-    flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'ducktape-laya'], env=env, text=True)
-    import shlex
-    subprocess.run(['cc', str(tmp / 'c.c'), *shlex.split(flags), '-o', str(tmp / 'pc-consumer')], check=True)
-    env['LD_LIBRARY_PATH'] = str(pc[0].parent.parent)
-    assert json.loads(subprocess.check_output([str(tmp / 'pc-consumer'), str(model)], env=env, input=fixture)) == results[0]
+    # pkg-config with a GNU-style compiler: cc on Linux and macOS, MinGW-w64 gcc (which links the
+    # import library ducktape_laya.lib for -lducktape_laya) on Windows when it and pkg-config exist.
+    compiler = 'gcc' if target.os == 'win32' else 'cc'
+    if target.os == 'win32' and not (shutil.which('pkg-config') and shutil.which(compiler)):
+        print('pkg-config consumer: skipped, pkg-config or MinGW-w64 gcc is not installed on this Windows machine')
+    else:
+        pc_env = dict(env, PKG_CONFIG_PATH=str(pc[0].parent))
+        flags = subprocess.check_output([tool('pkg-config'), '--cflags', '--libs', 'ducktape-laya'], env=pc_env, text=True)
+        program = tmp / ('pc-consumer' + ('.exe' if target.os == 'win32' else ''))
+        subprocess.run([tool(compiler), str(tmp / 'c.c'), *shlex.split(flags, posix=target.os != 'win32'), '-o', str(program)], check=True)
+        run_env = with_library_path(env, library_directory(prefix, target), target)
+        assert json.loads(subprocess.check_output([str(program), str(model)], env=run_env, input=fixture)) == results[0]
 print('Installed CMake C/C++ and pkg-config C consumers: real-model agreement')
