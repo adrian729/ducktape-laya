@@ -4,16 +4,16 @@ Where each package is published, and what is still missing. Publication follows 
 
 ## Status
 
-| Package | Channel | 0.1.0 | 0.2.0 (main) |
+| Package | Channel | 0.1.0 | 0.2.0 |
 | --- | --- | --- | --- |
-| Native tarball, SBOMs, inventories | GitHub Releases | Published, attested | Same process |
-| `ducktape-laya` (Node.js) | npm | Published | `publish-release` workflow (trusted publishing) |
-| `ducktape-laya-browser` | npm | Published | `publish-release` workflow (trusted publishing) |
-| `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | `publish-release` workflow (trusted publishing, repackaged from the tag and compared) |
-| `ducktape-laya` (Python wheel) | PyPI | — | `publish-release` workflow (trusted publishing) |
-| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | No account needed; publishing is a tag. Tested against the release tarball |
-| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | `publish-release` workflow (signs at upload; token and key in the `release` environment) |
-| `DucktapeLaya` (.NET) | NuGet | — | `publish-release` workflow (trusted publishing) |
+| Native tarball, SBOMs, inventories | GitHub Releases | Published, attested | Published, attested |
+| `ducktape-laya` (Node.js) | npm | Published | Published |
+| `ducktape-laya-browser` | npm | Published | Published |
+| `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Published |
+| `ducktape-laya` (Python wheel) | PyPI | — | Published |
+| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | Published |
+| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Pending: a signing-secret problem. Until it is published, the jar, sources and javadoc jars and POM are on the GitHub release. Then the `publish-release` workflow (signs at upload; token and key in the `release` environment) |
+| `DucktapeLaya` (.NET) | NuGet | — | Published |
 
 All names above were unclaimed on 2026-10-19.
 
@@ -129,7 +129,7 @@ The multilingual and typed-decisions GGUFs (`models/laya-multilingual.json`,
 ## Leftovers from 0.1.0
 
 - npm staged publishing left a `0.0.0-stage` placeholder on both npm packages.
-  It is harmless (`latest` is 0.1.0); hide it with `npm deprecate`.
+  It is harmless (`latest` is 0.2.0); hide it with `npm deprecate`.
 - The 0.1.0 artifacts include `release/compatibility.json` with
   `"status": "development"`. The field was removed afterwards; released files
   stay unchanged.

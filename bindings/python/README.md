@@ -55,7 +55,7 @@ closed are released when garbage collected, but close them for prompt release.
 
 ## From a checkout
 
-The binding is not on PyPI yet. Build the native library first (see the repository README), then either point Python at the source and the built library:
+Released versions install with `pip install ducktape-laya` (the Linux x86-64 wheel bundles the library). To use unreleased changes from main, build the native library first (see the repository README), then either point Python at the source and the built library:
 
 ```sh
 export DUCKTAPE_LAYA_LIB_DIR=/path/to/ducktape-laya/build

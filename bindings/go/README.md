@@ -1,7 +1,7 @@
 # Ducktape Laya for Go
 
 Linux x86-64 Laya GGUF decisions through cgo, backed by the shared `libducktape_laya.so`.
-Requires Go 1.22+ (CI tests 1.27), a C compiler and the 0.2 native library (C ABI 2) with `ducktape_laya.h`. The only published release tarball, v0.1.0, has ABI 1 and does not work with this binding; until 0.2.0 is released, build the library from a checkout ([below](#from-a-checkout)).
+Requires Go 1.22+ (CI tests 1.27), a C compiler and the 0.2 native library (C ABI 2) with `ducktape_laya.h`. Install the module with `go get github.com/adrian729/ducktape-laya/bindings/go@v0.2.0`; the library and header come from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (the v0.1.0 tarball has ABI 1 and does not work with this binding), or from a checkout ([below](#from-a-checkout)).
 No model or runtime download occurs. Model files are application-owned resources.
 
 The package links `-lducktape_laya` and includes `<ducktape_laya.h>`, so tell cgo where they are:
@@ -48,7 +48,7 @@ Cancellation is cooperative and returns no partial result. `CallOptions.OnEvent`
 
 ## From a checkout
 
-The module is not tagged yet. Build the native library (see the repository README), then require the module from your own `go.mod` with a `replace` directive pointing at the checkout:
+To use unreleased changes from main, build the native library (see the repository README), then require the module from your own `go.mod` with a `replace` directive pointing at the checkout:
 
 ```sh
 go mod edit -require=github.com/adrian729/ducktape-laya/bindings/go@v0.0.0 \

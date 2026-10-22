@@ -45,7 +45,7 @@ match engine.execute_with(request, options) {
 
 ## From a checkout
 
-Build the native library (see the repository README), then depend on the crate by path and point the build at the library:
+Released versions: `cargo add ducktape-laya` (0.2) plus the native library from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0). To use unreleased changes from main, build the native library (see the repository README), then depend on the crate by path and point the build at the library:
 
 ```toml
 [dependencies]

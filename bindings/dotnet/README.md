@@ -15,7 +15,7 @@ To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/pat
 
 ## From a checkout
 
-The package is not on NuGet yet. Build the native library (see the repository README), then reference the project from your application:
+Released versions install with `dotnet add package DucktapeLaya` (Linux x86-64; the package bundles the library). To use unreleased changes from main, build the native library (see the repository README), then reference the project from your application:
 
 ```sh
 dotnet add MyApp.csproj reference /path/to/ducktape-laya/bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj

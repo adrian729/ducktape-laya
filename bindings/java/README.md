@@ -43,7 +43,7 @@ Errors: `LayaException` with `status()` and constants such as `LayaException.CAN
 
 ## From a checkout
 
-The binding is not on Maven Central yet. Build the native library (see the repository README), then build the jar without Maven:
+Release 0.2.0 is the `ducktape-laya-0.2.0.jar` (with sources and javadoc jars and a POM) on the [GitHub release](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0); it bundles the native library. Maven Central (`io.github.adrian729:ducktape-laya`) is coming shortly. To use unreleased changes from main, build the native library (see the repository README), then build the jar without Maven:
 
 ```sh
 bindings/java/build.sh            # compiles, writes bindings/java/target/ducktape-laya.jar and runs the tests

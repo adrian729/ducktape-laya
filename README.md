@@ -9,8 +9,8 @@ Embed local Laya decisions in C/C++, Rust, Node.js and Electron, Python, Go, Jav
 
 **Status:**
 
-- **0.1.0 (published):** on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0), npm (`ducktape-laya`, `ducktape-laya-browser`) and crates.io (`ducktape-laya`, `ducktape-laya-sys`). C ABI 1, English Q8_0 model, Linux x86-64; the browser build is [experimental](docs/BROWSER.md).
-- **0.2.0 (2026-10-22):** C ABI 2 with a breaking API change ([migration](docs/COMPATIBILITY.md#migrating-from-010-abi-1-to-020-abi-2), [changelog](CHANGELOG.md)), new features (below), and the multilingual and typed-decisions models next to the English one, all held to the same gates: agreement with the original Laya's recorded results and with upstream llama.cpp. Published like 0.1.0 (GitHub Releases, npm, crates.io) for Linux x86-64. The Python wheel, the Java jars and the NuGet package are attested files on the GitHub release; they are not on PyPI, Maven Central or NuGet yet. Linux arm64, macOS and Windows build from a checkout (see the requirements below).
+- **0.2.0 (current release, 2026-10-22):** [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), npm (`ducktape-laya`, `ducktape-laya-browser`), crates.io (`ducktape-laya`, `ducktape-laya-sys`), PyPI (`ducktape-laya`), NuGet (`DucktapeLaya`) and the Go module proxy (`bindings/go`, tag `bindings/go/v0.2.0`). Every release asset is attested. C ABI 2 with a breaking API change ([migration](docs/COMPATIBILITY.md#migrating-from-010-abi-1-to-020-abi-2), [changelog](CHANGELOG.md)), new features (below), and the multilingual and typed-decisions models next to the English one, all held to the same gates: agreement with the original Laya's recorded results and with upstream llama.cpp. All registry packages are Linux x86-64 only; the browser build is [experimental](docs/BROWSER.md). Maven Central (`io.github.adrian729:ducktape-laya`) is coming shortly; until then the Java jar, sources and javadoc jars and POM are on the GitHub release. Linux arm64, macOS and Windows build from a checkout (see the requirements below).
+- **0.1.0:** earlier release (C ABI 1, English model), still on npm and crates.io under the 0.1 versions.
 
 This README and the guides in `docs/` describe main, which is 0.2.0 until the next release.
 
@@ -57,17 +57,17 @@ What each package needs on top:
 | --- | --- | --- |
 | Node.js | `npm install ducktape-laya` | Node.js 20+ (tested on 24 and 26). The native addon is prebuilt; no compiler. |
 | Electron | `npm install ducktape-laya` | Tested with Electron 44. Unpack the whole `node_modules/ducktape-laya` package (its worker script and native files) and the model from ASAR. |
-| Rust | `cargo add ducktape-laya` | The native library from the [release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0), found through `pkg-config` or `DUCKTAPE_LAYA_LIB_DIR`. Tested with Rust 1.98. |
-| C/C++ | [release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.1.0) | A C or C++ compiler; CMake 3.22+ or `pkg-config` to link. |
-| Python | From a checkout (unreleased) | Python 3.10+. The wheel from `scripts/package-linux.py` bundles the native library, so installing it needs no compiler; building it needs the native build with the Node addon, npm and Cargo. See [bindings/python](bindings/python/README.md). |
-| Go | From a checkout (unreleased) | Go 1.22+, cgo with a C compiler, and the native library and header. See [bindings/go](bindings/go/README.md). |
-| Java/Kotlin | From a checkout (unreleased) | Java 22+ (FFM API), run with `--enable-native-access`. See [bindings/java](bindings/java/README.md). |
-| .NET | From a checkout (unreleased) | .NET 10. See [bindings/dotnet](bindings/dotnet/README.md). |
+| Rust | `cargo add ducktape-laya` | The native library from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), found through `pkg-config` or `DUCKTAPE_LAYA_LIB_DIR`. Tested with Rust 1.98. |
+| C/C++ | [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (`ducktape-laya-0.2.0-linux-x64.tar.gz`) | A C or C++ compiler; CMake 3.22+ or `pkg-config` to link. |
+| Python | `pip install ducktape-laya` | Python 3.10+. The wheel (`manylinux_2_38_x86_64`) bundles the native library; no compiler. See [bindings/python](bindings/python/README.md). |
+| Go | `go get github.com/adrian729/ducktape-laya/bindings/go@v0.2.0` | Go 1.22+, cgo with a C compiler, and the native library and header from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0). See [bindings/go](bindings/go/README.md). |
+| Java/Kotlin | `ducktape-laya-0.2.0.jar` from the [GitHub release](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0); Maven Central coming shortly | Java 22+ (FFM API), run with `--enable-native-access`. The jar bundles the native library. See [bindings/java](bindings/java/README.md). |
+| .NET | `dotnet add package DucktapeLaya` | .NET 10. The package bundles the native library. See [bindings/dotnet](bindings/dotnet/README.md). |
 | Browser (experimental) | `npm install ducktape-laya-browser` | Tested on Chromium 152 only. WASM SIMD in a module worker, secure context; WebGPU is optional. See the [browser guide](docs/BROWSER.md) and [package README](bindings/browser/README.md). |
 
 The versions above are minimums the packages declare. CI tests Node 24 and 26, Rust 1.98, Go 1.27, Java 25, .NET 10 and the Ubuntu 24.04 runner's system Python; the older minimums (Node 20, Go 1.22, Java 22, Python 3.10) are not tested. `./demo ts` needs Node 22.6+ (`--experimental-strip-types`).
 
-The registry installs and the release tarball above are 0.1.0. For 0.2.0, build the library from a checkout ([manual setup](#manual-setup)); the [Node](bindings/node/README.md), [Rust](bindings/rust/ducktape-laya/README.md), [Python](bindings/python/README.md), [Go](bindings/go/README.md), [Java](bindings/java/README.md) and [.NET](bindings/dotnet/README.md) READMEs describe the 0.2.0 APIs, and each non-npm binding's README explains how to use it from a checkout.
+The packages and the release tarball above are 0.2.0, for Linux x86-64. The [Node](bindings/node/README.md), [Rust](bindings/rust/ducktape-laya/README.md), [Python](bindings/python/README.md), [Go](bindings/go/README.md), [Java](bindings/java/README.md) and [.NET](bindings/dotnet/README.md) READMEs describe the 0.2.0 APIs. On other platforms, build the library from a checkout ([manual setup](#manual-setup)).
 
 Building from source instead needs CMake 3.22+, a C/C++17 compiler and Git. The
 setup wizard and `scripts/download-model.py` need Python 3; the maintainer
@@ -184,11 +184,15 @@ Set the normal shared-library loader path or bundle the library with your app.
 Relative model paths use the process working directory. See
 [packaging](docs/PACKAGING.md) for pkg-config, loader and distribution details.
 
-For Rust, add the crate and point it at the installed native library. `ducktape-laya = "0.1"` from crates.io is 0.1.0, with the ABI 1 API (`Engine::open(path, threads)`) and the v0.1.0 tarball's library. For 0.2.0, depend on the checkout by path and use your own build's `lib` directory:
+For Rust, add the crate and point it at the installed native library (from the v0.2.0 release tarball, or your own build's `lib` directory):
+
+```sh
+cargo add ducktape-laya
+```
 
 ```toml
 [dependencies]
-ducktape-laya = { path = "/path/to/ducktape-laya/bindings/rust/ducktape-laya" }
+ducktape-laya = "0.2"
 ```
 
 ```sh
@@ -239,7 +243,7 @@ tarball manually. In an installed project, import it with
 `node_modules/ducktape-laya` package unpacked from ASAR (the worker script is
 started from the package directory) and open the engine in the main process.
 
-Structured results, batches, model routing, limits and the full request format are in the [API guide](docs/API.md). Browser setup is in the [browser guide](docs/BROWSER.md). `npm install ducktape-laya` installs 0.1.0, whose API differs (`decide`, no `contextTokens`); the [Node README](bindings/node/README.md) describes 0.2.0.
+Structured results, batches, model routing, limits and the full request format are in the [API guide](docs/API.md). Browser setup is in the [browser guide](docs/BROWSER.md). `npm install ducktape-laya` installs 0.2.0; the [Node README](bindings/node/README.md) describes its API (0.1.0 used `decide` and had no `contextTokens`).
 
 ## Verify and explore
 
