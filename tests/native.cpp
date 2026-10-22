@@ -2,11 +2,30 @@
 #include <filesystem>
 #include <future>
 #include <iostream>
+#include <random>
 #include <stdexcept>
 #include <string>
 static void expect(bool ok, const char *message) {
     if (!ok) throw std::runtime_error(message);
 }
+// A hard link (or a copy, across file systems) of a file under a non-ASCII name in
+// the working directory; the path is UTF-8 with forward slashes, ready for JSON.
+struct unicode_link {
+    std::filesystem::path dir;
+    std::string path;
+    explicit unicode_link(const std::filesystem::path &source) {
+        namespace fs = std::filesystem;
+        dir = fs::current_path() / fs::u8path("ducktape-laya-\u00fcn\u00efc\u00f8d\u00e9-" + std::to_string(std::random_device{}()));
+        fs::create_directories(dir);
+        // Latin-1, CJK and a character outside the BMP (a surrogate pair in UTF-16).
+        const auto target = dir / fs::u8path("m\u00f6del-\u6a21\u578b-\U0001F986" + source.extension().u8string());
+        std::error_code ec;
+        fs::create_hard_link(fs::canonical(source), target, ec);
+        if (ec) fs::copy_file(fs::canonical(source), target);
+        path = target.generic_u8string();
+    }
+    ~unicode_link() { std::error_code ec; std::filesystem::remove_all(dir, ec); }
+};
 int main(int argc, char **argv) {
     // Forward slashes: the path goes into JSON, and Windows accepts them.
     const std::string self_path = std::filesystem::canonical(argv[0]).generic_string();
@@ -36,6 +55,15 @@ int main(int argc, char **argv) {
             auto router = ducktape::engine::open_router(self(R"({"models":{"a":"SELF"}})").c_str());
             const auto info = router.info();
             expect(info.find("\"abi_version\":2") != std::string::npos && info.find("\"model\"") == std::string::npos, "router info has no model");
+        }
+        {
+            // Paths are UTF-8 in the C ABI on every platform, including outside the
+            // Windows ANSI code page and the Basic Multilingual Plane.
+            unicode_link alias(argv[0]);
+            auto router = ducktape::engine::open_router(R"({"models":{"a":")" + alias.path + R"("}})");
+            dtl_engine *missing = nullptr;
+            expect(dtl_open_router((R"({"models":{"a":")" + alias.path + R"(.missing"}})").c_str(), nullptr, &missing, &error) == DTL_MODEL_ERROR && !missing,
+                   "missing non-ASCII route"); dtl_free(error);
         }
         expect(dtl_open("/nonexistent/ducktape-laya.gguf", nullptr, &raw, &error) == DTL_MODEL_ERROR, "missing model"); dtl_free(error);
         expect(dtl_execute(nullptr, "{}", nullptr, &result, &error) == DTL_INVALID_ARGUMENT, "null engine"); dtl_free(error);
@@ -72,6 +100,8 @@ int main(int argc, char **argv) {
             auto a = std::async(std::launch::async, [&] { return engine.execute(request); });
             auto b = std::async(std::launch::async, [&] { return engine.execute(request); });
             expect(a.get() == first && b.get() == first, "serialized concurrent inference parity");
+            unicode_link model(argv[1]);
+            expect(ducktape::engine::open(model.path, R"({"threads":2})").execute(request) == first, "non-ASCII model path");
         }
         std::cout << "passed\n";
         return 0;

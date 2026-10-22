@@ -449,11 +449,18 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
             require(path.is_string(), "route " + id + ": path must be a string");
             auto text = path.get<std::string>();
             require(!text.empty() && text.find('\0') == std::string::npos, "route " + id + ": invalid model path");
-            std::error_code ec;
-            auto canonical = std::filesystem::canonical(text, ec);
-            if (ec || !std::filesystem::is_regular_file(canonical, ec) || ec)
+            // Paths are UTF-8 in the C ABI: u8path/u8string convert to and from wide
+            // strings on Windows (the narrow forms use the ANSI code page there) and
+            // keep the bytes unchanged on POSIX. llama.cpp opens with ggml_fopen (UTF-8).
+            std::string resolved;
+            try {
+                std::error_code ec;
+                auto canonical = std::filesystem::canonical(std::filesystem::u8path(text), ec);
+                if (!ec && std::filesystem::is_regular_file(canonical, ec) && !ec) resolved = canonical.u8string();
+            } catch (const std::system_error &) {}  // not convertible on this platform
+            if (resolved.empty())
                 throw failure(DTL_MODEL_ERROR, "Model path is not a local regular file: " + id);
-            router_state::route route{canonical.string(), {}, engine_config(config, shared)};
+            router_state::route route{resolved, {}, engine_config(config, shared)};
             // The path is raw bytes (not necessarily UTF-8), so it is not put into JSON.
             json key = {{"threads", route.config.threads}, {"context_tokens", route.config.context_tokens},
                         {"temperatures", route.config.temperatures}};  // overflow is applied per call, not per loaded model

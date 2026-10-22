@@ -267,8 +267,11 @@ int main(int argc, char **argv) {
         std::filesystem::create_hard_link(std::filesystem::canonical(argv[1]), dir / "a.gguf");
         std::filesystem::create_hard_link(std::filesystem::canonical(argv[1]), dir / "b.gguf");
         std::ofstream(dir / "invalid.gguf") << "not a model";
+        // Route paths are UTF-8, also outside the Windows ANSI code page and the BMP.
+        const auto unicode = dir / std::filesystem::u8path("m\u00f6del-\u6a21\u578b-\U0001F986.gguf");
+        std::filesystem::create_hard_link(std::filesystem::canonical(argv[1]), unicode);
         auto router = ducktape::engine::open_router(json({{"models",{{"a",(dir / "a.gguf").string()}, {"alias",(dir / "a.gguf").string()},
-            {"b",(dir / "b.gguf").string()}, {"bad",(dir / "invalid.gguf").string()}}},{"max_loaded",1}}).dump(), shared);
+            {"b",(dir / "b.gguf").string()}, {"bad",(dir / "invalid.gguf").string()}, {"unicode",unicode.u8string()}}},{"max_loaded",1}}).dump(), shared);
         auto routed = requests[0]; routed["model"] = "a";
         auto answer = json::parse(router.execute(routed.dump()));
         expect(answer["model"] == "a", "explicit route"); answer.erase("model");
@@ -284,6 +287,10 @@ int main(int argc, char **argv) {
         routed["model"] = "b";
         auto routed_results = json::parse(router.execute(json::array({routed,routed}).dump()));
         expect(routed_results.size() == 2 && routed_results[0] == routed_results[1], "router batch");
+        routed["model"] = "unicode";
+        answer = json::parse(router.execute(routed.dump()));
+        answer.erase("model");
+        expect(answer == singles[0], "non-ASCII route");
         checkpoint("routing and eviction");
         // ABI 2 settings. Open config: temperatures override the model's calibration; the
         // same override in a request gives the identical result, and a request wins over the engine.
