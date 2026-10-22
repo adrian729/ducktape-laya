@@ -29,15 +29,41 @@ LIBRARY = {'darwin': 'libducktape_laya.dylib', 'win32': 'ducktape_laya.dll'}.get
 # Executable suffix for test programs in a build directory.
 EXE = '.exe' if sys.platform == 'win32' else ''
 
-# Package platform names for the machine packaging runs on: (directory, wheel arch).
-PLATFORMS = {'x86_64': ('linux-x64', 'x86_64'), 'AMD64': ('linux-x64', 'x86_64'),
-             'aarch64': ('linux-arm64', 'aarch64'), 'arm64': ('linux-arm64', 'aarch64')}
+# Every native package target. `name` is the release platform (native archive
+# suffix, inventory `platform`, jar directory native/<name>/); the npm, wheel and
+# NuGet names follow each ecosystem's own convention. `files` are the names the
+# shared library is shipped under next to the Node addon (real bytes, no links).
+class Target(dict):
+    __getattr__ = dict.__getitem__
 
-def host_platform():
+TARGETS = [Target(t) for t in [
+    {'name': 'linux-x64', 'os': 'linux', 'machines': ('x86_64', 'AMD64'), 'npm': 'linux-x64',
+     'wheel': 'manylinux_2_38_x86_64', 'nuget': 'linux-x64', 'library': 'libducktape_laya.so',
+     'node_libraries': ['libducktape_laya.so', 'libducktape_laya.so.1'], 'archive': '.tar.gz'},
+    {'name': 'linux-arm64', 'os': 'linux', 'machines': ('aarch64', 'arm64'), 'npm': 'linux-arm64',
+     'wheel': 'manylinux_2_38_aarch64', 'nuget': 'linux-arm64', 'library': 'libducktape_laya.so',
+     'node_libraries': ['libducktape_laya.so', 'libducktape_laya.so.1'], 'archive': '.tar.gz'},
+    {'name': 'macos-arm64', 'os': 'darwin', 'machines': ('arm64',), 'npm': 'darwin-arm64',
+     'wheel': 'macosx_13_0_arm64', 'nuget': 'osx-arm64', 'library': 'libducktape_laya.dylib',
+     'node_libraries': ['libducktape_laya.1.dylib'], 'archive': '.tar.gz'},
+    {'name': 'windows-x64', 'os': 'win32', 'machines': ('AMD64', 'x86_64'), 'npm': 'win32-x64',
+     'wheel': 'win_amd64', 'nuget': 'win-x64', 'library': 'ducktape_laya.dll',
+     'node_libraries': ['ducktape_laya.dll'], 'archive': '.zip'},
+]]
+
+def target(name):
+    for item in TARGETS:
+        if item.name == name: return item
+    raise ValueError(f'Unknown package platform: {name}')
+
+def host_target():
+    """The package target of the machine packaging or testing runs on."""
     import platform
-    if platform.machine() not in PLATFORMS:
-        raise ValueError(f'Packages are built for Linux x86-64 and arm64, not {platform.machine()}')
-    return PLATFORMS[platform.machine()]
+    system = 'linux' if sys.platform.startswith('linux') else sys.platform
+    for item in TARGETS:
+        if item.os == system and platform.machine() in item.machines: return item
+    raise ValueError(f'No package target for {sys.platform}/{platform.machine()}; '
+                     f'packages are built for {", ".join(t.name for t in TARGETS)}')
 
 def verify_model(path, manifest):
     path = pathlib.Path(path)
@@ -153,11 +179,90 @@ def check_qualification(record, root=ROOT):
         raise ValueError('Browser tolerance must apply to same-backend upstream comparison')
     return policy
 
+INSTRUMENTATION_SYMBOL = re.compile(r'\b_?__(?:asan|ubsan|tsan|msan|sanitizer_cov|llvm_profile)_\w+')
+# Sanitizer runtimes and debug C/C++ runtimes a release binary must not load.
+DIAGNOSTIC_RUNTIME = re.compile(r'(?i)clang_rt\.|asan|ubsan|tsan|msan|^(?:vcruntime\d+d|msvcp\d+d|ucrtbased|concrt\d+d)\.dll$')
+
 def require_uninstrumented_binary(path):
     """Reject diagnostic native runtimes before loading or packaging them."""
-    symbols = subprocess.check_output(['readelf', '--dyn-syms', '--wide', str(path)], text=True)
-    if re.search(r'\b__(?:asan|ubsan|tsan|msan|sanitizer_cov|llvm_profile)_\w+', symbols):
+    head = pathlib.Path(path).read_bytes()[:4]
+    if head == b'\x7fELF':
+        symbols = subprocess.check_output(['readelf', '--dyn-syms', '--wide', str(path)], text=True)
+        instrumented = INSTRUMENTATION_SYMBOL.search(symbols)
+    elif head[:2] == b'MZ':
+        info = pe_info(path)
+        instrumented = any(DIAGNOSTIC_RUNTIME.search(name) for name in info['imports'] + info['delay_imports'])
+    else:
+        symbols = subprocess.check_output(['nm', '-a', str(path)], text=True)
+        instrumented = (INSTRUMENTATION_SYMBOL.search(symbols) or
+                        any(DIAGNOSTIC_RUNTIME.search(pathlib.PurePosixPath(name).name) for name in macho_info(path)['dylibs']))
+    if instrumented:
         raise ValueError('Instrumented binary cannot be packaged: ' + str(path))
+
+def pe_info(path):
+    """Exports, imported DLLs (direct and delay-loaded) and machine of a PE32+ image."""
+    import struct
+    data = pathlib.Path(path).read_bytes()
+    try:
+        if data[:2] != b'MZ': raise ValueError('no MZ header')
+        pe = struct.unpack_from('<I', data, 0x3c)[0]
+        if data[pe:pe + 4] != b'PE\0\0': raise ValueError('no PE signature')
+        machine, sections, _, _, _, optional_size, _ = struct.unpack_from('<HHIIIHH', data, pe + 4)
+        optional = pe + 24
+        if struct.unpack_from('<H', data, optional)[0] != 0x20b: raise ValueError('not PE32+')
+        count = struct.unpack_from('<I', data, optional + 108)[0]
+        directories = [struct.unpack_from('<II', data, optional + 112 + 8 * i) for i in range(min(count, 16))]
+        table = [struct.unpack_from('<8sIIII', data, optional + optional_size + 40 * i) for i in range(sections)]
+        def offset(rva):
+            for _, virtual_size, address, raw_size, raw in table:
+                if address <= rva < address + max(virtual_size, raw_size): return rva - address + raw
+            raise ValueError(f'RVA {rva:#x} outside every section')
+        def string(rva):
+            start = offset(rva)
+            return data[start:data.index(b'\0', start)].decode('ascii')
+        def descriptors(index, size, name_at):
+            rva = directories[index][0] if index < len(directories) else 0
+            names, position = [], offset(rva) if rva else None
+            while position is not None:
+                entry = data[position:position + size]
+                if not any(entry): break
+                names.append(string(struct.unpack_from('<I', entry, name_at)[0]))
+                position += size
+            return names
+        exports = []
+        if directories[0][0]:
+            directory = offset(directories[0][0])
+            number, _, names = struct.unpack_from('<III', data, directory + 24)
+            exports = [string(struct.unpack_from('<I', data, offset(names) + 4 * i)[0]) for i in range(number)]
+        return {'machine': machine, 'exports': sorted(exports), 'imports': descriptors(1, 20, 12),
+                'delay_imports': descriptors(13, 32, 4)}
+    except (struct.error, IndexError, ValueError) as error:
+        raise ValueError(f'{path}: not a readable PE32+ image ({error})') from None
+
+
+def macho_info(path):
+    """Linked dylibs, run-path entries and minimum macOS version of a 64-bit Mach-O image."""
+    import struct
+    data = pathlib.Path(path).read_bytes()
+    try:
+        magic, cpu, _, _, commands, _, _, _ = struct.unpack_from('<IiiIIIII', data, 0)
+        if magic != 0xfeedfacf: raise ValueError('not a 64-bit little-endian Mach-O')
+        dylibs, rpaths, minimum, position = [], [], None, 32
+        for _ in range(commands):
+            command, size = struct.unpack_from('<II', data, position)
+            if command in (0xc, 0x18 | 0x80000000, 0x1f | 0x80000000):  # LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB
+                start = position + struct.unpack_from('<I', data, position + 8)[0]
+                dylibs.append(data[start:data.index(b'\0', start)].decode())
+            elif command == 0x8000001c:  # LC_RPATH
+                start = position + struct.unpack_from('<I', data, position + 8)[0]
+                rpaths.append(data[start:data.index(b'\0', start)].decode())
+            elif command == 0x32:  # LC_BUILD_VERSION
+                packed = struct.unpack_from('<I', data, position + 12)[0]
+                minimum = f'{packed >> 16}.{(packed >> 8) & 0xff}'
+            position += size
+        return {'cpu': cpu, 'dylibs': dylibs, 'rpaths': rpaths, 'minimum_os': minimum}
+    except (struct.error, ValueError) as error:
+        raise ValueError(f'{path}: not a readable Mach-O image ({error})') from None
 
 def binary_info(build):
     """Inspect the built ABI without a model; detect stale/incompatible artifacts."""

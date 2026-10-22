@@ -140,7 +140,7 @@
     },
     "installed_packages": {
       "implementation": [
-        "scripts/package-linux.py",
+        "scripts/package-native.py",
         "scripts/package-browser.py"
       ],
       "checks": [
@@ -218,7 +218,7 @@
         "THIRD_PARTY_NOTICES.md"
       ],
       "checks": [
-        "scripts/package-linux.py",
+        "scripts/package-native.py",
         "scripts/package-browser.py"
       ],
       "acceptance": "Distributed component/model license obligations and exact artifact provenance reviewed; complete checksum-covered SBOM."

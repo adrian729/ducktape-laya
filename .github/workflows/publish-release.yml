@@ -122,7 +122,7 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          # As scripts/package-linux.py packages them; the .crate records the tag commit.
+          # As scripts/package-native.py packages them; the .crate records the tag commit.
           for name in ducktape-laya-sys ducktape-laya; do
             cargo package --manifest-path bindings/rust/Cargo.toml -p "$name" --locked --no-verify \
               --config "patch.crates-io.ducktape-laya-sys.path=\"$PWD/bindings/rust/ducktape-laya-sys\""

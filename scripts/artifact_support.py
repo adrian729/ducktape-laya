@@ -23,6 +23,37 @@ def archive_tree(source, destination, prefix, epoch):
                     archive.add(path, arcname=prefix + '/' + path.relative_to(source).as_posix(), recursive=False, filter=normalize)
 
 
+def archive_zip(source, destination, prefix, epoch):
+    """A deterministic zip of a directory tree under prefix/ (the Windows native archive)."""
+    source = pathlib.Path(source)
+    files = {f'{prefix}/{path.relative_to(source).as_posix()}': (path.read_bytes(), bool(path.stat().st_mode & 0o111))
+             for path in sorted(source.rglob('*')) if path.is_file()}
+    write_zip(destination, files, epoch)
+
+
+def read_zip(path):
+    """The entries of a zip as {name: (bytes, executable)}, in archive order."""
+    import zipfile
+    with zipfile.ZipFile(path) as archive:
+        return {info.filename: (archive.read(info), bool((info.external_attr >> 16) & 0o111))
+                for info in archive.infolist() if not info.is_dir()}
+
+
+def set_npm_platforms(manifest, targets):
+    """package.json text with its os and cpu arrays naming exactly these targets.
+
+    npm checks os and cpu separately, so they list every OS and every CPU among
+    the targets; resolve-addon.cjs rejects a combination without an addon."""
+    import re
+    def unique(values):
+        return list(dict.fromkeys(values))
+    for key, values in (('os', unique(t.npm.split('-')[0] for t in targets)), ('cpu', unique(t.npm.split('-')[1] for t in targets))):
+        array = '[\n' + ',\n'.join(f'    "{value}"' for value in values) + '\n  ]'
+        manifest, count = re.subn(rf'"{key}": \[[^\]]*\]', lambda _: f'"{key}": {array}', manifest)
+        if count != 1: raise ValueError(f'package.json must have exactly one "{key}" array')
+    return manifest
+
+
 def write_zip(destination, files, epoch, first=()):
     """Deterministic zip: sorted entries, fixed timestamps and permissions.
 

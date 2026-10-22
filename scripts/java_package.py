@@ -1,7 +1,9 @@
 """Build the Maven artifacts around an installed native library (build tooling only).
 
-ducktape-laya-VERSION.jar bundles libducktape_laya.so at native/<platform>/, which
-Native.java extracts when no library is configured; the sources and javadoc jars
+ducktape-laya-VERSION.jar bundles the shared library at native/<platform>/<file>
+(native/linux-x64/libducktape_laya.so, native/windows-x64/ducktape_laya.dll, ...),
+which Native.java extracts when no library is configured; one runner's jar holds
+its own platform and scripts/assemble-packages.py merges them into one jar; the sources and javadoc jars
 and the POM are what Maven Central requires next to it. Signing is a publication
 step."""
 import pathlib
@@ -9,7 +11,7 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ElementTree
 from artifact_support import write_zip
-from release_support import ROOT, host_platform
+from release_support import ROOT
 
 GROUP, ARTIFACT, MODULE = 'io.github.adrian729', 'ducktape-laya', 'io.github.adrian729.laya'
 POM = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -21,7 +23,7 @@ POM = '''<?xml version="1.0" encoding="UTF-8"?>
   <version>{version}</version>
   <packaging>jar</packaging>
   <name>ducktape-laya</name>
-  <description>Local Laya GGUF decisions (choice, noul, score) for Java 22+ through the ducktape-laya native library (Linux x86-64)</description>
+  <description>Local Laya GGUF decisions (choice, noul, score) for Java 22+ through the bundled ducktape-laya native library</description>
   <url>https://github.com/adrian729/ducktape-laya</url>
   <licenses>
     <license>
@@ -59,8 +61,16 @@ def pom(version):
     return text
 
 
-def build(out, version, library, epoch):
-    """Write the jar, sources jar, javadoc jar and POM into out; library is the real .so file."""
+# The manifest must lead the jar for JarInputStream.
+LEAD = ('META-INF/MANIFEST.MF',)
+
+
+def native_entry(target):
+    return f'native/{target.name}/{target.library}'
+
+
+def build(out, version, library, epoch, target):
+    """Write the jar, sources jar, javadoc jar and POM into out; library is the real shared library file."""
     out = pathlib.Path(out)
     source = ROOT / 'bindings/java/src/main/java'
     sources = sorted(source.rglob('*.java'))
@@ -68,7 +78,7 @@ def build(out, version, library, epoch):
              for path in [ROOT / 'LICENSE', ROOT / 'THIRD_PARTY_NOTICES.md', *sorted((ROOT / 'licenses').iterdir())]}
     manifest = (f'Manifest-Version: 1.0\\r\\nAutomatic-Module-Name: {MODULE}\\r\\nImplementation-Title: {ARTIFACT}\\r\\n'
                 f'Implementation-Version: {version}\\r\\n\\r\\n').encode()
-    lead = ('META-INF/MANIFEST.MF',)
+    lead = LEAD
     with tempfile.TemporaryDirectory(prefix='ducktape-java-') as directory:
         directory = pathlib.Path(directory)
         classes, docs = directory / 'classes', directory / 'docs'
@@ -77,7 +87,7 @@ def build(out, version, library, epoch):
         subprocess.run(['javadoc', '--release', '22', '-quiet', '-notimestamp', '-Xdoclint:none', '-d', str(docs),
                         *map(str, sources)], check=True, capture_output=True)
         files = {path.relative_to(classes).as_posix(): (path.read_bytes(), False) for path in sorted(classes.rglob('*.class'))}
-        files[f'native/{host_platform()[0]}/libducktape_laya.so'] = (pathlib.Path(library).read_bytes(), True)
+        files[native_entry(target)] = (pathlib.Path(library).read_bytes(), True)
         write_zip(out / f'{ARTIFACT}-{version}.jar', {**files, **legal, lead[0]: (manifest, False)}, epoch, lead)
         write_zip(out / f'{ARTIFACT}-{version}-sources.jar',
                   {**{path.relative_to(source).as_posix(): (path.read_bytes(), False) for path in sources}, **legal,

@@ -88,6 +88,7 @@ try:
     run('abi-layouts', [sys.executable, ROOT / 'tests/abi-layout.py'])
     run('typescript-consumers', [sys.executable, ROOT / 'tests/typescript/check.py'])
     run('packaging-identities', [sys.executable, ROOT / 'tests/packaging-identity.py'])
+    run('package-assembly', [sys.executable, ROOT / 'tests/package-assembly.py'])
     run('browser-backend-identities', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-backend.mjs'])
     run('browser-lifecycle', ['node', '--experimental-vm-modules', '--test', ROOT / 'tests/browser-lifecycle.mjs'])
     run('browser-binding', ['node', '--experimental-vm-modules', '--test', ROOT / 'bindings/browser/test.mjs'])
@@ -150,8 +151,11 @@ try:
                        [sys.executable, ROOT / 'tests/compare-native-reference.py', extra,
                         '--build', build, '--report', out / f'upstream-reference-{name}.json'])
     if a.packages:
-        run('package', [sys.executable, ROOT / 'scripts/package-linux.py', '--build', build, '--output', out / 'packages'])
+        run('package', [sys.executable, ROOT / 'scripts/package-native.py', '--build', build, '--output', out / 'packages'])
         run('package-smoke', [sys.executable, ROOT / 'tests/package-smoke.py', out / 'packages'])
+        # The multi-platform assembly of this one platform must load the same way.
+        run('package-assembly-real', [sys.executable, ROOT / 'scripts/assemble-packages.py', '--output', out / 'assembled', out / 'packages'])
+        run('assembled-smoke', [sys.executable, ROOT / 'tests/package-smoke.py', out / 'assembled'])
         if model:
             run('installed', [sys.executable, ROOT / 'tests/installed-packages.py', out / 'packages', model], 'installed_packages')
     if a.reproducibility:

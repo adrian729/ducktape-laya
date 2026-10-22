@@ -10,7 +10,7 @@ soversion = int(re.search(r'SOVERSION (\d+)', (ROOT / 'CMakeLists.txt').read_tex
 node = re.findall(r'DUCKTAPE_LAYA_(\d+)', (ROOT / 'src/exports.map').read_text())
 if header != abi or soversion != abi - 1 or node != [str(abi)]:
     raise SystemExit(f'ABI identity disagrees: record {abi}, header {header}, SOVERSION {soversion}, exports.map {node}')
-for path in ['scripts/package-linux.py', 'scripts/setup.py', 'tests/cross-host.py', 'bindings/python/src/ducktape_laya/_native.py']:
+for path in ['scripts/package-native.py', 'scripts/setup.py', 'tests/cross-host.py', 'bindings/python/src/ducktape_laya/_native.py']:
     names = set(re.findall(r'libducktape_laya\.so\.(\d+)', (ROOT / path).read_text()))
     if names - {str(soversion)}:
         raise SystemExit(f'{path} names libducktape_laya.so.{sorted(names)}, not .so.{soversion}')
