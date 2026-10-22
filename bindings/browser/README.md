@@ -1,6 +1,6 @@
 # ducktape-laya-browser
 
-Local Laya GGUF decisions (`choice`, `noul`, ordinal `score`) in the browser, using the same C++ core and llama.cpp runtime as the native library, compiled to WebAssembly with an optional WebGPU build. Inference runs in a module worker. **Experimental:** 0.1.0 passed the browser release gates on Chromium 152 only; this page describes 0.2.0, which is not yet qualified. 0.1.0 had a different API (see [the migration notes](https://github.com/adrian729/ducktape-laya/blob/main/docs/COMPATIBILITY.md)).
+Local Laya GGUF decisions (`choice`, `noul`, ordinal `score`) in the browser, using the same C++ core and llama.cpp runtime as the native library, compiled to WebAssembly with an optional WebGPU build. Inference runs in a module worker. **Experimental:** 0.2.0 passed the browser release gates on Chromium 152 only. 0.1.0 had a different API (see [the migration notes](https://github.com/adrian729/ducktape-laya/blob/main/docs/COMPATIBILITY.md)).
 
 ```sh
 npm install ducktape-laya-browser

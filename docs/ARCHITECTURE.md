@@ -94,7 +94,7 @@ inference failures never silently switch backends or recompute a result.
 Browser requests still pass through the C ABI and shared planner. Platform code
 may adapt memory, scheduling, cancellation transport and device-loss handling,
 but must preserve request/result semantics. Native ISA profiles, WASM and WebGPU
-are distinct numerical profiles: probability differences can change choices and threshold projections. Browser delivery is experimental: 0.1.0 passed the browser gates on Chromium 152 only, and main (0.2.0) is not yet qualified. Structural/API parity does not promise interchangeable predictions.
+are distinct numerical profiles: probability differences can change choices and threshold projections. Browser delivery is experimental: 0.1.0 and 0.2.0 passed the browser gates on Chromium 152 only. Structural/API parity does not promise interchangeable predictions.
 
 ## Conformance and maintenance
 

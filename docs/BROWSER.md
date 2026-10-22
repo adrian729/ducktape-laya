@@ -5,7 +5,7 @@ calibration, routing, batching and structured projection as native bindings.
 It runs in a private module worker. JavaScript owns asset fetching, queueing,
 shutdown and platform errors; it does not implement a second classifier.
 
-**Status: experimental.** 0.1.0 passed the browser release gates on Chromium 152; other browsers are untested. The 0.2.0 browser package on main is not yet qualified. Native CPU ISA
+**Status: experimental.** 0.1.0 and 0.2.0 passed the browser release gates on Chromium 152; other browsers are untested. Native CPU ISA
 profiles, WASM and WebGPU are distinct numerical profiles. Probabilities and
 threshold decisions are not interchangeable across profiles. Strict same-backend
 upstream tolerance is owned by `release/browser-toolchain.json`. API/structure

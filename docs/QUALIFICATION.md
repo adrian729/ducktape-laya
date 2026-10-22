@@ -4,7 +4,7 @@
 maps every required gate to implementation, reusable checks and acceptance
 criteria. `release/compatibility.json` owns the required gate list; maintainer
 checks reject drift between the two. These records are requirements, not a
-claim that the listed platforms or gates have passed. 0.1.0 passed every gate for its candidate; main (0.2.0) has not been qualified yet.
+claim that the listed platforms or gates have passed. 0.1.0 and 0.2.0 passed every gate for their candidates (`gates.json` on each GitHub release); changes on main after 0.2.0 are not qualified until the next release.
 
 The first target is Linux x86-64 CPU with the declared AVX2-era ISA, Ubuntu 24.04
 as the minimum userspace and Ubuntu 26.04 as the newer userspace. Native release
