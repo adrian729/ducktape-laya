@@ -1,3 +1,7 @@
-# Ducktape Laya
+# ducktape-laya-sys
 
-Native Laya GGUF decisions backed by the shared native library (`libducktape_laya.so`; on Windows `ducktape_laya.dll`). Install the native library and set `DUCKTAPE_LAYA_LIB_DIR` to its library directory (on Windows the directory that holds the import library `ducktape_laya.lib`, the zip's `lib`; the DLL in `bin` must be on `PATH` at run time), or expose its `ducktape-laya.pc` through `PKG_CONFIG_PATH` at build time. Configure your application's library loader path when bundling the shared library. No model or runtime download occurs. Model files are application-owned resources. The safe crate provides ownership and errors; the sys crate exposes the C ABI.
+Raw Rust declarations for the C ABI of ducktape-laya's native library (`libducktape_laya.so.1`; on Windows `ducktape_laya.dll` with its import library `ducktape_laya.lib`). Most applications should use the safe [`ducktape-laya`](https://crates.io/crates/ducktape-laya) crate instead.
+
+The build links the installed native library: set `DUCKTAPE_LAYA_LIB_DIR` to its `lib` directory (on Windows the zip's `lib`, with its `bin` on `PATH` at run time), or expose its `ducktape-laya.pc` through `PKG_CONFIG_PATH`. The library comes from the [release archive](https://github.com/adrian729/ducktape-laya/releases) of the same version. No model or runtime download occurs.
+
+The C contract (ownership, statuses, call options) is in [ducktape_laya.h](https://github.com/adrian729/ducktape-laya/blob/main/include/ducktape_laya.h) and the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).

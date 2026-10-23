@@ -1,20 +1,26 @@
 # Ducktape Laya for .NET
 
-Native Laya GGUF decisions backed by the shared native library (`libducktape_laya.so`, on Windows `ducktape_laya.dll`). Requires .NET 10 on Linux x86-64 (0.2.0) or, from the next release, Linux arm64 and Windows x64, and the native library. The package targets `net10.0`, uses source-generated P/Invoke, and is trim/AOT compatible. No model or runtime download occurs. Model files are application-owned resources and are not bundled.
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions from .NET: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get calibrated probabilities, computed on the CPU by the shared native library bundled in the package.
+
+```sh
+dotnet add package DucktapeLaya
+```
+
+Requires .NET 10. The package targets `net10.0`, uses source-generated P/Invoke, and is trim/AOT compatible. It bundles the native library for Linux x86-64 (0.2.0), and from the next release also Linux arm64 and Windows x64 (`linux-x64`, `linux-arm64`, `win-x64`; Windows needs the Microsoft Visual C++ Redistributable); NuGet picks the running platform's runtime identifier ([platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md)). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
 ## Library resolution
 
-1. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`. When this variable is set it is authoritative: if that file cannot be loaded, a `DllNotFoundException` naming the path is thrown, and if it is incompatible, a `LayaException`; nothing else is tried.
+1. `$DUCKTAPE_LAYA_LIB_DIR/` plus the platform's file name (`libducktape_laya.so`, `libducktape_laya.dylib` or `ducktape_laya.dll`). When this variable is set it is authoritative: if that file cannot be loaded, a `DllNotFoundException` naming the path is thrown, and if it is incompatible, a `LayaException`; nothing else is tried.
 2. Otherwise the copy shipped with the package: `runtimes/<rid>/native/` next to the application (the NuGet layout: `linux-x64`, `linux-arm64`, `osx-arm64`, `win-x64`), or the library file in the application directory (a flattened publish). It comes first, so an unrelated installed `libducktape_laya` cannot shadow it.
 3. Then `libducktape_laya.so.1` and `libducktape_laya.so` (on macOS `libducktape_laya.1.dylib`, then `libducktape_laya.dylib`; on Windows `ducktape_laya.dll`) through the system loader. On Windows the search is limited to the assembly directory and the safe system directories (never the current directory or `PATH`).
 
 A library must report `dtl_abi_version() == 2` and export `dtl_cancel_flag`. Without the override, an incompatible candidate is skipped for the next one; if none loads, the call fails with `DllNotFoundException`, and if only incompatible ones load, with `LayaException` (`UnsupportedPlatform`). Load failures are reported on every call, not just the first.
 
-To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project. Without it, `dotnet pack` still succeeds but produces a package without the native library. `scripts/package-native.py` builds the package for the platform it runs on (`DucktapeLaya.VERSION.nupkg`, library included under its own file name, byte-reproducible), and `scripts/assemble-packages.py` merges the platforms' packages into one with every `runtimes/<rid>/native/`. The 0.2.0 package carries Linux x86-64 (`linux-x64`) only; from the next release the package carries `linux-x64`, `linux-arm64` and `win-x64`, and NuGet picks the running platform's runtime identifier.
+To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project. Without it, `dotnet pack` still succeeds but produces a package without the native library. The release package is built by `scripts/package-native.py` ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md#build-the-packages)).
 
 ## From a checkout
 
-Released versions install with `dotnet add package DucktapeLaya` (the 0.2.0 package bundles the Linux x86-64 library; Linux arm64 and Windows x64 come with the next release). To use unreleased changes from main, build the native library (see the repository README), then reference the project from your application:
+To use unreleased changes, build the native library ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md)), then reference the project from your application:
 
 ```sh
 dotnet add MyApp.csproj reference /path/to/ducktape-laya/bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj
@@ -36,7 +42,7 @@ var options = new LayaCallOptions { Timeout = TimeSpan.FromSeconds(30), OnEvent 
 string result = engine.Execute(requestJson, options, cancellationToken);
 ```
 
-`LayaConfig` (init-only) holds `Threads` (0 = automatic, otherwise 1..256), `ContextTokens` (prompt capacity), `Overflow` (default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan`; a request's own `overflow` wins) and `Temperatures` (calibration overrides keyed like `"choice.3_5"`); unset members are omitted from the config JSON. `OpenRouter(routerJson, config)` opens a lazy local model registry in which the config applies to every route and a route's own `config` overrides it key by key. Requests name a route in `"model"`; with `"auto": {"english": "en", "default": "ml"}` in the router JSON, `"model": "auto"` chooses the route by the state's language, and `"auto"` cannot be a route ID. Per-request `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` are ordinary request JSON keys. There is one strict request contract, `Execute`/`ExecuteAsync`; events and `RequestId` are reported through the call options. See `docs/API.md` for request, schema and router contracts.
+`LayaConfig` (init-only) holds `Threads` (0 = automatic, otherwise 1..256), `ContextTokens` (prompt capacity), `Overflow` (default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan`; a request's own `overflow` wins) and `Temperatures` (calibration overrides keyed like `"choice.3_5"`); unset members are omitted from the config JSON. `OpenRouter(routerJson, config)` opens a lazy local model registry in which the config applies to every route and a route's own `config` overrides it key by key. Requests name a route in `"model"`; with `"auto": {"english": "en", "default": "ml"}` in the router JSON, `"model": "auto"` chooses the route by the state's language, and `"auto"` cannot be a route ID. Per-request `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` are ordinary request JSON keys. There is one strict request contract, `Execute`/`ExecuteAsync`; events and `RequestId` are reported through the call options. See the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md) for request, schema and router contracts.
 
 ## Threading and cancellation
 

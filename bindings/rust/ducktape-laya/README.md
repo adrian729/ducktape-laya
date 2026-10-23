@@ -1,6 +1,14 @@
-# Ducktape Laya
+# Ducktape Laya for Rust
 
-Native Laya GGUF decisions backed by the shared native library (`libducktape_laya.so`; on Windows `ducktape_laya.dll` with its import library `ducktape_laya.lib`). Install the native library and set `DUCKTAPE_LAYA_LIB_DIR` to its library directory, or expose its `ducktape-laya.pc` through `PKG_CONFIG_PATH` at build time. Configure your application's library loader path when bundling the shared library. No model or runtime download occurs. Model files are application-owned resources. The safe crate provides ownership and errors; the sys crate exposes the C ABI.
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Rust: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get calibrated probabilities, computed on the CPU by the shared native library. This safe crate provides ownership and errors; [`ducktape-laya-sys`](https://crates.io/crates/ducktape-laya-sys) exposes the raw C ABI.
+
+## Install
+
+```sh
+cargo add ducktape-laya
+```
+
+The crate links the native library, which comes from the release archive: [v0.2.0](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) has `ducktape-laya-0.2.0-linux-x64.tar.gz`; from the next release there are also Linux arm64 and Windows x64 archives ([platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md)). At build time, set `DUCKTAPE_LAYA_LIB_DIR` to the archive's `lib` directory, or expose its `lib/pkgconfig/ducktape-laya.pc` through `PKG_CONFIG_PATH`. At run time the loader must find the library: set `LD_LIBRARY_PATH`, install it system-wide, or bundle it with your application ([deployment](https://github.com/adrian729/ducktape-laya/blob/main/docs/PACKAGING.md)). On Windows, `DUCKTAPE_LAYA_LIB_DIR` names the zip's `lib` (the import library `ducktape_laya.lib`) and its `bin` (the DLL) goes on `PATH` at run time. No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)). Tested with Rust 1.98.
 
 ## Usage
 
@@ -40,7 +48,7 @@ match engine.execute_with(request, options) {
 
 ## From a checkout
 
-Released versions: `cargo add ducktape-laya` (0.2) plus the native library from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (Linux x86-64). From the next release the Linux arm64 tarball and the Windows x64 zip are published too; with the zip, set `DUCKTAPE_LAYA_LIB_DIR` to its `lib` directory (the linker needs `ducktape_laya.lib`) and put its `bin` directory, which holds the DLL, on `PATH` at run time. To use unreleased changes from main, build the native library (see the repository README), then depend on the crate by path and point the build at the library:
+To use unreleased changes, build the native library ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md)), then depend on the crate by path and point the build at the library:
 
 ```toml
 [dependencies]
@@ -54,3 +62,5 @@ cargo build
 ```
 
 `examples/decide.rs` runs one request from standard input: `cargo run --example decide -- /path/to/Laya-Q8_0.gguf < request.json` in this crate's directory, with the same variables set.
+
+The request and result format, routing and limits are in the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).

@@ -1,17 +1,21 @@
 # Ducktape Laya for Java
 
-Java binding for the shared `libducktape_laya.so`, using the Foreign Function & Memory API. It has no JNI, JNA or third-party dependencies, and JSON stays as `String`.
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Java and Kotlin: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get calibrated probabilities. The binding calls the shared native library through the Foreign Function & Memory API, with no JNI, JNA or third-party dependencies; requests and results are JSON `String`s.
 
-Requirements: Java 22 or newer (CI tests 25), a supported platform (Linux x86-64, 0.2.0; from the next release also Linux arm64 and Windows x64) and the native library (0.2, C ABI 2). No model or runtime download occurs; model files are application-owned resources.
+```text
+io.github.adrian729:ducktape-laya:0.2.0
+```
+
+Requirements: Java 22 or newer (CI tests 25). The jar bundles the native library: Linux x86-64 in 0.2.0, and from the next release also Linux arm64 and Windows x64 ([platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md)). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
 The library is located in this order:
 
-1. system property `ducktape.laya.library` (full path to the `.so`)
-2. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`
+1. system property `ducktape.laya.library` (full path to the library file)
+2. `$DUCKTAPE_LAYA_LIB_DIR/` plus the platform's file name (`libducktape_laya.so`, `libducktape_laya.dylib` or `ducktape_laya.dll`)
 3. a copy bundled in the jar at `/native/<platform>/` (`linux-x64/libducktape_laya.so`, `linux-arm64/libducktape_laya.so`, `macos-arm64/libducktape_laya.dylib`, `windows-x64/ducktape_laya.dll`), extracted to a private temporary directory (mode 700, under `java.io.tmpdir` or `-Dducktape.laya.tmpdir`, e.g. when `/tmp` is mounted `noexec`) and deleted again right after it is loaded, so nothing is left behind even if the JVM is killed; on Windows, where a loaded DLL cannot be deleted, to one shared copy per library content in `%LOCALAPPDATA%\ducktape-laya` (or `-Dducktape.laya.tmpdir`), a per-user directory other users cannot write, whose owner is checked before use; without such a location, to a fresh owner-only directory under `java.io.tmpdir` (never a predictable name in a shared directory). On Alpine and other musl systems the bundled glibc library cannot load, and the error says so
-4. the default loader path (`libducktape_laya.so.1`, then `libducktape_laya.so`)
+4. the default loader path (`libducktape_laya.so.1`, then `libducktape_laya.so`; on macOS `libducktape_laya.1.dylib`, then `libducktape_laya.dylib`; on Windows `ducktape_laya.dll`)
 
-An explicit override (1 or 2) is honoured or fails; it never falls back to later steps. The Linux x86-64 check applies only when no override is given. After loading, the binding requires `dtl_abi_version() == 2` and the `dtl_cancel_flag` symbol. Loading is lazy (first API call, including `Laya.runtimeInfo()`), not in a static initializer: a failure is cached and every API call throws a fresh `LayaException` with `UNSUPPORTED_PLATFORM` (status 7) whose message includes the cause.
+An explicit override (1 or 2) is honoured or fails; it never falls back to later steps. Without an override, a platform other than Linux x86-64 or arm64, macOS arm64 or Windows x64 fails with status 7. After loading, the binding requires `dtl_abi_version() == 2` and the `dtl_cancel_flag` symbol. Loading is lazy (first API call, including `Laya.runtimeInfo()`), not in a static initializer: a failure is cached and every API call throws a fresh `LayaException` with `UNSUPPORTED_PLATFORM` (status 7) whose message includes the cause.
 
 Run with native access enabled: `--enable-native-access=ALL-UNNAMED` on the classpath, or `--enable-native-access=io.github.adrian729.laya` on the module path.
 
@@ -43,11 +47,13 @@ Errors: `LayaException` with `status()` and constants such as `LayaException.CAN
 
 ## From a checkout
 
-Release 0.2.0 is on Maven Central as `io.github.adrian729:ducktape-laya:0.2.0` (also attached to the [GitHub release](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0)); the 0.2.0 jar bundles the Linux x86-64 library, and from the next release the jar carries Linux arm64 and Windows x64 as well (`native/linux-arm64/`, `native/windows-x64/ducktape_laya.dll`). To use unreleased changes from main, build the native library (see the repository README), then build the jar without Maven:
+To use unreleased changes, build the native library ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md)), then build the jar without Maven:
 
 ```sh
 bindings/java/build.sh            # compiles, writes bindings/java/target/ducktape-laya.jar and runs the tests
 bindings/java/build.sh --no-test  # jar only
 ```
 
-`build.sh` needs JDK 22+ on `PATH` and uses `DUCKTAPE_LAYA_LIB_DIR`, defaulting to the checkout's `build` directory; set `LAYA_MODEL` to also run the real-model tests. Put the jar on your application's classpath and set `DUCKTAPE_LAYA_LIB_DIR` (or `-Dducktape.laya.library=/path/to/libducktape_laya.so`) when running, since this development jar does not bundle the library. The release jar built by `scripts/package-native.py` (`ducktape-laya-VERSION.jar`, with sources and javadoc jars and a POM) bundles it and needs neither; `scripts/assemble-packages.py` merges the platforms' jars into one. Published releases carry Linux x86-64 only until the other platforms are release-qualified. A `pom.xml` is provided for Maven users.
+`build.sh` needs JDK 22+ on `PATH` and uses `DUCKTAPE_LAYA_LIB_DIR`, defaulting to the checkout's `build` directory; set `LAYA_MODEL` to also run the real-model tests. Put the jar on your application's classpath and set `DUCKTAPE_LAYA_LIB_DIR` (or `-Dducktape.laya.library=/path/to/libducktape_laya.so`) when running, since this development jar does not bundle the library. The release jar built by `scripts/package-native.py` bundles it and needs neither. A `pom.xml` is provided for Maven users.
+
+The request and result format, routing and limits are in the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).

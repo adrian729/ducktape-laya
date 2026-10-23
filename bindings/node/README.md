@@ -1,13 +1,14 @@
 # ducktape-laya
 
-Local Laya GGUF decisions (`choice`, `noul`, ordinal `score`) for Node.js and Electron, backed by the shared native library. Inference runs in a worker thread in-process: no server, network access or model download. This page describes version 0.2.0; 0.1.0 had a different API (see [the migration notes](https://github.com/adrian729/ducktape-laya/blob/main/docs/COMPATIBILITY.md)).
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions for Node.js and Electron: ask named questions about a text and get calibrated probabilities. A `choice` question picks one of several options, a `noul` question gives the probability that a statement is true, and a `score` question picks a level on an ordered scale. Inference runs on the CPU in a worker thread of your process: no server, network access or implicit model download. 0.1.0 had a different API ([migration notes](https://github.com/adrian729/ducktape-laya/blob/main/docs/COMPATIBILITY.md)).
 
 ## Requirements
 
-- Linux x86-64 with AVX2, FMA, F16C, BMI2 and SSE4.2; glibc 2.38+ (Ubuntu 24.04+, Debian 13+, Fedora 39+); musl (Alpine) is not supported, and a Linux-only package declares `"libc": ["glibc"]` so npm refuses it there (a multi-platform package cannot, because npm treats a `libc` field as a mismatch on macOS and Windows, so loading it on musl fails with a clear `ERR_LAYA_UNSUPPORTED` error instead). See the [repository README](https://github.com/adrian729/ducktape-laya#requirements).
-- Linux arm64 (Armv8.2-A with dot product and FP16, glibc 2.38+) and Windows x64 (the same CPU features as x86-64, plus the Microsoft Visual C++ Redistributable): from the next release the package carries one addon per platform in `native/<platform>-<arch>/` (`linux-x64`, `linux-arm64`, `win32-x64`) and picks the one for the running platform; the published 0.2.0 package has Linux x86-64 only. Both are tier-2 platforms, tested on GitHub-hosted runners with the English model ([release coverage](https://github.com/adrian729/ducktape-laya#release-coverage)). macOS on Apple silicon (`darwin-arm64`) is built in CI but not released. Otherwise build the addon from a checkout (see the [repository README](https://github.com/adrian729/ducktape-laya#manual-setup)) and pass `addonPath` or set `DUCKTAPE_LAYA_ADDON`; on Windows, keep `ducktape_laya.dll` next to `ducktape_laya.node`. 
-- Node.js 20+ (tested on 24 and 26) or Electron (tested with 44). The native addon is prebuilt; no compiler.
-- A Laya GGUF model, downloaded separately. The package includes `download-model.py` and `model-manifest.json`; `python3 node_modules/ducktape-laya/download-model.py resources` downloads the pinned English model and verifies its hash.
+- Node.js 20+ (tested on 24 and 26) or Electron (tested with 44). The native addon is prebuilt; no compiler is needed.
+- Linux x86-64 with AVX2, FMA, F16C, BMI2 and SSE4.2 and glibc 2.38+ (Ubuntu 24.04+). The 0.2.0 package carries Linux x86-64 only; from the next release it also carries Linux arm64 (Armv8.2-A with dot product and FP16) and Windows x64 (which needs the Microsoft Visual C++ Redistributable), and picks the addon for the running platform. musl (Alpine) is not supported: loading fails with `ERR_LAYA_UNSUPPORTED`. Full matrix: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md) and the [repository README](https://github.com/adrian729/ducktape-laya#requirements).
+- A Laya GGUF model, downloaded separately. `python3 node_modules/ducktape-laya/download-model.py resources` downloads the pinned English model into `resources/` and verifies its hash ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
+
+On another platform, build the addon from a checkout ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md)) and pass `addonPath` or set `DUCKTAPE_LAYA_ADDON`; on Windows keep `ducktape_laya.dll` next to `ducktape_laya.node`.
 
 ```sh
 npm install ducktape-laya
@@ -93,6 +94,6 @@ Errors are `Error` objects. Native failures carry `status` (the C ABI status, al
 
 ## Electron
 
-Open the engine in the main process. Unpack the whole `node_modules/ducktape-laya` package and the model from ASAR, for example with electron-builder's `asarUnpack: ["**/node_modules/ducktape-laya/**"]`: the worker script (`worker.cjs`) is started from the package directory, and the native addon and library (`ducktape_laya.node` and `ducktape_laya.dll` on Windows) must be real files. The package resolves its `app.asar` native path to `app.asar.unpacked`. Electron 44 is tested as a directory and from ASAR on Linux x86-64, and, from the next release, Linux arm64 and Windows x64.
+Open the engine in the main process. Unpack the whole `node_modules/ducktape-laya` package and the model from ASAR, for example with electron-builder's `asarUnpack: ["**/node_modules/ducktape-laya/**"]`: the worker script (`worker.cjs`) is started from the package directory, and the native addon and library (`ducktape_laya.node` and `ducktape_laya.dll` on Windows) must be real files. The package resolves its `app.asar` native path to `app.asar.unpacked`. Electron 44 is tested as a directory and from ASAR.
 
-The full request and result format is in the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).
+The full request and result format is in the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md); deployment details are in [linking and deployment](https://github.com/adrian729/ducktape-laya/blob/main/docs/PACKAGING.md).
