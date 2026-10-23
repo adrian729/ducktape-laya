@@ -1,10 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 
 [assembly: DisableRuntimeMarshalling]
+// Keeps the current directory and PATH out of the Windows search for the library.
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.SafeDirectories)]
 
 namespace Ducktape.Laya;
 
@@ -27,6 +30,33 @@ internal static unsafe partial class Native
         : OperatingSystem.IsWindows() ? "ducktape_laya.dll" : "libducktape_laya.so";
     static readonly string VersionedName = OperatingSystem.IsMacOS() ? "libducktape_laya.1.dylib"
         : OperatingSystem.IsWindows() ? "ducktape_laya.dll" : "libducktape_laya.so.1";
+
+    // NuGet runtime identifier of this process, e.g. linux-x64 (null for an unsupported platform).
+    internal static string? RuntimeId()
+    {
+        var os = OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : OperatingSystem.IsLinux() ? "linux" : null;
+        var arch = RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.X64 => "x64",
+            Architecture.Arm64 => "arm64",
+            _ => null,
+        };
+        return os is null || arch is null ? null : os + "-" + arch;
+    }
+
+    /// <summary>The library file shipped with the package, if present next to <paramref name="baseDir"/>:
+    /// runtimes/&lt;rid&gt;/native/ (the NuGet layout), or the directory itself (a flattened publish).</summary>
+    internal static string? BundledPath(string baseDir)
+    {
+        var rid = RuntimeId();
+        if (rid is not null)
+        {
+            var nuget = System.IO.Path.Combine(baseDir, "runtimes", rid, "native", FileName);
+            if (System.IO.File.Exists(nuget)) return nuget;
+        }
+        var flat = System.IO.Path.Combine(baseDir, FileName);
+        return System.IO.File.Exists(flat) ? flat : null;
+    }
 
     static readonly object Gate = new();
     static bool _resolverSet, _ready;
@@ -78,19 +108,26 @@ internal static unsafe partial class Native
     {
         var dir = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
         var assembly = typeof(Native).Assembly;
-        // An explicit override never falls back to other locations. Otherwise the soname comes first (as in
-        // the Python and Java bindings), then the plain name; the NuGet runtimes/<rid>/native layout (linux-x64,
-        // linux-arm64, osx-arm64, win-x64) is found by default probing. A library of the wrong ABI is skipped in
-        // favour of the next candidate.
+        // An explicit override never falls back to other locations. Otherwise the copy shipped with the package
+        // (runtimes/<rid>/native/, or next to the assembly) comes first, so an unrelated installed version of
+        // the library cannot shadow it; only then the soname and the plain name through the system loader
+        // (assembly directory and safe system directories only, never the current directory or PATH). A
+        // library of the wrong ABI is skipped in favour of the next candidate.
         var overridden = !string.IsNullOrEmpty(dir);
-        var candidates = overridden
-            ? new[] { System.IO.Path.Combine(dir!, FileName) }
-            : new[] { VersionedName, FileName };
-        LayaException? incompatible = null;
-        foreach (var candidate in candidates)
+        var candidates = new List<string>();
+        if (overridden) candidates.Add(System.IO.Path.Combine(dir!, FileName));
+        else
         {
-            var loaded = overridden ? LoadExplicit(candidate)
-                                    : NativeLibrary.TryLoad(candidate, assembly, null, out var h) ? h : IntPtr.Zero;
+            if (BundledPath(AppContext.BaseDirectory) is { } bundled) candidates.Add(bundled);
+        }
+        var explicitCount = candidates.Count;
+        if (!overridden) { candidates.Add(VersionedName); candidates.Add(FileName); }
+        LayaException? incompatible = null;
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var candidate = candidates[i];
+            var loaded = i < explicitCount ? LoadExplicit(candidate)
+                : NativeLibrary.TryLoad(candidate, assembly, DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.SafeDirectories, out var h) ? h : IntPtr.Zero;
             if (loaded == IntPtr.Zero) continue;
             try { return (loaded, Validate(loaded)); }
             catch (LayaException ex)

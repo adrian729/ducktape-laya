@@ -7,7 +7,8 @@ No model or runtime download occurs. Model files are application-owned resources
 ## Library resolution
 
 1. `$DUCKTAPE_LAYA_LIB_DIR/libducktape_laya.so`. When this variable is set it is authoritative: if that file cannot be loaded, a `DllNotFoundException` naming the path is thrown, and if it is incompatible, a `LayaException`; nothing else is tried.
-2. Otherwise `libducktape_laya.so.1`, then `libducktape_laya.so` (on macOS `libducktape_laya.1.dylib`, then `libducktape_laya.dylib`; on Windows `ducktape_laya.dll`), each through .NET's default native library probing, which covers `runtimes/<rid>/native/` next to the application (the NuGet layout: `linux-x64`, `linux-arm64`, `osx-arm64`, `win-x64`) and the system loader.
+2. Otherwise the copy shipped with the package: `runtimes/<rid>/native/` next to the application (the NuGet layout: `linux-x64`, `linux-arm64`, `osx-arm64`, `win-x64`), or the library file in the application directory (a flattened publish). It comes first, so an unrelated installed `libducktape_laya` cannot shadow it.
+3. Then `libducktape_laya.so.1` and `libducktape_laya.so` (on macOS `libducktape_laya.1.dylib`, then `libducktape_laya.dylib`; on Windows `ducktape_laya.dll`) through the system loader. On Windows the search is limited to the assembly directory and the safe system directories (never the current directory or `PATH`).
 
 A library must report `dtl_abi_version() == 2` and export `dtl_cancel_flag`. Without the override, an incompatible candidate is skipped for the next one; if none loads, the call fails with `DllNotFoundException`, and if only incompatible ones load, with `LayaException` (`UnsupportedPlatform`). Load failures are reported on every call, not just the first.
 

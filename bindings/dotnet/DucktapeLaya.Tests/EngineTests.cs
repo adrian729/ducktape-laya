@@ -29,6 +29,25 @@ public class EngineTests
     }
 
     [Fact]
+    public void BundledLibraryIsFoundBeforeTheSystemLoader()
+    {
+        var rid = Native.RuntimeId();
+        Assert.NotNull(rid);
+        var root = Path.Combine(Path.GetTempPath(), "ducktape-laya-bundled-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Assert.Null(Native.BundledPath(root));
+            var nuget = Path.Combine(root, "runtimes", rid!, "native");
+            Directory.CreateDirectory(nuget);
+            File.WriteAllBytes(Path.Combine(root, Native.FileName), new byte[1]);
+            Assert.Equal(Path.Combine(root, Native.FileName), Native.BundledPath(root));
+            File.WriteAllBytes(Path.Combine(nuget, Native.FileName), new byte[1]);
+            Assert.Equal(Path.Combine(nuget, Native.FileName), Native.BundledPath(root));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void RejectsBadPath() => Assert.Throws<LayaException>(() => LayaEngine.Open("missing.gguf", Two));
 
     [Fact]
