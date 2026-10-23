@@ -80,7 +80,11 @@ def set_npm_platforms(manifest, targets):
     """package.json text with its os and cpu arrays naming exactly these targets.
 
     npm checks os and cpu separately, so they list every OS and every CPU among
-    the targets; resolve-addon.cjs rejects a combination without an addon."""
+    the targets; resolve-addon.cjs rejects a combination without an addon.
+
+    "libc": ["glibc"] keeps npm from installing glibc binaries on musl (Alpine), but
+    npm treats an undefined libc (every non-Linux OS) as a mismatch, so the field is
+    present only when every target is Linux and removed otherwise."""
     import re
     def unique(values):
         return list(dict.fromkeys(values))
@@ -88,6 +92,10 @@ def set_npm_platforms(manifest, targets):
         array = '[\n' + ',\n'.join(f'    "{value}"' for value in values) + '\n  ]'
         manifest, count = re.subn(rf'"{key}": \[[^\]]*\]', lambda _: f'"{key}": {array}', manifest)
         if count != 1: raise ValueError(f'package.json must have exactly one "{key}" array')
+    manifest = re.sub(r'\n  "libc": \[[^\]]*\],?', '', manifest)
+    if all(t.npm.startswith('linux-') for t in targets):
+        manifest, count = re.subn(r'("cpu": \[[^\]]*\],?)', lambda m: m.group(1) + ('' if m.group(1).endswith(',') else ',') + '\n  "libc": [\n    "glibc"\n  ]' + (',' if m.group(1).endswith(',') else ''), manifest)
+        if count != 1: raise ValueError('package.json must have exactly one "cpu" array')
     return manifest
 
 

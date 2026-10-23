@@ -30,6 +30,9 @@
   "cpu": [
     "x64"
   ],
+  "libc": [
+    "glibc"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/adrian729/ducktape-laya.git",

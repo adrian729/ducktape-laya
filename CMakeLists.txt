@@ -267,7 +267,7 @@ if(DUCKTAPE_BUILD_NODE)
   target_link_libraries(ducktape_laya_node PRIVATE ducktape_laya)
   target_compile_definitions(ducktape_laya_node PRIVATE NAPI_VERSION=8 NODE_GYP_MODULE_NAME=ducktape_laya)
   set_target_properties(ducktape_laya_node PROPERTIES PREFIX "" SUFFIX ".node" OUTPUT_NAME ducktape_laya
-    BUILD_RPATH_USE_ORIGIN TRUE BUILD_RPATH "$<IF:$<BOOL:${APPLE}>,@loader_path,$ORIGIN>"
+    BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "$<IF:$<BOOL:${APPLE}>,@loader_path;@loader_path/../..,$ORIGIN;$ORIGIN/../..>")
   dtl_record_native_build(ducktape_laya_node)
   install(TARGETS ducktape_laya_node LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/ducktape-laya/node)

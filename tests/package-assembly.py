@@ -124,6 +124,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-assembly-') as directory:
         members = {member.name: member for member in archive.getmembers()}
         manifest = json.loads(archive.extractfile('package/package.json').read())
     assert manifest['os'] == ['linux', 'darwin', 'win32'] and manifest['cpu'] == ['x64', 'arm64'], manifest
+    assert 'libc' not in manifest, manifest  # npm rejects a libc field on non-Linux hosts
     assert {name.split('/')[2] for name in members if name.startswith('package/native/')} == {t.npm for t in TARGETS}
     assert list(members) == sorted(members) and {m.mtime for m in members.values()} == {499162500}
     jar = read_zip(first / f'{java_package.ARTIFACT}-{VERSION}.jar')
