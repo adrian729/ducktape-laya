@@ -82,6 +82,27 @@ if(DUCKTAPE_REPRODUCIBLE_PATHS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     "${DTL_DRIVER_OPTION}-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
     "${DTL_DRIVER_OPTION}-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=./build")
 endif()
+# Hardening for everything compiled into the shipped library and Node addon (ggml and llama.cpp
+# included: these options are set before they are added). Without them the protections come only
+# from the distribution compiler's defaults. Not for the browser build (WebAssembly).
+if(NOT EMSCRIPTEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    # Control Flow Guard: compile with checks, and mark the image (DllCharacteristics GUARD_CF).
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/guard:cf>")
+    add_link_options(/guard:cf)
+  else()
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-fstack-protector-strong>")
+    # Fortification needs optimisation; -U first, as some toolchains predefine the macro.
+    add_compile_options("$<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<CONFIG:Release,RelWithDebInfo,MinSizeRel>>:-U_FORTIFY_SOURCE;-D_FORTIFY_SOURCE=3>")
+    if(UNIX AND NOT APPLE)
+      # ELF: read-only relocations, resolved at load time (full RELRO / BIND_NOW).
+      add_link_options("LINKER:-z,relro,-z,now")
+      if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-mbranch-protection=standard>")
+      endif()
+    endif()
+  endif()
+endif()
 add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
 # Upstream Git discovery can find the parent project's repository in an archive.
 # Normalize its generated metadata to the explicit runtime identity instead.

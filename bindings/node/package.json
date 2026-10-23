@@ -10,7 +10,7 @@
   "scripts": {
     "test": "node --test test.cjs"
   },
-  "license": "MIT",
+  "license": "MIT AND Apache-2.0",
   "files": [
     "index.cjs",
     "index.d.ts",

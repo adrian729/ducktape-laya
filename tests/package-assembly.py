@@ -61,7 +61,7 @@ def fragment(directory, name, commit='a' * 40, shared=b'shared', foreign=None, l
     if foreign: npm[f'package/native/{target(foreign).npm}/ducktape_laya.node'] = b'foreign'
     tgz(out / f'ducktape-laya-{VERSION}.tgz', npm)
     write_zip(out / f'{java_package.ARTIFACT}-{VERSION}.jar',
-              {'META-INF/MANIFEST.MF': (b'Manifest-Version: 1.0\r\n\r\n', False), 'io/Laya.class': (b'class', False),
+              {'META-INF/MANIFEST.MF': (java_package.manifest_bytes(VERSION), False), 'io/Laya.class': (b'class', False),
                java_package.native_entry(item): (library, True)}, EPOCH, java_package.LEAD)
     extension = item.library.rsplit('.', 1)[1]
     nupkg = {'_rels/.rels': (b'rels', False), 'DucktapeLaya.nuspec': (b'nuspec', False), 'lib/net10.0/DucktapeLaya.dll': (b'managed', False),
@@ -163,4 +163,17 @@ with tempfile.TemporaryDirectory(prefix='ducktape-assembly-') as directory:
         (wrong / 'inventory.json').write_text(json.dumps(record))
         refused(directory / f'payload-{kind}-out', [fragments[0], wrong], 'differ from its inventory payload')
     refused(first, [fragments[0]], 'exists')
+    # The manifest the packager writes has real line breaks (a literal backslash-r-backslash-n once made it unreadable
+    # to java.util.jar), and where a JDK is present Java itself reads the version and module name from it.
+    manifest = java_package.manifest_bytes(VERSION)
+    assert b'\\' not in manifest and manifest.endswith(b'\r\n\r\n') and manifest.count(b'\r\n') == 5, manifest
+    if shutil.which('java'):
+        jar = directory / 'manifest.jar'
+        write_zip(jar, {'META-INF/MANIFEST.MF': (manifest, False)}, EPOCH, java_package.LEAD)
+        (directory / 'ManifestProbe.java').write_text(
+            'public class ManifestProbe { public static void main(String[] a) throws Exception {\n'
+            '  try (var jar = new java.util.jar.JarFile(a[0])) { var m = jar.getManifest().getMainAttributes();\n'
+            '    System.out.print(m.getValue("Implementation-Version") + " " + m.getValue("Automatic-Module-Name")); } } }\n')
+        seen = subprocess.check_output(['java', str(directory / 'ManifestProbe.java'), str(jar)], text=True)
+        assert seen == f'{VERSION} {java_package.MODULE}', seen
 print(f'Package assembly: {len(TARGETS)} platforms merged deterministically; mismatched fragments refused')

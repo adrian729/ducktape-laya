@@ -31,7 +31,7 @@ def build(out, version, library, epoch, target):
     metadata = [
         'Metadata-Version: 2.4', 'Name: ducktape-laya', f'Version: {version}',
         'Summary: Local Laya GGUF decisions (choice, noul, score) through the ducktape-laya native library',
-        'Project-URL: Source, https://github.com/adrian729/ducktape-laya', 'License-Expression: MIT',
+        'Project-URL: Source, https://github.com/adrian729/ducktape-laya', 'License-Expression: MIT AND Apache-2.0',
         *[f'License-File: {path.relative_to(ROOT).as_posix()}' for path in licenses],
         f'Classifier: {CLASSIFIERS[target.os]}', 'Classifier: Programming Language :: Python :: 3',
         'Requires-Python: >=3.10', 'Description-Content-Type: text/markdown']

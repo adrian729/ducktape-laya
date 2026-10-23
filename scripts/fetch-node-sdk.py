@@ -3,12 +3,15 @@
 
 Downloads the headers archive and, for Windows, the import library
 win-<arch>/node.lib of the exact Node version, checks both against the
-release's SHASUMS256.txt, and writes OUTPUT/include/node/ and OUTPUT/node.lib.
+release's SHASUMS256.txt and against the SHA-256s pinned in the repository
+(scripts/node-sdk-sha256.json, so a compromised mirror of both files cannot
+slip in), and writes OUTPUT/include/node/ and OUTPUT/node.lib.
 Pass them to CMake as NODE_INCLUDE_DIR and NODE_LIB. Linux and macOS builds can
 use the headers installed with Node instead.
 """
 import argparse
 import hashlib
+import json
 import pathlib
 import shutil
 import subprocess
@@ -36,8 +39,16 @@ for line in fetch('SHASUMS256.txt').decode().splitlines():
     sums[name] = digest
 
 
+pinned = json.loads((pathlib.Path(__file__).resolve().parent / 'node-sdk-sha256.json').read_text()).get(version)
+
+
 def verified(name):
+    if pinned is None or name not in pinned:
+        raise SystemExit(f'{name}: no SHA-256 pinned for Node {version} in scripts/node-sdk-sha256.json '
+                         f'(add the value from {base}SHASUMS256.txt after checking it)')
     data = fetch(name)
+    if hashlib.sha256(data).hexdigest() != pinned[name]:
+        raise SystemExit(f'{name}: sha256 differs from the value pinned for Node {version}')
     if hashlib.sha256(data).hexdigest() != sums.get(name):
         raise SystemExit(f'{name}: sha256 differs from {version} SHASUMS256.txt')
     return data

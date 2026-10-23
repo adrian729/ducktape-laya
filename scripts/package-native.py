@@ -16,6 +16,7 @@ import pathlib
 import shutil
 import subprocess
 import re
+import sys
 import tempfile
 from release_support import (ROOT, build_environment, host_target, check_record, sha256, git, binary_info, source_identity, native_build_identity,
                              require_runtime_identity, require_uninstrumented_binary, pe_info, macho_info)
@@ -27,6 +28,18 @@ p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDes
 p.add_argument('--build', type=pathlib.Path, default=ROOT / 'build')
 p.add_argument('--output', type=pathlib.Path, required=True)
 a = p.parse_args()
+def require_elf_hardening(path):
+    """Full RELRO: a GNU_RELRO segment and BIND_NOW (flags NOW), so the GOT is read-only after load."""
+    dynamic = subprocess.check_output(['readelf', '-dW', str(path)], text=True)
+    segments = subprocess.check_output(['readelf', '-lW', str(path)], text=True)
+    if 'GNU_RELRO' not in segments or not re.search(r'\(FLAGS\).*\bBIND_NOW\b|\(FLAGS_1\).*\bNOW\b', dynamic):
+        raise SystemExit(f'{path.name} lacks full RELRO (GNU_RELRO and BIND_NOW)')
+
+def require_guard_cf(path):
+    """Control Flow Guard: IMAGE_DLLCHARACTERISTICS_GUARD_CF set in the PE header."""
+    if not pe_info(path)['dll_characteristics'] & 0x4000:
+        raise SystemExit(f'{path.name} is not linked with Control Flow Guard (GUARD_CF)')
+
 def normalize_nupkg(source, destination, epoch):
     """Rewrite a nupkg deterministically: NuGet stamps entries with the pack time and
     gives relationships random IDs, and writes its XML parts with the platform's line
@@ -71,6 +84,30 @@ try:
     require_runtime_identity(diagnostics, record)
 except ValueError as error:
     p.error(str(error))
+cache = {}
+for line in (build / 'CMakeCache.txt').read_text().splitlines():
+    match = re.match(r'([^:#]+):[^=]+=(.*)', line)
+    if match: cache[match[1]] = match[2]
+# Only the product configuration is packaged: the approved runtime checkout, a Release build and
+# CMake's own default flags (scripts/validate.py and CI pass nothing else). Anything else would ship
+# unrecorded sources or host-specific instructions under the approved runtime's name.
+WINDOWS_FLAGS = {'CMAKE_C_FLAGS': '/DWIN32 /D_WINDOWS', 'CMAKE_CXX_FLAGS': '/DWIN32 /D_WINDOWS /EHsc',
+                 'CMAKE_C_FLAGS_RELEASE': '/O2 /Ob2 /DNDEBUG', 'CMAKE_CXX_FLAGS_RELEASE': '/O2 /Ob2 /DNDEBUG'}
+DEFAULT_FLAGS = {'CMAKE_C_FLAGS': '', 'CMAKE_CXX_FLAGS': '', 'CMAKE_C_FLAGS_RELEASE': '-O3 -DNDEBUG', 'CMAKE_CXX_FLAGS_RELEASE': '-O3 -DNDEBUG'}
+def refuse_non_product_build():
+    problems = []
+    if cache.get('CMAKE_BUILD_TYPE') != 'Release': problems.append(f'CMAKE_BUILD_TYPE is {cache.get("CMAKE_BUILD_TYPE")!r}, not Release')
+    if cache.get('DUCKTAPE_LLAMA_REVISION'): problems.append('DUCKTAPE_LLAMA_REVISION is set')
+    approved = (ROOT / record['runtime']['path']).resolve()
+    if not cache.get('DUCKTAPE_LLAMA_SOURCE') or pathlib.Path(cache['DUCKTAPE_LLAMA_SOURCE']).resolve() != approved:
+        problems.append(f'DUCKTAPE_LLAMA_SOURCE is {cache.get("DUCKTAPE_LLAMA_SOURCE")!r}, not the checkout\'s {approved.as_posix()}')
+    if not cache.get('CMAKE_HOME_DIRECTORY') or pathlib.Path(cache['CMAKE_HOME_DIRECTORY']).resolve() != ROOT.resolve():
+        problems.append(f'the build directory was configured from {cache.get("CMAKE_HOME_DIRECTORY")!r}, not this checkout')
+    for name, default in (WINDOWS_FLAGS if target.os == 'win32' else DEFAULT_FLAGS).items():
+        if cache.get(name, '').strip() != default: problems.append(f'{name} is {cache.get(name)!r}, not the default {default!r}')
+    if problems:
+        p.error('Not a product build (' + '; '.join(problems) + '); configure a fresh build directory as scripts/validate.py does')
+refuse_non_product_build()
 out.mkdir(parents=True, exist_ok=False)
 if not (build / 'ducktape_laya.node').is_file():
     p.error('Build the Node addon before packaging')
@@ -80,6 +117,21 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     directory = pathlib.Path(directory)
     native = directory / f'ducktape-laya-{version}-{platform_dir}'
     subprocess.run(['cmake', '--install', str(build), '--prefix', str(native)], check=True, capture_output=True)
+    shipped_sha256 = {}
+    if target.os == 'linux':
+        # Drop the symbol table and debug sections the dynamic loader does not need (--strip-unneeded keeps
+        # .dynsym, which check-abi.py and the version requirements below read). Deterministic for one binutils.
+        library_files = [path for path in native.glob('lib*/libducktape_laya.so*') if path.is_file() and not path.is_symlink()]
+        addon_file = next(native.glob('lib*/ducktape-laya/node/ducktape_laya.node'))
+        for path in [*library_files, addon_file]:
+            subprocess.run(['strip', '--strip-unneeded', str(path)], check=True)
+        if len(library_files) != 1: raise SystemExit(f'Expected one installed library file, found {[x.name for x in library_files]}')
+        subprocess.run([sys.executable, str(ROOT / 'scripts/check-abi.py'), str(library_files[0])], check=True, capture_output=True)
+        shipped_sha256 = {'ducktape_laya': sha256(library_files[0]), 'ducktape_laya_node': sha256(addon_file)}
+        for path in (library_files[0], addon_file): require_elf_hardening(path)
+    elif target.os == 'win32':
+        for path in (native.glob('bin/ducktape_laya.dll'), native.glob('lib*/ducktape-laya/node/ducktape_laya.node')):
+            for item in path: require_guard_cf(item)
     # tar.gz with symlinks on Linux and macOS, zip on Windows (no symlinks there).
     archive = archive_zip if target.archive == '.zip' else archive_tree
     archive(native, out / (native.name + target.archive), native.name, epoch)
@@ -101,7 +153,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     addon = package / 'native' / target.npm
     addon.mkdir(parents=True)
     shutil.copy(installed_addon, addon / 'ducktape_laya.node')
-    # Copy real bytes under every loader name (libducktape_laya.so and .so.1 on Linux),
+    # Copy real bytes under the name the addon links (libducktape_laya.so.1 on Linux),
     # avoiding symlink support differences in npm tarballs.
     for name in target.node_libraries:
         shutil.copy(installed_library, addon / name)
@@ -129,11 +181,10 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
                     f'-p:DucktapeLayaRuntime={target.nuget}', '-p:ContinuousIntegrationBuild=true', '--nologo'],
                    cwd=ROOT, env=dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1'), check=True, capture_output=True)
     normalize_nupkg(nuget / f'DucktapeLaya.{version}.nupkg', out / f'DucktapeLaya.{version}.nupkg', epoch)
-    cache = {}
-    for line in (build / 'CMakeCache.txt').read_text().splitlines():
-        match = re.match(r'([^:#]+):[^=]+=(.*)', line)
-        if match: cache[match[1]] = match[2]
-    isa = {key: value for key, value in cache.items() if key.startswith(('GGML_AVX', 'GGML_FMA', 'GGML_F16C', 'GGML_BMI', 'GGML_SSE', 'GGML_NATIVE', 'GGML_CPU_ARM_ARCH'))}
+    # The options that select instructions on this architecture (the other's are CMake cache defaults, not build inputs).
+    prefixes = ('GGML_NATIVE',) + (('GGML_CPU_ARM_ARCH',) if target.name.endswith('arm64') else
+                                   ('GGML_AVX', 'GGML_FMA', 'GGML_F16C', 'GGML_BMI', 'GGML_SSE'))
+    isa = {key: value for key, value in cache.items() if key.startswith(prefixes)}
     toolchain = {}
     if target.os == 'linux':
         symbols = subprocess.check_output(['readelf', '--version-info', str(build / target.library)], text=True)
@@ -148,6 +199,9 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
             if newest(prefix) > limit:
                 raise SystemExit(f'Library needs {prefix}{".".join(map(str, newest(prefix)))}, above the declared {".".join(map(str, limit))}')
         toolchain['required_runtime_symbol_versions'] = requirements
+        toolchain['strip'] = {'command': 'strip --strip-unneeded', 'tool': subprocess.check_output(['strip', '--version'], text=True).splitlines()[0],
+                              'shipped_sha256': shipped_sha256}
+        toolchain['hardening'] = 'full RELRO (BIND_NOW) verified on the shipped library and addon'
     elif target.os == 'darwin':
         info = {name: macho_info(build / name) for name in [target.library, 'ducktape_laya.node']}
         # The wheel tag (macosx_14_0) promises the deployment target the library was linked for.
@@ -166,6 +220,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         if exports != expected:
             raise SystemExit(f'{target.library} exports {exports}, expected exactly {expected}')
         # The C++ runtime is the Visual C++ Redistributable (/MD); applications provide it.
+        toolchain['hardening'] = 'Control Flow Guard (GUARD_CF) verified on the DLL and addon'
         toolchain['linked_libraries'] = {name: sorted(item['imports']) for name, item in info.items()}
         toolchain['delay_loaded_libraries'] = {name: sorted(item['delay_imports']) for name, item in info.items()}
     compiler = subprocess.check_output([cache['CMAKE_CXX_COMPILER'], '--version'], text=True).splitlines()[0]

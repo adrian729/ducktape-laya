@@ -6,7 +6,7 @@
   "main": "index.mjs",
   "types": "index.d.ts",
   "files": ["index.mjs", "index.d.ts", "protocol.d.ts", "worker.mjs", "wasm/", "webgpu/", "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/", "toolchain.json"],
-  "license": "MIT",
+  "license": "MIT AND Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-3-Clause",
   "repository": {"type": "git", "url": "git+https://github.com/adrian729/ducktape-laya.git", "directory": "bindings/browser"},
   "homepage": "https://github.com/adrian729/ducktape-laya#readme",
   "bugs": {"url": "https://github.com/adrian729/ducktape-laya/issues"}

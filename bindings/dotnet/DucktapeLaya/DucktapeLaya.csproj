@@ -12,7 +12,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Description>Local Laya GGUF decisions (choice, noul, score) through the bundled ducktape-laya native library.</Description>
     <Authors>adrian729</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>MIT AND Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/adrian729/ducktape-laya</PackageProjectUrl>
     <RepositoryUrl>https://github.com/adrian729/ducktape-laya</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

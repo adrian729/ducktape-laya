@@ -1,6 +1,14 @@
 """CycloneDX inventory for components incorporated in consumer artifacts."""
 import json
+import re
 from release_support import ROOT, read_json, sha256
+
+def nlohmann_version(record):
+    """The vendored nlohmann/json version, from the NLOHMANN_JSON_VERSION_* macros of the pinned runtime."""
+    text = (ROOT / record['runtime']['path'] / 'vendor/nlohmann/json.hpp').read_text(encoding='utf-8')
+    parts = [re.search(rf'^#define NLOHMANN_JSON_VERSION_{name}\s+(\d+)', text, re.M) for name in ('MAJOR', 'MINOR', 'PATCH')]
+    if not all(parts): raise SystemExit('Cannot read NLOHMANN_JSON_VERSION_* from the vendored nlohmann/json')
+    return '.'.join(part[1] for part in parts)
 
 def document(record, browser=False):
     def component(name, version, license_expression, notices):
@@ -9,7 +17,7 @@ def document(record, browser=False):
             'properties': [{'name': 'ducktape:notice:' + path, 'value': sha256(ROOT / path)} for path in notices]}
     patches = [{'name': 'ducktape:patch:' + patch['path'], 'value': patch['sha256']} for patch in record['runtime']['patches']]
     components = [component('llama.cpp-ggml', record['runtime']['commit'], 'MIT', ['licenses/llama.cpp-MIT.txt']),
-        component('nlohmann-json', '3.12.0', 'MIT', ['licenses/nlohmann-json-MIT.txt']),
+        component('nlohmann-json', nlohmann_version(record), 'MIT', ['licenses/nlohmann-json-MIT.txt']),
         component('llamafile-cpu-kernels', record['runtime']['commit'], 'MIT', ['licenses/llamafile-MIT.txt'])]
     # Recorded patches modify build copies of llama.cpp/ggml and its vendored nlohmann header.
     for item in components: item['properties'] += patches

@@ -39,10 +39,10 @@ class Target(dict):
 TARGETS = [Target(t) for t in [
     {'name': 'linux-x64', 'os': 'linux', 'machines': ('x86_64', 'AMD64'), 'npm': 'linux-x64',
      'wheel': 'manylinux_2_38_x86_64', 'nuget': 'linux-x64', 'library': 'libducktape_laya.so',
-     'node_libraries': ['libducktape_laya.so', 'libducktape_laya.so.1'], 'archive': '.tar.gz'},
+     'node_libraries': ['libducktape_laya.so.1'], 'archive': '.tar.gz'},
     {'name': 'linux-arm64', 'os': 'linux', 'machines': ('aarch64', 'arm64'), 'npm': 'linux-arm64',
      'wheel': 'manylinux_2_38_aarch64', 'nuget': 'linux-arm64', 'library': 'libducktape_laya.so',
-     'node_libraries': ['libducktape_laya.so', 'libducktape_laya.so.1'], 'archive': '.tar.gz'},
+     'node_libraries': ['libducktape_laya.so.1'], 'archive': '.tar.gz'},
     {'name': 'macos-arm64', 'os': 'darwin', 'machines': ('arm64',), 'npm': 'darwin-arm64',
      'wheel': 'macosx_14_0_arm64', 'nuget': 'osx-arm64', 'library': 'libducktape_laya.dylib',
      'node_libraries': ['libducktape_laya.1.dylib'], 'archive': '.tar.gz'},
@@ -285,6 +285,7 @@ def pe_info(path):
         machine, sections, _, _, _, optional_size, _ = struct.unpack_from('<HHIIIHH', data, pe + 4)
         optional = pe + 24
         if struct.unpack_from('<H', data, optional)[0] != 0x20b: raise ValueError('not PE32+')
+        characteristics = struct.unpack_from('<H', data, optional + 70)[0]
         count = struct.unpack_from('<I', data, optional + 108)[0]
         directories = [struct.unpack_from('<II', data, optional + 112 + 8 * i) for i in range(min(count, 16))]
         table = [struct.unpack_from('<8sIIII', data, optional + optional_size + 40 * i) for i in range(sections)]
@@ -309,7 +310,7 @@ def pe_info(path):
             directory = offset(directories[0][0])
             number, _, names = struct.unpack_from('<III', data, directory + 24)
             exports = [string(struct.unpack_from('<I', data, offset(names) + 4 * i)[0]) for i in range(number)]
-        return {'machine': machine, 'exports': sorted(exports), 'imports': descriptors(1, 20, 12),
+        return {'machine': machine, 'dll_characteristics': characteristics, 'exports': sorted(exports), 'imports': descriptors(1, 20, 12),
                 'delay_imports': descriptors(13, 32, 4)}
     except (struct.error, IndexError, ValueError) as error:
         raise ValueError(f'{path}: not a readable PE32+ image ({error})') from None

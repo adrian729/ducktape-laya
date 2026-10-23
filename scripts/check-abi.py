@@ -30,6 +30,9 @@ else:
     names = [line.split()[-1] for line in output.splitlines() if line.strip()]
     actual = {name[1:] for name in names if re.fullmatch(r'_dtl_\w+', name)}
     other = [name for name in names if not re.fullmatch(r'_dtl_\w+', name)]
-assert expected == actual, {'missing': sorted(expected-actual), 'unexpected': sorted(actual-expected)}
-assert not other, 'Unexpected public symbols: ' + repr(other)
+# Explicit exits, not assert: the gate must also hold under python -O.
+if expected != actual:
+    raise SystemExit(f'Exports differ from the public header: missing {sorted(expected - actual)}, unexpected {sorted(actual - expected)}')
+if other:
+    raise SystemExit('Unexpected public symbols: ' + repr(other))
 print(f'ABI exports match public header: {len(actual)} functions')

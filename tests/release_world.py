@@ -95,7 +95,7 @@ class World:
             {'package/package.json': manifest, 'package/index.cjs': b'module.exports = 1;\n',
              f'package/native/{item.npm}/ducktape_laya.node': addon, **{f'package/native/{item.npm}/{name}': library for name in item.node_libraries}})
         write_zip(out / f'{java_package.ARTIFACT}-{self.version}.jar',
-                  {'META-INF/MANIFEST.MF': (b'Manifest-Version: 1.0\r\n\r\n', False), 'io/Laya.class': (b'class', False),
+                  {'META-INF/MANIFEST.MF': (java_package.manifest_bytes(self.version), False), 'io/Laya.class': (b'class', False),
                    java_package.native_entry(item): (library, True)}, EPOCH, java_package.LEAD)
         nupkg = {'_rels/.rels': (b'rels', False), 'DucktapeLaya.nuspec': (b'nuspec', False), 'lib/net10.0/DucktapeLaya.dll': (b'managed', False),
                  f'runtimes/{item.nuget}/native/{item.library}': (library, False),

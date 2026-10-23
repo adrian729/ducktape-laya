@@ -30,6 +30,10 @@ POM = '''<?xml version="1.0" encoding="UTF-8"?>
       <name>MIT</name>
       <url>https://opensource.org/license/mit</url>
     </license>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+    </license>
   </licenses>
   <developers>
     <developer>
@@ -78,6 +82,12 @@ def native_entry(target):
     return f'native/{target.name}/{target.library}'
 
 
+def manifest_bytes(version):
+    """META-INF/MANIFEST.MF, with real CRLF line ends (the jar tool's own) and the empty line that ends the main section."""
+    return (f'Manifest-Version: 1.0\r\nAutomatic-Module-Name: {MODULE}\r\nImplementation-Title: {ARTIFACT}\r\n'
+            f'Implementation-Version: {version}\r\n\r\n').encode()
+
+
 def build(out, version, library, epoch, target):
     """Write the jar, sources jar, javadoc jar and POM into out; library is the real shared library file."""
     out = pathlib.Path(out)
@@ -85,8 +95,7 @@ def build(out, version, library, epoch, target):
     sources = sorted(source.rglob('*.java'))
     legal = {f'META-INF/{path.relative_to(ROOT).as_posix()}': (path.read_bytes(), False)
              for path in [ROOT / 'LICENSE', ROOT / 'THIRD_PARTY_NOTICES.md', *sorted((ROOT / 'licenses').iterdir())]}
-    manifest = (f'Manifest-Version: 1.0\\r\\nAutomatic-Module-Name: {MODULE}\\r\\nImplementation-Title: {ARTIFACT}\\r\\n'
-                f'Implementation-Version: {version}\\r\\n\\r\\n').encode()
+    manifest = manifest_bytes(version)
     lead = LEAD
     with tempfile.TemporaryDirectory(prefix='ducktape-java-') as directory:
         directory = pathlib.Path(directory)

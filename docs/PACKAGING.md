@@ -104,6 +104,20 @@ Cargo with the locked dependencies already fetched (it runs `cargo package
 --locked --offline`), a JDK (`javac`, `javadoc`), the .NET SDK (`dotnet pack`),
 Python 3.11+ and, on Linux, `readelf`. There is no wheel-only mode.
 
+Only the product build is packaged: the script refuses a build directory whose
+cache has a `DUCKTAPE_LLAMA_SOURCE` other than the checkout's pinned runtime, a
+`DUCKTAPE_LLAMA_REVISION`, a `CMAKE_BUILD_TYPE` other than `Release`, or
+`CMAKE_C_FLAGS`/`CMAKE_CXX_FLAGS` (and their `_RELEASE` variants) other than
+CMake's defaults (what `scripts/validate.py` and CI configure; on Windows
+`/DWIN32 /D_WINDOWS` and `/EHsc`). On Linux the shipped library and addon are
+stripped with `strip --strip-unneeded` (the dynamic symbol table stays; the
+inventory records the stripped hashes under `toolchain.strip`), `check-abi.py`
+runs on the stripped library, and the script requires full RELRO (`GNU_RELRO` and
+`BIND_NOW`); on Windows it requires Control Flow Guard (`GUARD_CF`) in the DLL and
+the addon. CMake builds the library, ggml and llama.cpp with `-fstack-protector-strong`,
+`_FORTIFY_SOURCE=3` (optimised builds), `-z relro -z now` and, on Linux arm64,
+`-mbranch-protection=standard`; with clang-cl `/guard:cf`.
+
 ```sh
 # Build with DUCKTAPE_BUILD_NODE=ON and NODE_INCLUDE_DIR first.
 python3 scripts/package-native.py --build build --output build/packages-0.2.0
@@ -116,7 +130,7 @@ The output holds that platform's packages, each installable on its own:
 | File | Contents |
 | --- | --- |
 | `ducktape-laya-VERSION-PLATFORM.tar.gz` (`.zip` on Windows) | The `cmake --install` tree: headers, the shared library (on Windows `bin/ducktape_laya.dll` and the import library `lib/ducktape_laya.lib`), CMake config, pkg-config file, the Node addon, model manifest, `download-model.py`, licences |
-| `ducktape-laya-VERSION.tgz` | npm package with this platform's addon and library in `native/<platform>-<arch>/` (`linux-x64`, `linux-arm64`, `darwin-arm64`, `win32-x64`); `os` and `cpu` name this platform |
+| `ducktape-laya-VERSION.tgz` | npm package with this platform's addon and the library it links (`libducktape_laya.so.1` on Linux, one copy) in `native/<platform>-<arch>/` (`linux-x64`, `linux-arm64`, `darwin-arm64`, `win32-x64`); `os` and `cpu` name this platform |
 | `ducktape-laya-sys-VERSION.crate`, `ducktape-laya-VERSION.crate` | Rust source crates (the same on every platform) |
 | `ducktape_laya-VERSION-py3-none-TAG.whl` | Python wheel bundling the library in `ducktape_laya/_native/`; `TAG` is `manylinux_2_38_x86_64`, `manylinux_2_38_aarch64`, `macosx_14_0_arm64` or `win_amd64`. The Python files are the same in every wheel |
 | `ducktape-laya-VERSION.jar`, `-sources.jar`, `-javadoc.jar`, `.pom` | Maven files; the jar bundles the library at `native/<platform>/` (`native/windows-x64/ducktape_laya.dll`, ...) |

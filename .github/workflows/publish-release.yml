@@ -217,7 +217,7 @@ jobs:
         run: scripts/verify-release-assets.sh "$TAG" dist "DucktapeLaya.${TAG#v}.nupkg"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.402'
       # Exchanges this job's OIDC token for a NuGet API key valid for one hour.
       - uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         id: login
