@@ -39,56 +39,18 @@ These are code changes; they need no accounts.
 - Versions are already 0.2.0 in `release/compatibility.json` and every binding manifest. For later releases, bump them together: `check_record` rejects any mismatch, including the Python, Java and .NET versions.
 - Write the release notes: give the unreleased section of [CHANGELOG.md](../CHANGELOG.md) its version and date, and use it for the GitHub release text.
 - Python: the real wheel comes only from `scripts/python_wheel.py` (run by `scripts/package-native.py`, one wheel per platform: `manylinux_2_38_x86_64`, `manylinux_2_38_aarch64`, `win_amd64`), which bundles the native library; `publish-release` uploads every wheel the verified inventory lists. Building `bindings/python` with its `pyproject.toml` alone (`pip wheel`, `python -m build`) produces a wheel without the library; never upload that.
-- Java and .NET: `scripts/package-native.py` builds `ducktape-laya-VERSION.jar`
-  (library at `native/<platform>/`), the sources and javadoc jars and the POM
-  (`scripts/java_package.py`), and `DucktapeLaya.VERSION.nupkg` (library at
-  `runtimes/<rid>/native/`), all byte-reproducible on one host.
-  `scripts/assemble-packages.py` merges the platforms' outputs into one npm
-  package, one jar and one NuGet package carrying every platform
-  ([PACKAGING.md](PACKAGING.md#multi-platform-packages)); the next release
-  publishes the assembled packages of Linux x86-64, Linux arm64 and Windows x64.
-  `tests/installed-packages.py` runs both, and a Go consumer built against the
-  tarball, outside the checkout. A plain `dotnet pack` without
-  `-p:DucktapeLayaNativeLibrary=...` produces a package without the library;
-  never upload that. Maven Central requires the four Java files to be
-  GPG-signed at upload.
+- Java and .NET: `scripts/package-native.py` builds `ducktape-laya-VERSION.jar` (library at `native/<platform>/`), the sources and javadoc jars and the POM (`scripts/java_package.py`), and `DucktapeLaya.VERSION.nupkg` (library at `runtimes/<rid>/native/`), all byte-reproducible on one host. `scripts/assemble-packages.py` merges the platforms' outputs into one npm package, one jar and one NuGet package carrying every platform ([PACKAGING.md](PACKAGING.md#multi-platform-packages)); the next release publishes the assembled packages of Linux x86-64, Linux arm64 and Windows x64. `tests/installed-packages.py` runs both, and a Go consumer built against the tarball, outside the checkout. A plain `dotnet pack` without `-p:DucktapeLayaNativeLibrary=...` produces a package without the library; never upload that. Maven Central requires the four Java files to be GPG-signed at upload.
 
 ## One-time maintainer setup
 
-Each registry needs the maintainer's account. Every registry is published by
-the `publish-release` workflow from the GitHub environment `release`
-(deployments only from `main`). The trusted publisher entries
-below must name exactly that repository, workflow file and environment.
+Each registry needs the maintainer's account. Every registry is published by the `publish-release` workflow from the GitHub environment `release` (deployments only from `main`). The trusted publisher entries below must name exactly that repository, workflow file and environment.
 
-- **PyPI:** a pending trusted publisher (pypi.org, Account → Publishing) for
-  project `ducktape-laya`, owner `adrian729`, repository `ducktape-laya`,
-  workflow `publish-release.yml`, environment `release`. It creates the project
-  at the first upload and does not reserve the name before that. PyPI requires
-  2FA on the account.
-- **NuGet:** a trusted publishing policy (nuget.org, user menu → Trusted
-  Publishing) with owner `adrian729`, repository `ducktape-laya`, workflow
-  `publish-release.yml`, environment `release`, and the nuget.org user name as
-  the `NUGET_USER` variable of the `release` environment (not a secret). The
-  policy becomes permanent at its first successful login; until then it expires
-  after about a week and has to be re-activated.
-- **Maven Central:** sign in to the Central Portal with GitHub, which verifies
-  the `io.github.adrian729` namespace. Central has no OIDC publishing and
-  requires a PGP signature on every file (the GitHub attestations do not replace
-  it), so the `release` environment holds four secrets: `CENTRAL_USERNAME` and
-  `CENTRAL_PASSWORD` (a Central Portal user token), `MAVEN_GPG_PRIVATE_KEY`
-  (armored secret key) and `MAVEN_GPG_PASSPHRASE`. Publish the public key to
-  `keyserver.ubuntu.com` so Central can verify the signatures. Set the secrets
-  with `gh secret set NAME --env release`, which prompts for the value.
-- **Go:** no account. Pushing the tag `bindings/go/vX.Y.Z` (subdirectory module
-  tags carry the path prefix) makes the module available through the proxy and
-  pkg.go.dev.
-- **npm:** a trusted publisher (package settings → Trusted Publisher → GitHub
-  Actions) on both `ducktape-laya` and `ducktape-laya-browser`, with the same
-  repository, workflow and environment. npm then needs no token or OTP.
-- **crates.io:** a trusted publisher (crate settings → Trusted Publishing) on both
-  `ducktape-laya-sys` and `ducktape-laya`, with the same repository, workflow and
-  environment. After the first release through the workflow, "Require trusted
-  publishing for all new versions" can be enabled on both.
+- **PyPI:** a pending trusted publisher (pypi.org, Account → Publishing) for project `ducktape-laya`, owner `adrian729`, repository `ducktape-laya`, workflow `publish-release.yml`, environment `release`. It creates the project at the first upload and does not reserve the name before that. PyPI requires 2FA on the account.
+- **NuGet:** a trusted publishing policy (nuget.org, user menu → Trusted Publishing) with owner `adrian729`, repository `ducktape-laya`, workflow `publish-release.yml`, environment `release`, and the nuget.org user name as the `NUGET_USER` variable of the `release` environment (not a secret). The policy becomes permanent at its first successful login; until then it expires after about a week and has to be re-activated.
+- **Maven Central:** sign in to the Central Portal with GitHub, which verifies the `io.github.adrian729` namespace. Central has no OIDC publishing and requires a PGP signature on every file (the GitHub attestations do not replace it), so the `release` environment holds four secrets: `CENTRAL_USERNAME` and `CENTRAL_PASSWORD` (a Central Portal user token), `MAVEN_GPG_PRIVATE_KEY` (armored secret key) and `MAVEN_GPG_PASSPHRASE`. Publish the public key to `keyserver.ubuntu.com` so Central can verify the signatures. Set the secrets with `gh secret set NAME --env release`, which prompts for the value.
+- **Go:** no account. Pushing the tag `bindings/go/vX.Y.Z` (subdirectory module tags carry the path prefix) makes the module available through the proxy and pkg.go.dev.
+- **npm:** a trusted publisher (package settings → Trusted Publisher → GitHub Actions) on both `ducktape-laya` and `ducktape-laya-browser`, with the same repository, workflow and environment. npm then needs no token or OTP.
+- **crates.io:** a trusted publisher (crate settings → Trusted Publishing) on both `ducktape-laya-sys` and `ducktape-laya`, with the same repository, workflow and environment. After the first release through the workflow, "Require trusted publishing for all new versions" can be enabled on both.
 
 ## The publish-release workflow
 
@@ -110,20 +72,12 @@ For the next release's rollback rehearsal, the published assets become the last-
 
 ## Converted models
 
-The multilingual and typed-decisions GGUFs (`models/laya-multilingual.json`,
-`models/laya-typed-decisions.json`) have no download URL: users build them with
-`scripts/convert-model.py`. To make them downloadable, either:
+The multilingual and typed-decisions GGUFs (`models/laya-multilingual.json`, `models/laya-typed-decisions.json`) have no download URL: users build them with `scripts/convert-model.py`. To make them downloadable, either:
 
-- ask the Laya authors or ggml-org to publish official GGUFs, then switch the
-  manifests to those files if they qualify; or
-- upload the exact files the manifests pin (for example to a Hugging Face model
-  repository under the maintainer's account, with the Apache-2.0 notice and a
-  link to the source revision) and set each manifest's `url`.
+- ask the Laya authors or ggml-org to publish official GGUFs, then switch the manifests to those files if they qualify; or
+- upload the exact files the manifests pin (for example to a Hugging Face model repository under the maintainer's account, with the Apache-2.0 notice and a link to the source revision) and set each manifest's `url`.
 
 ## Leftovers from 0.1.0
 
-- npm staged publishing left a `0.0.0-stage` placeholder on both npm packages.
-  It is harmless (`latest` is 0.2.0); hide it with `npm deprecate`.
-- The 0.1.0 artifacts include `release/compatibility.json` with
-  `"status": "development"`. The field was removed afterwards; released files
-  stay unchanged.
+- npm staged publishing left a `0.0.0-stage` placeholder on both npm packages. It is harmless (`latest` is 0.2.0); hide it with `npm deprecate`.
+- The 0.1.0 artifacts include `release/compatibility.json` with `"status": "development"`. The field was removed afterwards; released files stay unchanged.

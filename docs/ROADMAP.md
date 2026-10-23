@@ -1,17 +1,12 @@
 # Roadmap
 
-Work that is wanted but not scheduled, open research questions, and features
-deliberately not planned, with the reasons. Scheduled work lives in working
-plans; when a plan picks an item up, remove it from here.
+Work that is wanted but not scheduled, open research questions, and features deliberately not planned, with the reasons. Scheduled work lives in working plans; when a plan picks an item up, remove it from here.
 
 ## Wanted later
 
 ### GPU backends
 
-CPU comes first only because it runs everywhere, is the simplest to qualify, and
-the model is already fast enough on it. GPUs matter most for long documents
-(8,192 tokens), large batches and high-throughput servers. Start once the CPU
-platforms are fully qualified.
+CPU comes first only because it runs everywhere, is the simplest to qualify, and the model is already fast enough on it. GPUs matter most for long documents (8,192 tokens), large batches and high-throughput servers. Start once the CPU platforms are fully qualified.
 
 | Backend | Platforms | Notes |
 |---|---|---|
@@ -21,17 +16,11 @@ platforms are fully qualified.
 | WebGPU | Browser | Already exists (experimental) |
 
 Each backend needs:
-- a build option and runtime selection, with CPU fallback when no device is
-  found and the active backend reported in `info()`;
-- its own numerical profile, held to the CPU bar: the upstream reference on that
-  backend, cross-profile drift against CPU, and no changed decisions on the
-  fixtures;
-- device-loss and out-of-memory handling and tests (the WebGPU work is the
-  pattern);
+- a build option and runtime selection, with CPU fallback when no device is found and the active backend reported in `info()`;
+- its own numerical profile, held to the CPU bar: the upstream reference on that backend, cross-profile drift against CPU, and no changed decisions on the fixtures;
+- device-loss and out-of-memory handling and tests (the WebGPU work is the pattern);
 - packaging variants, so CPU users don't download GPU runtimes;
-- qualification like the CPU profile: the release gates in
-  [QUALIFICATION.md](QUALIFICATION.md), run on CI or listed hardware for that
-  backend.
+- qualification like the CPU profile: the release gates in [QUALIFICATION.md](QUALIFICATION.md), run on CI or listed hardware for that backend.
 
 ### More release targets and release provenance
 
@@ -52,82 +41,36 @@ Found by the 2026-10 bindings audit; none has backward-compatibility constraints
 
 ### Higher-precision model variants
 
-`ggml-org/Laya-GGUF` also has `Laya-BF16.gguf`: the same English model at roughly
-the original Laya's precision, 844 MB against 449 MB for the Q8_0 file we ship.
-- It should remove most of the 0.010 mean probability difference from the
-  original (measured 2026-10-20), at about twice the memory and slower CPU
-  inference.
-- Supporting it means pinning its hash, the same qualification as Q8_0, and
-  documenting it as the accuracy-first option next to the memory-first Q8_0.
+`ggml-org/Laya-GGUF` also has `Laya-BF16.gguf`: the same English model at roughly the original Laya's precision, 844 MB against 449 MB for the Q8_0 file we ship.
+- It should remove most of the 0.010 mean probability difference from the original (measured 2026-10-20), at about twice the memory and slower CPU inference.
+- Supporting it means pinning its hash, the same qualification as Q8_0, and documenting it as the accuracy-first option next to the memory-first Q8_0.
 - The same applies to BF16 versions of other supported Laya models.
 
 ### Larger Laya models
 
-The English model (ModernBERT-large, about 421M parameters) is the largest Laya
-checkpoint published as of 2026-10-20. GGUF and llama.cpp run this architecture
-at any size, so a larger release would be supported the same way: convert or
-download, pin, qualify. Check memory per engine and the context capacity.
+The English model (ModernBERT-large, about 421M parameters) is the largest Laya checkpoint published as of 2026-10-20. GGUF and llama.cpp run this architecture at any size, so a larger release would be supported the same way: convert or download, pin, qualify. Check memory per engine and the context capacity.
 
 ### Downloadable multilingual and typed-decisions models
 
-Users currently build these two GGUFs with `scripts/convert-model.py`. Make
-them downloadable: upload the exact pinned files (for example to a Hugging Face
-repository under the maintainer's account, with a model card giving the
-Apache-2.0 notice, source revision and hashes) and set each manifest's `url`, or
-switch to official GGUFs if the Laya authors or ggml-org publish them. Steps:
-[PUBLISHING.md](PUBLISHING.md#converted-models).
+Users currently build these two GGUFs with `scripts/convert-model.py`. Make them downloadable: upload the exact pinned files (for example to a Hugging Face repository under the maintainer's account, with a model card giving the Apache-2.0 notice, source revision and hashes) and set each manifest's `url`, or switch to official GGUFs if the Laya authors or ggml-org publish them. Steps: [PUBLISHING.md](PUBLISHING.md#converted-models).
 
 ### Mobile, and the languages that depend on it
 
-iOS and Android need their own packaging (XCFramework, AAR), toolchains and
-memory testing. The 0.5 GB model fits on phones.
+iOS and Android need their own packaging (XCFramework, AAR), toolchains and memory testing. The 0.5 GB model fits on phones.
 - **Swift for iOS:** a Swift package; if macOS were ever supported, the same package could serve it.
-- **Kotlin on Android:** needs a JNI binding, because Android lacks Java's FFM
-  API.
+- **Kotlin on Android:** needs a JNI binding, because Android lacks Java's FFM API.
 - **Dart/Flutter:** a `dart:ffi` binding across mobile and desktop.
 
 ### More language bindings on request
 
-Ruby (`ffi` gem) and PHP (`FFI`) would each be a small wrapper like the Python
-binding, for Rails and Laravel backends. Add one when a user asks.
+Ruby (`ffi` gem) and PHP (`FFI`) would each be a small wrapper like the Python binding, for Rails and Laravel backends. Add one when a user asks.
 
 ## Research questions
 
-- **The original Laya's `act_probability`:** a second "act" output alongside
-  the decisions. The original's config prices an `escalate` action (`act_costs`),
-  so it appears to be the probability that the answer should be acted on rather
-  than escalated. The GGUF and llama.cpp path don't carry it; supporting it would
-  need converter and llama.cpp changes. First confirm its meaning and whether the
-  authors treat it as public.
-- **Batching questions into one forward pass:** measured 2026-10-20 on CPU
-  (4 cores), questions packed as separate sequences in one `llama_encode` were
-  only 1.15× faster on a 4-question request, and results changed with the batch
-  composition: the same question got different probabilities depending on its
-  position and neighbours (up to 0.04 on the fixtures), most likely because
-  matrix kernels tile rows differently. Not adopted. Revisit for GPU backends,
-  where batching pays more, and only with results independent of the batch.
-- **Windows agreement with the original Laya:** the clang-cl build runs the
-  same ggml kernels as Linux x86-64 (AVX2, FMA, F16C, BMI2), agrees exactly
-  with upstream llama.cpp, but drifts 0.054 from the original Laya on one
-  fixture answer (`json_escaping/spam`; limit 0.05; Linux 0.037). Measured
-  2026-10-22: the whole gap comes from the C runtime's single-precision `erff`
-  (GEGLU-erf, `ggml-cpu/vec.h`) and `sinf`/`cosf` (RoPE cache,
-  `ggml-cpu/ops.cpp`); with those computed as `(float)f((double)x)` Windows and
-  Linux produce identical results on all 29 answers (max drift 0.039 on both).
-  Neither library is wrong; the answer is fragile under Q8_0 activation
-  quantization. Upstream deliberately uses the platform libm on CPU and
-  hand-written approximations on Metal and Vulkan (#14445), so bit-identical
-  results across platforms are not an upstream goal. A runtime patch with our
-  own `erff`/`sinf`/`cosf` would make CPU platforms identical, but it would
-  move Linux from 0.037 to 0.039, diverge from stock llama.cpp arithmetic on
-  every upgrade, cost unmeasured time (`erff` runs about 3.4M times per
-  request) and still not cover GPU backends. Not planned: this is upstream
-  behaviour, so it is a documented known deviation with its own cap
-  ([COMPATIBILITY.md](COMPATIBILITY.md#known-deviations)); Windows x64 ships
-  as a tier-2 target with it.
-- **Loading a model from memory:** llama.cpp has no public load-from-buffer API.
-  Workarounds (memfd, temporary files) add little real protection for encrypted
-  assets. Revisit with mobile.
+- **The original Laya's `act_probability`:** a second "act" output alongside the decisions. The original's config prices an `escalate` action (`act_costs`), so it appears to be the probability that the answer should be acted on rather than escalated. The GGUF and llama.cpp path don't carry it; supporting it would need converter and llama.cpp changes. First confirm its meaning and whether the authors treat it as public.
+- **Batching questions into one forward pass:** measured 2026-10-20 on CPU (4 cores), questions packed as separate sequences in one `llama_encode` were only 1.15× faster on a 4-question request, and results changed with the batch composition: the same question got different probabilities depending on its position and neighbours (up to 0.04 on the fixtures), most likely because matrix kernels tile rows differently. Not adopted. Revisit for GPU backends, where batching pays more, and only with results independent of the batch.
+- **Windows agreement with the original Laya:** the clang-cl build runs the same ggml kernels as Linux x86-64 (AVX2, FMA, F16C, BMI2), agrees exactly with upstream llama.cpp, but drifts 0.054 from the original Laya on one fixture answer (`json_escaping/spam`; limit 0.05; Linux 0.037). Measured 2026-10-22: the whole gap comes from the C runtime's single-precision `erff` (GEGLU-erf, `ggml-cpu/vec.h`) and `sinf`/`cosf` (RoPE cache, `ggml-cpu/ops.cpp`); with those computed as `(float)f((double)x)` Windows and Linux produce identical results on all 29 answers (max drift 0.039 on both). Neither library is wrong; the answer is fragile under Q8_0 activation quantization. Upstream deliberately uses the platform libm on CPU and hand-written approximations on Metal and Vulkan (#14445), so bit-identical results across platforms are not an upstream goal. A runtime patch with our own `erff`/`sinf`/`cosf` would make CPU platforms identical, but it would move Linux from 0.037 to 0.039, diverge from stock llama.cpp arithmetic on every upgrade, cost unmeasured time (`erff` runs about 3.4M times per request) and still not cover GPU backends. Not planned: this is upstream behaviour, so it is a documented known deviation with its own cap ([COMPATIBILITY.md](COMPATIBILITY.md#known-deviations)); Windows x64 ships as a tier-2 target with it.
+- **Loading a model from memory:** llama.cpp has no public load-from-buffer API. Workarounds (memfd, temporary files) add little real protection for encrypted assets. Revisit with mobile.
 
 ## Not planned
 

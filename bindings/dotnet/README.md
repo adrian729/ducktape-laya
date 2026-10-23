@@ -1,8 +1,6 @@
 # Ducktape Laya for .NET
 
-Native Laya GGUF decisions backed by the shared native library (`libducktape_laya.so`, on Windows `ducktape_laya.dll`).
-Requires .NET 10 on Linux x86-64 (0.2.0) or, from the next release, Linux arm64 and Windows x64, and the native library. The package targets `net10.0`, uses source-generated P/Invoke, and is trim/AOT compatible.
-No model or runtime download occurs. Model files are application-owned resources and are not bundled.
+Native Laya GGUF decisions backed by the shared native library (`libducktape_laya.so`, on Windows `ducktape_laya.dll`). Requires .NET 10 on Linux x86-64 (0.2.0) or, from the next release, Linux arm64 and Windows x64, and the native library. The package targets `net10.0`, uses source-generated P/Invoke, and is trim/AOT compatible. No model or runtime download occurs. Model files are application-owned resources and are not bundled.
 
 ## Library resolution
 

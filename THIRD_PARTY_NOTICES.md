@@ -1,54 +1,21 @@
 # Third-party components
 
-- llama.cpp / ggml: MIT, copyright 2023–2026 The ggml authors.
-  Pinned source: `third_party/llama.cpp`, commit
-  `1e6f04a75e91da4bb66b5248f3fd4bdeff169d41` (b11540).
-  [License](licenses/llama.cpp-MIT.txt). `src/backend_llama.cpp` adapts Laya's prompt
-  preparation, temperature lookup and answer formatting from
-  `tools/server/server-decision.cpp`. Jinja, Unicode and JSON support are compiled
-  directly from the pinned source. Additional copyright notices remain in the
-  vendored files; preserve them when redistributing source. Builds compile modified
-  copies of some upstream files, including the vendored nlohmann/json header, using
-  the recorded patches in `patches/llama.cpp` (see `patches/README.md`).
-- Laya (original implementation, https://github.com/NandhaKishorM/laya): Apache-2.0,
-  copyright the Laya authors. [License](licenses/Apache-2.0.txt). The word lists and
-  thresholds in `src/language.cpp` are taken from its `laya/lang.py`; the test cases in
-  `tests/original-reference` are its recorded results.
-- llamafile CPU kernels incorporated by ggml: MIT, Copyright 2024 Mozilla
-  Foundation. [Full notice](licenses/llamafile-MIT.txt).
-- Further code that llama.cpp/ggml adapted from other projects and that is
-  compiled into the library, with the attribution in the pinned source:
-  - YaRN rotary-embedding scaling, `ggml/src/ggml-cpu/ops.cpp` (comment above
-    `rope_yarn`): "MIT licensed. Copyright (c) 2023 Jeffrey Quesnelle and Bowen
-    Peng", based on https://github.com/jquesnelle/yarn.
-  - SIMD `expf` routines (`ggml_v_expf` variants), `ggml/src/ggml-cpu/vec.h`:
-    "adapted from arm limited optimized routine", that is Arm's
-    optimized-routines (https://github.com/ARM-software/optimized-routines),
-    which is offered under the MIT license (or Apache-2.0 with the LLVM exception).
-  - BPE tokenizer, `src/llama-vocab.cpp`: "adapted from
-    https://github.com/cmp-nct/ggllm.cpp [MIT License]".
+- llama.cpp / ggml: MIT, copyright 2023–2026 The ggml authors. Pinned source: `third_party/llama.cpp`, commit `1e6f04a75e91da4bb66b5248f3fd4bdeff169d41` (b11540). [License](licenses/llama.cpp-MIT.txt). `src/backend_llama.cpp` adapts Laya's prompt preparation, temperature lookup and answer formatting from `tools/server/server-decision.cpp`. Jinja, Unicode and JSON support are compiled directly from the pinned source. Additional copyright notices remain in the vendored files; preserve them when redistributing source. Builds compile modified copies of some upstream files, including the vendored nlohmann/json header, using the recorded patches in `patches/llama.cpp` (see `patches/README.md`).
+- Laya (original implementation, https://github.com/NandhaKishorM/laya): Apache-2.0, copyright the Laya authors. [License](licenses/Apache-2.0.txt). The word lists and thresholds in `src/language.cpp` are taken from its `laya/lang.py`; the test cases in `tests/original-reference` are its recorded results.
+- llamafile CPU kernels incorporated by ggml: MIT, Copyright 2024 Mozilla Foundation. [Full notice](licenses/llamafile-MIT.txt).
+- Further code that llama.cpp/ggml adapted from other projects and that is compiled into the library, with the attribution in the pinned source:
+  - YaRN rotary-embedding scaling, `ggml/src/ggml-cpu/ops.cpp` (comment above `rope_yarn`): "MIT licensed. Copyright (c) 2023 Jeffrey Quesnelle and Bowen Peng", based on https://github.com/jquesnelle/yarn.
+  - SIMD `expf` routines (`ggml_v_expf` variants), `ggml/src/ggml-cpu/vec.h`: "adapted from arm limited optimized routine", that is Arm's optimized-routines (https://github.com/ARM-software/optimized-routines), which is offered under the MIT license (or Apache-2.0 with the LLVM exception).
+  - BPE tokenizer, `src/llama-vocab.cpp`: "adapted from https://github.com/cmp-nct/ggllm.cpp [MIT License]".
 
-  The upstream comments carry no separate license file; the MIT license text is in
-  [licenses/llama.cpp-MIT.txt](licenses/llama.cpp-MIT.txt). Keep these
-  attributions when redistributing.
-- nlohmann JSON: MIT, Niels Lohmann. Included through llama.cpp's vendor directory.
-  [License](licenses/nlohmann-json-MIT.txt). The vendored header
-  (`vendor/nlohmann/json.hpp`, version 3.12.0) embeds code from other authors, with
-  the notices it carries:
-  - Grisu2 binary-to-decimal conversion: MIT, Copyright (c) 2009 Florian Loitsch
-    (https://florian.loitsch.com/).
+  The upstream comments carry no separate license file; the MIT license text is in [licenses/llama.cpp-MIT.txt](licenses/llama.cpp-MIT.txt). Keep these attributions when redistributing.
+- nlohmann JSON: MIT, Niels Lohmann. Included through llama.cpp's vendor directory. [License](licenses/nlohmann-json-MIT.txt). The vendored header (`vendor/nlohmann/json.hpp`, version 3.12.0) embeds code from other authors, with the notices it carries:
+  - Grisu2 binary-to-decimal conversion: MIT, Copyright (c) 2009 Florian Loitsch (https://florian.loitsch.com/).
   - UTF-8 decoder: MIT, Copyright (c) 2008-2009 Björn Hoehrmann
     <bjoern@hoehrmann.de>.
-  - Hedley (preprocessor feature detection macros): marked `SPDX-License-Identifier: MIT`
-    in the header, Copyright (c) 2016-2021 Evan Nemerson <evan@nemerson.com>
-    (https://nemequ.github.io/hedley).
-  - `integer_sequence` and related utilities taken from Google Abseil
-    (https://github.com/abseil/abseil-cpp, `absl/utility/utility.h`): Apache-2.0,
-    Copyright 2018 The Abseil Authors. [License](licenses/Apache-2.0.txt).
-- Unicode character property tables (`src/unicode-data.cpp` in llama.cpp, compiled into
-  the library) are generated by llama.cpp's `scripts/gen-unicode-data.py` from the Unicode
-  Character Database (https://www.unicode.org/Public/UCD/latest/ucd/). The generated file
-  carries no licence text of its own; it is covered by llama.cpp's MIT license above.
+  - Hedley (preprocessor feature detection macros): marked `SPDX-License-Identifier: MIT` in the header, Copyright (c) 2016-2021 Evan Nemerson <evan@nemerson.com> (https://nemequ.github.io/hedley).
+  - `integer_sequence` and related utilities taken from Google Abseil (https://github.com/abseil/abseil-cpp, `absl/utility/utility.h`): Apache-2.0, Copyright 2018 The Abseil Authors. [License](licenses/Apache-2.0.txt).
+- Unicode character property tables (`src/unicode-data.cpp` in llama.cpp, compiled into the library) are generated by llama.cpp's `scripts/gen-unicode-data.py` from the Unicode Character Database (https://www.unicode.org/Public/UCD/latest/ucd/). The generated file carries no licence text of its own; it is covered by llama.cpp's MIT license above.
 - Laya models: the upstream model card declares Apache-2.0 for all three checkpoints in [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) ([license text](licenses/Apache-2.0.txt)).
   - English: fine-tuned from [ModernBERT-large](https://huggingface.co/answerdotai/ModernBERT-large) (Apache-2.0). Used through the [ggml-org GGUF conversion](https://huggingface.co/ggml-org/Laya-GGUF), pinned by `models/manifest.json`.
   - Multilingual: fine-tuned from [jhu-clsp/mmBERT-base](https://huggingface.co/jhu-clsp/mmBERT-base) (MIT). Pinned by `models/laya-multilingual.json`.
@@ -58,14 +25,4 @@
 
 Ducktape Laya is an independent integration, not an upstream Laya release.
 
-Browser artifacts additionally incorporate code from the pinned Emscripten SDK
-(`release/browser-toolchain.json`): Emscripten runtime glue (MIT or NCSA), musl
-(MIT and the notices in its COPYRIGHT), libc++/libc++abi/compiler-rt (LLVM license
-texts including applicable exceptions), and Dawn WebGPU bindings (BSD notices).
-Their complete texts are included under `licenses/`. The native installation, the
-npm packages, the Python wheel, the Maven jar (under `META-INF/`) and the NuGet package copy the whole `licenses/` directory, so they also carry these
-browser-only texts although the native library contains none of that code. The browser's GPU driver
-and browser implementation are supplied by the host, not redistributed here.
-Test-only Electron, ASAR and upstream server-reference dependencies are excluded
-from consumer packages. Build/toolchain licenses do not replace the separate
-license obligations of an application's bundled model assets.
+Browser artifacts additionally incorporate code from the pinned Emscripten SDK (`release/browser-toolchain.json`): Emscripten runtime glue (MIT or NCSA), musl (MIT and the notices in its COPYRIGHT), libc++/libc++abi/compiler-rt (LLVM license texts including applicable exceptions), and Dawn WebGPU bindings (BSD notices). Their complete texts are included under `licenses/`. The native installation, the npm packages, the Python wheel, the Maven jar (under `META-INF/`) and the NuGet package copy the whole `licenses/` directory, so they also carry these browser-only texts although the native library contains none of that code. The browser's GPU driver and browser implementation are supplied by the host, not redistributed here. Test-only Electron, ASAR and upstream server-reference dependencies are excluded from consumer packages. Build/toolchain licenses do not replace the separate license obligations of an application's bundled model assets.
