@@ -1,7 +1,7 @@
 # Ducktape Laya for .NET
 
-Linux native Laya GGUF decisions backed by the shared `libducktape_laya.so`.
-Requires .NET 10 on Linux x86-64 and the native library. The package targets `net10.0`, uses source-generated P/Invoke, and is trim/AOT compatible.
+Native Laya GGUF decisions backed by the shared native library (`libducktape_laya.so`, on Windows `ducktape_laya.dll`).
+Requires .NET 10 on Linux x86-64 (0.2.0) or, from the next release, Linux arm64 and Windows x64, and the native library. The package targets `net10.0`, uses source-generated P/Invoke, and is trim/AOT compatible.
 No model or runtime download occurs. Model files are application-owned resources and are not bundled.
 
 ## Library resolution
@@ -11,11 +11,11 @@ No model or runtime download occurs. Model files are application-owned resources
 
 A library must report `dtl_abi_version() == 2` and export `dtl_cancel_flag`. Without the override, an incompatible candidate is skipped for the next one; if none loads, the call fails with `DllNotFoundException`, and if only incompatible ones load, with `LayaException` (`UnsupportedPlatform`). Load failures are reported on every call, not just the first.
 
-To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project. Without it, `dotnet pack` still succeeds but produces a package without the native library. `scripts/package-native.py` builds the package for the platform it runs on (`DucktapeLaya.VERSION.nupkg`, library included under its own file name, byte-reproducible), and `scripts/assemble-packages.py` merges the platforms' packages into one with every `runtimes/<rid>/native/`. Published releases carry Linux x86-64 only until the other platforms are release-qualified.
+To place a native build into the package, set `-p:DucktapeLayaNativeLibrary=/path/to/libducktape_laya.so` when building or packing the library project. Without it, `dotnet pack` still succeeds but produces a package without the native library. `scripts/package-native.py` builds the package for the platform it runs on (`DucktapeLaya.VERSION.nupkg`, library included under its own file name, byte-reproducible), and `scripts/assemble-packages.py` merges the platforms' packages into one with every `runtimes/<rid>/native/`. The 0.2.0 package carries Linux x86-64 (`linux-x64`) only; from the next release the package carries `linux-x64`, `linux-arm64` and `win-x64`, and NuGet picks the running platform's runtime identifier.
 
 ## From a checkout
 
-Released versions install with `dotnet add package DucktapeLaya` (Linux x86-64; the package bundles the library). To use unreleased changes from main, build the native library (see the repository README), then reference the project from your application:
+Released versions install with `dotnet add package DucktapeLaya` (the 0.2.0 package bundles the Linux x86-64 library; Linux arm64 and Windows x64 come with the next release). To use unreleased changes from main, build the native library (see the repository README), then reference the project from your application:
 
 ```sh
 dotnet add MyApp.csproj reference /path/to/ducktape-laya/bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj

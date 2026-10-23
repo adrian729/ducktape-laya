@@ -1,7 +1,7 @@
 # Ducktape Laya
 
-Linux native Laya GGUF decisions backed by the shared `libducktape_laya.so`.
-Install the native library and set `DUCKTAPE_LAYA_LIB_DIR` to its library directory,
+Native Laya GGUF decisions backed by the shared native library (`libducktape_laya.so`; on Windows `ducktape_laya.dll`).
+Install the native library and set `DUCKTAPE_LAYA_LIB_DIR` to its library directory (on Windows the directory that holds the import library `ducktape_laya.lib`, the zip's `lib`; the DLL in `bin` must be on `PATH` at run time),
 or expose its `ducktape-laya.pc` through `PKG_CONFIG_PATH` at build time.
 Configure your application's library loader path when bundling the shared library.
 No model or runtime download occurs. Model files are application-owned resources.

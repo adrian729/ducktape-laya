@@ -1,13 +1,13 @@
 # Ducktape Laya for Python
 
 Local Laya GGUF decisions (`choice`, `noul`, ordinal `score`) from Python, backed
-by the shared `libducktape_laya.so`. Inference runs in-process: no server, network
-or model download. Linux x86-64 only; see the repository README for CPU and glibc
+by the shared native library. Inference runs in-process: no server, network
+or model download. Wheels: `manylinux_2_38_x86_64` (tier 1; published in 0.2.0) and, from the next release, `manylinux_2_38_aarch64` and `win_amd64` (tier 2); see the repository README for CPU, glibc and Visual C++ Redistributable
 requirements. Python 3.10+.
 
 The package uses `ctypes`, so it needs no compiler. It loads the native library
-bundled in the wheel, or the system's `libducktape_laya.so.1`. Setting
-`DUCKTAPE_LAYA_LIB_DIR` selects a specific library instead; if that one cannot be
+bundled in the wheel, or the system's `libducktape_laya.so.1`. On Windows the wheel bundles `ducktape_laya.dll` in `ducktape_laya/_native/`. Setting
+`DUCKTAPE_LAYA_LIB_DIR` (on Windows, the directory that holds `ducktape_laya.dll`, the zip's `bin`) selects a specific library instead; if that one cannot be
 loaded, the first `Engine.open`, `Engine.open_router` or `runtime_info` call raises
 `OSError` rather than falling back (loading is lazy, so import itself succeeds). Download the model separately and check its hash; see the repository README.
 
@@ -55,7 +55,7 @@ closed are released when garbage collected, but close them for prompt release.
 
 ## From a checkout
 
-Released versions install with `pip install ducktape-laya` (the Linux x86-64 wheel bundles the library). To use unreleased changes from main, build the native library first (see the repository README), then either point Python at the source and the built library:
+Released versions install with `pip install ducktape-laya` (the 0.2.0 wheel is Linux x86-64 and bundles the library; the Linux arm64 and Windows wheels come with the next release). To use unreleased changes from main, build the native library first (see the repository README), then either point Python at the source and the built library:
 
 ```sh
 export DUCKTAPE_LAYA_LIB_DIR=/path/to/ducktape-laya/build

@@ -9,7 +9,7 @@ Embed local Laya decisions in C/C++, Rust, Node.js and Electron, Python, Go, Jav
 
 **Status:**
 
-- **0.2.0 (current release, 2026-10-22):** [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), npm (`ducktape-laya`, `ducktape-laya-browser`), crates.io (`ducktape-laya`, `ducktape-laya-sys`), PyPI (`ducktape-laya`), NuGet (`DucktapeLaya`), Maven Central (`io.github.adrian729:ducktape-laya`) and the Go module proxy (`bindings/go`, tag `bindings/go/v0.2.0`). Every release asset is attested. C ABI 2 with a breaking API change ([migration](docs/COMPATIBILITY.md#migrating-from-010-abi-1-to-020-abi-2), [changelog](CHANGELOG.md)), new features (below), and the multilingual and typed-decisions models next to the English one, all held to the same gates: agreement with the original Laya's recorded results and with upstream llama.cpp. All registry packages are Linux x86-64 only; the browser build is [experimental](docs/BROWSER.md). Linux arm64, macOS and Windows build from a checkout (see the requirements below).
+- **0.2.0 (current release, 2026-10-22):** [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), npm (`ducktape-laya`, `ducktape-laya-browser`), crates.io (`ducktape-laya`, `ducktape-laya-sys`), PyPI (`ducktape-laya`), NuGet (`DucktapeLaya`), Maven Central (`io.github.adrian729:ducktape-laya`) and the Go module proxy (`bindings/go`, tag `bindings/go/v0.2.0`). Every release asset is attested. C ABI 2 with a breaking API change ([migration](docs/COMPATIBILITY.md#migrating-from-010-abi-1-to-020-abi-2), [changelog](CHANGELOG.md)), new features (below), and the multilingual and typed-decisions models next to the English one, all held to the same gates: agreement with the original Laya's recorded results and with upstream llama.cpp. All 0.2.0 registry packages are Linux x86-64 only; the browser build is [experimental](docs/BROWSER.md). Linux arm64 and Windows x64 packages come with the next release (see [release coverage](#release-coverage)); until then they and macOS build from a checkout (see the requirements below).
 - **0.1.0:** earlier release (C ABI 1, English model), still on npm and crates.io under the 0.1 versions.
 
 This README and the guides in `docs/` describe main, which is 0.2.0 until the next release.
@@ -23,37 +23,48 @@ This README and the guides in `docs/` describe main, which is 0.2.0 until the ne
 - [Local routing](docs/API.md#local-routing) between several models, including [routing by language](docs/API.md#choosing-the-model-by-language) between the English and multilingual models.
 - Deadlines, cooperative cancellation and passive events in every binding, with the same results from every binding on the same build for the same request text (Node and the browser serialize request objects with `JSON.stringify`, which writes `149.0` as `149`; see [the API guide](docs/API.md#primitive-requests-and-results)).
 
+## Release coverage
+
+Releases from the next one on cover three platforms. The tier says how much evidence backs a platform ([qualification](docs/QUALIFICATION.md)).
+
+| Platform | Tier | Packages |
+| --- | --- | --- |
+| Linux x86-64 | 1 | Native tarball, npm, crates, wheel, jar, NuGet, Go; 0.1.0 and 0.2.0 |
+| Linux arm64 | 2 | Same packages, from the next release |
+| Windows x64 | 2 | `ducktape-laya-V-windows-x64.zip` and the same packages, from the next release |
+| macOS arm64 | none yet | Built and tested in CI, not released; the next tier-2 candidate (macOS 14.0 minimum) |
+
+Tier 1 passes every release gate: the full real-model checks with all three models, sanitizers, a one-hour stress run, eight-hour soak, performance budgets, the Linux userspace and browser matrices and upgrade rollback. Tier 2 is CI-tested on the release candidate's run, on GitHub-hosted runners: the native tests, every binding and the installed packages (Electron included) with the English model only, agreement with llama.cpp and the original Laya, reproducible builds, a 600-second stress run, and probability drift against Linux x86-64 reported. It has no soak or performance budgets yet, and the multilingual and typed-decisions models are not part of it.
+
 ## Requirements
 
 Native packages (C/C++, Rust, Node.js, Electron) need:
 
-- **CPU:** Linux x86-64 with AVX2, FMA, F16C, BMI2 and SSE4.2: Intel Haswell,
+- **Linux x86-64 CPU:** AVX2, FMA, F16C, BMI2 and SSE4.2: Intel Haswell,
   AMD Excavator/Zen or newer. Some low-power Atom, Celeron and Pentium chips lack
   AVX2. On those, opening an engine fails with status 7
   (`DTL_UNSUPPORTED_PLATFORM`) and names the missing feature.
-- **System libraries:** glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29`, as in
-  Ubuntu 24.04+, Debian 13+ and Fedora 39+. Tested on Ubuntu 24.04 and 26.04.
-- **Windows x64 (from a checkout):** the same CPU features as Linux x86-64.
-  CI builds it with clang-cl on Windows Server 2025 and runs the native tests
-  and every binding (C, C++, Rust, Node, Electron, Python, Go, Java, .NET) with
-  and without the real model: all bindings agree exactly, agreement with
-  llama.cpp is exact, and agreement with the original Laya holds within one
-  [documented deviation](docs/COMPATIBILITY.md). Point the bindings at
-  `ducktape_laya.dll` with `DUCKTAPE_LAYA_LIB_DIR`; the DLL needs the Microsoft
-  Visual C++ Redistributable. CI builds and tests Windows packages (zip, wheel,
-  npm, jar, NuGet; [packaging](docs/PACKAGING.md#package-artifacts)), but none
-  are released yet.
-- **Linux arm64 (0.2.0, from a checkout):** CI builds and tests it on Ubuntu
-  24.04 arm64, including real-model agreement with llama.cpp and the original
-  Laya and the installed packages (tarball, npm, wheel, jar, NuGet). It needs
-  Armv8.2-A with dot product and half precision (Graviton2+, Ampere Altra,
-  Cortex-A76 / Raspberry Pi 5); opening an engine elsewhere fails with status 7.
-  Releases still publish x86-64 packages only: arm64 is not yet release-qualified.
-- **macOS on Apple silicon (0.2.0, from a checkout):** CI builds and tests it on
-  macOS 15 arm64, with and without the real model (agreement with llama.cpp and
-  the original Laya, every binding suite). Build it from a checkout and point
-  the bindings at `libducktape_laya.dylib` with `DUCKTAPE_LAYA_LIB_DIR`. CI
-  builds and tests macOS packages (macOS 14+), but none are released yet. Intel
+- **Linux system libraries (x86-64 and arm64):** glibc 2.38+ and libstdc++ with
+  `GLIBCXX_3.4.29`, as in Ubuntu 24.04+, Debian 13+ and Fedora 39+. Tested on
+  Ubuntu 24.04 and 26.04 (x86-64) and Ubuntu 24.04 (arm64).
+- **Linux arm64 (tier 2, from the next release):** Armv8.2-A with dot product and
+  half precision (Graviton2+, Ampere Altra, Cortex-A76 / Raspberry Pi 5);
+  opening an engine elsewhere fails with status 7. Tested only on GitHub's
+  `ubuntu-24.04-arm` runners, with the English model.
+- **Windows x64 (tier 2, from the next release):** the same CPU features as Linux
+  x86-64 (AVX2, FMA, F16C, BMI2, SSE4.2) and the Microsoft Visual C++
+  Redistributable, which the DLL needs and the packages do not bundle. The build
+  is clang-cl (Visual Studio's LLVM) and is tested only on GitHub's Windows Server
+  2025 runners with the English model: all bindings (C, C++, Rust, Node, Electron,
+  Python, Go, Java, .NET) agree exactly, agreement with llama.cpp is exact, and
+  agreement with the original Laya holds within one
+  [documented deviation](docs/COMPATIBILITY.md#known-deviations). Its results
+  differ slightly from Linux's, because the Windows C runtime rounds some math
+  functions differently.
+- **macOS on Apple silicon (not released):** CI builds and tests it on macOS 15
+  arm64, with and without the real model, and builds its packages (macOS 14.0
+  minimum), but no release carries them yet. Build it from a checkout and point
+  the bindings at `libducktape_laya.dylib` with `DUCKTAPE_LAYA_LIB_DIR`. Intel
   Macs are not supported.
 - **Memory:** about 0.5 GB per open engine with the English model and the default 512-token context (measured natively: 475 MiB after opening, 600 MiB while deciding). Plan for 1 GB per engine. Other models and longer contexts need more; see [other checkpoints](#other-laya-checkpoints).
 - **Disk:** 449 MB for the English model, plus 15 MB for the library or npm package.
@@ -63,19 +74,19 @@ What each package needs on top:
 
 | Package | Install | Also needs |
 | --- | --- | --- |
-| Node.js | `npm install ducktape-laya` | Node.js 20+ (tested on 24 and 26). The native addon is prebuilt; no compiler. |
-| Electron | `npm install ducktape-laya` | Tested with Electron 44. Unpack the whole `node_modules/ducktape-laya` package (its worker script and native files) and the model from ASAR. |
-| Rust | `cargo add ducktape-laya` | The native library from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), found through `pkg-config` or `DUCKTAPE_LAYA_LIB_DIR`. Tested with Rust 1.98. |
-| C/C++ | [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (`ducktape-laya-0.2.0-linux-x64.tar.gz`) | A C or C++ compiler; CMake 3.22+ or `pkg-config` to link. |
-| Python | `pip install ducktape-laya` | Python 3.10+. The wheel (`manylinux_2_38_x86_64`) bundles the native library; no compiler. See [bindings/python](bindings/python/README.md). |
-| Go | `go get github.com/adrian729/ducktape-laya/bindings/go@v0.2.0` | Go 1.22+, cgo with a C compiler, and the native library and header from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0). See [bindings/go](bindings/go/README.md). |
-| Java/Kotlin | `io.github.adrian729:ducktape-laya:0.2.0` (Maven Central) | Java 22+ (FFM API), run with `--enable-native-access`. The jar bundles the native library. See [bindings/java](bindings/java/README.md). |
-| .NET | `dotnet add package DucktapeLaya` | .NET 10. The package bundles the native library. See [bindings/dotnet](bindings/dotnet/README.md). |
+| Node.js | `npm install ducktape-laya` | Node.js 20+ (tested on 24 and 26). The native addon is prebuilt; no compiler. From the next release the package carries Linux x86-64, Linux arm64 and Windows x64; 0.2.0 carries Linux x86-64 only. |
+| Electron | `npm install ducktape-laya` | Tested with Electron 44 on Linux x86-64, Linux arm64 and Windows x64 (the last two from the next release). Unpack the whole `node_modules/ducktape-laya` package (its worker script and native files) and the model from ASAR. |
+| Rust | `cargo add ducktape-laya` | The native library from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), found through `pkg-config` or `DUCKTAPE_LAYA_LIB_DIR`. On Windows, from the next release, use the `windows-x64` zip: `DUCKTAPE_LAYA_LIB_DIR` names its `lib` directory (the import library) and `bin` (the DLL) goes on `PATH` at run time. Tested with Rust 1.98. |
+| C/C++ | [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (`ducktape-laya-0.2.0-linux-x64.tar.gz`); from the next release also `ducktape-laya-V-linux-arm64.tar.gz` and `ducktape-laya-V-windows-x64.zip` | A C or C++ compiler; CMake 3.22+ or `pkg-config` to link. |
+| Python | `pip install ducktape-laya` | Python 3.10+. The wheel bundles the native library; no compiler. Wheel tags: `manylinux_2_38_x86_64` (0.2.0), and from the next release `manylinux_2_38_aarch64` and `win_amd64`. See [bindings/python](bindings/python/README.md). |
+| Go | `go get github.com/adrian729/ducktape-laya/bindings/go@v0.2.0` | Go 1.22+, cgo with a C compiler, and the native library and header from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (on Windows, from the next release, the `windows-x64` zip and a MinGW-w64 gcc). See [bindings/go](bindings/go/README.md). |
+| Java/Kotlin | `io.github.adrian729:ducktape-laya:0.2.0` (Maven Central) | Java 22+ (FFM API), run with `--enable-native-access`. The jar bundles the native library (Linux x86-64 in 0.2.0; from the next release also Linux arm64 and Windows x64). See [bindings/java](bindings/java/README.md). |
+| .NET | `dotnet add package DucktapeLaya` | .NET 10. The package bundles the native library (runtime identifiers `linux-x64` in 0.2.0; from the next release also `linux-arm64` and `win-x64`). See [bindings/dotnet](bindings/dotnet/README.md). |
 | Browser (experimental) | `npm install ducktape-laya-browser` | Tested on Chromium 152 only. WASM SIMD in a module worker, secure context; WebGPU is optional. See the [browser guide](docs/BROWSER.md) and [package README](bindings/browser/README.md). |
 
 The versions above are minimums the packages declare. CI tests Node 24 and 26, Rust 1.98, Go 1.27, Java 25, .NET 10 and the Ubuntu 24.04 runner's system Python; the older minimums (Node 20, Go 1.22, Java 22, Python 3.10) are not tested. `./demo ts` needs Node 22.6+ (`--experimental-strip-types`).
 
-The packages and the release tarball above are 0.2.0, for Linux x86-64. The [Node](bindings/node/README.md), [Rust](bindings/rust/ducktape-laya/README.md), [Python](bindings/python/README.md), [Go](bindings/go/README.md), [Java](bindings/java/README.md) and [.NET](bindings/dotnet/README.md) READMEs describe the 0.2.0 APIs. On other platforms, build the library from a checkout ([manual setup](#manual-setup)).
+The packages and the release tarball above are 0.2.0, for Linux x86-64; the multi-platform packages arrive with the next release. The [Node](bindings/node/README.md), [Rust](bindings/rust/ducktape-laya/README.md), [Python](bindings/python/README.md), [Go](bindings/go/README.md), [Java](bindings/java/README.md) and [.NET](bindings/dotnet/README.md) READMEs describe the 0.2.0 APIs. Until then, on Linux arm64, Windows and macOS, build the library from a checkout ([manual setup](#manual-setup)).
 
 Building from source instead needs CMake 3.22+, a C/C++17 compiler and Git. The
 setup wizard and `scripts/download-model.py` need Python 3; the maintainer
@@ -114,7 +125,7 @@ cmake --build build -j 3
 cmake --install build --prefix "$PWD/build/staging"
 ```
 
-On Windows x64 (from a checkout, tested in CI but not released), build with
+On Windows x64 (from a checkout; the next release ships a zip), build with
 Visual Studio's clang-cl and Ninja from an x64 Native Tools Command Prompt;
 CMake also needs a GNU `patch`, which Git for Windows includes. For the Node
 addon, `python scripts/fetch-node-sdk.py build-node-sdk --lib` downloads the

@@ -1,6 +1,6 @@
 # Ducktape Laya for Go
 
-Linux x86-64 Laya GGUF decisions through cgo, backed by the shared `libducktape_laya.so`. Windows x64 works from a checkout ([below](#windows)).
+Laya GGUF decisions through cgo, backed by the shared native library: Linux x86-64 with the 0.2.0 tarball, and from the next release Linux arm64 and Windows x64 ([below](#windows)).
 Requires Go 1.22+ (CI tests 1.27), a C compiler and the 0.2 native library (C ABI 2) with `ducktape_laya.h`. Install the module with `go get github.com/adrian729/ducktape-laya/bindings/go@v0.2.0`; the library and header come from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (the v0.1.0 tarball has ABI 1 and does not work with this binding), or from a checkout ([below](#from-a-checkout)).
 No model or runtime download occurs. Model files are application-owned resources.
 
@@ -63,7 +63,7 @@ To run the binding's own tests, use the same variables in `bindings/go` and set 
 
 ## Windows
 
-Windows x64 works from a checkout and is tested in CI (Go 1.27, MinGW-w64 gcc 15). There are no Windows release packages yet. Build the library with clang-cl as in the repository README; it produces `ducktape_laya.dll` and its import library `ducktape_laya.lib` in the build directory.
+Windows x64 is a tier-2 platform, tested in CI (Go 1.27, MinGW-w64 gcc 15). From the next release use the `ducktape-laya-V-windows-x64.zip` release asset: its `lib` directory holds the import library `ducktape_laya.lib`, `bin` the DLL and `include` the header. Before that, build the library from a checkout with clang-cl as in the repository README; it produces `ducktape_laya.dll` and `ducktape_laya.lib` in the build directory.
 
 cgo on Windows needs a MinGW-w64 gcc on `PATH` (for example from [MinGW-Builds](https://github.com/niXman/mingw-builds-binaries) or MSYS2). With `-L<build>`, its linker finds `ducktape_laya.lib` for `-lducktape_laya`; no per-OS flags are needed in your code. At run time Windows looks for `ducktape_laya.dll` next to the executable or on `PATH`, so ship the DLL beside your program. In PowerShell:
 
@@ -73,5 +73,7 @@ $env:CGO_LDFLAGS = "-LC:\path\to\ducktape-laya\build"
 $env:PATH = "C:\path\to\ducktape-laya\build;$env:PATH"
 go test ./...
 ```
+
+With the zip, use `<zip>\include` for `CGO_CFLAGS`, `<zip>\lib` for `CGO_LDFLAGS` and `<zip>\bin` on `PATH`.
 
 The DLL uses the Microsoft C++ runtime (`/MD`), so the target machine needs the Microsoft Visual C++ Redistributable, which is almost always installed.

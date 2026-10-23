@@ -2,7 +2,7 @@
 
 Java binding for the shared `libducktape_laya.so`, using the Foreign Function & Memory API. It has no JNI, JNA or third-party dependencies, and JSON stays as `String`.
 
-Requirements: Java 22 or newer (CI tests 25), Linux x86-64, and the native library (0.2, C ABI 2). No model or runtime download occurs; model files are application-owned resources.
+Requirements: Java 22 or newer (CI tests 25), a supported platform (Linux x86-64, 0.2.0; from the next release also Linux arm64 and Windows x64) and the native library (0.2, C ABI 2). No model or runtime download occurs; model files are application-owned resources.
 
 The library is located in this order:
 
@@ -43,7 +43,7 @@ Errors: `LayaException` with `status()` and constants such as `LayaException.CAN
 
 ## From a checkout
 
-Release 0.2.0 is on Maven Central as `io.github.adrian729:ducktape-laya:0.2.0` (also attached to the [GitHub release](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0)); the jar bundles the native library. To use unreleased changes from main, build the native library (see the repository README), then build the jar without Maven:
+Release 0.2.0 is on Maven Central as `io.github.adrian729:ducktape-laya:0.2.0` (also attached to the [GitHub release](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0)); the 0.2.0 jar bundles the Linux x86-64 library, and from the next release the jar carries Linux arm64 and Windows x64 as well (`native/linux-arm64/`, `native/windows-x64/ducktape_laya.dll`). To use unreleased changes from main, build the native library (see the repository README), then build the jar without Maven:
 
 ```sh
 bindings/java/build.sh            # compiles, writes bindings/java/target/ducktape-laya.jar and runs the tests

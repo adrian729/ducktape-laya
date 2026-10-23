@@ -1,6 +1,6 @@
 # Ducktape Laya
 
-Linux native Laya GGUF decisions backed by the shared `libducktape_laya.so`.
+Native Laya GGUF decisions backed by the shared native library (`libducktape_laya.so`; on Windows `ducktape_laya.dll` with its import library `ducktape_laya.lib`).
 Install the native library and set `DUCKTAPE_LAYA_LIB_DIR` to its library directory,
 or expose its `ducktape-laya.pc` through `PKG_CONFIG_PATH` at build time.
 Configure your application's library loader path when bundling the shared library.
@@ -45,7 +45,7 @@ match engine.execute_with(request, options) {
 
 ## From a checkout
 
-Released versions: `cargo add ducktape-laya` (0.2) plus the native library from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0). To use unreleased changes from main, build the native library (see the repository README), then depend on the crate by path and point the build at the library:
+Released versions: `cargo add ducktape-laya` (0.2) plus the native library from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (Linux x86-64). From the next release the Linux arm64 tarball and the Windows x64 zip are published too; with the zip, set `DUCKTAPE_LAYA_LIB_DIR` to its `lib` directory (the linker needs `ducktape_laya.lib`) and put its `bin` directory, which holds the DLL, on `PATH` at run time. To use unreleased changes from main, build the native library (see the repository README), then depend on the crate by path and point the build at the library:
 
 ```toml
 [dependencies]
