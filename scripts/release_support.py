@@ -254,6 +254,23 @@ def check_qualification(record, root=ROOT):
         raise ValueError('Browser tolerance must apply to same-backend upstream comparison')
     return policy
 
+def security_review_problems(review):
+    """Shape problems of the hand-written security review evidence (docs/RELEASE_CHECKS.md, Security review)."""
+    if not isinstance(review, dict):
+        return ['not a JSON object']
+    problems = []
+    for key in ('source_commit', 'runtime_commit', 'model_licence'):
+        if not isinstance(review.get(key), str) or not review[key].strip():
+            problems.append(f'{key} must be a non-empty string')
+    if review.get('source_tracked_dirty') is not False:
+        problems.append('source_tracked_dirty must be false')
+    patches = review.get('runtime_patches')
+    if not isinstance(patches, list) or not all(isinstance(h, str) and len(h) == 64 for h in patches):
+        problems.append('runtime_patches must be a list of SHA-256 hex digests')
+    if not isinstance(review.get('release_blocking_code_issues'), list):
+        problems.append('release_blocking_code_issues must be a list')
+    return problems
+
 INSTRUMENTATION_SYMBOL = re.compile(r'\b_?__(?:asan|ubsan|tsan|msan|sanitizer_cov|llvm_profile)_\w+')
 # Sanitizer runtimes and debug C/C++ runtimes a release binary must not load.
 DIAGNOSTIC_RUNTIME = re.compile(r'(?i)clang_rt\.|asan|ubsan|tsan|msan|^(?:vcruntime\d+d|msvcp\d+d|ucrtbased|concrt\d+d)\.dll$')

@@ -7,13 +7,24 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from release_support import ROOT, read_json, check_qualification, check_targets
+from release_support import ROOT, read_json, check_qualification, check_targets, security_review_problems
 
 
 class Qualification(unittest.TestCase):
     def setUp(self):
         self.record = read_json(ROOT / 'release/compatibility.json')
         self.policy = read_json(ROOT / 'release/qualification.json')
+
+    def test_security_review_shape(self):
+        review = {'source_commit': 'a' * 40, 'source_tracked_dirty': False, 'runtime_commit': 'b' * 40,
+                  'runtime_patches': ['c' * 64], 'release_blocking_code_issues': [], 'model_licence': 'Apache-2.0 reviewed'}
+        self.assertEqual(security_review_problems(review), [])
+        for key, bad in [('source_commit', ''), ('runtime_commit', None), ('model_licence', ' '), ('source_tracked_dirty', True),
+                         ('runtime_patches', ['short']), ('runtime_patches', 'x'), ('release_blocking_code_issues', None)]:
+            with self.subTest(key=key, bad=bad):
+                self.assertTrue(security_review_problems({**review, key: bad}))
+        self.assertTrue(security_review_problems([]))
+        self.assertTrue(security_review_problems({k: v for k, v in review.items() if k != 'model_licence'}))
 
     def test_current_policy(self):
         check_qualification(self.record)

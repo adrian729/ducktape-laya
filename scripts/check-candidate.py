@@ -21,6 +21,7 @@ Missing evidence is not_run; mismatched or failed evidence is failed.
 import argparse
 import fnmatch
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -29,7 +30,7 @@ import tarfile
 import tempfile
 import zipfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from release_support import ROOT, check_qualification, check_record, check_targets, git, read_json, sha256, source_identity
+from release_support import ROOT, check_qualification, check_record, check_targets, git, read_json, security_review_problems, sha256, source_identity
 from release_targets import Context, Missing, Mismatch, COMPARISON_NOTES, compare_packages, evaluate_targets, need, run_gate
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -272,7 +273,7 @@ def license_inventory():
                 members = {pathlib.PurePosixPath(m).name for m in archive.getnames()}
         need(LICENSE_TEXTS <= members, f'{name} lacks license texts')
     review = load('security_review')
-    need(review.get('model_licence'), 'license review missing')
+    need(isinstance(review.get('model_licence'), str) and review['model_licence'].strip(), 'license review missing')
 
 def reproducibility():
     report = load('reproducibility')
@@ -327,6 +328,8 @@ def performance():
 
 def security_review():
     review = load('security_review')
+    problems = security_review_problems(review)
+    need(not problems, 'security review: ' + '; '.join(problems))
     tested_source(review, 'security_review')
     need(review.get('runtime_commit') == record['runtime']['commit'], 'security review: different runtime pin')
     need(review.get('runtime_patches') == [patch['sha256'] for patch in record['runtime']['patches']], 'security review: different runtime patches')
@@ -363,7 +366,7 @@ if set(GATES) != set(record['required_release_gates']):
     raise SystemExit('Gate checker does not match release/compatibility.json required gates')
 result = {'schema_version': 2, 'candidate_commit': commit, 'checker_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'checker_tree_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'source_identity_sha256': source,
-          'model_sha256': manifest_model['sha256'], 'evidence': {k: str(v) for k, v in paths.items()}, 'gates': {}}
+          'model_sha256': manifest_model['sha256'], 'evidence': {k: pathlib.PurePath(os.path.relpath(v, base)).as_posix() for k, v in paths.items()}, 'gates': {}}
 # Release-level (tier-1) gates, then every target's.
 for gate, check in GATES.items():
     result['gates'][gate] = run_gate(check)

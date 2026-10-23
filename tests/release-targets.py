@@ -260,6 +260,9 @@ class CheckCandidate(unittest.TestCase):
         world = self.world('pass')
         gates = self.check(world)
         self.assertEqual(gates['schema_version'], 2)
+        # Evidence paths are relative to the evidence manifest, never absolute local paths.
+        self.assertEqual(gates['evidence'], {key: os.path.relpath(path, world.directory) for key, path in world.paths.items()})
+        self.assertFalse(any(os.path.isabs(path) for path in gates['evidence'].values()))
         self.assertEqual(sorted(gates['targets']), ['linux-arm64', 'linux-x64', 'windows-x64'])
         for platform in TIER2:
             self.assertEqual({k: v['status'] for k, v in gates['targets'][platform]['gates'].items()},
