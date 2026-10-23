@@ -16,7 +16,9 @@ With --published DIR COMMIT it instead checks a downloaded release (gh release
 download TAG -D DIR) as attest-release.yml would; 0.2.0 must pass.
 """
 import argparse
+import hashlib
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -137,6 +139,57 @@ class Assets(unittest.TestCase):
         self.edit_json(directory, 'gates.json', lambda g: g['targets'].pop('windows-x64'))
         write_sums(directory)
         self.refused(directory, 'not the qualified targets')
+
+    def verify(self, certificate_changes=None, predicate_changes=None, asset='ducktape-laya-%s.pom'):
+        """scripts/verify-release-assets.sh against a fake gh that serves self.assets and a canned attestation."""
+        work = self.directory / f'verify-{len(list(self.directory.iterdir()))}'
+        (work / 'bin').mkdir(parents=True)
+        repo, signer = 'adrian729/ducktape-laya', 'https://github.com/adrian729/ducktape-laya/.github/workflows/attest-release.yml@refs/heads/main'
+        certificate = {'subjectAlternativeName': signer, 'buildSignerURI': signer, 'buildConfigURI': signer,
+                       'sourceRepositoryURI': f'https://github.com/{repo}', 'githubWorkflowRepository': repo,
+                       'sourceRepositoryRef': 'refs/heads/main', 'githubWorkflowRef': 'refs/heads/main',
+                       'githubWorkflowTrigger': 'workflow_dispatch', 'runnerEnvironment': 'github-hosted', **(certificate_changes or {})}
+        gates = hashlib.sha256((self.assets / 'gates.json').read_bytes()).hexdigest()
+        predicate = {'release': 'v9.9.9', 'repository': repo, 'source_commit': COMMIT, 'gates_sha256': gates, 'release_ready': True,
+                     **(predicate_changes or {})}
+        (work / 'attestation.json').write_text(json.dumps([{'verificationResult': {'signature': {'certificate': certificate},
+                                                                                    'statement': {'predicate': predicate}}}]))
+        fake = work / 'bin' / 'gh'
+        fake.write_text(f'''#!/usr/bin/env bash
+case "$1 $2" in
+  "release download") while [ $# -gt 0 ]; do case "$1" in -D) dir=$2; shift;; -p) cp "{self.assets}/$2" "$dir/"; shift;; esac; shift; done;;
+  "api repos/"*) echo {COMMIT};;
+  "attestation verify") echo "$@" >> "{work}/calls"; cat "{work}/attestation.json";;
+  *) echo "unexpected gh $*" >&2; exit 9;;
+esac
+''')
+        fake.chmod(0o755)
+        name = asset % self.world.version
+        result = subprocess.run(['bash', str(ROOT / 'scripts/verify-release-assets.sh'), 'v9.9.9', str(work / 'out'), name], capture_output=True,
+                                text=True, env={**os.environ, 'PATH': f'{work / "bin"}:{os.environ["PATH"]}'})
+        calls = (work / 'calls').read_text() if (work / 'calls').exists() else ''
+        return result, calls
+
+    def test_signer_is_pinned_exactly(self):
+        result, calls = self.verify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The exact certificate identity (workflow path and ref), never the prefix-matching --signer-workflow.
+        self.assertIn('--cert-identity https://github.com/adrian729/ducktape-laya/.github/workflows/attest-release.yml@refs/heads/main', calls)
+        self.assertIn('--source-ref refs/heads/main', calls)
+        self.assertNotIn('--signer-workflow', calls)
+        for label, changes in {'another ref': {'sourceRepositoryRef': 'refs/heads/feature'},
+                               'workflow ref': {'githubWorkflowRef': 'refs/tags/v9.9.9'},
+                               'another workflow': {'subjectAlternativeName': 'https://github.com/adrian729/ducktape-laya/.github/workflows/attest-release.yml.evil@refs/heads/main'},
+                               'another signer URI': {'buildSignerURI': 'https://github.com/adrian729/ducktape-laya/.github/workflows/other.yml@refs/heads/main'},
+                               'another repository': {'sourceRepositoryURI': 'https://github.com/adrian729/other'},
+                               'push trigger': {'githubWorkflowTrigger': 'push'},
+                               'self-hosted': {'runnerEnvironment': 'self-hosted'}}.items():
+            with self.subTest(label):
+                result, _ = self.verify(changes)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('has no attestation for', result.stderr)
+        result, _ = self.verify(predicate_changes={'source_commit': 'b' * 40})
+        self.assertNotEqual(result.returncode, 0)
 
     def test_schema_is_compared_numerically(self):
         # jq prints 2.0 as "2.0": a shell string comparison with 2 would skip the platform check.

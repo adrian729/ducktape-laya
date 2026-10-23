@@ -8,7 +8,11 @@
 #     the tagged commit (scripts/release-gates.jq, shared with attest-release),
 #     and it is the gates.json listed in SHA256SUMS;
 #   - the file has an attest-release attestation for this release, tag commit and
-#     gates.json.
+#     gates.json, signed by exactly the attest-release.yml workflow as run from main
+#     (--cert-identity is the certificate's full SubjectAlternativeName, workflow path
+#     and ref; --signer-workflow would be a prefix match without the ref) and whose
+#     certificate names this repository, the main ref and a workflow_dispatch run on a
+#     GitHub-hosted runner.
 # Only the named assets are written to OUTPUT_DIR (SHA256SUMS and gates.json are
 # kept elsewhere), so the directory can be handed to an upload tool as it is.
 #
@@ -22,7 +26,7 @@ shift 2
 [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Not a release tag: $tag" >&2; exit 2; }
 repo=${GITHUB_REPOSITORY:-adrian729/ducktape-laya}
 predicate_type=https://github.com/$repo/release-qualification/v1
-signer=$repo/.github/workflows/attest-release.yml
+signer=https://github.com/$repo/.github/workflows/attest-release.yml@refs/heads/main
 
 meta=$(mktemp -d)
 trap 'rm -rf "$meta"' EXIT
@@ -42,10 +46,15 @@ for asset in "$@"; do
   [ "$(awk -v name="$asset" '$2 == name' "$meta/SHA256SUMS" | wc -l)" = 1 ] ||
     { echo "$asset is not listed once in SHA256SUMS" >&2; exit 1; }
   (cd "$out" && awk -v name="$asset" '$2 == name' "$meta/SHA256SUMS" | sha256sum -c --quiet -)
-  gh attestation verify "$out/$asset" -R "$repo" --predicate-type "$predicate_type" --signer-workflow "$signer" --format json |
-    jq -e --arg tag "$tag" --arg repo "$repo" --arg commit "$commit" --arg gates "$gates" \
-      'any(.[]; .verificationResult.statement.predicate | .release == $tag and .repository == $repo
-        and .source_commit == $commit and .gates_sha256 == $gates and .release_ready == true)' > /dev/null ||
+  gh attestation verify "$out/$asset" -R "$repo" --predicate-type "$predicate_type" --cert-identity "$signer" --source-ref refs/heads/main --format json |
+    jq -e --arg tag "$tag" --arg repo "$repo" --arg commit "$commit" --arg gates "$gates" --arg signer "$signer" \
+      'any(.[]; (.verificationResult.signature.certificate
+          | .subjectAlternativeName == $signer and .buildSignerURI == $signer and .buildConfigURI == $signer
+            and .sourceRepositoryURI == "https://github.com/\($repo)" and .githubWorkflowRepository == $repo
+            and .sourceRepositoryRef == "refs/heads/main" and .githubWorkflowRef == "refs/heads/main"
+            and .githubWorkflowTrigger == "workflow_dispatch" and .runnerEnvironment == "github-hosted")
+        and (.verificationResult.statement.predicate | .release == $tag and .repository == $repo
+          and .source_commit == $commit and .gates_sha256 == $gates and .release_ready == true))' > /dev/null ||
     { echo "$asset has no attestation for $tag, $commit and this gates.json" >&2; exit 1; }
   echo "$asset: listed in SHA256SUMS, qualified and attested for $tag"
 done
