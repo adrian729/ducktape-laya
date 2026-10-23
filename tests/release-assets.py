@@ -138,6 +138,26 @@ class Assets(unittest.TestCase):
         write_sums(directory)
         self.refused(directory, 'not the qualified targets')
 
+    def test_schema_is_compared_numerically(self):
+        # jq prints 2.0 as "2.0": a shell string comparison with 2 would skip the platform check.
+        directory = self.copy('schema-2.0')
+        self.edit_json(directory, 'gates.json', lambda g: (g.update(schema_version=2.0), g['targets'].pop('windows-x64')))
+        self.assertIn('"schema_version": 2.0', (directory / 'gates.json').read_text())
+        write_sums(directory)
+        self.refused(directory, 'not the qualified targets')
+        # The same value with the right targets passes.
+        directory = self.copy('schema-2.0-ok')
+        self.edit_json(directory, 'gates.json', lambda g: g.update(schema_version=2.0))
+        write_sums(directory)
+        self.assertEqual(check(directory).returncode, 0)
+
+    def test_multi_platform_inventory_needs_schema_2(self):
+        directory = self.copy('schema-1-multi')
+        self.edit_json(directory, 'gates.json', lambda g: (g.update(schema_version=1), g.pop('targets')))
+        write_sums(directory)
+        self.assertTrue(gates_filter(json.loads((directory / 'gates.json').read_text())))
+        self.refused(directory, 'needs a schema 2 gates.json')
+
     def test_fragment_from_another_commit(self):
         directory = self.copy('fragment')
         self.edit_json(directory, 'native-inventory.json', lambda i: i['fragments']['windows-x64'].update(packaging_source_commit='b' * 40))

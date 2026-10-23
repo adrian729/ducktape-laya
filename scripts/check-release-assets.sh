@@ -9,8 +9,12 @@
 #   - for gates.json schema 2, the native inventory is a multi-platform assembly
 #     whose platforms are exactly the qualified targets, every fragment packaged
 #     from COMMIT on a clean tree;
+#   - a multi-platform native inventory goes with a schema 2 gates.json (schema is compared in jq,
+#     like scripts/release-gates.jq, so 2 and 2.0 mean the same everywhere);
 #   - nothing else is in SHA256SUMS.
-# Accepts the 0.1.0 and 0.2.0 (schema 1, single-platform) releases unchanged.
+# Accepts the schema 1, single-platform 0.2.0 release unchanged. 0.1.0 is rejected here (its gates.json
+# has no `inventories_sha256`, so it does not bind the inventories); scripts/release-gates.jq itself still
+# accepts both the 0.1.0 and 0.2.0 gates.json.
 #
 # Usage: scripts/check-release-assets.sh DIR COMMIT
 # Needs jq and sha256sum.
@@ -48,7 +52,10 @@ for pair in native:native-inventory.json:native-sbom.cdx.json browser:npm-browse
   done < <(jq -r '.artifacts | to_entries[] | "\(if (.value | type) == "object" then .value.sha256 else .value end) \(.key)"' "$inventory")
 done
 
-if [ "$(jq .schema_version gates.json)" = 2 ]; then
+if jq -e '.kind == "multi-platform"' native-inventory.json > /dev/null && ! jq -e '.schema_version == 2' gates.json > /dev/null; then
+  fail "native-inventory.json is a multi-platform assembly, which needs a schema 2 gates.json"
+fi
+if jq -e '.schema_version == 2' gates.json > /dev/null; then
   jq -e --slurpfile gates gates.json --arg commit "$commit" '.kind == "multi-platform"
     and .platforms == ($gates[0].targets | keys | sort)
     and (.fragments | keys) == .platforms
