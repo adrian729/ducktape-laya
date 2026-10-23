@@ -2,7 +2,8 @@
 const { parentPort, workerData } = require('node:worker_threads');
 let native, handle;
 try {
-  native = require(workerData.addonPath);
+  try { native = require(workerData.addonPath); }
+  catch (error) { throw Object.assign(new Error(`Cannot load the native Laya addon: ${error.message}`), { status: 7 }); }
   handle = native.open(workerData.modelPath, workerData.config, workerData.router);
 } catch (error) {
   parentPort.postMessage({ startupError: error.message, status: error.status });

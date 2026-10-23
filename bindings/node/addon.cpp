@@ -25,7 +25,7 @@ static void check(dtl_status s, char *error) {
     if (s) throw native_error(s, error ? error : "Laya operation failed");
 }
 static void require_abi() {
-    if (dtl_abi_version() != 2) throw std::runtime_error("Native ducktape-laya ABI " + std::to_string(dtl_abi_version()) + " is not supported (expected 2)");
+    if (dtl_abi_version() != 2) throw native_error(DTL_UNSUPPORTED_PLATFORM, ("Native ducktape-laya ABI " + std::to_string(dtl_abi_version()) + " is not supported (expected 2)").c_str());
 }
 template<class F> napi_value guarded(napi_env env, F f) {
     try { return f(); }

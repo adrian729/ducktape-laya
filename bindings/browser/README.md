@@ -65,7 +65,7 @@ Router requests name a route in `model`, or send `model: 'auto'` (with an option
 
 ## Errors and closing
 
-Native failures carry `status` (exported as `Status`); argument errors carry `status` 1; queue and lifecycle failures carry `code` (`ERR_LAYA_QUEUE_FULL`, `ERR_LAYA_CLOSED`, `ERR_LAYA_WORKER_EXITED`). Strings that are not well-formed Unicode are rejected. A GPU device loss or a runtime abort fails pending work and closes that engine; open a new one.
+Native failures carry `status` (exported as `Status`); argument errors carry `status` 1; queue and lifecycle failures carry `code` (`ERR_LAYA_QUEUE_FULL`, `ERR_LAYA_CLOSED`, `ERR_LAYA_WORKER_EXITED`); a runtime that cannot be loaded or has the wrong ABI fails with status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`. Strings that are not well-formed Unicode are rejected. A GPU device loss or a runtime abort fails pending work and closes that engine; open a new one.
 
 `close()` drains accepted calls and terminates the worker; `close({ cancelPending: true })` cancels them first. Repeated calls return the same promise.
 

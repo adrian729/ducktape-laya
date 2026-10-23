@@ -86,11 +86,11 @@ test('page deadline is wall-clock so the worker realm can measure it', async () 
   await call;
 });
 
-async function workerHarness() {
+async function workerHarness(abi = 2) {
   let top = 64;
   const calls = [], strings = new Map(), heap = new Uint32Array(4096);
   const runtime = {
-    HEAPU32: heap, _dtl_abi_version: () => 2, _dtl_default_call_options(pointer) { heap[pointer >>> 2] = 40; },
+    HEAPU32: heap, _dtl_abi_version: () => abi, _dtl_default_call_options(pointer) { heap[pointer >>> 2] = 40; },
     lengthBytesUTF8: text => Buffer.byteLength(text), stringToUTF8: (text, pointer) => { strings.set(pointer, text); },
     _malloc: size => { const pointer = top; top += (size + 7) & ~7; return pointer; }, _free() {}, _dtl_free() {},
     UTF8ToString: () => JSON.stringify({ backend: 'wasm-cpu' }), addFunction: () => 11, removeFunction() {},
@@ -125,4 +125,20 @@ test('worker converts the absolute wall-clock deadline to remaining milliseconds
   await namespace.call('dtl_execute', '{}', { id: 1, observe: false, deadline: Date.now() + 5000 });
   const timeout = calls.find(call => call.name === 'dtl_execute').words[4];
   assert.ok(timeout > 3000 && timeout <= 5000, `remaining ${timeout}`);
+});
+
+test('an incompatible runtime ABI fails with status 7 and the unsupported code', async () => {
+  const { namespace } = await workerHarness(3);
+  await assert.rejects(namespace.init({ backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, modelUrl: 'https://example.test/m.gguf' }),
+    { status: 7, message: /Incompatible Laya WASM ABI/ });
+});
+
+test('the page maps status 7 worker errors to ERR_LAYA_UNSUPPORTED', async () => {
+  const workers = [];
+  globalThis.Worker = class { constructor() { workers.push(this); } postMessage(message) { this.sent = message; } terminate() {} };
+  const { Laya } = await import('./index.mjs?unsupported');
+  const opening = Laya.open({ modelUrl: 'https://example.test/m.gguf', moduleUrl: 'https://example.test/laya.mjs' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  workers[0].onmessage({ data: { id: workers[0].sent.id, error: 'Incompatible Laya WASM ABI', status: 7 } });
+  await assert.rejects(opening, { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
 });

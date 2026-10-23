@@ -9,7 +9,13 @@ class Laya {
     if (token !== internal) throw new TypeError('Use Laya.open()');
     this.#worker = worker; this.#maxPending = maxPending;
   }
-  static runtimeInfo({ addonPath } = {}) { return JSON.parse(require(resolveAddon(addonPath)).info()); }
+  static runtimeInfo(options) {
+    const { addonPath } = optionsObject(options);
+    let addon;
+    try { addon = require(resolveAddon(addonPath)); }
+    catch (error) { throw nativeError(error.message, error.status ?? 7); }
+    return JSON.parse(addon.info());
+  }
   info() { return this.#send('info').then(JSON.parse); }
   static open(modelPath, options) { return Laya.#open(modelPath, options, false); }
   static async openRouter(config, options) {
@@ -17,7 +23,8 @@ class Laya {
     if (typeof config !== 'string') text = wellFormedJson(config, 'router config');
     return Laya.#open(text, options, true);
   }
-  static async #open(modelPath, { threads, contextTokens, overflow, temperatures, maxPending = 16, addonPath } = {}, router) {
+  static async #open(modelPath, options, router) {
+    const { threads, contextTokens, overflow, temperatures, maxPending = 16, addonPath } = optionsObject(options);
     const what = router ? 'router config' : 'model path';
     if (typeof modelPath !== 'string' || modelPath.includes('\0') || Buffer.byteLength(modelPath) > 1048576) throw invalid(TypeError, `Invalid ${what}`);
     if (!modelPath.isWellFormed()) throw invalid(TypeError, `${what} is not valid Unicode`);
@@ -42,8 +49,11 @@ class Laya {
       config.temperatures = temperatures;
     }
     if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw invalid(RangeError, 'maxPending must be 1..1024');
+    let resolved;
+    try { resolved = resolveAddon(addonPath); }
+    catch (error) { throw nativeError(error.message, error.status ?? 7); }
     const worker = new Worker(path.join(__dirname, 'worker.cjs'), { workerData: {
-      modelPath, config: Object.keys(config).length ? wellFormedJson(config, 'config') : null, router, addonPath: resolveAddon(addonPath)
+      modelPath, config: Object.keys(config).length ? wellFormedJson(config, 'config') : null, router, addonPath: resolved
     }});
     const engine = new Laya(internal, worker, maxPending);
     await new Promise((resolve, reject) => {
@@ -51,7 +61,7 @@ class Laya {
       worker.on('message', (message) => {
         if (message.startupError) {
           engine.#dead = true;
-          reject(Object.assign(new Error(message.startupError), { status: message.status }));
+          reject(nativeError(message.startupError, message.status));
           return;
         }
         if (message.ready) { ready = true; resolve(); return; }
@@ -65,7 +75,7 @@ class Laya {
         }
         engine.#pending.delete(message.id);
         pending.cleanup?.();
-        if (message.error) pending.reject(Object.assign(new Error(message.error), { status: message.status }));
+        if (message.error) pending.reject(nativeError(message.error, message.status));
         else pending.resolve(message.result);
       });
       const fail = (error) => {
@@ -80,11 +90,12 @@ class Laya {
     return engine;
   }
   #send(kind, request, onEvent, { signal, timeoutMs = 0, requestId } = {}) {
+    // A closed engine reports ERR_LAYA_CLOSED even after its worker has exited.
+    if (this.#closing && kind !== 'close') return Promise.reject(closedError());
     if (this.#dead) return Promise.reject(exitedError('Engine worker has exited'));
     // JSON.stringify can run application getters/toJSON methods that submit work
     // or close this engine. Check again at the actual enqueue boundary.
     if (kind !== 'close') {
-      if (this.#closing) return Promise.reject(closedError());
       if (this.#pending.size >= this.#maxPending) return Promise.reject(queueFullError());
     }
     if (signal?.aborted) return Promise.reject(Object.assign(new Error('Request cancelled'), { status: 5 }));
@@ -112,7 +123,8 @@ class Laya {
     });
   }
   /** Runs one request object (or JSON string) or an array of requests. */
-  async execute(request, { onEvent, signal, timeoutMs = 0, requestId } = {}) {
+  async execute(request, options) {
+    const { onEvent, signal, timeoutMs = 0, requestId } = optionsObject(options);
     if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw invalid(RangeError, 'timeoutMs must be 0..86400000');
     if (requestId !== undefined && (!Number.isSafeInteger(requestId) || requestId < 0)) throw invalid(RangeError, 'requestId must be a non-negative safe integer');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
@@ -143,9 +155,17 @@ class Laya {
   }
 }
 const internal = Symbol('Laya');
+// Options default to {}; null or a non-object is an argument error with status 1.
+const optionsObject = options => {
+  if (options === undefined) return {};
+  if (options === null || typeof options !== 'object') throw invalid(TypeError, 'options must be an object');
+  return options;
+};
 const closedError = () => Object.assign(new Error('Engine is closing or closed'), { code: 'ERR_LAYA_CLOSED' });
 const queueFullError = () => Object.assign(new Error('Laya queue is full'), { code: 'ERR_LAYA_QUEUE_FULL' });
 const exitedError = message => Object.assign(new Error(message), { code: 'ERR_LAYA_WORKER_EXITED' });
+// Load and ABI failures (status 7) also carry a stable code.
+const nativeError = (message, status) => Object.assign(new Error(message), { status }, status === 7 ? { code: 'ERR_LAYA_UNSUPPORTED' } : {});
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
 // JSON.stringify escapes lone surrogates instead of failing, which the native
 // side would then silently replace; reject them before serializing.

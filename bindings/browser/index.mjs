@@ -4,6 +4,8 @@ const bytes = text => new TextEncoder().encode(text).byteLength;
 const absolute = url => new URL(url, globalThis.location?.href).href;
 const queueFullError = () => Object.assign(new Error('Laya queue is full'), { code: 'ERR_LAYA_QUEUE_FULL' });
 const exitedError = (message, status) => Object.assign(new Error(message), { code: 'ERR_LAYA_WORKER_EXITED', ...(status === undefined ? {} : { status }) });
+// Load and ABI failures (status 7) also carry a stable code.
+const nativeError = (message, status) => Object.assign(new Error(message), { status }, status === 7 ? { code: 'ERR_LAYA_UNSUPPORTED' } : {});
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
 // JSON.stringify escapes lone surrogates instead of failing, which the native
 // side would then silently replace; reject them before serializing.
@@ -35,7 +37,7 @@ export class Laya {
       if (data.event) { try { Promise.resolve(pending.onEvent?.(data.event)).catch(() => {}); } catch {} return; }
       this.#pending.delete(data.id);
       pending.cleanup?.();
-      if (data.error) pending.reject(Object.assign(new Error(data.error), { status: data.status }));
+      if (data.error) pending.reject(nativeError(data.error, data.status));
       else pending.resolve(data.result);
     };
     worker.onerror = event => this.#fail(exitedError(event.message || 'Laya worker failed'));

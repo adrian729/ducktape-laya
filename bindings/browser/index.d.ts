@@ -33,3 +33,8 @@ export declare const Status: Readonly<{
   OK: 0; INVALID_ARGUMENT: 1; MODEL_ERROR: 2; INFERENCE_ERROR: 3;
   OUT_OF_MEMORY: 4; CANCELLED: 5; DEADLINE_EXCEEDED: 6; UNSUPPORTED_PLATFORM: 7;
 }>;
+/** Shape of errors thrown by this package; `status` is a `Status` value, `code` a stable string. Load and ABI failures carry status 7 and code `ERR_LAYA_UNSUPPORTED`. */
+export interface LayaError extends Error {
+  status?: number;
+  code?: 'ERR_LAYA_CLOSED' | 'ERR_LAYA_QUEUE_FULL' | 'ERR_LAYA_WORKER_EXITED' | 'ERR_LAYA_UNSUPPORTED';
+}

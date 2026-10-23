@@ -87,7 +87,7 @@ Cancellation is cooperative; a rejected call returns no partial result. After an
 
 ## Errors and closing
 
-Errors are `Error` objects. Native failures carry `status` (the C ABI status, also exported as `Status`); argument errors carry `status` 1. Queue and lifecycle failures carry `code`: `ERR_LAYA_QUEUE_FULL`, `ERR_LAYA_CLOSED` or `ERR_LAYA_WORKER_EXITED`. Strings that are not well-formed Unicode are rejected.
+Errors are `Error` objects. Native failures carry `status` (the C ABI status, also exported as `Status`); argument errors carry `status` 1. Queue and lifecycle failures carry `code`: `ERR_LAYA_QUEUE_FULL`, `ERR_LAYA_CLOSED` or `ERR_LAYA_WORKER_EXITED`. A missing, unloadable or wrong-ABI addon (including a glibc addon on a musl system) fails with status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`. After `close()`, every call (including `info()`) rejects with `ERR_LAYA_CLOSED`. A `null` or non-object options argument is a status-1 `TypeError`. Strings that are not well-formed Unicode are rejected.
 
 `close()` stops admission and drains accepted calls; `close({ cancelPending: true })` cancels them first. Repeated calls return the same promise, and closing succeeds even if the worker already exited.
 

@@ -62,7 +62,7 @@ async function call(name, request, job) {
 }
 async function init(options) {
   if (options.backend === 'webgpu') {
-    if (!navigator.gpu || !await navigator.gpu.requestAdapter()) throw new Error('WebGPU adapter unavailable');
+    if (!navigator.gpu || !await navigator.gpu.requestAdapter()) throw fail('WebGPU adapter unavailable', 7);
     // Monitor the runtime's device in this private worker realm.
     const requestDevice = GPUAdapter.prototype.requestDevice;
     GPUAdapter.prototype.requestDevice = async function(...args) {
@@ -71,20 +71,22 @@ async function init(options) {
       return device;
     };
   }
+  try {
   const create = (await import(options.moduleUrl)).default;
   runtime = await create({ onAbort: () => { if (!closing) postMessage({ fatal: 'Laya WASM runtime aborted' }); }, locateFile: name => name.endsWith('.wasm') ? options.wasmUrl : new URL(name, options.moduleUrl).href,
     print: options.diagnostics ? text => postMessage({ diagnostic: String(text) }) : () => {}, printErr: options.diagnostics ? text => postMessage({ diagnostic: String(text) }) : () => {} });
-  if (runtime._dtl_abi_version() !== 2) throw new Error('Incompatible Laya WASM ABI');
+  } catch (error) { throw fail(`Cannot load the Laya WASM runtime: ${error?.message ?? error}`, 7); }
+  if (runtime._dtl_abi_version() !== 2) throw fail('Incompatible Laya WASM ABI', 7);
   const diagnostics = JSON.parse(await call('dtl_info', null, {}));
   const expectedBackend = options.backend === 'webgpu' ? 'webgpu' : 'wasm-cpu';
-  if (diagnostics.backend !== expectedBackend) throw new Error(`Laya backend mismatch: expected ${expectedBackend}, got ${diagnostics.backend}`);
+  if (diagnostics.backend !== expectedBackend) throw fail(`Laya backend mismatch: expected ${expectedBackend}, got ${diagnostics.backend}`, 7);
   {
     // Verify the wasm32 struct layout the worker writes against the runtime's own defaults.
     const probe = runtime._malloc(CALL_OPTIONS_SIZE);
     if (!probe) throw fail('Out of WASM memory', 4);
     try {
       runtime._dtl_default_call_options(probe);
-      if (runtime.HEAPU32[probe >>> 2] !== CALL_OPTIONS_SIZE) throw new Error('Incompatible Laya WASM ABI');
+      if (runtime.HEAPU32[probe >>> 2] !== CALL_OPTIONS_SIZE) throw fail('Incompatible Laya WASM ABI', 7);
     } finally { runtime._free(probe); }
   }
   observer = runtime.addFunction((text, user) => {

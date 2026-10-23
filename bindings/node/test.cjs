@@ -146,7 +146,7 @@ test('runtime and model diagnostics share native identity', { skip: !process.env
     assert.ok(info.model.temperatures.noul > 0);
     delete info.model; assert.deepEqual(info, runtime);
   } finally { await engine.close(); }
-  await assert.rejects(engine.info());
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED' });
 });
 
 test('Status is frozen and validation errors carry status and codes', async () => {
@@ -181,7 +181,7 @@ test('close resolves after the worker has died and stays idempotent', async () =
   const close = engine.close();
   assert.equal(engine.close(), close);
   await close;
-  await assert.rejects(engine.info());
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED' });
 });
 
 test('execute is the only call', async () => {
@@ -349,4 +349,28 @@ test('answers report confidence and answer_confidence', { skip: !process.env.LAY
       assert.equal(answer.answer_confidence, top);
     }
   } finally { await engine.close(); }
+});
+
+test('calls after close() report ERR_LAYA_CLOSED once the worker has exited', async () => {
+  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  await engine.close();
+  await new Promise(resolve => setTimeout(resolve, 100)); // let the worker exit
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED' });
+  await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_CLOSED' });
+});
+
+test('addon load failures carry status 7 and ERR_LAYA_UNSUPPORTED', async () => {
+  const addonPath = path.join(__dirname, 'does-not-exist.node');
+  await assert.rejects(Laya.open('x', { addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
+  await assert.rejects(Laya.openRouter({ models: { unused: __filename } }, { addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
+  assert.throws(() => Laya.runtimeInfo({ addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
+});
+
+test('null or non-object options are argument errors with status 1', async () => {
+  await assert.rejects(Laya.open('x', null), { name: 'TypeError', status: 1 });
+  await assert.rejects(Laya.openRouter({ models: { unused: __filename } }, null), { name: 'TypeError', status: 1 });
+  assert.throws(() => Laya.runtimeInfo(null), { name: 'TypeError', status: 1 });
+  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  try { await assert.rejects(engine.execute('{}', null), { name: 'TypeError', status: 1 }); }
+  finally { await engine.close(); }
 });
