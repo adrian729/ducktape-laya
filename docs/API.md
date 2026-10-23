@@ -132,14 +132,7 @@ Requests are strict: these are the only top-level keys, and any other key (inclu
 
 Any other key in a question is rejected.
 
-A primitive request contains non-null `state` and 1–32 named `questions`.
-Each question requires a supported `type` and non-null `instructions`; state,
-instructions and criterion descriptions may be text or structured JSON.
-Structured values enter the prompt as the original Laya writes them, the format
-the model was trained on: one-line JSON with `", "` and `": "` separators,
-non-ASCII text kept, and numbers at full precision (`149.0` stays `149.0`).
-A criterion description that is `null` or `""` means no description; `0` and
-`false` are descriptions.
+A primitive request contains non-null `state` and 1–32 named `questions`. Each question requires a supported `type` and non-null `instructions`; state, instructions and criterion descriptions may be text or structured JSON. Structured values enter the prompt as the original Laya writes them, the format the model was trained on: one-line JSON with `", "` and `": "` separators, non-ASCII text kept, and numbers at full precision (`149.0` stays `149.0`; integers outside the 64-bit range keep all their digits, as Python's exact integers do). Integers with more than 308 digits exceed the double range and are rejected with status 1, where Python would accept them. A structured state may serialize longer than its request text (`1e15` becomes `1000000000000000.0`); a state whose serialized text exceeds 2 MiB is rejected with status 1, as is a rendered question over 2 MiB. A criterion description that is `null` or `""` means no description; `0` and `false` are descriptions.
 
 | Type | Criteria | Answer |
 | --- | --- | --- |
@@ -193,13 +186,7 @@ probability across the copies. Each copy costs one more model pass.
 
 ## Batches
 
-Pass a JSON array of 1–32 requests; results are an array in the same order.
-Primitive and structured requests can be mixed. Limits apply to the entire
-call: 1 MiB UTF-8, 128 questions total, 32 questions per request, depth 64, at
-most 1,024 members in any JSON object (also in open and router configs), and at
-most 4,096 planned forward passes; each
-prompt must fit its token limit (`max_tokens`, at most the engine's `context_tokens`, checked even when every question is a single-option `choice`) or follow its overflow policy. The model's instruction/option head budget still applies. A run of more than 4,096 consecutive ASCII spaces in a question or in the state is rejected, because llama.cpp's tokenizer takes quadratic time on such runs. Every
-binding's `execute` accepts an array:
+Pass a JSON array of 1–32 requests; results are an array in the same order. Primitive and structured requests can be mixed. Limits apply to the entire call: 1 MiB UTF-8, 128 questions total, 32 questions per request, depth 64, at most 1,024 members in any JSON object (also in open and router configs), and at most 4,096 planned forward passes; each prompt must fit its token limit (`max_tokens`, at most the engine's `context_tokens`, checked even when every question is a single-option `choice`) or follow its overflow policy. The model's instruction/option head budget still applies. Tokenization time is linear in the text's length. Every binding's `execute` accepts an array:
 
 ```js
 const results = await engine.execute([requestA, requestB]);
@@ -345,15 +332,7 @@ Return zero to continue, `DTL_DEADLINE_EXCEEDED` for a host deadline, or another
 nonzero value to cancel. The first observed stop is latched even if a caller
 subsequently resets its flag. C++ callback exceptions count as cancellation.
 
-Statuses: `DTL_CANCELLED` (5) and `DTL_DEADLINE_EXCEEDED` (6). Failure returns
-no partial result. Waiting calls check controls while acquiring the mutex;
-preparation and question boundaries check them too. CPU execution uses the
-upstream abort callback and resets it before releasing the inference lock.
-Cancellation is cooperative, not a thread kill or a hard wall-clock guarantee.
-Model loading, template execution and tokenization may finish before the next safe
-check; tokenization cannot be interrupted, and the request limits above bound its
-cost.
-Router cache mutations are not rolled back by a cancelled request.
+Statuses: `DTL_CANCELLED` (5) and `DTL_DEADLINE_EXCEEDED` (6). Failure returns no partial result. Waiting calls check controls while acquiring the mutex; preparation and question boundaries check them too. CPU execution uses the upstream abort callback and resets it before releasing the inference lock. Cancellation is cooperative, not a thread kill or a hard wall-clock guarantee. Model loading, template execution and tokenization may finish before the next safe check; tokenization cannot be interrupted. Its time grows linearly with the text, which the request limits above bound: on a busy 8-core x86-64 desktop, 1 MiB of state took about 4 s for ordinary text and up to about 11 s for long words without spaces, the slowest input measured. Router cache mutations are not rolled back by a cancelled request.
 
 C++ `execute` takes a `call_options` with `request_id`, `timeout_ms`, `should_cancel`, `cancel_user_data` and `on_event`. Rust `execute_with` takes `CallOptions` built with `request_id`, `timeout_ms`, `cancel_flag` (a borrowed
 `AtomicU32`) and `on_event`. Hosts
@@ -397,19 +376,7 @@ closing a non-null handle invalidates it and must not race any active call.
 | 6 | Deadline exceeded |
 | 7 | Unsupported platform/required CPU features |
 
-Allocation failure while parsing, planning, rendering or returning a request
-yields status 4 and leaves the engine usable. During model loading the runtime
-loader may report it as status 2. The library does not terminate the process on
-C++ allocation failure. Inside llama.cpp/ggml C code, failing to allocate model
-weights or compute buffers is reported as status 2 or 4, and a failed CPU
-thread-pool allocation during inference as status 4. ggml aborts the process
-(`SIGABRT`) when one of its small bookkeeping allocations fails, such as a graph
-context or scheduler array; that is upstream design. On Linux with the default
-memory overcommit such allocations practically never fail, because the kernel's
-OOM killer stops a process under memory pressure first. In the browser an abort
-ends only that worker's WebAssembly instance (see BROWSER.md). Applications that
-must survive allocation failure inside ggml should run the engine in a separate
-process.
+Allocation failure while parsing, planning, rendering or returning a request yields status 4 and leaves the engine usable. During model loading the runtime loader may report it as status 2. The library does not terminate the process on C++ allocation failure. Inside llama.cpp/ggml C code, failing to allocate model weights or compute buffers is reported as status 2 or 4. During inference, a failed CPU thread-pool or work-buffer allocation, and a CPU worker thread that the operating system refuses to create (for example at `RLIMIT_NPROC` or a container's pids limit), are reported as status 4; the engine stays usable. ggml aborts the process (`SIGABRT`) when one of its small bookkeeping allocations fails, such as a graph context or scheduler array; that is upstream design. On Linux with the default memory overcommit such allocations practically never fail, because the kernel's OOM killer stops a process under memory pressure first. In the browser an abort ends only that worker's WebAssembly instance (see BROWSER.md). Applications that must survive allocation failure inside ggml should run the engine in a separate process.
 
 Every binding exposes native statuses through its error type, with named
 constants. JS rejects with an Error carrying `status`; binding-level validation
