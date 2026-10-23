@@ -15,7 +15,7 @@ unsupported fields are rejected.
 |---|---|---|---|
 | C | `dtl_open(path, config_json, &engine, &error)` | `dtl_execute(engine, json, call_options, &result, &error)` | `dtl_open_router(router_json, config_json, &engine, &error)` |
 | C++ | `ducktape::engine::open(path, config_json)` | `engine.execute(json, call_options)` | `ducktape::engine::open_router(router_json, config_json)` |
-| Rust | `Engine::open(path, &Config)` | `engine.execute(json)`; `execute_with(json, CallOptions)` | `Engine::open_router(router_json, &Config)` |
+| Rust | `Engine::open(path, &Config)` (`path` is any `AsRef<Path>` that is valid UTF-8) | `engine.execute(json)`; `execute_with(json, CallOptions)` | `Engine::open_router(router_json, &Config)` |
 | Node/TS | `Laya.open(path, options)` | `execute(request, options)` | `Laya.openRouter(config, options)` |
 | Python | `Engine.open(path, threads=, context_tokens=, temperatures=, overflow=)` | `execute(request, on_event=, request_id=, timeout=, cancel=)`; `execute_async` | `Engine.open_router(config, ...)` |
 | Go | `laya.Open(path, *Config)` | `Execute(json)`; `ExecuteContext(ctx, json, *CallOptions)` | `laya.OpenRouter(routerJSON, *Config)` |

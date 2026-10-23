@@ -63,6 +63,12 @@ fn read_info(engine: *mut ffi::Engine) -> Result<String, Error> {
     let status = unsafe { ffi::dtl_info(engine, &mut result, &mut error) };
     let owned = Buffer(result);
     check(status, error)?;
+    if owned.0.is_null() {
+        return Err(Error {
+            status: status::INFERENCE_ERROR,
+            message: "Native result was null".into(),
+        });
+    }
     Ok(unsafe { CStr::from_ptr(owned.0) }
         .to_string_lossy()
         .into_owned())
@@ -203,8 +209,14 @@ impl Engine {
     pub fn info(&self) -> Result<String, Error> {
         read_info(self.0.as_ptr())
     }
-    /// Open a single GGUF model.
-    pub fn open(model_path: &str, config: &Config) -> Result<Self, Error> {
+    /// Open a single GGUF model. The path must be valid UTF-8 (the native
+    /// library takes UTF-8 paths on every platform); otherwise this fails with
+    /// `INVALID_ARGUMENT`.
+    pub fn open(model_path: impl AsRef<std::path::Path>, config: &Config) -> Result<Self, Error> {
+        let model_path = model_path
+            .as_ref()
+            .to_str()
+            .ok_or_else(|| invalid("Model path is not valid UTF-8"))?;
         let path = cstring(model_path)?;
         Self::open_with(config, |config, out, error| unsafe {
             ffi::dtl_open(path.as_ptr(), config, out, error)
@@ -321,6 +333,21 @@ mod tests {
     }
     fn two() -> Config {
         Config::default().threads(2)
+    }
+    #[test]
+    fn open_accepts_paths_and_rejects_non_utf8() {
+        let missing = Engine::open(std::path::Path::new("/nonexistent/m.gguf"), &two())
+            .err()
+            .unwrap();
+        assert_eq!(missing.status, status::MODEL_ERROR);
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let bad = std::ffi::OsStr::from_bytes(b"/tmp/\xff.gguf");
+            let error = Engine::open(bad, &two()).err().unwrap();
+            assert_eq!(error.status, status::INVALID_ARGUMENT);
+            assert!(error.message.contains("UTF-8"));
+        }
     }
     fn escape(path: &str) -> String {
         path.replace('\\', "\\\\").replace('"', "\\\"")
