@@ -12,6 +12,11 @@ schema 2, packages that are not the qualified ones or differ from their
 inventory, and platforms that are not the targets. A schema-1 gates.json (0.1.0,
 0.2.0) still passes the shared filter.
 
+scripts/verify-release-assets.sh runs against a fake gh: the signer is pinned by the exact
+certificate identity and the certificate's repository, ref, trigger and runner are
+checked. scripts/pypi-missing-wheels.py (the PyPI publish job) runs against fake PyPI
+payloads: published wheels with equal bytes are skipped, differing or foreign files fail.
+
 With --published DIR COMMIT it instead checks a downloaded release (gh release
 download TAG -D DIR) as attest-release.yml would; 0.2.0 must pass.
 """
@@ -253,6 +258,91 @@ esac
         self.assertFalse(gates_filter({**gates, 'schema_version': 3, 'targets': self.gates['targets']}))
         self.assertTrue(gates_filter(self.gates))
         self.assertFalse(gates_filter(self.gates, 'b' * 40))
+
+
+class PyPI(unittest.TestCase):
+    """scripts/pypi-missing-wheels.py against fake PyPI JSON payloads (no network)."""
+    SCRIPT = ROOT / 'scripts/pypi-missing-wheels.py'
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='ducktape-pypi-')
+        self.addCleanup(self.temp.cleanup)
+        self.work = pathlib.Path(self.temp.name)
+        self.dist = self.work / 'dist'
+        self.dist.mkdir()
+        self.wheels = {f'ducktape_laya-1.2.3-py3-none-{tag}.whl': f'wheel {tag}'.encode() for tag in ('manylinux_2_38_x86_64', 'manylinux_2_38_aarch64', 'win_amd64')}
+        for name, data in self.wheels.items():
+            (self.dist / name).write_bytes(data)
+        self.sums = self.work / 'SHA256SUMS'
+        self.sums.write_text(''.join(f'{hashlib.sha256(data).hexdigest()}  {name}\n' for name, data in self.wheels.items()) + 'f' * 64 + '  gates.json\n')
+
+    def run_script(self, payload=None, status=None):
+        command = [sys.executable, str(self.SCRIPT), '--package', 'ducktape-laya', '--version', '1.2.3', '--dist', str(self.dist), '--sums', str(self.sums)]
+        if payload is not None:
+            (self.work / 'pypi.json').write_text(json.dumps(payload))
+            command += ['--pypi-json', str(self.work / 'pypi.json')]
+        else:
+            command += ['--pypi-status', str(status)]
+        output = self.work / 'github-output'
+        output.write_text('')
+        result = subprocess.run(command, capture_output=True, text=True, env={**os.environ, 'GITHUB_OUTPUT': str(output)})
+        return result, output.read_text().strip()
+
+    def listing(self, names=None, **changes):
+        return {'info': {'name': 'ducktape-laya'}, 'urls': [
+            {'filename': name, 'digests': {'sha256': changes.get(name, hashlib.sha256(self.wheels[name]).hexdigest())}} for name in (names or self.wheels)]}
+
+    def remaining(self):
+        return sorted(path.name for path in self.dist.iterdir())
+
+    def test_workflow_uses_the_comparison_not_skip_existing(self):
+        workflow = (ROOT / '.github/workflows/publish-release.yml').read_text()
+        self.assertNotRegex(workflow, r'(?m)^\s*skip-existing:')
+        job = workflow[workflow.index('\n  pypi:\n'):workflow.index('\n  nuget:\n')]
+        self.assertIn('scripts/pypi-missing-wheels.py', job)
+        self.assertLess(job.index('scripts/pypi-missing-wheels.py'), job.index('pypa/gh-action-pypi-publish'))
+        self.assertIn("steps.plan.outputs.upload == 'true'", job)
+        self.assertIn('id-token: write', job)
+
+    def test_not_published_uploads_everything(self):
+        result, output = self.run_script(status=404)
+        self.assertEqual((result.returncode, output), (0, 'upload=true'), result.stderr)
+        self.assertEqual(self.remaining(), sorted(self.wheels))
+        result, output = self.run_script(payload={'info': {}, 'urls': []})
+        self.assertEqual((result.returncode, output), (0, 'upload=true'), result.stderr)
+
+    def test_retry_uploads_only_missing_wheels(self):
+        done = list(self.wheels)[:2]
+        result, output = self.run_script(self.listing(done))
+        self.assertEqual((result.returncode, output), (0, 'upload=true'), result.stderr)
+        self.assertEqual(self.remaining(), [list(self.wheels)[2]])
+        self.assertEqual(sorted(path.name for path in (self.work / 'already-published').iterdir()), sorted(done))
+
+    def test_everything_already_published(self):
+        result, output = self.run_script(self.listing())
+        self.assertEqual((result.returncode, output), (0, 'upload=false'), result.stderr)
+        self.assertEqual(self.remaining(), [])
+
+    def test_wheel_with_other_bytes_fails(self):
+        name = list(self.wheels)[1]
+        result, output = self.run_script(self.listing(**{name: '0' * 64}))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f'{name} is on PyPI with sha256', result.stderr)
+        self.assertEqual((output, self.remaining()), ('', sorted(self.wheels)))
+
+    def test_foreign_file_and_bad_inputs_fail(self):
+        payload = self.listing()
+        payload['urls'].append({'filename': 'ducktape_laya-1.2.3.tar.gz', 'digests': {'sha256': '1' * 64}})
+        result, _ = self.run_script(payload)
+        self.assertIn('not part of this release', result.stderr)
+        self.assertNotEqual(result.returncode, 0)
+        result, _ = self.run_script(status=500)
+        self.assertNotEqual(result.returncode, 0)
+        # A local wheel that differs from SHA256SUMS never goes up.
+        (self.dist / list(self.wheels)[0]).write_bytes(b'tampered')
+        result, _ = self.run_script(status=404)
+        self.assertIn('does not match SHA256SUMS', result.stderr)
+        self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == '__main__':
