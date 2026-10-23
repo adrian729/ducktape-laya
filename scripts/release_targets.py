@@ -16,6 +16,7 @@ hold raises Mismatch (gate failed).
 import hashlib
 import json
 import pathlib
+import re
 import tarfile
 import zipfile
 
@@ -46,12 +47,38 @@ CI_EVENT, CI_CONCLUSION = 'workflow_dispatch', 'success'
 RELEASE_REPOSITORY = 'adrian729/ducktape-laya'
 
 
+# What cannot be compared byte for byte between this host and the CI runner, and what is compared instead
+# (measured on a real candidate run: every other entry of every package, class files and DLLs included, was equal).
+# Written to the gates.json report as package_comparison, so nothing is skipped silently.
+COMPARISON_NOTES = {
+    'ducktape_laya-targets.cmake': 'the CMake version that generated the install export writes its newest policy into '
+                                   'cmake_policy(VERSION 2.8.3...X); that number is compared as <cmake>, every other byte is compared',
+    'nuget.psmdcp': 'NuGet records the .NET runtime that ran dotnet pack in lastModifiedBy (";.NET 10.0" here, ";.NET 8.0" in CI); '
+                    'that version is compared as <runtime>, every other byte is compared',
+    '*-javadoc.jar': 'javadoc output depends on the exact JDK (CI pins Temurin 25.0.4; this host may differ), so the HTML and assets are not '
+                     'compared: the manifest and the page names of the API module (io.github.adrian729.laya/...) are. The sources jar the '
+                     'javadoc is generated from is compared entry by entry, as are the class files in the jar'}
+JAVADOC_API = 'io.github.adrian729.laya/'
+
+
+def normalized(entry, data):
+    """An entry's bytes with the host-toolchain stamp of COMPARISON_NOTES replaced; everything else is untouched."""
+    if entry.endswith('/ducktape_laya-targets.cmake'):
+        return re.sub(rb'cmake_policy\(VERSION 2\.8\.3\.\.\.[0-9.]+\)', b'cmake_policy(VERSION 2.8.3...<cmake>)', data)
+    if entry.endswith('/nuget.psmdcp'):
+        return re.sub(rb'(<lastModifiedBy>[^<]*?);\.NET [0-9.]+', rb'\1;.NET <runtime>', data)
+    return data
+
+
 def package_entries(path):
     """{entry name: description} of one package file, independent of the container's compression and metadata.
 
-    tar and zip entries are (sha256, executable) or ('link', target); a file that is no archive is
-    its sha256. Two hosts that deflate the same entries differently have equal descriptions."""
+    tar and zip entries are [sha256, executable] or ['link', target]; a file that is no archive is its
+    sha256. Two hosts that deflate the same entries differently have equal descriptions. normalized()
+    entries are described without their toolchain stamp; a javadoc jar is described by its manifest and
+    its API page names (COMPARISON_NOTES)."""
     path = pathlib.Path(path)
+    digest = lambda entry, data: hashlib.sha256(normalized(entry, data)).hexdigest()
     if path.name.endswith(('.tar.gz', '.tgz', '.crate')):
         entries = {}
         with tarfile.open(path, 'r:gz') as archive:
@@ -61,14 +88,18 @@ def package_entries(path):
                 if member.issym() or member.islnk():
                     entries[member.name] = ['link', member.linkname]
                 elif member.isfile():
-                    entries[member.name] = [hashlib.sha256(archive.extractfile(member).read()).hexdigest(), bool(member.mode & 0o111)]
+                    entries[member.name] = [digest(member.name, archive.extractfile(member).read()), bool(member.mode & 0o111)]
                 else:
                     raise ValueError(f'{path.name}: unexpected entry {member.name}')
         return entries
     if path.name.endswith(('.zip', '.jar', '.nupkg', '.whl')):
         with zipfile.ZipFile(path) as archive:
-            return {info.filename: [hashlib.sha256(archive.read(info)).hexdigest(), bool((info.external_attr >> 16) & 0o111)]
-                    for info in archive.infolist() if not info.is_dir()}
+            entries = {info.filename: [digest(info.filename, archive.read(info)), bool((info.external_attr >> 16) & 0o111)]
+                       for info in archive.infolist() if not info.is_dir()}
+        if path.name.endswith('-javadoc.jar'):
+            entries = {name: (value if name == 'META-INF/MANIFEST.MF' else 'api page') for name, value in entries.items()
+                       if name == 'META-INF/MANIFEST.MF' or name.startswith(JAVADOC_API)}
+        return entries
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 

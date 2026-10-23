@@ -336,6 +336,27 @@ class CheckCandidate(unittest.TestCase):
                 self.assertEqual(gate['status'], 'failed', gate)
                 self.assertIn('differs from this host', gate['detail'])
                 self.assertIn(message, gate['detail'])
+        # The documented toolchain stamps (COMPARISON_NOTES) are the only things allowed to differ.
+        world = self.world('local-toolchain-stamps')
+        world.repack_local(f'ducktape-laya-{world.version}-linux-x64.tar.gz', lambda e: {
+            k: v.replace(b'3.29', b'4.2') if k.endswith('-targets.cmake') else v for k, v in e.items()})
+        world.repack_local(f'DucktapeLaya.{world.version}.nupkg', lambda e: {
+            k: (v[0].replace(b'.NET 8.0', b'.NET 10.0'), v[1]) if k.endswith('nuget.psmdcp') else v for k, v in e.items()})
+        world.repack_local(f'ducktape-laya-{world.version}-javadoc.jar', lambda e: {
+            **e, 'index.html': (b'jdk 27 page', False), 'io.github.adrian729.laya/io/github/adrian729/laya/Laya.html': (b'jdk 27 page', False),
+            'resource-files/jquery-ui.min.css': (b'only in some JDKs', False)})
+        gates = self.check(world)
+        self.assertEqual(gates['gates']['artifact_integrity'], {'status': 'passed'})
+        self.assertEqual(sorted(gates['package_comparison']), ['*-javadoc.jar', 'ducktape_laya-targets.cmake', 'nuget.psmdcp'])
+        # ... but a change beyond the stamp, or a missing API page, still fails.
+        for label, name, change, message in (
+                ('cmake beyond the policy', f'ducktape-laya-{world.version}-linux-x64.tar.gz',
+                 lambda e: {k: v + b'target_link_libraries(x evil)\n' if k.endswith('-targets.cmake') else v for k, v in e.items()}, 'targets.cmake'),
+                ('javadoc API page', f'ducktape-laya-{world.version}-javadoc.jar',
+                 lambda e: {k: v for k, v in e.items() if not k.startswith('io.github')}, 'Laya.html')):
+            with self.subTest(label):
+                world.repack_local(name, change)
+                self.assertIn(message, self.check(world)['gates']['artifact_integrity']['detail'])
         # Entries are compared, not container bytes: the same entries in a differently compressed container pass.
         world = self.world('local-recompressed')
         world.repack_local(f'ducktape-laya-{world.version}.tgz', lambda e: dict(reversed(list(e.items()))))

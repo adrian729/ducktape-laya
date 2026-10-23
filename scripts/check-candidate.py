@@ -30,7 +30,7 @@ import tempfile
 import zipfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from release_support import ROOT, check_qualification, check_record, check_targets, git, read_json, sha256, source_identity
-from release_targets import Context, Missing, Mismatch, compare_packages, evaluate_targets, need, run_gate
+from release_targets import Context, Missing, Mismatch, COMPARISON_NOTES, compare_packages, evaluate_targets, need, run_gate
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('evidence', type=pathlib.Path, help='JSON object: evidence name -> report path (relative to the manifest)')
@@ -377,6 +377,7 @@ result['inventories_sha256'] = {}
 for label, path in (('native', paths.get('release_packages')), ('browser', paths.get('browser_package'))):
     if path and path.is_file(): result['inventories_sha256'][label] = sha256(path)
 result['reused_evidence'] = reused
+result['package_comparison'] = COMPARISON_NOTES
 result['publication_gates'] = {gate: 'not_run' for gate in policy['publication_gates']}
 a.report.write_text(json.dumps(result, indent=2) + '\n')
 shutil.rmtree(candidate_tree, ignore_errors=True)

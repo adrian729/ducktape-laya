@@ -100,12 +100,14 @@ class World:
         nupkg = {'_rels/.rels': (b'rels', False), 'DucktapeLaya.nuspec': (b'nuspec', False), 'lib/net10.0/DucktapeLaya.dll': (b'managed', False),
                  f'runtimes/{item.nuget}/native/{item.library}': (library, False),
                  '[Content_Types].xml': (content_types(item.library.rsplit('.', 1)[1]), False),
-                 'package/services/metadata/core-properties/nuget.psmdcp': (b'core', False)}
+                 'package/services/metadata/core-properties/nuget.psmdcp':
+                     (b'<coreProperties>\n  <lastModifiedBy>NuGet.Packaging, Version=7.9.0.0;.NET 8.0</lastModifiedBy>\n</coreProperties>\n', False)}
         write_zip(out / f'DucktapeLaya.{self.version}.nupkg', nupkg, EPOCH, list(nupkg))
         prefix = f'ducktape-laya-{self.version}-{platform}'
         files = {f'{prefix}/lib/{item.library}': library, **{f'{prefix}/share/ducktape-laya/{name}': b'text' for name in LICENSES},
                  f'{prefix}/include/ducktape_laya.h': b'#pragma once\n', f'{prefix}/lib/cmake/ducktape_laya/ducktape_laya-config.cmake': b'# config\n',
-                 f'{prefix}/lib/pkgconfig/ducktape-laya.pc': b'Libs: -lducktape_laya\n'}
+                 f'{prefix}/lib/pkgconfig/ducktape-laya.pc': b'Libs: -lducktape_laya\n',
+                 f'{prefix}/lib/cmake/ducktape_laya/ducktape_laya-targets.cmake': b'cmake_policy(PUSH)\ncmake_policy(VERSION 2.8.3...3.29)\n'}
         if item.archive == '.zip':
             write_zip(out / (prefix + '.zip'), {name: (data, False) for name, data in files.items()}, EPOCH)
         else:
@@ -115,7 +117,8 @@ class World:
         for name in (f'ducktape-laya-sys-{self.version}.crate', f'ducktape-laya-{self.version}.crate'):
             tgz(out / name, {'crate/src/lib.rs': name.encode()})
         for name in (f'ducktape-laya-{self.version}-sources.jar', f'ducktape-laya-{self.version}-javadoc.jar'):
-            write_zip(out / name, {'META-INF/MANIFEST.MF': (name.encode(), False)}, EPOCH)
+            pages = {'index.html': (b'jdk page', False), 'io.github.adrian729.laya/io/github/adrian729/laya/Laya.html': (b'jdk page', False)}
+            write_zip(out / name, {'META-INF/MANIFEST.MF': (name.encode(), False), **(pages if name.endswith('javadoc.jar') else {})}, EPOCH)
         (out / f'ducktape-laya-{self.version}.pom').write_bytes(b'pom')
         (out / 'sbom.cdx.json').write_text(json.dumps({'bomFormat': 'CycloneDX', 'components': []}))
         inventory = {'schema_version': 2, 'package_version': self.version, 'packaging_source_commit': self.commit,
