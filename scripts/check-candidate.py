@@ -30,7 +30,7 @@ import tempfile
 import zipfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from release_support import ROOT, check_qualification, check_record, check_targets, git, read_json, sha256, source_identity
-from release_targets import Context, Missing, Mismatch, evaluate_targets, need, run_gate
+from release_targets import Context, Missing, Mismatch, compare_packages, evaluate_targets, need, run_gate
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('evidence', type=pathlib.Path, help='JSON object: evidence name -> report path (relative to the manifest)')
@@ -298,6 +298,14 @@ def artifact_integrity():
     identities = fragment['build_identities']
     need(identities['ducktape_laya']['binary_sha256'] == report['library_sha256'] and identities['ducktape_laya_node']['binary_sha256'] == addon,
          'release packages: linux-x64 library or addon is not the locally validated one')
+    # Everything else the linux-x64 packages carry (headers, CMake and pkg-config files, Python, Java and C# code,
+    # crates, SBOM) must be what this host's own package-native run made, compared entry by entry (the containers'
+    # compression differs between hosts, their entries do not).
+    local_directory = paths['native'].parent / 'packages'
+    fragment_directory, _ = ctx.fragment('linux-x64')
+    differences = compare_packages(local_directory, fragment_directory, list(inventory['artifacts']), list(fragment['artifacts']))
+    need(not differences, 'packages: CI linux-x64 fragment differs from this host\'s package run: ' +
+         '; '.join(f'{name}: {detail}' for name, detail in differences[:6]))
     for platform in ctx.targets:
         ctx.release_payload(platform)
     browser_package()

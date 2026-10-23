@@ -313,6 +313,34 @@ class CheckCandidate(unittest.TestCase):
                 self.assertIn('invalid release record', result.stderr)
                 self.assertFalse((world.directory / 'rejected.json').exists())
 
+    def test_local_package_run_equals_ci_fragment(self):
+        """Entry by entry: headers, CMake/pkg-config files, npm, Java, C#, Python and Rust code; not container bytes."""
+        archive = lambda v: f'ducktape-laya-{v}-linux-x64.tar.gz'
+        prefix = lambda v: f'ducktape-laya-{v}-linux-x64'
+        cases = {
+            'header': (archive, lambda v, e: {**e, f'{prefix(v)}/include/ducktape_laya.h': b'#define EVIL 1\n'}, 'include/ducktape_laya.h'),
+            'cmake': (archive, lambda v, e: {k: v_ for k, v_ in e.items() if not k.endswith('ducktape_laya-config.cmake')}, 'ducktape_laya-config.cmake'),
+            'pkg-config': (archive, lambda v, e: {**e, f'{prefix(v)}/lib/pkgconfig/ducktape-laya.pc': b'Libs: -lother\n'}, 'ducktape-laya.pc'),
+            'npm code': (lambda v: f'ducktape-laya-{v}.tgz', lambda v, e: {**e, 'package/index.cjs': b'module.exports = 2;\n'}, 'package/index.cjs'),
+            'java class': (lambda v: f'ducktape-laya-{v}.jar', lambda v, e: {**e, 'io/Laya.class': (b'other', False)}, 'io/Laya.class'),
+            'csharp code': (lambda v: f'DucktapeLaya.{v}.nupkg', lambda v, e: {**e, 'lib/net10.0/DucktapeLaya.dll': (b'other', False)}, 'DucktapeLaya.dll'),
+            'python code': (lambda v: f'ducktape_laya-{v}-py3-none-manylinux_2_38_x86_64.whl',
+                            lambda v, e: {**e, 'ducktape_laya/__init__.py': (b'evil = 1\n', False)}, '__init__.py'),
+            'rust crate': (lambda v: f'ducktape-laya-{v}.crate', lambda v, e: {**e, 'crate/src/lib.rs': b'evil'}, 'crate/src/lib.rs'),
+            'pom': (lambda v: f'ducktape-laya-{v}.pom', lambda v, e: b'other pom', 'contents differ')}
+        for label, (name, change, message) in cases.items():
+            with self.subTest(label):
+                world = self.world('local-' + label.replace(' ', '-'))
+                world.repack_local(name(world.version), lambda e: change(world.version, e))
+                gate = self.check(world)['gates']['artifact_integrity']
+                self.assertEqual(gate['status'], 'failed', gate)
+                self.assertIn('differs from this host', gate['detail'])
+                self.assertIn(message, gate['detail'])
+        # Entries are compared, not container bytes: the same entries in a differently compressed container pass.
+        world = self.world('local-recompressed')
+        world.repack_local(f'ducktape-laya-{world.version}.tgz', lambda e: dict(reversed(list(e.items()))))
+        self.assertEqual(self.check(world)['gates']['artifact_integrity'], {'status': 'passed'})
+
     def test_installed_release_is_this_host(self):
         world = self.world('host')
         path = world.paths['installed_release']

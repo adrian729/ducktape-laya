@@ -103,7 +103,9 @@ class World:
                  'package/services/metadata/core-properties/nuget.psmdcp': (b'core', False)}
         write_zip(out / f'DucktapeLaya.{self.version}.nupkg', nupkg, EPOCH, list(nupkg))
         prefix = f'ducktape-laya-{self.version}-{platform}'
-        files = {f'{prefix}/lib/{item.library}': library, **{f'{prefix}/share/ducktape-laya/{name}': b'text' for name in LICENSES}}
+        files = {f'{prefix}/lib/{item.library}': library, **{f'{prefix}/share/ducktape-laya/{name}': b'text' for name in LICENSES},
+                 f'{prefix}/include/ducktape_laya.h': b'#pragma once\n', f'{prefix}/lib/cmake/ducktape_laya/ducktape_laya-config.cmake': b'# config\n',
+                 f'{prefix}/lib/pkgconfig/ducktape-laya.pc': b'Libs: -lducktape_laya\n'}
         if item.archive == '.zip':
             write_zip(out / (prefix + '.zip'), {name: (data, False) for name, data in files.items()}, EPOCH)
         else:
@@ -258,6 +260,22 @@ class World:
         write_json(path, value)
         if rehash:
             self.rehash()
+
+    def repack_local(self, name, change):
+        """Rewrite one file of this host's own linux-x64 package run (entries dict -> entries dict, or bytes -> bytes), keeping its inventory true."""
+        from artifact_support import read_tgz, read_zip
+        directory = self.directory / 'native' / 'packages'
+        path = directory / name
+        if name.endswith('.pom') or name.endswith('.json'):
+            path.write_bytes(change(path.read_bytes()))
+        elif name.endswith(('.tgz', '.tar.gz', '.crate')):
+            tgz(path, change({key: data for key, (data, _) in read_tgz(path).items()}))
+        else:
+            entries = read_zip(path)
+            write_zip(path, change(entries), EPOCH, [n for n in entries if n == 'META-INF/MANIFEST.MF'])
+        inventory = json.loads((directory / 'inventory.json').read_text())
+        inventory['artifacts'][name] = {'sha256': sha256(path), 'bytes': path.stat().st_size}
+        write_json(directory / 'inventory.json', inventory)
 
     def repack_release(self, name, change):
         """Rewrite one release package (entries dict -> entries dict) and update the release inventory to match."""

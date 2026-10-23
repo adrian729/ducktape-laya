@@ -16,6 +16,8 @@ hold raises Mismatch (gate failed).
 import hashlib
 import json
 import pathlib
+import tarfile
+import zipfile
 
 from artifact_support import PAYLOAD_PREFIXES, read_tgz, read_zip, verify_inventory
 from release_support import sha256, target as package_target
@@ -42,6 +44,50 @@ LINUX_TESTS = {'real-faults', 'real-c-faults'}
 CI_EVENT, CI_CONCLUSION = 'workflow_dispatch', 'success'
 # The only repository whose runs are candidate evidence (scripts/fetch-ci-evidence.py has the same constant).
 RELEASE_REPOSITORY = 'adrian729/ducktape-laya'
+
+
+def package_entries(path):
+    """{entry name: description} of one package file, independent of the container's compression and metadata.
+
+    tar and zip entries are (sha256, executable) or ('link', target); a file that is no archive is
+    its sha256. Two hosts that deflate the same entries differently have equal descriptions."""
+    path = pathlib.Path(path)
+    if path.name.endswith(('.tar.gz', '.tgz', '.crate')):
+        entries = {}
+        with tarfile.open(path, 'r:gz') as archive:
+            for member in archive.getmembers():
+                if member.isdir():
+                    continue
+                if member.issym() or member.islnk():
+                    entries[member.name] = ['link', member.linkname]
+                elif member.isfile():
+                    entries[member.name] = [hashlib.sha256(archive.extractfile(member).read()).hexdigest(), bool(member.mode & 0o111)]
+                else:
+                    raise ValueError(f'{path.name}: unexpected entry {member.name}')
+        return entries
+    if path.name.endswith(('.zip', '.jar', '.nupkg', '.whl')):
+        with zipfile.ZipFile(path) as archive:
+            return {info.filename: [hashlib.sha256(archive.read(info)).hexdigest(), bool((info.external_attr >> 16) & 0o111)]
+                    for info in archive.infolist() if not info.is_dir()}
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def compare_packages(local, ci, local_names, ci_names):
+    """Differences between this host's package set and the CI fragment's: [(file, what differs)], by entry."""
+    differences = []
+    if sorted(local_names) != sorted(ci_names):
+        differences.append(('(files)', f'only here {sorted(set(local_names) - set(ci_names))}, only in CI {sorted(set(ci_names) - set(local_names))}'))
+    for name in sorted(set(local_names) & set(ci_names)):
+        mine, theirs = package_entries(pathlib.Path(local) / name), package_entries(pathlib.Path(ci) / name)
+        if mine == theirs:
+            continue
+        if isinstance(mine, dict) and isinstance(theirs, dict):
+            changed = sorted(entry for entry in mine.keys() & theirs.keys() if mine[entry] != theirs[entry])
+            detail = {'only here': sorted(mine.keys() - theirs.keys())[:4], 'only in CI': sorted(theirs.keys() - mine.keys())[:4], 'differ': changed[:4]}
+            differences.append((name, {key: value for key, value in detail.items() if value}))
+        else:
+            differences.append((name, 'contents differ'))
+    return differences
 
 
 class Context:
