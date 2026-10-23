@@ -169,14 +169,13 @@
         "tests/installed-packages.py",
         "tests/electron/run.cjs"
       ],
-      "acceptance": "Actual C/C++, Rust, npm/TS/Electron, Python wheel and browser artifacts work outside the checkout."
+      "acceptance": "Actual C/C++, Rust, npm/TS/Electron, Python wheel, Java, NuGet and Go packages work outside the checkout; the browser package is checked by the browser gates."
     },
     "sanitizers": {
       "implementation": [
         "src"
       ],
       "checks": [
-        "tests/input-fuzz.cpp",
         "tests/native.cpp",
         "tests/control.cpp",
         "tests/input-libfuzzer.cpp",
@@ -185,20 +184,17 @@
         "tests/faults.cpp",
         "scripts/check-fuzz.py"
       ],
-      "acceptance": "Strict ASan/UBSan/leak checks cover real-model and model-free paths; concurrency tooling coverage explicitly recorded."
+      "acceptance": "Strict ASan/UBSan/leak checks cover real-model and model-free paths (every registered native test, a short stress run, TSan for native and Rust code), and the coverage-guided fuzz campaign meets its budget; concurrency tooling coverage explicitly recorded. tests/input-fuzz.cpp runs in the CI parser-sanitizers job, which is not candidate evidence."
     },
     "stress": {
       "implementation": [
-        "src/execution.hpp",
-        "bindings/node",
-        "bindings/browser"
+        "src/execution.hpp"
       ],
       "checks": [
         "tests/stress.cpp",
-        "tests/browser-lifecycle.mjs",
         "scripts/check-stress.py"
       ],
-      "acceptance": "One-hour routine stress and eight-hour candidate soak meet frozen resource budgets without leaks, hangs or corrupted results."
+      "acceptance": "One-hour routine stress and eight-hour candidate soak of the native library meet frozen resource budgets without leaks, hangs or corrupted results. No browser stress or memory soak exists; the browser lifecycle is covered by the browser gates."
     },
     "linux_matrix": {
       "implementation": [
@@ -240,9 +236,10 @@
       ],
       "checks": [
         "scripts/package-native.py",
-        "scripts/package-browser.py"
+        "scripts/package-browser.py",
+        "scripts/check-candidate.py"
       ],
-      "acceptance": "Distributed component/model license obligations and exact artifact provenance reviewed; complete checksum-covered SBOM."
+      "acceptance": "Every native, release and browser inventory carries a checksum-covered SBOM whose notice hashes are current, and the tar.gz and zip archives of every platform carry the licence texts (wheel, jar and nupkg contents are not gated); the distributed components' and model's licence obligations are recorded as reviewed in the security review evidence (model_licence)."
     },
     "reproducibility": {
       "implementation": [
@@ -251,7 +248,7 @@
       "checks": [
         "scripts/check-reproducibility.py"
       ],
-      "acceptance": "Independent native/browser builds and deterministic packages match under identical pinned inputs."
+      "acceptance": "Two independent native builds of one source snapshot under identical pinned inputs install identical library and Node addon files, and contain the candidate library. Browser builds and package determinism are not checked here (package entries are compared across hosts by artifact_integrity)."
     },
     "artifact_integrity": {
       "implementation": [
@@ -259,9 +256,10 @@
       ],
       "checks": [
         "tests/packaging-identity.py",
-        "tests/browser-backend.mjs"
+        "tests/browser-backend.mjs",
+        "scripts/check-candidate.py"
       ],
-      "acceptance": "Sources, binary/assets and runtime identity match; stale/swapped/modified artifacts rejected; final artifacts have verifiable provenance."
+      "acceptance": "Sources, binary/assets and runtime identity match; stale/swapped/modified artifacts rejected; the shipped linux-x64 packages carry the locally validated library and addon and equal this host's package run entry by entry. Provenance attestation of the final artifacts happens after qualification (attest-release)."
     },
     "performance": {
       "implementation": [
@@ -279,9 +277,10 @@
         "SECURITY.md"
       ],
       "checks": [
-        "docs/RELEASE_CHECKS.md"
+        "docs/RELEASE_CHECKS.md",
+        "scripts/check-candidate.py"
       ],
-      "acceptance": "Threat boundaries, pinned dependency advisories and release permissions reviewed; no unresolved release-blocking issue."
+      "acceptance": "A hand-written security review (procedure and evidence schema in docs/RELEASE_CHECKS.md) bound to the candidate source, the runtime pin and its patch hashes, with no release-blocking code issue; check-candidate validates those fields, not the review's content."
     },
     "upgrade_rollback": {
       "implementation": [
