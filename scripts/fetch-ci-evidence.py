@@ -43,6 +43,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = '.github/workflows/native.yml'
 EVENT, CONCLUSION = 'workflow_dispatch', 'success'
 OPTIONAL_PREFIX = 'native-x64-'
+# The only repository whose runs are candidate evidence (scripts/release_targets.py checks ci-run.json against the same name).
+REPOSITORY = 'adrian729/ducktape-laya'
 
 
 class Refused(Exception):
@@ -172,10 +174,13 @@ def main():
     p.add_argument('--candidate', required=True, help='Candidate commit')
     p.add_argument('--output', type=pathlib.Path, required=True, help='New directory for the downloaded evidence')
     p.add_argument('--run', type=int, help='Run ID (default: the newest complete successful candidate run of the commit)')
-    p.add_argument('--repository', default=os.environ.get('GITHUB_REPOSITORY', 'adrian729/ducktape-laya'))
+    p.add_argument('--repository', default=os.environ.get('GITHUB_REPOSITORY', REPOSITORY),
+               help=f'Only {REPOSITORY} is accepted')
     p.add_argument('--merge', type=pathlib.Path, help='Evidence manifest to add the keys to (created if missing)')
     p.add_argument('--replace', action='store_true', help='With --merge, overwrite keys that already exist')
     a = p.parse_args()
+    if a.repository != REPOSITORY:
+        raise Refused(f'{a.repository} is not {REPOSITORY}; only its runs are release evidence')
     if a.output.exists():
         p.error(f'{a.output} exists; choose a new path')
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', '--verify', a.candidate + '^{commit}'], text=True).strip()

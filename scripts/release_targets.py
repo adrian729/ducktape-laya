@@ -40,6 +40,8 @@ REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control'}
 LINUX_TESTS = {'real-faults', 'real-c-faults'}
 # The run that may produce candidate evidence.
 CI_EVENT, CI_CONCLUSION = 'workflow_dispatch', 'success'
+# The only repository whose runs are candidate evidence (scripts/fetch-ci-evidence.py has the same constant).
+RELEASE_REPOSITORY = 'adrian729/ducktape-laya'
 
 
 class Context:
@@ -74,6 +76,7 @@ class Context:
     # The CI candidate run and the files downloaded from it.
     def ci_run(self):
         run = self.load('ci_run')
+        need(run.get('repository') == RELEASE_REPOSITORY, f'ci run: repository {run.get("repository")}, not {RELEASE_REPOSITORY}')
         need(run.get('head_sha') == self.commit, f'ci run: {run.get("run_id")} built {run.get("head_sha")}, not the candidate')
         need(run.get('event') == CI_EVENT and run.get('conclusion') == CI_CONCLUSION,
              f'ci run: {run.get("event")}/{run.get("conclusion")}, not a successful dispatch')

@@ -26,7 +26,7 @@ fetch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fetch)
 COMMIT = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
 RECORD = json.loads(subprocess.check_output(['git', '-C', str(ROOT), 'show', f'{COMMIT}:release/compatibility.json'], text=True))
-REPO = 'owner/repo'
+REPO = 'adrian729/ducktape-laya'
 
 
 def zip_bytes(entries, link=None):
@@ -173,6 +173,14 @@ class Fetch(unittest.TestCase):
                 self.github = FakeGitHub()
                 self.github.set_zip('evidence-linux-arm64', data)
                 self.refused('evidence-linux-arm64')
+
+    def test_other_repository_refused(self):
+        self.refused('only its runs are release evidence', '--repository', 'owner/repo')
+
+    def test_repository_names_agree(self):
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        import release_targets
+        self.assertEqual(fetch.REPOSITORY, release_targets.RELEASE_REPOSITORY)
 
     def test_existing_output(self):
         self.output.mkdir()

@@ -75,6 +75,11 @@ class Targets(unittest.TestCase):
         self.world.edit('installed-windows-x64-real-model/installed.json', lambda r: r.update(note='edited'), rehash=False)
         self.assertGate('windows-x64', 'installed_packages', 'failed', 'changed after download')
 
+    def test_run_of_another_repository(self):
+        self.world.edit('ci-run.json', lambda r: r.update(repository='owner/fork'), rehash=False)
+        self.assertGate('windows-x64', 'abi', 'failed', 'repository owner/fork')
+        self.assertGate('linux-arm64', 'reproducibility', 'failed', 'not adrian729/ducktape-laya')
+
     def test_wrong_run(self):
         self.world.rehash(head='b' * 40)
         self.assertGate('windows-x64', 'abi', 'failed', 'not the candidate')

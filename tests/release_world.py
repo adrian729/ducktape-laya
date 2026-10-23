@@ -235,7 +235,7 @@ class World:
         files = {path.relative_to(self.ci).as_posix(): sha256(path) for path in sorted(self.ci.rglob('*'))
                  if path.is_file() and path.name not in ('ci-run.json', 'evidence.json')}
         write_json(self.ci / 'ci-run.json', {
-            'schema_version': 1, 'repository': 'owner/repo', 'workflow_path': '.github/workflows/native.yml', 'run_id': 7, 'run_attempt': 1,
+            'schema_version': 1, 'repository': 'adrian729/ducktape-laya', 'workflow_path': '.github/workflows/native.yml', 'run_id': 7, 'run_attempt': 1,
             'head_sha': head or self.commit, 'event': event, 'status': 'completed', 'conclusion': 'success',
             'html_url': 'https://example.invalid/runs/7', 'candidate_commit': self.commit, 'artifacts': {}, 'files': files})
         sys.path.insert(0, str(ROOT / 'scripts'))
