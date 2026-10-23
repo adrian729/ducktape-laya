@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-ducktape-laya runs [Laya](https://github.com/NandhaKishorM/laya) decision models inside your application. You pass a text (or a JSON value) and a few named questions; it answers each one with calibrated probabilities, on the CPU, in-process. There is no server, no network access and no Python at run time, and it does not generate text.
+ducktape-laya runs [Laya](https://github.com/NandhaKishorM/laya) decision models inside your application. You pass a text (or a JSON value) and a few named questions; it answers each one with calibrated probabilities, on the CPU, in-process. It needs no server, network access or separate runtime (no Python for the C, Node, Rust, Go, Java or .NET bindings), and it does not generate text.
 
 One native library does the work; thin bindings expose it to C/C++, Rust, Node.js and Electron, Python, Go, Java/Kotlin and .NET, plus an experimental browser build (WebAssembly, optional WebGPU).
 
