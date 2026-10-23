@@ -168,6 +168,14 @@ type CallOptions struct {
 // prompt release; a finalizer releases the handle as a safety net if an Engine
 // becomes unreachable without being closed.
 type Engine struct {
+	c *engineCore
+}
+
+// engineCore is the state behind an Engine. It must never point back to the
+// Engine: the finalizer sits on the Engine, and a self-referencing object
+// (the sync.Cond's Locker is &mu) is never collected, so the finalizer would
+// never run.
+type engineCore struct {
 	mu       sync.Mutex
 	idle     *sync.Cond
 	active   int
@@ -178,9 +186,10 @@ type Engine struct {
 }
 
 func newEngine(handle unsafe.Pointer) *Engine {
-	e := &Engine{handle: handle, done: make(chan struct{})}
-	e.idle = sync.NewCond(&e.mu)
-	runtime.SetFinalizer(e, (*Engine).release)
+	c := &engineCore{handle: handle, done: make(chan struct{})}
+	c.idle = sync.NewCond(&c.mu)
+	e := &Engine{c: c}
+	runtime.SetFinalizer(e, func(e *Engine) { e.c.release() })
 	return e
 }
 
@@ -268,7 +277,7 @@ func openNative(first string, config *Config, router bool, nullMsg string) (*Eng
 	return newEngine(raw), nil
 }
 
-func (e *Engine) begin() error {
+func (e *engineCore) begin() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
@@ -278,7 +287,7 @@ func (e *Engine) begin() error {
 	return nil
 }
 
-func (e *Engine) end() {
+func (e *engineCore) end() {
 	e.mu.Lock()
 	e.active--
 	release := e.active == 0 && e.deferred
@@ -291,9 +300,12 @@ func (e *Engine) end() {
 	}
 }
 
+// closeNative releases a native handle; a variable so tests can observe it.
+var closeNative = func(handle unsafe.Pointer) { C.dtl_close((*C.dtl_engine)(handle)) }
+
 // release frees the native handle exactly once and signals done. Callers must
 // ensure no call is running.
-func (e *Engine) release() {
+func (e *engineCore) release() {
 	e.mu.Lock()
 	handle := e.handle
 	e.handle = nil
@@ -302,8 +314,7 @@ func (e *Engine) release() {
 	if handle == nil {
 		return
 	}
-	runtime.SetFinalizer(e, nil)
-	C.dtl_close((*C.dtl_engine)(handle))
+	closeNative(handle)
 	close(e.done)
 }
 
@@ -315,14 +326,16 @@ func (e *Engine) release() {
 // engine: it would wait for its own call and deadlock. Use CloseDeferred
 // there.
 func (e *Engine) Close() error {
-	e.mu.Lock()
-	e.closed = true
-	for e.active > 0 {
-		e.idle.Wait()
+	c := e.c
+	c.mu.Lock()
+	c.closed = true
+	for c.active > 0 {
+		c.idle.Wait()
 	}
-	e.mu.Unlock()
-	e.release()
-	<-e.done
+	c.mu.Unlock()
+	c.release()
+	<-c.done
+	runtime.SetFinalizer(e, nil)
 	return nil
 }
 
@@ -332,24 +345,28 @@ func (e *Engine) Close() error {
 // close from inside an OnEvent callback, where Close would wait for its own
 // call and deadlock.
 func (e *Engine) CloseDeferred() {
-	e.mu.Lock()
-	e.closed = true
-	e.deferred = true
-	idle := e.active == 0
-	e.mu.Unlock()
+	c := e.c
+	c.mu.Lock()
+	c.closed = true
+	c.deferred = true
+	idle := c.active == 0
+	c.mu.Unlock()
 	if idle {
-		e.release()
+		c.release()
 	}
+	runtime.KeepAlive(e)
 }
 
 // Info reports model metadata for a single engine; routers report runtime
 // information only.
 func (e *Engine) Info() (string, error) {
-	if err := e.begin(); err != nil {
+	defer runtime.KeepAlive(e)
+	c := e.c
+	if err := c.begin(); err != nil {
 		return "", err
 	}
-	defer e.end()
-	return readInfo(e.handle)
+	defer c.end()
+	return readInfo(c.handle)
 }
 
 // Execute runs one request or a bounded JSON array.
@@ -363,7 +380,8 @@ func (e *Engine) Execute(request string) (string, error) {
 // context.DeadlineExceeded). An already-done ctx returns immediately without
 // a native call. No partial result is returned.
 func (e *Engine) ExecuteContext(ctx context.Context, request string, opts *CallOptions) (string, error) {
-	return e.call(ctx, request, opts)
+	defer runtime.KeepAlive(e)
+	return e.c.call(ctx, request, opts)
 }
 
 //export goObserver
@@ -373,7 +391,7 @@ func goObserver(event *C.char, user unsafe.Pointer) {
 	handle.Value().(func(string))(C.GoString(event))
 }
 
-func (e *Engine) call(ctx context.Context, request string, opts *CallOptions) (string, error) {
+func (e *engineCore) call(ctx context.Context, request string, opts *CallOptions) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

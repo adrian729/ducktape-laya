@@ -6,10 +6,12 @@ import (
 	"errors"
 	"math"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -349,7 +351,7 @@ func TestCloseFromOtherGoroutineWaitsDuringCallback(t *testing.T) {
 		}
 	}
 	select {
-	case <-e.done:
+	case <-e.c.done:
 	default:
 		t.Fatal("Close returned before release")
 	}
@@ -597,5 +599,39 @@ func TestAnswerConfidenceIsMaxProbability(t *testing.T) {
 	}
 	if out.Answers.Kind.AnswerConfidence != best || out.Answers.Kind.Confidence < 0 || out.Answers.Kind.Confidence > 1 {
 		t.Fatalf("%+v", out.Answers.Kind)
+	}
+}
+
+// A dropped, unclosed engine must be released by the finalizer. (The engine
+// state used to point at itself through its sync.Cond, which kept the
+// finalizer from ever running.)
+func TestFinalizerReleasesDroppedEngine(t *testing.T) {
+	released := make(chan unsafe.Pointer, 1)
+	orig := closeNative
+	closeNative = func(h unsafe.Pointer) { released <- h; orig(h) }
+	defer func() { closeNative = orig }()
+
+	var handle unsafe.Pointer
+	func() {
+		router, err := OpenRouter(`{"models":{"unused":"go.mod"}}`, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handle = router.c.handle
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		runtime.GC()
+		select {
+		case h := <-released:
+			if h != handle {
+				t.Fatal("released a different handle")
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("finalizer never released the dropped engine")
+		}
 	}
 }
