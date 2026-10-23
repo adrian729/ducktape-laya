@@ -372,6 +372,59 @@ public final class LayaTest {
         }
     }
 
+    /** A jar-bundled library is loaded from a private extraction directory that is empty again
+     *  right after loading (Linux/macOS), and a shared Windows-style extraction reuses its copy. */
+    static void bundledExtraction() throws Exception {
+        String libDir = System.getenv("DUCKTAPE_LAYA_LIB_DIR");
+        String platform = Native.platform(System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT),
+            System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT));
+        if (libDir == null || platform == null || !Files.isRegularFile(Path.of(libDir, Native.LIB))) {
+            System.out.println("SKIP bundledExtraction (no library to bundle)");
+            return;
+        }
+        boolean windows = platform.startsWith("windows");
+        Path resources = Files.createTempDirectory("laya-res");
+        Path tmp = Files.createTempDirectory("laya-tmp");
+        try {
+            Path nativeDir = Files.createDirectories(resources.resolve("native").resolve(platform));
+            Files.copy(Path.of(libDir, Native.LIB), nativeDir.resolve(Native.LIB));
+            String java = ProcessHandle.current().info().command().orElse("java");
+            String cp = System.getProperty("java.class.path") + (Path.of("a").getFileSystem().getSeparator().equals("/") ? ":" : ";") + resources;
+            ProcessBuilder pb = new ProcessBuilder(java, "--enable-native-access=ALL-UNNAMED", "-Dducktape.laya.tmpdir=" + tmp,
+                "-cp", cp, "io.github.adrian729.laya.LayaTest", "--bundled-child").redirectErrorStream(true);
+            pb.environment().remove("DUCKTAPE_LAYA_LIB_DIR");
+            pb.environment().remove("LD_LIBRARY_PATH");
+            Process p = pb.start();
+            String out = new String(p.getInputStream().readAllBytes());
+            eq(0, p.waitFor(), "bundled child: " + out);
+            try (var entries = Files.list(tmp)) {
+                if (windows) eq(1L, entries.count(), "one shared copy");
+                else eq(List.<Path>of(), entries.toList(), "extraction directory left behind");
+            }
+        } finally {
+            deleteRecursively(resources);
+            deleteRecursively(tmp);
+        }
+        // Shared extraction: one copy per content, reused, and a tampered copy is replaced.
+        Path base = Files.createTempDirectory("laya-shared");
+        try {
+            byte[] bytes = {1, 2, 3, 4};
+            Path first = Native.extractShared(base, bytes);
+            eq(first, Native.extractShared(base, bytes), "shared copy reused");
+            Files.write(first, new byte[] {9, 9});
+            eq(first, Native.extractShared(base, bytes), "tampered copy replaced");
+            check(java.util.Arrays.equals(bytes, Files.readAllBytes(first)), "tampered copy restored");
+        } finally {
+            deleteRecursively(base);
+        }
+    }
+
+    private static void deleteRecursively(Path root) throws java.io.IOException {
+        try (var walk = Files.walk(root)) {
+            for (Path q : walk.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(q);
+        }
+    }
+
     private static void loadFailureChild() {
         for (int i = 0; i < 2; i++) {
             LayaException e = null;
@@ -424,13 +477,17 @@ public final class LayaTest {
     }
 
     public static void main(String[] args) {
+        if (args.length > 0 && args[0].equals("--bundled-child")) {
+            check(Laya.runtimeInfo().contains("\"abi_version\":2"), "bundled runtime info");
+            System.exit(0);
+        }
         if (args.length > 0 && args[0].equals("--load-failure")) {
             loadFailureChild();
             System.exit(0);
         }
-        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "packagePlatforms", "configJson", "loadFailure", "pendingCloseFailsFast", "routerAutoValidation"};
+        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "packagePlatforms", "configJson", "loadFailure", "bundledExtraction", "pendingCloseFailsFast", "routerAutoValidation"};
         Case[] cases = {LayaTest::diagnostics, LayaTest::rejectsBadPath, LayaTest::rejectsNul, LayaTest::rejectsInvalidUnicode,
-            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::packagePlatforms, LayaTest::configJson, LayaTest::loadFailure,
+            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::packagePlatforms, LayaTest::configJson, LayaTest::loadFailure, LayaTest::bundledExtraction,
             LayaTest::pendingCloseFailsFast, LayaTest::routerAutoValidation};
         List<String> failed = new ArrayList<>();
         int ran = 0;

@@ -105,8 +105,12 @@ final class Native {
         if (platform == null)
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM,
                 "ducktape-laya supports Linux x86-64 and arm64, macOS arm64 and Windows x64 (found " + os + "/" + arch + ")");
-        Path bundled = extractBundled("/native/" + platform + "/" + LIB, os.contains("windows"));
-        if (bundled != null) return open(bundled, global);
+        if (platform.startsWith("linux") && isMusl())
+            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM,
+                "The bundled ducktape-laya library needs glibc, and this looks like a musl system (for example Alpine); "
+                + "use a glibc-based image or set -Dducktape.laya.library to a musl build");
+        SymbolLookup bundled = loadBundled("/native/" + platform + "/" + LIB, os.contains("windows"), global);
+        if (bundled != null) return bundled;
         RuntimeException last = null;
         String versioned = LIB.endsWith(".dylib") ? "libducktape_laya.1.dylib" : LIB.endsWith(".dll") ? LIB : LIB + ".1";
         for (String name : new String[] {versioned, LIB}) {
@@ -120,6 +124,23 @@ final class Native {
             "Cannot find " + LIB + ": set -Dducktape.laya.library, DUCKTAPE_LAYA_LIB_DIR or the loader path", last);
     }
 
+    /** True on a musl system: a musl dynamic loader is present and no glibc one is. */
+    static boolean isMusl() {
+        boolean musl = false, glibc = false;
+        for (String d : new String[] {"/lib", "/lib64"}) {
+            try (var names = Files.list(Path.of(d))) {
+                for (Path q : (Iterable<Path>) names::iterator) {
+                    String n = q.getFileName().toString();
+                    musl |= n.startsWith("ld-musl-");
+                    glibc |= n.startsWith("ld-linux-");
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // directory absent
+            }
+        }
+        return musl && !glibc;
+    }
+
     private static SymbolLookup open(Path path, Arena arena) {
         // macOS dyld would otherwise fall back to DYLD_LIBRARY_PATH for a missing path.
         if (!Files.isRegularFile(path))
@@ -131,37 +152,97 @@ final class Native {
         }
     }
 
-    private static Path extractBundled(String resource, boolean windows) {
+    /** Extracts the bundled library and loads it. On Linux and macOS the copy is deleted as soon as
+     *  it is loaded (unlinking a mapped library is safe), so nothing is left behind even if the JVM
+     *  is killed. */
+    private static SymbolLookup loadBundled(String resource, boolean windows, Arena arena) {
+        byte[] bytes;
         try (InputStream in = Native.class.getResourceAsStream(resource)) {
             if (in == null) return null;
-            byte[] bytes = in.readAllBytes();
-            if (windows) return extractShared(bytes);
-            Path dir = Files.createTempDirectory("ducktape-laya");
-            Path file = dir.resolve(LIB);
-            Files.write(file, bytes);
-            // Hooks run in reverse registration order: the directory must be registered first.
-            dir.toFile().deleteOnExit();
-            file.toFile().deleteOnExit();
-            return file;
+            bytes = in.readAllBytes();
+        } catch (IOException e) {
+            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot read bundled library: " + e.getMessage(), e);
+        }
+        Path dir = null;
+        try {
+            Path file;
+            if (windows) {
+                file = extractWindows(bytes);
+            } else {
+                dir = Files.createTempDirectory(tempBase(), "ducktape-laya");
+                file = dir.resolve(LIB);
+                Files.write(file, bytes);
+            }
+            return open(file, arena);
         } catch (IOException e) {
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot extract bundled library: " + e.getMessage(), e);
+        } finally {
+            if (dir != null) deleteTree(dir);
         }
     }
 
+    private static void deleteTree(Path dir) {
+        try {
+            Files.deleteIfExists(dir.resolve(LIB));
+            Files.deleteIfExists(dir);
+        } catch (IOException | RuntimeException ignored) {
+            // Best effort: the files are private to this user in a directory only this user can write.
+        }
+    }
+
+    /** Base directory for extraction: -Dducktape.laya.tmpdir (for example when /tmp is mounted
+     *  noexec) or java.io.tmpdir. */
+    private static Path tempBase() {
+        String p = System.getProperty("ducktape.laya.tmpdir");
+        if (p != null && !p.isEmpty()) return Path.of(p);
+        return Path.of(System.getProperty("java.io.tmpdir"));
+    }
+
     /** Windows cannot delete a DLL while it is loaded, so a per-process copy would be left behind
-     *  on every run. Instead every process of the user shares one copy per library content, in
-     *  the user's own temporary directory, checked byte for byte before it is used. */
-    private static Path extractShared(byte[] bytes) throws IOException {
+     *  on every run. Instead every process of the user shares one copy per library content in a
+     *  per-user directory (%LOCALAPPDATA%\ducktape-laya, or -Dducktape.laya.tmpdir) that other
+     *  users cannot write to. Without such a location the library goes into a fresh, owner-only
+     *  directory under java.io.tmpdir (never a predictable name in a shared directory). */
+    private static Path extractWindows(byte[] bytes) throws IOException {
+        String prop = System.getProperty("ducktape.laya.tmpdir");
+        String local = System.getenv("LOCALAPPDATA");
+        Path base = prop != null && !prop.isEmpty() ? Path.of(prop)
+            : local != null && !local.isEmpty() ? Path.of(local, "ducktape-laya") : null;
+        if (base != null) {
+            try {
+                return extractShared(base, bytes);
+            } catch (IOException e) {
+                if (prop != null && !prop.isEmpty()) throw e;
+                // Unusable or not ours: fall through to a private directory.
+            }
+        }
+        Path dir = Files.createTempDirectory(Path.of(System.getProperty("java.io.tmpdir")), "ducktape-laya");
+        restrictToOwner(dir);
+        Path file = dir.resolve(LIB);
+        Files.write(file, bytes);
+        // Hooks run in reverse registration order: the directory must be registered first.
+        dir.toFile().deleteOnExit();
+        file.toFile().deleteOnExit();
+        return file;
+    }
+
+    /** Shares one copy per content under base, which must belong to the current user. */
+    static Path extractShared(Path base, byte[] bytes) throws IOException {
         byte[] digest;
         try {
             digest = MessageDigest.getInstance("SHA-256").digest(bytes);
         } catch (NoSuchAlgorithmException e) {
             throw new IOException(e);
         }
-        Path dir = Path.of(System.getProperty("java.io.tmpdir"), "ducktape-laya-" + HexFormat.of().formatHex(digest, 0, 16));
+        Files.createDirectories(base);
+        Path dir = base.resolve(HexFormat.of().formatHex(digest, 0, 16));
         Files.createDirectories(dir);
+        requireOwn(base, dir);
         Path file = dir.resolve(LIB);
-        if (sameContent(file, bytes)) return file;
+        if (sameContent(file, bytes)) {
+            requireOwn(base, file);
+            return file;
+        }
         Path part = Files.createTempFile(dir, "ducktape_laya", ".part");
         try {
             Files.write(part, bytes);
@@ -172,7 +253,33 @@ final class Native {
         } finally {
             Files.deleteIfExists(part);
         }
+        requireOwn(base, file);
         return file;
+    }
+
+    /** Refuses a path whose owner differs from the owner of the files this process creates. */
+    private static void requireOwn(Path base, Path path) throws IOException {
+        Path probe = Files.createTempFile(base, "owner", ".probe");
+        try {
+            if (!Files.getOwner(path, LinkOption.NOFOLLOW_LINKS).equals(Files.getOwner(probe)))
+                throw new IOException(path + " is not owned by the current user");
+        } finally {
+            Files.deleteIfExists(probe);
+        }
+    }
+
+    /** Replaces the ACL of a directory by one that grants only its owner (Windows). */
+    private static void restrictToOwner(Path dir) throws IOException {
+        java.nio.file.attribute.AclFileAttributeView view =
+            Files.getFileAttributeView(dir, java.nio.file.attribute.AclFileAttributeView.class);
+        if (view == null) return;
+        java.nio.file.attribute.AclEntry entry = java.nio.file.attribute.AclEntry.newBuilder()
+            .setType(java.nio.file.attribute.AclEntryType.ALLOW)
+            .setPrincipal(view.getOwner())
+            .setPermissions(java.util.EnumSet.allOf(java.nio.file.attribute.AclEntryPermission.class))
+            .setFlags(java.nio.file.attribute.AclEntryFlag.FILE_INHERIT, java.nio.file.attribute.AclEntryFlag.DIRECTORY_INHERIT)
+            .build();
+        view.setAcl(java.util.List.of(entry));
     }
 
     private static boolean sameContent(Path file, byte[] bytes) throws IOException {
