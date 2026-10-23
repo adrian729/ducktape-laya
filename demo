@@ -8,7 +8,7 @@ case "$language" in
     cat <<'HELP'
 Usage: ./demo [c|cpp|rust|js|ts] [model.gguf]
 Default: js. Fill three prompts; Enter accepts the prefilled example.
-Answers: 2 to 8 labels separated by | (for example: yes | no).
+Answers: 2 to 8 labels separated by | (for example: yes | no); a limit of the demos, the library accepts 1 to 255.
 The model comes from argument 2, LAYA_MODEL, or the pinned local HF cache.
 The launcher builds the selected example and uses the shared GGUF library.
 HELP
