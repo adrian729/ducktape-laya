@@ -18,7 +18,7 @@ presented as completed capabilities until their gates are satisfied.
 | Native interfaces | Shared C ABI, thin C++, Rust, Node/TypeScript (and Electron), Python, Go, Java/Kotlin and .NET bindings |
 | Browser execution | WebGPU/WASM path, reusing the shared implementation wherever feasible |
 | Higher-level features | Routing (explicit and by language), batching, passive observers, structured decisions and long-input policies |
-| Supported operating system for now | Linux; advertise only tested CPU architectures, distributions/runtime baselines and execution backends |
+| Supported operating systems | Linux x86-64 (tier 1), Linux arm64 and Windows x64 (tier 2, from the next release; see [QUALIFICATION.md](QUALIFICATION.md#release-targets-and-tiers)); advertise only tested CPU architectures, distributions/runtime baselines and execution backends |
 
 One shared implementation owns common behavior. Bindings adapt language types,
 ownership, errors, async scheduling and platform integration. Reuse upstream
@@ -32,7 +32,7 @@ and package the library independently; exclude demo-only dependencies and assets
 from consumer artifacts. Package integration tests are automated consumers of
 the public API, not demo applications or UI requirements.
 
-No Windows/macOS delivery commitment until suitable test environments exist.
+macOS has no delivery commitment; macOS arm64 is built and tested in CI and is the next tier-2 candidate ([ROADMAP.md](ROADMAP.md)).
 Linux browser testing is in scope now. Linux native GPU support is a separately
 validated capability, not implied by browser WebGPU support.
 

@@ -8,14 +8,26 @@ Existing status numbers, ordering, the meaning of answers and confidence fields,
 
 A release identifies its architecture, CPU features, system-library floor, tested Linux userspaces, Node/Electron/browser versions and backend. The same model may have numeric differences between CPU/GPU/ISA profiles; bindings using the same native binary and settings must agree exactly. Each backend must agree with upstream processing within its declared strict tolerance. Cross-profile probability and discrete-decision drift is reported, without an interchangeability guarantee. Browser delivery is experimental: 0.1.0 and 0.2.0 passed the browser gates on Chromium 152 only. Unvalidated platforms must not be advertised as supported merely because the source can compile there.
 
+Release targets and tiers are in `release/compatibility.json` and [QUALIFICATION.md](QUALIFICATION.md#release-targets-and-tiers). From the next release, a release identifies, per target:
+
+| Target | Tier | CPU features | System floor | Build and math library | Tested on |
+| --- | --- | --- | --- | --- | --- |
+| Linux x86-64 | 1 | AVX, AVX2, FMA, F16C, BMI2, SSE4.2 | glibc 2.38+ (symbols up to 2.39), `GLIBCXX_3.4.29` | gcc, glibc | Ubuntu 24.04 and 26.04 userspaces, Node 24 and 26, Electron 44, Chromium 152 (WASM and WebGPU) |
+| Linux arm64 | 2 | `asimddp`, `fphp`, `asimdhp` (Armv8.2-A with dot product and FP16) | same as x86-64 | gcc, glibc | GitHub `ubuntu-24.04-arm`, Node 24, Electron 44 |
+| Windows x64 | 2 | same as Linux x86-64 | Microsoft Visual C++ Redistributable | clang-cl, UCRT | GitHub `windows-2025` (Windows Server 2025), Node 24, Electron 44 |
+
+Tier 2 is CI-tested with the English model only. Against the Linux x86-64 profile, on the fixture corpus, the maximum probability drift is 0.0334 on Linux arm64 and 0.0865 on Windows x64, with no changed decision; these are measurements, not guarantees. The Windows DLL is `ducktape_laya.dll` and carries no ABI number in its name: There is no SONAME or symbol versioning there, so keep the DLL of the ABI the program was built against; the bindings check `dtl_abi_version()` when they load it. Linux libraries keep `libducktape_laya.so.1`. The Windows DLL also links the build image's MSVC and SDK libraries, so its bytes depend on the runner image; reports record the `build_environment`. 0.1.0 and 0.2.0 identify Linux x86-64 only.
+
 Release acceptance includes actual artifact installation, model integrity, ABI and cross-binding checks, upstream-reference and original-reference agreement, sanitizer/resource regressions, platform coverage, license/provenance inventory and reproducibility. Failed and unrun gates remain visible. Public publication, signing keys, security contact and release hosting are separate deployment decisions, not silently inferred from local implementation work. See [SECURITY.md](../SECURITY.md) and [PLAN.md](PLAN.md) for boundaries.
 
 ## Known deviations
 
 Agreement with the original Laya is checked per platform against the same
 limits (probabilities within 0.05). One answer on one platform has a documented,
-separately capped deviation (`KNOWN_DEVIATIONS` in `tests/original-reference.py`);
-every other answer there is still held to 0.05.
+separately capped deviation, listed under the target's `known_deviations` in
+`release/compatibility.json` (read by `tests/original-reference.py`); every
+other answer there is still held to 0.05. A platform that is not a release target
+has none.
 
 | Platform | Model | Answer | Drift | Cap | Cause |
 | --- | --- | --- | --- | --- | --- |

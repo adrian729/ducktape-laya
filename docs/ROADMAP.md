@@ -15,7 +15,7 @@ platforms are fully qualified.
 
 | Backend | Platforms | Notes |
 |---|---|---|
-| Metal | macOS arm64 | Built into ggml; a possibility only if macOS itself becomes supported, which has no commitment (see [PLAN.md](PLAN.md)) |
+| Metal | macOS arm64 | Built into ggml; a possibility once macOS arm64 is released (it is the next tier-2 candidate, see below) |
 | CUDA | Linux and Windows x64 with NVIDIA GPUs | Fastest server option; a large toolkit dependency, so ship it as a separate package variant |
 | Vulkan | Linux and Windows (any vendor), Android later | One portable backend across GPU vendors |
 | WebGPU | Browser | Already exists (experimental) |
@@ -112,8 +112,8 @@ binding, for Rails and Laravel backends. Add one when a user asks.
   every upgrade, cost unmeasured time (`erff` runs about 3.4M times per
   request) and still not cover GPU backends. Not planned: this is upstream
   behaviour, so it is a documented known deviation with its own cap
-  ([COMPATIBILITY.md](COMPATIBILITY.md#known-deviations)) and does not block a
-  Windows release.
+  ([COMPATIBILITY.md](COMPATIBILITY.md#known-deviations)); Windows x64 ships
+  as a tier-2 target with it.
 - **Loading a model from memory:** llama.cpp has no public load-from-buffer API.
   Workarounds (memfd, temporary files) add little real protection for encrypted
   assets. Revisit with mobile.
@@ -135,4 +135,4 @@ Features the original Laya has that ducktape-laya deliberately leaves out.
 | `batch_tokens` open setting | It sized the batched forward pass, which was not adopted (see Research questions) |
 | Temperature fitting, fine-tuning, evaluation harnesses | Training tooling: use the original's tools, then convert the model or pass the fitted temperatures |
 | HTTP server, MCP server, LangChain/LlamaIndex/CrewAI integrations | In-process embedding is a project goal; integrations could later sit on top of the Python binding |
-| Intel Macs | macOS is not supported at all (see the README); if Apple Silicon support were ever added, Intel Macs would still be left out, since Apple stopped selling them in 2023 and CI runners are being retired |
+| Intel Macs | macOS is not released yet and Apple silicon comes first (see the README); Intel Macs would still be left out, since Apple stopped selling them in 2023 and CI runners are being retired |
