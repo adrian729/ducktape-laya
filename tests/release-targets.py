@@ -15,6 +15,7 @@ part runs check-candidate.py on evidence bound to HEAD: the tier-2 targets pass,
 gates.json has schema 2, and a CI linux-x64 library or addon that differs from
 the locally validated one fails the tier-1 artifact_integrity gate."""
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -279,6 +280,33 @@ class CheckCandidate(unittest.TestCase):
         value = json.loads(world.paths['installed_release'].read_text())
         world.paths['installed_release'].write_text(json.dumps({**value, 'artifact_inventory_sha256': '0' * 64}))
         self.assertIn('not the release packages', self.check(world)['gates']['installed_packages']['detail'])
+
+    def candidate_with_record(self, change):
+        """A dangling commit: HEAD with release/compatibility.json changed (no branch, index or work tree is touched)."""
+        record = json.loads(git(ROOT, 'show', f'{self.commit}:release/compatibility.json'))
+        change(record)
+        env = {**os.environ, 'GIT_INDEX_FILE': str(pathlib.Path(self.temp.name) / f'index-{len(os.listdir(self.temp.name))}'),
+               'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.invalid', 'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.invalid'}
+        run = lambda *args, **kw: subprocess.run(['git', '-C', str(ROOT), *args], env=env, check=True, capture_output=True, text=True, **kw).stdout.strip()
+        run('read-tree', self.commit)
+        blob = run('hash-object', '-w', '--stdin', input=json.dumps(record, indent=2) + '\n')
+        run('update-index', '--cacheinfo', f'100644,{blob},release/compatibility.json')
+        return run('commit-tree', run('write-tree'), '-p', self.commit, '-m', 'test candidate')
+
+    def test_candidate_record_is_validated(self):
+        world = self.world('record')
+        manifest = world.evidence_manifest(world.directory / 'evidence.json')
+        cases = {'empty required_gates': lambda r: r['targets'][1].update(required_gates=[]),
+                 'unknown tier-2 gate': lambda r: r['targets'][1]['required_gates'].append('no_such_gate'),
+                 'missing build workflow': lambda r: r['targets'][1]['build'].update(built_by='.github/workflows/missing.yml')}
+        for label, change in cases.items():
+            with self.subTest(label):
+                commit = self.candidate_with_record(change)
+                result = subprocess.run([sys.executable, str(ROOT / 'scripts/check-candidate.py'), str(manifest), '--candidate', commit,
+                                         '--report', str(world.directory / 'rejected.json')], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('invalid release record', result.stderr)
+                self.assertFalse((world.directory / 'rejected.json').exists())
 
     def test_installed_release_is_this_host(self):
         world = self.world('host')

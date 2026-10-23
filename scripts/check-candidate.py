@@ -29,7 +29,7 @@ import tarfile
 import tempfile
 import zipfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from release_support import ROOT, check_record, git, read_json, sha256, source_identity
+from release_support import ROOT, check_qualification, check_record, check_targets, git, read_json, sha256, source_identity
 from release_targets import Context, Missing, Mismatch, evaluate_targets, need, run_gate
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -45,8 +45,15 @@ with subprocess.Popen(['git', '-C', str(ROOT), 'archive', commit], stdout=subpro
     with tarfile.open(fileobj=archive.stdout, mode='r|') as stream:
         stream.extractall(candidate_tree, filter='data')
 record = read_json(candidate_tree / 'release/compatibility.json')
-check_record()
-policy = read_json(candidate_tree / 'release/qualification.json')
+check_record()  # the checker checkout: runtime pin, patches and package versions
+# The candidate's own record, policy and targets (an empty required_gates list, an unknown gate or a
+# missing build workflow in a candidate whose checker checkout is newer must not pass unnoticed).
+try:
+    if record.get('schema_version') != 2: raise ValueError('Unsupported compatibility record schema')
+    policy = check_qualification(record, candidate_tree)
+    check_targets(record, candidate_tree)
+except (ValueError, KeyError, TypeError, OSError) as error:
+    raise SystemExit(f'check-candidate: the candidate {commit} has an invalid release record: {type(error).__name__}: {error}')
 manifest_model = read_json(candidate_tree / record['models'][0])
 base = a.evidence.resolve().parent
 paths = {key: (base / value).resolve() for key, value in read_json(a.evidence).items()}
