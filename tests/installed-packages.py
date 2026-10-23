@@ -10,7 +10,9 @@ import argparse
 import atexit
 import hashlib
 import json
+import os
 import pathlib
+import platform as platform_module
 import re
 import shutil
 import subprocess
@@ -36,7 +38,10 @@ request = (root / 'tests/fixtures/primitive.json').read_bytes()
 env = clean_environment()
 report = {'schema_version': 1, 'status': 'failed', 'platform': target.name, 'artifact_inventory_sha256': sha256(artifacts / 'inventory.json'),
           'package_version': version, 'model_sha256': sha256(model), 'source_commit': git(root, 'rev-parse', 'HEAD'),
-          'source_tracked_dirty': bool(git(root, 'diff', 'HEAD', '--name-only')), 'consumers': {}}
+          'source_tracked_dirty': bool(git(root, 'diff', 'HEAD', '--name-only')), 'consumers': {},
+          # Where this ran: scripts/check-candidate.py requires the release host's own run (not a GitHub Actions one) for installed_release.
+          'host': {'system': platform_module.system(), 'machine': platform_module.machine(), 'hostname': platform_module.node(),
+                   'github_actions': os.environ.get('GITHUB_ACTIONS') == 'true'}}
 
 
 def record(name, output):

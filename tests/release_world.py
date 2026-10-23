@@ -166,6 +166,8 @@ class World:
         write_json(installed / 'installed.json', {
             'schema_version': 1, 'status': 'passed', 'platform': platform, 'artifact_inventory_sha256': sha256(self.release / 'inventory.json'),
             'package_version': self.version, 'model_sha256': self.model, 'source_commit': self.commit, 'source_tracked_dirty': False,
+            'host': {'system': {'linux': 'Linux', 'windows': 'Windows'}[item['os']], 'machine': 'x86_64', 'hostname': f'runner-{platform}',
+                     'github_actions': True},
             'consumers': {name: 'c' * 64 for name in ('native', 'node', 'rust', 'python', 'java', 'dotnet', 'go')}})
         npm = f'ducktape-laya-{self.version}.tgz'
         versions = (self.policy['platforms']['targets'].get(platform) or self.policy['platforms']['native'])['electron_versions']
@@ -214,8 +216,18 @@ class World:
             'build_source': {'sha256': self.source}, 'assets': {},
             'artifacts': {path.name: sha256(path) for path in sorted(browser.iterdir()) if path.name != 'inventory.json'}})
         self.paths['browser_package'] = browser / 'inventory.json'
+        native_policy = self.policy['platforms']['native']
+        write_json(self.directory / 'userspaces.json', {
+            'status': 'passed', 'artifact_inventory_sha256': sha256(self.release / 'inventory.json'),
+            'environments': {name: {'status': 'passed', 'os_release': {'VERSION_ID': name.removeprefix('ubuntu-')}}
+                             for name in (native_policy['minimum_userspace'], *native_policy['additional_userspaces'])}})
+        self.paths['userspaces'] = self.directory / 'userspaces.json'
+        write_json(self.directory / 'electron.json', json.loads((self.ci / 'installed-linux-x64-real-model/electron.json').read_text()))
+        self.paths['electron'] = self.directory / 'electron.json'
         installed = self.directory / 'installed-release.json'
-        write_json(installed, json.loads((self.ci / 'installed-linux-x64-real-model/installed.json').read_text()))
+        value = json.loads((self.ci / 'installed-linux-x64-real-model/installed.json').read_text())
+        value['host'] = {'system': 'Linux', 'machine': 'x86_64', 'hostname': 'release-host', 'github_actions': False}
+        write_json(installed, value)
         self.paths['installed_release'] = installed
 
     def rehash(self, event='workflow_dispatch', head=None):

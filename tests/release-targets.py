@@ -280,6 +280,37 @@ class CheckCandidate(unittest.TestCase):
         world.paths['installed_release'].write_text(json.dumps({**value, 'artifact_inventory_sha256': '0' * 64}))
         self.assertIn('not the release packages', self.check(world)['gates']['installed_packages']['detail'])
 
+    def test_installed_release_is_this_host(self):
+        world = self.world('host')
+        path = world.paths['installed_release']
+        value = json.loads(path.read_text())
+        for label, host, message in (
+                ('the CI report copied', json.loads(world.paths['linux-x64:installed'].read_text())['host'], 'not run on a local linux-x64 host'),
+                ('no host', None, 'no host recorded'),
+                ('arm64 host', {**value['host'], 'machine': 'aarch64'}, 'not run on a local linux-x64 host'),
+                ('windows host', {**value['host'], 'system': 'Windows'}, 'not run on a local linux-x64 host'),
+                ('same hostname', {**value['host'], 'hostname': 'runner-linux-x64'}, 'ran on the CI host')):
+            with self.subTest(label):
+                path.write_text(json.dumps({**{k: v for k, v in value.items() if k != 'host'}, **({'host': host} if host else {})}))
+                self.assertIn(message, self.check(world)['gates']['installed_packages']['detail'])
+        path.write_text(json.dumps(value))
+        self.assertEqual(self.check(world)['gates']['installed_packages'], {'status': 'passed'})
+        # The CI report itself is not the local run.
+        path.write_bytes(world.paths['linux-x64:installed'].read_bytes())
+        self.assertIn('is the CI linux-x64 report', self.check(world)['gates']['installed_packages']['detail'])
+
+    def test_electron_is_linux_x64_npm_package(self):
+        world = self.world('electron')
+        self.assertIn('native_matrix evidence missing', self.check(world)['gates']['linux_matrix']['detail'])
+        path = world.paths['electron']
+        value = json.loads(path.read_text())
+        for label, change, message in (('platform', {'platform': 'windows-x64'}, 'did not pass on linux-x64'),
+                                       ('no platform', {'platform': None}, 'did not pass on linux-x64'),
+                                       ('artifact', {'artifact': f'ducktape-laya-{world.version}-linux-x64.tar.gz'}, 'not the candidate npm package')):
+            with self.subTest(label):
+                path.write_text(json.dumps({**value, **change}))
+                self.assertIn(message, self.check(world)['gates']['linux_matrix']['detail'])
+
 
 if __name__ == '__main__':
     unittest.main()

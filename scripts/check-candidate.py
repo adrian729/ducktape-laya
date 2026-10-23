@@ -136,6 +136,17 @@ def native_gate(gate):
             for name in ('installed_release', 'linux-x64:installed'):
                 installed = load(name) if name == 'installed_release' else ctx.ci_json(name)
                 same_source(installed, name)
+                host = installed.get('host') or {}
+                if name == 'installed_release':
+                    # The release host's own run: not the CI runner's report (a CI file, run on GitHub Actions) under another name.
+                    need(paths[name].resolve() != ctx.path('linux-x64:installed').resolve() and
+                         ctx.sha256(paths[name]) != ctx.sha256(ctx.path('linux-x64:installed')), f'{name}: is the CI linux-x64 report')
+                    need(host.get('github_actions') is False and host.get('system') == 'Linux' and host.get('machine') in ('x86_64', 'AMD64'),
+                         f'{name}: not run on a local linux-x64 host ({host or "no host recorded"})')
+                    ci_host = ctx.ci_json('linux-x64:installed').get('host') or {}
+                    need(host.get('hostname') and host.get('hostname') != ci_host.get('hostname'), f'{name}: ran on the CI host')
+                else:
+                    need(host.get('github_actions') is True, f'{name}: not a GitHub Actions run ({host or "no host recorded"})')
                 need(installed['status'] == 'passed' and installed['platform'] == 'linux-x64', f'{name}: failed or not linux-x64')
                 need(installed['artifact_inventory_sha256'] == sha256(directory / 'inventory.json'), f'{name}: not the release packages')
                 need(installed['model_sha256'] == manifest_model['sha256'], f'{name}: model differs')
@@ -169,7 +180,9 @@ def linux_matrix():
     required = {policy['platforms']['native']['minimum_userspace'], *policy['platforms']['native']['additional_userspaces']}
     need({f'ubuntu-{v}' for v in releases} >= required, f'userspaces: {sorted(releases)} do not cover {sorted(required)}')
     electron = load('electron')
-    need(electron['status'] == 'passed' and electron['artifact_sha256'] == sha256(directory / electron['artifact']), 'electron: not the candidate npm package')
+    npm = f'ducktape-laya-{ctx.record["package_version"]}.tgz'
+    need(electron['status'] == 'passed' and electron.get('platform') == 'linux-x64', 'electron: did not pass on linux-x64')
+    need(electron['artifact'] == npm and electron['artifact_sha256'] == sha256(directory / npm), 'electron: not the candidate npm package')
     need({r['mode'] for r in electron['results']} == {'directory', 'asar'}, 'electron: directory and ASAR modes required')
     need({r['electron'] for r in electron['results']} <= set(policy['platforms']['native']['electron_versions']), 'electron: unlisted version')
     # Native validation reports from every compiler/Node combination (local or CI artifacts).
