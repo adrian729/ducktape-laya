@@ -127,6 +127,20 @@ int main(int argc, char **argv) {
         expect(base < 512 && json::parse(engine.execute(sized(512 - base)))["usage"]["input_tokens"] == 512,
                "largest accepted prompt uses the whole budget");
         expect(rejected(sized(513 - base), "512-token"), "prompt over budget rejected");
+        {
+            // Serialization can make a structured state longer than its request (1e15 is
+            // written 1000000000000000.0); the serialized text is bounded before tokenizing.
+            const std::string question = R"(,"questions":{"refund":)" + requests[0]["questions"]["refund"].dump() + "}}";
+            std::string numbers = "[1e15";
+            while (numbers.size() < 600000) numbers += ",1e15";
+            const std::string request = R"({"state":)" + numbers + "]" + question;
+            expect(request.size() < 1048576 && rejected(request, "Serialized state is too large"), "serialized state over 2 MiB rejected");
+            // Integers outside int64/uint64 enter the prompt with all their digits, as the
+            // original Laya writes them: the same as passing that text as the state.
+            expect(engine.execute(R"({"state":{"n":100000000000000000000000,"m":-9223372036854775809})" + question) ==
+                   engine.execute(R"({"state":"{\"n\": 100000000000000000000000, \"m\": -9223372036854775809}")" + question),
+                   "big integers are serialized exactly");
+        }
         json long_option = primitive("Please refund me.");
         long_option["questions"]["department"]["criteria"]["billing"] = repeated("payments ", 60);
         expect(rejected(long_option.dump(), "option text exceeds"), "long option rejected");

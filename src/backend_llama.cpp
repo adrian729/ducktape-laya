@@ -47,17 +47,6 @@ void sanitize(json &value, const std::string &marker) {
     }
 }
 }
-// llama.cpp's BPE is quadratic in the length of one run of ASCII spaces (800k
-// spaces take about 30 s and cannot be cancelled), so such runs are bounded.
-constexpr size_t max_space_run = 4096;
-void require_space_runs(std::string_view text, const std::string &what) {
-    size_t run = 0;
-    for (char c : text) {
-        run = c == ' ' ? run + 1 : 0;
-        if (run > max_space_run)
-            throw failure(DTL_INVALID_ARGUMENT, what + " has more than " + std::to_string(max_space_run) + " consecutive spaces");
-    }
-}
 struct prepared_window {
     std::vector<llama_token> tokens;
     std::vector<size_t> markers;
@@ -203,13 +192,14 @@ struct backend::impl {
         const bool separate_state = input["state"].is_string();
         std::string state_text;
         if (separate_state) { state_text = input["state"].get<std::string>(); input["state"] = ""; }
+        // Serialization can expand a structured state (1e15 is written 1000000000000000.0),
+        // so the text to tokenize is bounded like the rendered prompt, not only the request.
+        require(state_text.size() <= max_request * 2, "Serialized state is too large");
         jinja::context jc(source);
         jinja::global_from_json(jc, common_json::parse(input.dump()), false);
         jinja::runtime runtime(jc);
         auto rendered = jinja::runtime::gather_string_parts(runtime.execute(program))->as_string().str();
         require(rendered.size() <= max_request * 2, "Rendered prompt is too large");
-        require_space_runs(rendered, q.id + ": the question");
-        require_space_runs(state_text, "state");
         const size_t limit = q.max_tokens ? q.max_tokens : capacity;
         // The text between mask tokens is tokenized on its own, as the model was
         // trained: some vocabularies (mmBERT) mark the mask as left-stripping, which

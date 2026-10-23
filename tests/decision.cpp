@@ -27,6 +27,32 @@ int main() {
         expect(dtl::python_json(mixed) == "{\"s\": \"Tom \\\"x\\\" / \\\\ \\n\\t\\b\\f\\r\\u0001\x7f\u2028 na\u00efve\", "
                "\"n\": null, \"t\": true, \"f\": false, \"l\": [1, 2.0, {}], \"e\": {}, \"i\": -17, "
                "\"u\": 18446744073709551615}", "python_json object, escaping and separators");
+        // Integers outside int64/uint64 keep their digits, as Python's json does (it parses
+        // them as exact ints); the expected text is Python's json.dumps output.
+        auto parse_kept = [](const std::string &text) {
+            dtl::integer_literals literals(text);
+            return json::parse(text, [&](int, json::parse_event_t event, json &parsed) {
+                if (event == json::parse_event_t::value) literals.keep(parsed);
+                return true;
+            });
+        };
+        const std::string big = R"({"a":100000000000000000000000,"b":-9223372036854775809,"c":18446744073709551616,)"
+            R"("d":9223372036854775807,"e":-9223372036854775808,"f":18446744073709551615,"g":1e23,)"
+            R"("h":100000000000000000000000.0,"i":-0,"j":0,"k":[123456789012345678901234567890,)"
+            R"({"x":-123456789012345678901234567890}],"s":"q\"12345678901234567890123\\","t":12345678901234567890123E0,)"
+            R"("u":1234567890123456789})";
+        expect(dtl::python_json(parse_kept(big)) == "{\"a\": 100000000000000000000000, \"b\": -9223372036854775809, "
+               "\"c\": 18446744073709551616, \"d\": 9223372036854775807, \"e\": -9223372036854775808, "
+               "\"f\": 18446744073709551615, \"g\": 1e+23, \"h\": 1e+23, \"i\": 0, \"j\": 0, "
+               "\"k\": [123456789012345678901234567890, {\"x\": -123456789012345678901234567890}], "
+               "\"s\": \"q\\\"12345678901234567890123\\\\\", \"t\": 1.2345678901234568e+22, \"u\": 1234567890123456789}",
+               "python_json keeps integers outside int64/uint64 exact");
+        const std::string huge = "1" + std::string(308, '0'), negative = "-" + std::string(300, '9');
+        expect(dtl::python_json(parse_kept(huge)) == huge && dtl::python_json(parse_kept(negative)) == negative &&
+               dtl::python_json(parse_kept("[" + huge + "," + negative + "]")) == "[" + huge + ", " + negative + "]",
+               "python_json keeps 300-digit integers exact");
+        expect(dtl::is_big_integer(parse_kept(huge)) && !dtl::is_big_integer(parse_kept("1e23")) &&
+               parse_kept("18446744073709551615").is_number_unsigned(), "only overflowing integer literals are kept as text");
         const std::map<std::string, float> temperatures{{"choice.2", 2}, {"choice.3_5", 3}, {"choice.6_10", 6},
             {"choice.11", 11}, {"score", 4}, {"score.3_5", 5}, {"noul.2", 7}};
         expect(dtl::temperature_for("choice", 2, temperatures) == 2 && dtl::temperature_for("choice", 3, temperatures) == 3 &&

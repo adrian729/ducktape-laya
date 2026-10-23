@@ -91,9 +91,9 @@ DTL_API dtl_call_options dtl_default_call_options(void);
 DTL_API uint32_t dtl_cancel_flag(void *user_data);
 
 /* One request object or an array of 1..32 (at most 128 questions, 1 MiB in
- * total, 1024 members per JSON object, 4096 planned forward passes, no run of
- * more than 4096 ASCII spaces in a question or state); arrays return arrays in
- * input order. Every request is validated first.
+ * total, 1024 members per JSON object, 4096 planned forward passes, 2 MiB of
+ * serialized state or rendered question); arrays return arrays in input order.
+ * Every request is validated first.
  * A single-model engine then prepares every request before any inference; a
  * router loads, prepares and runs request by request. Errors return no partial
  * result. Calls on one handle serialize; separate handles may run concurrently.

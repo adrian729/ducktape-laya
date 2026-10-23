@@ -5,6 +5,7 @@
 #include "execution.hpp"
 #include "language.hpp"
 #include "platform.hpp"
+#include "python_json.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -17,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 using dtl::json;
 using dtl::question;
@@ -125,17 +127,19 @@ json read_json(const char *text) {
     size_t n = 0;
     while (n <= max_request && text[n]) ++n;
     require(n <= max_request, "Request exceeds 1 MiB");
+    dtl::integer_literals literals(std::string_view(text, n));
     try {
         // Objects keep insertion order with a linear key search, so parsing one object
         // costs O(members^2): bound the members per object.
         std::vector<size_t> members;
-        return json::parse(text, [&members](int depth, json::parse_event_t event, json &) {
+        return json::parse(text, [&](int depth, json::parse_event_t event, json &parsed) {
             require(depth <= 64, "JSON nesting exceeds 64 levels");
             if (event == json::parse_event_t::object_start) members.push_back(0);
             else if (event == json::parse_event_t::object_end) members.pop_back();
             else if (event == json::parse_event_t::key)
                 require(++members.back() <= max_object_members, "JSON objects are limited to " +
                         std::to_string(max_object_members) + " members");
+            else if (event == json::parse_event_t::value) literals.keep(parsed);
             return true;
         });
     } catch (const json::exception &e) { throw failure(DTL_INVALID_ARGUMENT, e.what()); }
@@ -174,7 +178,8 @@ dtl::temperature_map temperatures(const json &value, const std::string &where) {
                 where + ": unsupported key " + key);
         // Checked after narrowing to the float the engine uses: 1e-50 or 1e39 would
         // otherwise pass as a double and become 0 or infinity.
-        const float temperature = t.is_number() ? t.get<float>() : 0.0f;
+        const float temperature = t.is_number() ? t.get<float>() :
+            dtl::is_big_integer(t) ? std::strtof(dtl::big_integer_text(t).c_str(), nullptr) : 0.0f;
         require(std::isfinite(temperature) && temperature > 0, where + "." + key + " must be > 0 and fit a float");
         out[key] = temperature;
     }

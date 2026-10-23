@@ -12,14 +12,17 @@
 #endif
 namespace dtl {
 namespace {
-struct feature { const char *name; bool supported; };
+// detected is false where this build cannot check the feature: the guard then fails
+// closed instead of assuming the CPU has it.
+struct feature { const char *name; bool supported; bool detected = true; };
 #if defined(_WIN32) && defined(__x86_64__)
 // __builtin_cpu_supports needs compiler-rt, which clang-cl does not link by
 // default; read the same CPUID bits (and the OS's AVX state for AVX users).
 __attribute__((target("xsave"))) bool x86_supports(const char *name) {
-    int leaf1[4], leaf7[4];
+    int leaf0[4], leaf1[4], leaf7[4] = {0, 0, 0, 0};
+    __cpuid(leaf0, 0);
     __cpuid(leaf1, 1);
-    __cpuidex(leaf7, 7, 0);
+    if (leaf0[0] >= 7) __cpuidex(leaf7, 7, 0); // leaf 7 exists only when the maximum leaf reaches it
     const bool avx_state = (leaf1[2] & (1 << 27)) && (_xgetbv(0) & 6) == 6;
     if (!std::strcmp(name, "avx")) return (leaf1[2] & (1 << 28)) && avx_state;
     if (!std::strcmp(name, "avx2")) return (leaf7[1] & (1 << 5)) && avx_state;
@@ -80,13 +83,27 @@ std::vector<feature> required_features() {
 #ifdef DTL_NEED_FP16
     out.push_back({"fphp", has("hw.optional.arm.FEAT_FP16")});
 #endif
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    // Other 64-bit Arm systems (Windows on Arm): no feature check is implemented, so
+    // a build that requires these features refuses to run instead of passing silently.
+#ifdef DTL_NEED_DOTPROD
+    out.push_back({"asimddp", false, false});
+#endif
+#ifdef DTL_NEED_FP16
+    out.push_back({"fphp", false, false});
+    out.push_back({"asimdhp", false, false});
+#endif
 #endif
     return out;
 }
 }
 void ensure_cpu_supported() {
-    for (const auto &feature : required_features())
+    for (const auto &feature : required_features()) {
+        if (!feature.detected)
+            throw failure(DTL_UNSUPPORTED_PLATFORM, std::string("This build cannot check the required CPU feature ") + feature.name +
+                          " on this operating system");
         if (!feature.supported) throw failure(DTL_UNSUPPORTED_PLATFORM, std::string("CPU lacks required feature: ") + feature.name);
+    }
 }
 json runtime_info() {
     json required = json::array(), missing = json::array();
