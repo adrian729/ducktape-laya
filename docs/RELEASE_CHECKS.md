@@ -1,8 +1,10 @@
 # Validation and release checks
 
-The complete target matrix, gate mapping and measurement requirements are in [QUALIFICATION.md](QUALIFICATION.md) and `release/qualification.json`. Those are acceptance requirements; the runners below do not yet cover every required gate.
+How to run each check and produce the evidence each release gate needs. The gates, tiers and acceptance criteria are defined in [QUALIFICATION.md](QUALIFICATION.md) and `release/qualification.json`; `scripts/check-candidate.py` decides whether a candidate passes all of them ([the candidate check](#the-candidate-check)). The release procedure that uses this evidence is [RELEASING.md](RELEASING.md).
 
-Run the native checks with one command. Output directories must be new so earlier reports are not overwritten. Keep local outputs under ignored `build*/` paths and attach relevant results to the commit, PR or CI run; do not commit run reports. Models are supplied explicitly and checked against the pinned manifest before real inference; the runner never downloads one.
+Output directories must be new so earlier reports are not overwritten. Keep local outputs under ignored `build*/` paths and attach relevant results to the commit, PR or CI run; do not commit run reports. Models are supplied explicitly and checked against their pinned manifest before real inference; no runner downloads one.
+
+## Native validation
 
 ```sh
 npm ci --ignore-scripts --prefix tests/typescript
@@ -28,9 +30,13 @@ The core bounds the temperatures stored in a model to [0.5, 5], as the original 
 
 With `--model`, the runner requires the `cpu-guard` test to be registered, which needs `qemu-x86_64` (and `python3`) on `PATH` when CMake configures; without QEMU a real-model run fails. It also runs `tests/download-model.py` and records the Rust, Go, Java, .NET and Python versions it found under `toolchains`.
 
-The GitHub workflow defines Ubuntu 24.04 model-free checks for Clang/Node 24 and GCC/Node 26, including `--packages` and its package smoke test. Manual dispatch can explicitly enable the pinned model download, QEMU and the real-model installed-package checks. CI uses the runner's default `clang` and `gcc`, which need not be the compiler versions `release/qualification.json` lists; the `native_matrix` evidence for `check-candidate.py` may therefore combine local and CI reports, as long as together they cover every listed compiler and Node version and each is bound to the candidate. Workflow dependencies are pinned by commit; Rust and Node versions are explicit. Consult the relevant GitHub Actions run for results; workflow definitions alone are not release evidence. CI does not publish packages or update dependencies.
+## Continuous integration
+
+`native.yml` ("Native checks") runs on every push and pull request: model-free builds with clang (Node 24) and gcc (Node 26) on Ubuntu 24.04 x86-64, gcc on `ubuntu-24.04-arm`, the clang-cl Windows x64 build and its independent-build check, each running `scripts/validate.py --packages` and its binding suites, the per-platform packages, their multi-platform assembly and its installation on every platform, and the parser sanitizer job below. `platforms.yml` ("Other platforms") builds and tests macOS arm64. Manual dispatch with `real_model` adds the pinned model download, the QEMU CPU guard and the real-model checks; dispatch with `candidate=true` is the release candidate run ([below](#release-targets-and-the-ci-candidate-run)). CI uses the runners' default `clang` and `gcc`, which need not be the compiler versions `release/qualification.json` lists; the `native_matrix` evidence may therefore combine local and CI reports, as long as together they cover every listed compiler and Node version and each is bound to the candidate. Workflow dependencies are pinned by commit; Rust and Node versions are explicit. Workflow definitions alone are not release evidence; CI does not publish packages or update dependencies.
 
 A separate model-free CI job instruments the shared library with ASan/UBSan, runs the model-free CTest suite and `tests/input-fuzz.cpp` (deterministic request/schema/config mutations, nesting and size boundaries), then builds `laya-input-fuzzer` and runs a 60-second coverage-guided libFuzzer smoke from the generated corpus. The smoke exercises the harness; it does not meet the one-hour fuzz budget or replace real-model sanitizer runs. No sanitizer recovery or suppression is enabled.
+
+## Performance budgets
 
 The benchmark (`tests/benchmark.py`, one fresh process per run) records model open/close, first and warm p50/p95/p99 latency for small, structured, near-limit and batch requests, two engines in concurrent threads, router cold loads with evictions, cancellation response and deadline overshoot, RSS, descriptors and threads. Repeated outputs must match and descriptors/threads must return to their starting counts. Budgets are frozen per profile, model, thread count and reference CPU from at least three independent runs, then candidates are checked against them:
 
@@ -41,6 +47,8 @@ python3 scripts/performance-budgets.py check build/bench-candidate.json
 ```
 
 Limits are the worst baseline value times a declared headroom (1.5 for time, 1.25 for memory); leaks have none. The committed budgets in `release/budgets/native-performance.json` were frozen from a 0.1.0-era baseline (source commit `baaf568`, an ancestor of `v0.1.0`); a 0.2.0 build still met them on 2026-10-21. Each additional model has its own budget, named by `performance_budgets` in its manifest (`release/budgets/native-performance-<model id>.json`, derived 2026-10-21 from three 0.2.0 runs); `tests/benchmark.py` takes any pinned model, and check-candidate reads the benchmark report for each additional model from the evidence key `performance_<model id>`. They detect regressions on the reference host, not portable latency promises. Run without competing builds or inference and keep the reports as CI/PR artifacts.
+
+## Stress and soak
 
 The native stress target supports a bounded round smoke test and elapsed-time qualification runs. Configure first, then explicitly build this optional target:
 
@@ -54,7 +62,7 @@ build/laya-stress /path/to/Laya-Q8_0.gguf --seconds 3600
 
 Each duration run completes at least ten rounds, then runs the concurrent-caller check. Every round exercises open/use/close, malformed input, deadline recovery and concurrent callers on one handle with two inference threads; periodic rounds add mixed batches, an independent second engine, and a router whose two hard-linked model paths (created in the working directory, which must share the model's filesystem) force cold loads and evictions. After every close, descriptors/threads must return to baseline and RSS must stay within the declared 128 MiB allocator retention allowance. From 40 rounds, the last quarter's median closed RSS must not exceed the second quarter's by more than 32 MiB, so slow leaks inside that allowance fail long runs. Progress goes to stderr; the final JSON on stdout includes elapsed time and resource measurements. A short smoke run does not satisfy the one-hour or eight-hour gates, and this native test does not cover browser memory.
 
-Independent reproducibility compares the bytes, permission bits and symlink targets of all installed native and Node files from a single captured working-tree snapshot compiled in two separate source/build/install roots. Runtime source is archived from its recorded commit and patches are hash checked. The report identifies dirty source and hashes the actual snapshot. The guarantee is for the same toolchain and options; it does not assert identical output across compilers or architectures. Packaging determinism is a separate check for identical prebuilt inputs.
+## Long and instrumented gates
 
 Identity-bound runners write a `report.json` with source commit, build and model identities for the remaining long or instrumented gates:
 
@@ -66,9 +74,9 @@ node tests/electron/run.cjs PACKAGES/ducktape-laya-0.2.0.tgz /path/to/Laya-Q8_0.
 python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COMMIT --report build-candidate/gates.json
 ```
 
-The sanitizer runner builds ASan+UBSan and TSan configurations, runs every registered native test with the model (allocation-failure injection is skipped under sanitizer runtimes) and a short stress run. The `sanitizers` gate also lists the coverage-guided fuzz campaign (`scripts/check-fuzz.py`, below) among its checks; its report is the separate `fuzz` evidence. The rollback rehearsal switches an installed application from retained last-known-good packages to the candidate and back, requiring the LKG library and byte-identical outputs after rollback. Make `LKG_PACKAGES` from the previous GitHub release: `gh release download vX.Y.Z -D build/lkg-assets` and `python3 scripts/release-assets.py retain build/lkg-assets --output build/lkg-packages`, which restores the native package directory (`inventory.json` and its artifacts) and verifies it. When both sides have the same ABI, one consumer binary must work with both. Across an ABI break (0.1.0 to 0.2.0), an application must rebuild, so each side runs a consumer built from its own packaging source commit against its own headers. `check-candidate.py` takes a JSON map of evidence names to report paths. The tier-1 (release-level) names are `native`, `native_matrix`, `browser_package`, `browser`, `browser_isolated`, `userspaces`, `electron`, `cross_cpu`, `sanitizers`, `fuzz`, `stress`, `soak`, `reproducibility`, `performance`, `security_review`, `upgrade`, `model_upgrade`, `rollback` and `installed_release`; `scripts/fetch-ci-evidence.py` adds the candidate run's (next section). A gate passes only when its evidence passed and is bound to the candidate commit, the validated library and packages, the browser package assets and the pinned model; missing evidence is `not_run`. In particular: the security review must name its `source_commit` and `source_tracked_dirty` (false) like other reports; the cross-CPU bundle must contain the candidate library; the rollback's previous side must be an earlier release whose source is an ancestor of the candidate; the native packages must be built from the candidate's source identity; browser runs must use a Chrome version listed in `release/qualification.json` and, for WebGPU, listed non-fallback hardware; and each reproduced build must contain the candidate library. The checks that take packages (`installed_release`, `userspaces`, `electron`, `rollback`, the licence texts of every platform archive) use the release packages the candidate run assembled, which are what is published; `artifact_integrity` also requires the CI linux-x64 library and Node addon to be byte-identical to the locally validated ones, every release package to carry exactly each target's fragment payload, and the CI linux-x64 fragment to equal this host's own `package-native.py` run (`build-candidate/native/packages`) entry by entry (headers, CMake and pkg-config files, Python, Java and C# code, crates, SBOM; compared by entry name and sha256, not container bytes, because deflate differs between hosts; three host-toolchain stamps cannot be equal and are normalized or partly compared, each listed under `package_comparison` in `gates.json`: the `cmake_policy(VERSION 2.8.3...X)` line CMake writes into `ducktape_laya-targets.cmake`, the `.NET` runtime version in the NuGet `nuget.psmdcp` `lastModifiedBy`, and the javadoc jar, whose HTML depends on the exact JDK (CI pins Temurin 25.0.4), so only its manifest and the API page names are compared; measured on a real candidate run, every other entry, class files and DLLs included, was equal). The `electron` evidence must be the `linux-x64` run of the candidate `ducktape-laya-X.Y.Z.tgz`, and `installed_release` must be this host's own linux-x64 run (its `host` field: Linux x86-64, not GitHub Actions, a hostname other than the CI report's), not CI's `installed.json`. A candidate whose own release record or targets are invalid (empty `required_gates`, unknown gate, missing workflow) is rejected before any gate runs, and `ci-run.json` must name `adrian729/ducktape-laya`. Hours-long evidence (`soak`, `stress`, `fuzz`, `sanitizers`, `performance`, `upgrade`, `model_upgrade`) may come from an ancestor commit when the diff since touches no library input (`src/`, `include/`, `cmake/`, `patches/`, `CMakeLists.txt`, the runtime record and pin, the model manifest) and none of that gate's harness files; soak, stress and performance must also have run on the candidate's exact library bytes. Everything else (native validation, packages, browser runs, reproducibility, install checks, all tier-2 evidence) is produced from the candidate itself. The report lists reused evidence under `reused_evidence`. The release record, policy, budgets, notices and source identity are read from the candidate commit's own tree, so later tooling commits cannot alter what is checked. `release_ready` requires every gate of every release target. Publication gates stay separate.
+The sanitizer runner builds ASan+UBSan and TSan configurations, runs every registered native test with the model (allocation-failure injection is skipped under sanitizer runtimes) and a short stress run. The `sanitizers` gate also lists the coverage-guided fuzz campaign (`scripts/check-fuzz.py`, below) among its checks; its report is the separate `fuzz` evidence.
 
-Before publication, require all applicable recorded gates, review current evidence and numeric-profile limits, verify the security contact and release hosting, and retain the prior artifacts for rollback. Publication is an explicit maintainer action. Assemble the release assets with `scripts/release-assets.py assemble` from the release packages (see [PUBLISHING.md](PUBLISHING.md#release-day-order)) and check them with `scripts/check-release-assets.sh DIR COMMIT`. After the GitHub release exists, run the `attest-release` workflow from `main` with its tag (it refuses other refs). It runs the same `scripts/check-release-assets.sh` from `main` on the published assets: every asset is listed once in `SHA256SUMS` with matching bytes; `gates.json` passes `scripts/release-gates.jq` (release ready, produced by a clean checker for the tagged commit, every release-level gate passed and, for schema 2, every gate of every release target, exactly one of them tier 1); the published native and browser inventories are the ones `gates.json` qualified and were packaged from the tagged commit; every artifact they list is published with the listed hash; for schema 2 the native inventory's platforms are exactly the qualified targets and every fragment was packaged from the tagged commit on a clean tree. Any asset outside those inventories fails the run. It then signs a release-qualification attestation for each asset, whose predicate also names each target's tier. It is not build provenance: the packages are built on GitHub-hosted runners in the candidate run and qualified on the release host, which requires its own Linux x86-64 library and addon to be byte-identical to CI's. `scripts/verify-release-assets.sh` (used by `publish-release`) applies the same `release-gates.jq`; 0.1.0 and 0.2.0 (schema 1, no targets) still pass it. Registry status, missing publishing work and the release-day order are in [PUBLISHING.md](PUBLISHING.md). Each numerical profile must pass strict same-backend upstream checks. Cross-profile comparisons report probability and decision drift and must not be described as probability equivalence.
+The rollback rehearsal switches an installed application from retained last-known-good packages to the candidate and back, requiring the LKG library and byte-identical outputs after rollback. Make `LKG_PACKAGES` from the previous GitHub release: `gh release download vX.Y.Z -D build/lkg-assets` and `python3 scripts/release-assets.py retain build/lkg-assets --output build/lkg-packages`, which restores the native package directory (`inventory.json` and its artifacts) and verifies it. When both sides have the same ABI, one consumer binary must work with both. Across an ABI break (0.1.0 to 0.2.0), an application must rebuild, so each side runs a consumer built from its own packaging source commit against its own headers.
 
 Exact native results on a second physical CPU are checked with one unchanged binary. A manually dispatched real-model CI run bundles its built library and C conformance consumer, records raw fixture outputs with the runner's CPU identity and uploads both. Download that artifact and run the same bundle on a different CPU:
 
@@ -80,11 +88,15 @@ python3 tests/cross-host.py compare ARTIFACT/cross-host/record.json build/cross-
 
 Comparison requires identical bundle, model and fixture hashes, distinct CPU identities and byte-identical outputs. It covers that build's ISA profile only.
 
+## Fault injection and the CPU guard
+
 `real-faults` (`tests/faults.cpp`, Linux, registered with a test model) feeds damaged models to `dtl_open`: empty, non-GGUF and unreadable files, a directory, truncation from the header to the last byte, and in-place corruption of the magic, version, tensor/metadata counts, a string length, the decision type, temperatures and the head budget. Each must return `DTL_MODEL_ERROR` with a message and no descriptor leak; corrupted tensor bytes are not detectable without the host's SHA-256 check. It then injects allocation failure: model loading under an address-space limit, and failing the Nth C++ allocation of `dtl_execute` (every point through 384, then every 97th) and of `dtl_open` (geometric points). Request failures must return `DTL_OUT_OF_MEMORY`; failures absorbed internally must still produce exact results; the engine must keep returning exact results afterwards. `real-c-faults` (same executable, `--c-allocations`; not in sanitizer builds) fails each C allocation (`malloc`, `calloc`, `realloc`, `posix_memalign`, `aligned_alloc`, `memalign`) of one `dtl_execute` and one `dtl_open`, each in its own child process. Every point must end in an exact result, `DTL_OUT_OF_MEMORY`/`DTL_MODEL_ERROR`, or `SIGABRT` from ggml's own allocation checks; any other signal fails (an unchecked NULL). At least one inference point must reach the caller as `DTL_OUT_OF_MEMORY` and leave the engine returning exact results.
 
 `real-runtime-faults` (same executable, `--runtime-faults`) fails work inside a forward pass, each in its own child process: worker-thread creation under `RLIMIT_NPROC` (skipped when the limit is not enforced, as for root) and, outside sanitizer builds, the CPU work buffer's growth for a request larger than the baseline. Each call must return `DTL_OUT_OF_MEMORY` and the engine must then return exact results for smaller and larger requests. `ggml-faults` (`tests/ggml-faults.cpp`, Linux, model-free) checks the same two failures directly on ggml, plus a refused second or third worker thread (the started ones must be joined). `tokenizer-partition` (`tests/tokenizer.cpp`, model-free, on upstream's vocabulary-only test files) and `real-tokenizer` (the test model's vocabulary) compare token sequences with `tests/fixtures/tokenizer-partition.txt`, recorded with the unpatched runtime, and check that tokenization time grows linearly with the number of special-token matches.
 
 `cpu-guard` (`tests/cpu-guard.py`, x86-64, registered with a test model when `qemu-x86_64` and `python3` are found; not in sanitizer builds) runs a C probe and the Node binding under QEMU user-mode CPU models. Nehalem (no AVX) and Sandy Bridge (AVX, no AVX2/FMA/F16C/BMI2) must return `DTL_UNSUPPORTED_PLATFORM` naming the first missing feature, with `dtl_info` listing every missing one. QEMU executes AVX-family instructions regardless of the emulated CPU, so the probe runs with execution logging and each executed block is decoded: no instruction from a feature the emulated CPU lacks may run. An emulated CPU with every feature must open the model, and the scan must see AVX/AVX2 there (positive control). It does not replace a run on physical older hardware.
+
+## ThreadSanitizer and fuzzing
 
 ThreadSanitizer covers the native library, llama.cpp/ggml (its own pthread pool; OpenMP is disabled) and the native test executables, including the real-model suites and the stress loop's concurrent callers, second engines and router evictions, and the Rust binding's tests (one engine and one router shared across threads, cancellation set from another thread, close on a different thread). It does not cover the Node worker threads. No suppressions:
 
@@ -135,6 +147,82 @@ python3 scripts/check-fuzz.py --build build-fuzzer --seconds 3600 \
 
 It requires an explicitly configured fuzz build, resets runtime overrides to the approved pin, rebuilds the target, verifies shared-library coverage instrumentation, and bounds runtime and memory. A shorter `--seconds` smoke can pass while `qualification_budget_met` remains false. Campaign success alone never makes `release_ready` true. Do not modify its build directory during the run.
 
+## Installed packages
+
+Installed C/C++, pkg-config, npm, Rust, Python wheel, Maven, NuGet and Go consumers must perform real-model inference outside the checkout and agree exactly on outputs (`tests/installed-packages.py --report` records each consumer's output hash).
+
+Rust packages contain library source, metadata and license, excluding demos. The sys crate locates an installed native library using `DUCKTAPE_LAYA_LIB_DIR`, or `pkg-config` when the variable is absent. It no longer assumes a monorepo `build/` directory. Crates express their sibling dependency by version in the published manifest. Before publication, the artifact consumer test uses a local Cargo patch to the extracted sys crate, never a path into this repository.
+
+The reproducible Electron integration consumer lives under `tests/electron`:
+
+```sh
+npm ci --prefix tests/electron
+node tests/electron/node_modules/electron/install.js
+node tests/electron/run.cjs build/packages/ducktape-laya-X.Y.Z.tgz /path/to/Laya-Q8_0.gguf build/electron.json
+```
+
+Only the test setup downloads Electron; applications do not acquire this test dependency. The test installs the actual tarball into a temporary app, uses a pinned ASAR packager, and removes the app after both runs. Compare both outputs and validate every Electron version advertised by a release.
+
+### Linux userspaces
+
+```sh
+python3 tests/download-userspaces.py --output build-platforms
+python3 tests/linux-userspace.py ARTIFACT_DIR MODEL \
+  build-platforms/ubuntu-24.04.5/rootfs build-platforms/ubuntu-26.04.1/rootfs \
+  --report build/userspaces.json
+```
+
+Provisioning is an explicit maintainer download. `tests/linux-userspaces.json` pins official Ubuntu image URLs, hashes and the image-signing fingerprint. The provisioner verifies the checksum signature with a trusted local Ubuntu keyring and the pinned archive hash before extraction; it records image provenance. Device entries are omitted and absolute symlinks become equivalent relative links inside the extracted root. No system packages are installed on the host.
+
+The consumer runner verifies the artifact inventory and approved model hash, retains distinct records for every root (even when directory names match), and requires exact ordered result agreement. Supply locally verified root filesystems when using other images; missing provenance is explicit in the report. It uses Bubblewrap with read-only artifact/model mounts, each userspace's own runtime libraries and network access disabled. It executes an installed C consumer and compares results. This tests userspace loading/inference, not a different host kernel, physical CPU or building all bindings inside those distributions. Keep run results with CI/PR artifacts and define the release matrix from those checks.
+
+### SBOM and inventory
+
+Each packager emits a checksum-covered CycloneDX 1.6 component inventory (`sbom.cdx.json`). Native binaries are inspected through the C ABI before packaging, so a stale version/runtime/patch identity is rejected. Browser packages include Emscripten, musl, LLVM runtime and Dawn notices in addition to shared runtime notices. The inventory separates incorporated components from host system libraries, host browser/GPU drivers, excluded model weights and test-only tools. Checksums detect changes; the release's attestation establishes who published the files ([RELEASING.md](RELEASING.md#provenance)).
+
+## Reproducible builds
+
+Independent reproducibility compares the bytes, permission bits and symlink targets of all installed native and Node files from a single captured working-tree snapshot compiled in two separate source/build/install roots. Runtime source is archived from its recorded commit and patches are hash checked. The report identifies dirty source and hashes the actual snapshot. The guarantee is for the same toolchain and options; it does not assert identical output across compilers or architectures. Packaging determinism is a separate check for identical prebuilt inputs.
+
+`scripts/check-reproducibility.py --output build-repro-new` compiles one captured source snapshot in two independent source/build/install roots and compares all installed native/Node bytes, modes and symlink targets. Source/build paths are normalized; generated GGML identity uses the explicit runtime pin. Keep Node build/install RPATHs relative to `$ORIGIN`, and package the installed addon. Installed consumer tests reject absolute library search paths.
+
+On Windows, clang-cl builds with `/Brepro` (no timestamps in objects; a content hash instead of the link time in the DLL, addon and import library), and CI runs the same check from a Visual Studio x64 developer prompt:
+
+```bat
+python scripts/check-reproducibility.py --output build-repro --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
+```
+
+This check covers identical inputs and toolchains, not different compilers or architectures. Across hosts, the Linux x86-64 library and Node addon built by CI (`ubuntu-24.04`, gcc 13.3.0, Node 26.7.0 headers) are byte-identical to the release host's build of the same commit; the release procedure compares their hashes (`library_sha256`, `addon_sha256`) and stops when they differ. Keep its reports in CI/PR artifacts or ignored build directories. A reproducible build is one release requirement, not a substitute for runtime, platform or installed-consumer checks.
+
+Native packaging rejects binaries exposing sanitizer, libFuzzer coverage or LLVM profile instrumentation symbols (on Windows and macOS also binaries that load a sanitizer or debug runtime) before loading them. Use separate diagnostic builds for testing and rebuild uninstrumented release artifacts for distribution.
+
+The DLL's bytes depend on the runner image, not only on the sources: it links the image's MSVC and Windows SDK libraries (UCRT, vcruntime), and two images built different, individually reproducible DLLs from one commit. Package inventories and reports therefore record `build_environment` (`ImageOS`, `ImageVersion`, `VCToolsVersion`, `WindowsSDKVersion`, `VSCMD_VER`), and the reproducibility check must run on the image of the build it validates; it rejects a reproduction from another environment. An ordinary Linux host sets none of these variables, and Linux x86-64 builds with the same compiler and Node headers matched across hosts (below).
+
+## Browser
+
+Browser release checks must cover primitive/schema/batch outputs, ordered events, invalid/closed calls, asset budgets, route aliases, pre-cancellation, deadlines, cancelling/idempotent shutdown and explicit WASM initialization fallback. Include missing/corrupt assets, hash mismatch, initialization aborts, device loss, worker failure, memory pressure and deployment of the extracted package. Capture the browser version, GPU/driver, launch flags, model identity and build configuration; flags that enable WebGPU experimentally do not establish default browser support.
+
+`tests/browser.html` and `tests/browser-server.py` provide the browser test harness. Export its `window.state` after completion to a local report. Compare against a native run of the same model and fixtures, not a historical checked-in result:
+
+```sh
+python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf --output build-check-native
+python3 tests/compare-browser.py build/browser-results.json --native build-check-native/outputs.json
+```
+
+`validate.py` writes the native fixture results to `outputs.json` (from `tests/parity.py --report`); `check-candidate.py` accepts browser drift only against that file of the candidate's native run. The comparator requires matching fixture sets, native key order mapped to JavaScript property order, a responsive main-thread heartbeat, ordered events and finite values. It reports numeric drift and changed choice/structured decisions without a cross-profile tolerance gate. Metadata, token counts and result shapes remain exact. `tests/compare-browser-reference.py` separately compares with unchanged upstream decision processing on the same backend.
+
+For repeatable real-browser runs, install the locked developer tools and use an installed Chrome. Build both backend reference probes with `--reference` first:
+
+```sh
+npm ci --ignore-scripts --prefix tests/browser-automation
+node tests/browser-automation/run.mjs --model /path/to/Laya-Q8_0.gguf \
+  --native build-check-native/outputs.json --output build-browser-check
+```
+
+The runner starts its own loopback-only harness, verifies the model, runs both backends, upstream comparisons, lifecycle/assets/device-loss checks, and closes the browser and server afterward. It records browser/platform, model, fixture and asset identities. Same-backend upstream failures cause a failed exit; cross-profile drift is retained as measured evidence, not probability equivalence. It defaults to headed Chrome without custom launch flags; use `--headless` only when that environment provides the intended GPU. `--isolated` adds COOP/COEP for shared-memory controls. `--package-dir EXTRACTED_PACKAGE` tests shipped assets; `--backend wasm|webgpu` selects a backend. Explicit `--skip-reference`/`--skip-controls` leave those checks not run. `--constrained-wasm BUILD` adds a WASM `memory` stage using a test build with a lowered heap ceiling (`scripts/build-browser.py --maximum-memory 469762048`, 448 MiB): opening an engine and a router's first request there must reject, never hang or succeed, and the page must then open a working engine with the product build. Packaging rejects builds whose ceiling is not 4 GiB. Selected-check success is never full release approval.
+
+Store run results in ignored build directories or CI/PR artifacts. Broader GPU, physical CPU, isolated-page cancellation and minimum-browser coverage are not covered yet ([roadmap](ROADMAP.md)).
+
 ## Security review
 
 The `security_review` gate has no runner: the maintainer reviews the threat boundaries in `SECURITY.md`, the pinned dependencies' advisories and the release permissions, and writes `security_review` evidence by hand as a JSON object that `check-candidate.py` validates (`release_support.security_review_problems`):
@@ -151,6 +239,42 @@ The `security_review` gate has no runner: the maintainer reviews the threat boun
 Other fields (notes, advisory references) are free-form and not checked: the gate proves the review was recorded against this candidate, not what it concluded.
 
 The `model_upgrade` gate accepts `comparison.status` of `passed` or `failed` by design: a changed model is expected to change outputs, so it requires the candidate-model checks (`native_contracts`, `binding_conformance`, `abi`) to pass and the comparison to complete, not to match the baseline.
+
+## The candidate check
+
+`check-candidate.py` takes a JSON map of evidence names to report paths and writes `gates.json`:
+
+```sh
+python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COMMIT --report build-candidate/gates.json
+```
+
+Tier-1 evidence names and the commands that produce them (paths as used in a candidate directory `build-candidate/`; `MODEL`, `ML` and `TD` are the English, multilingual and typed-decisions files):
+
+| Evidence | Produced by |
+| --- | --- |
+| `native` | `CC=gcc CXX=g++ python3 scripts/validate.py --model MODEL --extra-model ML --extra-model TD --packages --upstream-reference --output build-candidate/native` |
+| `native_matrix` | A JSON list of `report.json` paths that together cover every compiler and Node version in `release/qualification.json`: the gcc run above, the same run with clang, and the CI clang report |
+| `browser_package`, `browser`, `browser_isolated` | The browser package's `inventory.json` and the two `tests/browser-automation/run.mjs` reports ([browser](#browser)) |
+| `userspaces`, `electron`, `rollback`, `installed_release` | [Installed packages](#installed-packages), run on the CI-assembled packages ([CI candidate run](#release-targets-and-the-ci-candidate-run)) |
+| `cross_cpu` | `tests/cross-host.py compare` output ([above](#long-and-instrumented-gates)) |
+| `sanitizers`, `fuzz` | `scripts/check-sanitizers.py`, `scripts/check-fuzz.py --seconds 3600` |
+| `stress`, `soak` | `scripts/check-stress.py` with `--seconds 3600` and `--seconds 28800` |
+| `reproducibility` | `scripts/check-reproducibility.py` ([reproducible builds](#reproducible-builds)) |
+| `performance`, `performance_<model id>` | `tests/benchmark.py` per model on an idle host, checked against its budget ([performance budgets](#performance-budgets)) |
+| `upgrade` | `scripts/check-upgrade.py --runtime COMMIT --model MODEL` ([UPGRADES.md](UPGRADES.md)) |
+| `model_upgrade` | `scripts/check-upgrade.py` with `--candidate-model` and `--candidate-manifest` |
+| `security_review` | The hand-written review ([security review](#security-review)) |
+
+`scripts/fetch-ci-evidence.py` adds the candidate run's evidence (next section). Binding rules:
+
+- A gate passes only when its evidence passed and is bound to the candidate commit, the validated library and packages, the browser package assets and the pinned model; missing evidence is `not_run`.
+- In particular: the security review must name its `source_commit` and `source_tracked_dirty` (false) like other reports; the cross-CPU bundle must contain the candidate library; the rollback's previous side must be an earlier release whose source is an ancestor of the candidate; the native packages must be built from the candidate's source identity; browser runs must use a Chrome version listed in `release/qualification.json` and, for WebGPU, listed non-fallback hardware; and each reproduced build must contain the candidate library.
+- The checks that take packages (`installed_release`, `userspaces`, `electron`, `rollback`, the licence texts of every platform archive) use the release packages the candidate run assembled, which are what is published; `artifact_integrity` also requires the CI linux-x64 library and Node addon to be byte-identical to the locally validated ones, every release package to carry exactly each target's fragment payload, and the CI linux-x64 fragment to equal this host's own `package-native.py` run (`build-candidate/native/packages`) entry by entry (headers, CMake and pkg-config files, Python, Java and C# code, crates, SBOM; compared by entry name and sha256, not container bytes, because deflate differs between hosts; three host-toolchain stamps cannot be equal and are normalized or partly compared, each listed under `package_comparison` in `gates.json`: the `cmake_policy(VERSION 2.8.3...X)` line CMake writes into `ducktape_laya-targets.cmake`, the `.NET` runtime version in the NuGet `nuget.psmdcp` `lastModifiedBy`, and the javadoc jar, whose HTML depends on the exact JDK (CI pins Temurin 25.0.4), so only its manifest and the API page names are compared; measured on a real candidate run, every other entry, class files and DLLs included, was equal).
+- The `electron` evidence must be the `linux-x64` run of the candidate `ducktape-laya-X.Y.Z.tgz`, and `installed_release` must be this host's own linux-x64 run (its `host` field: Linux x86-64, not GitHub Actions, a hostname other than the CI report's), not CI's `installed.json`.
+- A candidate whose own release record or targets are invalid (empty `required_gates`, unknown gate, missing workflow) is rejected before any gate runs, and `ci-run.json` must name `adrian729/ducktape-laya`.
+- Hours-long evidence (`soak`, `stress`, `fuzz`, `sanitizers`, `performance`, `upgrade`, `model_upgrade`) may come from an ancestor commit when the diff since touches no library input (`src/`, `include/`, `cmake/`, `patches/`, `CMakeLists.txt`, the runtime record and pin, the model manifest) and none of that gate's harness files; soak, stress and performance must also have run on the candidate's exact library bytes. Everything else (native validation, packages, browser runs, reproducibility, install checks, all tier-2 evidence) is produced from the candidate itself. The report lists reused evidence under `reused_evidence`.
+- The release record, policy, budgets, notices and source identity are read from the candidate commit's own tree, so later tooling commits cannot alter what is checked.
+- `release_ready` requires every gate of every release target. Publication is a separate step ([RELEASING.md](RELEASING.md)).
 
 ## Release targets and the CI candidate run
 

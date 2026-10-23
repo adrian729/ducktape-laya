@@ -39,10 +39,18 @@ Found by the 2026-10 bindings audit; none has backward-compatibility constraints
 - **Model path types:** Python rejects `bytes` paths and paths with non-UTF-8 bytes.
 - **Rust MSRV:** `rust-version = "1.98"` is the current stable; the crates probably build on a much older compiler, but this has not been verified with older toolchains.
 
+### Broader test coverage
+
+- **Physical CPUs, GPUs and browsers.** The CPU check is tested on emulated CPUs only; the browser on Chromium 152 with one GPU; tier-2 platforms with the English model only. Add older physical x86-64 CPUs, more GPUs, Firefox and Safari, and the multilingual and typed-decisions models on Linux arm64 and Windows.
+- **Resource pressure.** No browser memory or soak run exists, and performance budgets exist only for Linux x86-64 on one machine.
+- **Results across `threads` values** are not compared by any check.
+- **Larger accuracy corpus.** The original-Laya comparison has 29 answers per model, and `scan` and truncation are not compared with the original.
+- **Documentation snippets.** The README and package README code is not compiled by CI (the example request files are).
+
 ### Higher-precision model variants
 
 `ggml-org/Laya-GGUF` also has `Laya-BF16.gguf`: the same English model at roughly the original Laya's precision, 844 MB against 449 MB for the Q8_0 file we ship.
-- It should remove most of the 0.010 mean probability difference from the original (measured 2026-10-20), at about twice the memory and slower CPU inference.
+- It should remove most of the English model's mean probability difference from the original (0.0068 in the 0.2.0 qualification run; [accuracy](PERFORMANCE.md#accuracy-against-the-original-laya)), at about twice the memory and slower CPU inference.
 - Supporting it means pinning its hash, the same qualification as Q8_0, and documenting it as the accuracy-first option next to the memory-first Q8_0.
 - The same applies to BF16 versions of other supported Laya models.
 
@@ -52,12 +60,12 @@ The English model (ModernBERT-large, about 421M parameters) is the largest Laya 
 
 ### Downloadable multilingual and typed-decisions models
 
-Users currently build these two GGUFs with `scripts/convert-model.py`. Make them downloadable: upload the exact pinned files (for example to a Hugging Face repository under the maintainer's account, with a model card giving the Apache-2.0 notice, source revision and hashes) and set each manifest's `url`, or switch to official GGUFs if the Laya authors or ggml-org publish them. Steps: [PUBLISHING.md](PUBLISHING.md#converted-models).
+Users currently build these two GGUFs with `scripts/convert-model.py`. Make them downloadable: upload the exact pinned files (for example to a Hugging Face repository under the maintainer's account, with a model card giving the Apache-2.0 notice, source revision and hashes) and set each manifest's `url`, or switch to official GGUFs if the Laya authors or ggml-org publish them. Steps: [RELEASING.md](RELEASING.md#converted-models).
 
 ### Mobile, and the languages that depend on it
 
 iOS and Android need their own packaging (XCFramework, AAR), toolchains and memory testing. The 0.5 GB model fits on phones.
-- **Swift for iOS:** a Swift package; if macOS were ever supported, the same package could serve it.
+- **Swift for iOS:** a Swift package; the same package could serve macOS once it is a release target.
 - **Kotlin on Android:** needs a JNI binding, because Android lacks Java's FFM API.
 - **Dart/Flutter:** a `dart:ffi` binding across mobile and desktop.
 
@@ -69,7 +77,7 @@ Ruby (`ffi` gem) and PHP (`FFI`) would each be a small wrapper like the Python b
 
 - **The original Laya's `act_probability`:** a second "act" output alongside the decisions. The original's config prices an `escalate` action (`act_costs`), so it appears to be the probability that the answer should be acted on rather than escalated. The GGUF and llama.cpp path don't carry it; supporting it would need converter and llama.cpp changes. First confirm its meaning and whether the authors treat it as public.
 - **Batching questions into one forward pass:** measured 2026-10-20 on CPU (4 cores), questions packed as separate sequences in one `llama_encode` were only 1.15× faster on a 4-question request, and results changed with the batch composition: the same question got different probabilities depending on its position and neighbours (up to 0.04 on the fixtures), most likely because matrix kernels tile rows differently. Not adopted. Revisit for GPU backends, where batching pays more, and only with results independent of the batch.
-- **Windows agreement with the original Laya:** the clang-cl build runs the same ggml kernels as Linux x86-64 (AVX2, FMA, F16C, BMI2), agrees exactly with upstream llama.cpp, but drifts 0.054 from the original Laya on one fixture answer (`json_escaping/spam`; limit 0.05; Linux 0.037). Measured 2026-10-22: the whole gap comes from the C runtime's single-precision `erff` (GEGLU-erf, `ggml-cpu/vec.h`) and `sinf`/`cosf` (RoPE cache, `ggml-cpu/ops.cpp`); with those computed as `(float)f((double)x)` Windows and Linux produce identical results on all 29 answers (max drift 0.039 on both). Neither library is wrong; the answer is fragile under Q8_0 activation quantization. Upstream deliberately uses the platform libm on CPU and hand-written approximations on Metal and Vulkan (#14445), so bit-identical results across platforms are not an upstream goal. A runtime patch with our own `erff`/`sinf`/`cosf` would make CPU platforms identical, but it would move Linux from 0.037 to 0.039, diverge from stock llama.cpp arithmetic on every upgrade, cost unmeasured time (`erff` runs about 3.4M times per request) and still not cover GPU backends. Not planned: this is upstream behaviour, so it is a documented known deviation with its own cap ([COMPATIBILITY.md](COMPATIBILITY.md#known-deviations)); Windows x64 ships as a tier-2 target with it.
+- **Windows agreement with the original Laya:** the clang-cl build runs the same ggml kernels as Linux x86-64 and agrees exactly with upstream llama.cpp, but one fixture answer (`json_escaping/spam`) drifts 0.054 from the original Laya (limit 0.05; Linux 0.037). Measured 2026-10-22, the whole gap comes from the Windows C runtime's single-precision `erff` (GEGLU) and `sinf`/`cosf` (RoPE cache); computed as `(float)f((double)x)`, Windows and Linux give identical results on all 29 answers (largest drift 0.039 on both). Upstream deliberately uses the platform math library on CPU (#14445), so bit-identical results across platforms are not an upstream goal. Our own `erff`/`sinf`/`cosf` in a runtime patch would make CPU platforms identical, but would move Linux from 0.037 to 0.039, diverge from stock llama.cpp on every upgrade, cost unmeasured time (`erff` runs about 3.4M times per request) and still not cover GPU backends. Not planned: it is a documented [known deviation](COMPATIBILITY.md#known-deviations) with its own cap.
 - **Loading a model from memory:** llama.cpp has no public load-from-buffer API. Workarounds (memfd, temporary files) add little real protection for encrypted assets. Revisit with mobile.
 
 ## Not planned
@@ -89,4 +97,4 @@ Features the original Laya has that ducktape-laya deliberately leaves out.
 | `batch_tokens` open setting | It sized the batched forward pass, which was not adopted (see Research questions) |
 | Temperature fitting, fine-tuning, evaluation harnesses | Training tooling: use the original's tools, then convert the model or pass the fitted temperatures |
 | HTTP server, MCP server, LangChain/LlamaIndex/CrewAI integrations | In-process embedding is a project goal; integrations could later sit on top of the Python binding |
-| Intel Macs | macOS is not released yet and Apple silicon comes first (see the README); Intel Macs would still be left out, since Apple stopped selling them in 2023 and CI runners are being retired |
+| Intel Macs | macOS is not released yet and Apple silicon comes first ([platforms](PLATFORMS.md)); Intel Macs would still be left out, since Apple stopped selling them in 2023 and CI runners are being retired |

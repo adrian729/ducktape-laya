@@ -1,6 +1,19 @@
 # Shared-core architecture
 
-Ducktape Laya is an embedded inference library. It uses llama.cpp and GGUF with one C++ implementation behind a shared C ABI. C++, Rust, Node/TypeScript, Python, Go, Java, .NET and browser interfaces must preserve that implementation's decision semantics. The product requirements are in [PLAN.md](PLAN.md); observable behavior is in [API.md](API.md) and [BROWSER.md](BROWSER.md).
+Ducktape Laya is an embedded inference library. It uses llama.cpp and GGUF with one C++ implementation behind a shared C ABI. C++, Rust, Node/TypeScript, Python, Go, Java, .NET and browser interfaces must preserve that implementation's decision semantics. Observable behaviour is in [API.md](API.md) and [BROWSER.md](BROWSER.md).
+
+## Design principles and scope
+
+- **One shared implementation.** The C++ core owns every behaviour the bindings share. Bindings adapt language types, ownership, errors, async scheduling and platform integration, nothing more.
+- **Reuse upstream first.** Prefer llama.cpp's own loading, tokenization, templates and tensor execution over a parallel implementation, and prove equivalence before replacing working code. Keep the upstream pin unchanged by default; a necessary runtime patch is small, recorded with its hash, justified, and has a removal condition ([patches](../patches/README.md)). No silent vendor edits or long-lived fork.
+- **Duplicate only with a reason.** Duplicating shared logic needs a specific platform constraint or a measured benefit; record why, what is duplicated, how it stays equivalent (shared conformance tests) and when it can be removed.
+- **Narrow public surface.** Upstream types and headers never appear in the public ABI. Supported limits, decision types and model and runtime identity are exposed through `info()`, so consumers detect capabilities without depending on an upstream revision.
+- **Models are separate.** Weights are versioned apart from the library and pinned by manifests; no package contains or implicitly downloads a model, and nothing updates the runtime or a model inside an installed application.
+- **Demos are disposable.** The demos are optional developer tools; they never drive the architecture, APIs, dependencies or release acceptance, and they stay out of consumer packages. Package tests are automated consumers of the public API.
+- **The browser shares the core.** The browser package compiles the same core to WebAssembly instead of redirecting users to another SDK; platform code adapts memory, scheduling and asset loading only. A browser limitation stays visible rather than being relabelled as support.
+- **Advertise only what is tested.** A platform, backend or runtime version is supported only when the release checks cover it ([PLATFORMS.md](PLATFORMS.md)); compiling is not enough. Native GPU support is a separate capability, not implied by browser WebGPU.
+
+Out of scope: text or chat generation, an HTTP or inference server, model training, implicit downloads or updates, and untested operating systems. Deliberately omitted features of the original Laya are listed in the [roadmap](ROADMAP.md#not-planned).
 
 ## Responsibility boundaries
 
@@ -58,4 +71,4 @@ Browser requests still pass through the C ABI and shared planner. Platform code 
 
 Keep regression inputs in `tests/fixtures` and automated public-API consumers in `tests/consumers`, independently of demos. Same-native-binary binding outputs must agree exactly with identical model bytes and settings. Compare each adapter with upstream processing on the same backend at its strict declared tolerance. Measure cross-profile numeric drift and changed decisions separately; never use that measurement to weaken same-backend checks. Changes to ownership, bounds, ordering, errors, calibration or lifecycle require corresponding contract updates and regression coverage.
 
-[PACKAGING.md](PACKAGING.md) defines artifact integrity and installation; [RELEASE_CHECKS.md](RELEASE_CHECKS.md) defines repeatable verification. Run outputs, audit findings and review narratives belong in commit/PR history or CI artifacts, not in permanent architecture documents. Keep these documents aligned with the accepted implementation and mark future release requirements explicitly.
+[BUILDING.md](BUILDING.md) defines builds, packages and their identity records; [RELEASE_CHECKS.md](RELEASE_CHECKS.md) defines repeatable verification. Keep architecture, contracts, support limitations, build and upgrade procedures current with accepted changes, and keep reusable tests and fixtures in source. Run outputs, benchmark samples, audit findings and review narratives belong in commit or PR history and CI artifacts (local outputs under ignored `build*/` directories), not in these documents; do not add dated audit documents.
