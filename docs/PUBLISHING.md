@@ -57,7 +57,7 @@ These are code changes; they need no accounts.
 
 Each registry needs the maintainer's account. Every registry is published by
 the `publish-release` workflow from the GitHub environment `release`
-(deployments only from `main` and `v*` tags). The trusted publisher entries
+(deployments only from `main`). The trusted publisher entries
 below must name exactly that repository, workflow file and environment.
 
 - **PyPI:** a pending trusted publisher (pypi.org, Account → Publishing) for

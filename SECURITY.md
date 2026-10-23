@@ -13,8 +13,10 @@ not name the ref, so it is not enough on its own. `--source-ref refs/heads/main`
 pins the source ref too, and `scripts/verify-release-assets.sh`, which the
 publish jobs run, also checks the certificate's repository, workflow ref,
 `workflow_dispatch` trigger and GitHub-hosted runner. The `release` environment
-should additionally restrict deployment branches to `main` and require a reviewer
-(a repository setting, not enforced by these files).
+admits deployments from `main` only (a repository setting, not enforced by these
+files). It has no required reviewer by the maintainer's choice: a release runs
+end to end once the maintainer asks for it, and the gates above, the pinned
+signer and the `main`-only environment are what stop unqualified bytes.
 The npm tarballs are uploaded exactly as attested, so the same command verifies
 the copies npm serves. The crates are not: `cargo publish` packages them again
 from the tagged source, so a crates.io file verifies only if its bytes happen to

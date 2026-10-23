@@ -11,7 +11,7 @@ name: publish-release
 # npm, PyPI, NuGet and crates.io use trusted publishing (GitHub OIDC); no token is
 # stored. Maven Central has no OIDC publishing and requires PGP signatures, so its
 # job uses a Central Portal user token and a signing key stored as secrets of the
-# `release` environment, which only main and v* tags can deploy to.
+# `release` environment, which only main can deploy to.
 on:
   workflow_dispatch:
     inputs:
