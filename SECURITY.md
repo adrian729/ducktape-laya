@@ -6,9 +6,15 @@ with SHA-256 checksums. Each artifact has a GitHub (Sigstore) attestation bindin
 to the release and its qualification report; verify one with
 `gh attestation verify FILE -R adrian729/ducktape-laya --predicate-type
 https://github.com/adrian729/ducktape-laya/release-qualification/v1`.
-Add `--signer-workflow adrian729/ducktape-laya/.github/workflows/attest-release.yml`
-to require that workflow as the signer; from 0.2.0 the workflow signs only when
-run from `main`, so `--source-ref refs/heads/main` pins that as well.
+Add `--cert-identity https://github.com/adrian729/ducktape-laya/.github/workflows/attest-release.yml@refs/heads/main`
+to require exactly that workflow, run from `main`, as the signer (from 0.2.0 the
+workflow signs only from `main`); `--signer-workflow` is a prefix match that does
+not name the ref, so it is not enough on its own. `--source-ref refs/heads/main`
+pins the source ref too, and `scripts/verify-release-assets.sh`, which the
+publish jobs run, also checks the certificate's repository, workflow ref,
+`workflow_dispatch` trigger and GitHub-hosted runner. The `release` environment
+should additionally restrict deployment branches to `main` and require a reviewer
+(a repository setting, not enforced by these files).
 The npm tarballs are uploaded exactly as attested, so the same command verifies
 the copies npm serves. The crates are not: `cargo publish` packages them again
 from the tagged source, so a crates.io file verifies only if its bytes happen to
