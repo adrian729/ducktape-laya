@@ -48,6 +48,19 @@ set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_CUDA OFF CACHE BOOL "" FORCE)
 set(GGML_METAL OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+# x86-64 profile: AVX2 baseline (AVX, AVX2, FMA, F16C, BMI2, SSE4.2), checked at open
+# (src/platform.cpp). ggml's own defaults turn these off when SOURCE_DATE_EPOCH is set
+# or when cross-compiling, which would silently change the numerical profile; pin them.
+# They remain cache options: -DGGML_AVX2=OFF ... still selects the portable profile.
+if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  foreach(feature AVX AVX2 BMI2 SSE42)
+    set(GGML_${feature} ON CACHE BOOL "ggml: enable ${feature} (ducktape-laya profile)")
+  endforeach()
+  if(NOT MSVC) # MSVC-style builds have no GGML_FMA/GGML_F16C: /arch:AVX2 implies them
+    set(GGML_FMA ON CACHE BOOL "ggml: enable FMA (ducktape-laya profile)")
+    set(GGML_F16C ON CACHE BOOL "ggml: enable F16C (ducktape-laya profile)")
+  endif()
+endif()
 # 64-bit Arm baseline: dot product and half precision (Graviton2+, Ampere Altra,
 # Cortex-A76 / Raspberry Pi 5). The library checks them at open (src/platform.cpp).
 if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
