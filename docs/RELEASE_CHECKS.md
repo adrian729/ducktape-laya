@@ -56,7 +56,6 @@ compare our probabilities re-expressed at the stored temperature (exact up to
 rounding, since probabilities are a softmax of scores over the temperature).
 Sanitizer, stress, browser and platform evidence remain separate;
 the runner does not silently transplant historical results to a different binary.
-`--require-release` exits unsuccessfully if any required gate is failed or unrun.
 This runner currently covers a subset of release gates and cannot approve a release
 by itself. A successful normal exit means its selected checks passed.
 

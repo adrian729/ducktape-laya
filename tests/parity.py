@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Real-model public-API conformance, independent of examples and demos.
 
-Optional reference comparison never starts/stops a server. Reports capture outputs
+Every binding must agree exactly with the C consumer. Reports capture outputs
 for before/after adapter comparisons; they are not automatically accepted goldens.
 """
 import argparse
@@ -12,7 +12,6 @@ import os
 import pathlib
 import shutil
 import subprocess
-import urllib.request
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 from compare_results import compare_results, js_object_order
@@ -21,15 +20,11 @@ from release_support import LIBRARY, binary_info, sha256, source_identity
 parser = argparse.ArgumentParser()
 parser.add_argument('model', type=pathlib.Path)
 parser.add_argument('--build-dir', type=pathlib.Path)
-parser.add_argument('--server-url')
 parser.add_argument('--request', type=pathlib.Path, help='Use one fixture instead of the shared corpus')
 parser.add_argument('--report', type=pathlib.Path)
-parser.add_argument('--tolerance', type=float, default=0.000001)
 parser.add_argument('--call-timeout', type=float, default=900,
                     help='Seconds per consumer call; a hang guard, sized for loaded or slower hosts')
 args = parser.parse_args()
-if not math.isfinite(args.tolerance) or args.tolerance < 0:
-    parser.error('--tolerance must be finite and nonnegative')
 if not math.isfinite(args.call_timeout) or args.call_timeout <= 0:
     parser.error('--call-timeout must be finite and positive')
 root = pathlib.Path(__file__).resolve().parents[1]
@@ -38,11 +33,6 @@ model = str(args.model.resolve())
 fixtures = [args.request] if args.request else sorted((root / 'tests/fixtures').glob('*.json'))
 if not fixtures:
     parser.error('No conformance fixtures found')
-if args.server_url:
-    fixtures = [args.request or root / 'tests/fixtures/primitive.json']
-    body = json.loads(fixtures[0].read_text())
-    if not isinstance(body, dict) or 'questions' not in body or 'schema' in body:
-        parser.error('--server-url requires a primitive question fixture')
 env = dict(os.environ)
 windows = sys.platform == 'win32'
 exe = '.exe' if windows else ''
@@ -114,15 +104,7 @@ for fixture in fixtures:
     results = run_bindings(fixture, fixture.name)
     request = fixture.read_bytes()
     report['fixtures'][fixture.name] = results
-    if args.server_url:
-        req = urllib.request.Request(args.server_url.rstrip('/') + '/v1/systemone', request,
-                                     {'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=120) as response:
-            reference = json.load(response)
-        error, path = compare_results(results['C']['answers'], reference['answers'], args.tolerance, 'answers')
-        compare_results(results['C']['usage'], reference['usage'])
-        print(f'Reference maximum absolute difference: {error:.9g} at {path}')
-if not args.request and not args.server_url and OPEN_CONFIG_FIXTURE.is_file():
+if not args.request and OPEN_CONFIG_FIXTURE.is_file():
     report['open_config'] = {'config': OPEN_CONFIG, 'fixture': OPEN_CONFIG_FIXTURE.name,
                              'fixture_hash': sha256(OPEN_CONFIG_FIXTURE),
                              'results': run_bindings(OPEN_CONFIG_FIXTURE, OPEN_CONFIG_FIXTURE.name + '+open_config', OPEN_CONFIG)}

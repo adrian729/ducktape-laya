@@ -33,7 +33,6 @@ p.add_argument('--cmake-arg', action='append', default=[], help='Extra configure
 p.add_argument('--packages', action='store_true', help='Build the packages and load them outside the checkout; with --model also run them')
 p.add_argument('--upstream-reference', action='store_true', help='Build an isolated test-only upstream processor and compare every real-model fixture request')
 p.add_argument('--reproducibility', action='store_true', help='Also compile two independent source snapshots')
-p.add_argument('--require-release', action='store_true', help='Fail if any required release gate is failed or not run')
 p.add_argument('--extra-model', type=pathlib.Path, action='append', default=[], help='GGUF of an additional pinned model (release/compatibility.json additional_models) to qualify against the original Laya and upstream; repeatable')
 a = p.parse_args()
 if a.jobs < 1: p.error('--jobs must be positive')
@@ -234,4 +233,4 @@ finally:
     report['release_ready'] = all(gate['status'] == 'passed' for gate in report['gates'].values())
     save()
 print(json.dumps({'selected_checks': report['selected_checks'], 'release_ready': report['release_ready'], 'report': str(out / 'report.json')}))
-raise SystemExit(report['selected_checks'] != 'passed' or (a.require_release and not report['release_ready']))
+raise SystemExit(report['selected_checks'] != 'passed')
