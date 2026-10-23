@@ -59,6 +59,8 @@ the runner does not silently transplant historical results to a different binary
 This runner currently covers a subset of release gates and cannot approve a release
 by itself. A successful normal exit means its selected checks passed.
 
+`tests/examples-smoke.py` (run by the validator on non-Windows hosts, model-free) checks that every `examples/*.json` and `examples/presets/*.json` request passes the library's request validation (through a router engine, which validates before it loads a model) and that `examples/decide.c` and `decide.cpp` compile and fail cleanly without a model.
+
 With `--model`, the runner requires the `cpu-guard` test to be registered, which needs `qemu-x86_64` (and `python3`) on `PATH` when CMake configures; without QEMU a real-model run fails. It also runs `tests/download-model.py` and records the Rust, Go, Java, .NET and Python versions it found under `toolchains`.
 
 The GitHub workflow defines Ubuntu 24.04 model-free checks for Clang/Node 24 and GCC/Node 26, including `--packages` and its package smoke test. Manual dispatch can explicitly enable the pinned model download, QEMU and the real-model installed-package checks. CI uses the runner's default `clang` and `gcc`, which need not be the compiler versions `release/qualification.json` lists; the `native_matrix` evidence for `check-candidate.py` may therefore combine local and CI reports, as long as together they cover every listed compiler and Node version and each is bound to the candidate. Workflow dependencies are pinned by commit; Rust and Node
@@ -261,6 +263,23 @@ approved pin, rebuilds the target, verifies shared-library coverage instrumentat
 and bounds runtime and memory. A shorter `--seconds` smoke can pass while
 `qualification_budget_met` remains false. Campaign success alone never makes
 `release_ready` true. Do not modify its build directory during the run.
+
+## Security review
+
+The `security_review` gate has no runner: the maintainer reviews the threat boundaries in `SECURITY.md`, the pinned dependencies' advisories and the release permissions, and writes `security_review` evidence by hand as a JSON object that `check-candidate.py` validates (`release_support.security_review_problems`):
+
+| Field | Required value |
+|---|---|
+| `source_commit` | The candidate commit (or, for the hours-long reuse rule, an ancestor with no input change since) |
+| `source_tracked_dirty` | `false` |
+| `runtime_commit` | The runtime pin in `release/compatibility.json` |
+| `runtime_patches` | The SHA-256 of each runtime patch in that record, in order |
+| `release_blocking_code_issues` | A list; it must be empty to pass |
+| `model_licence` | A non-empty string recording that the model and component licence obligations were reviewed (the `license_inventory` gate reads it) |
+
+Other fields (notes, advisory references) are free-form and not checked: the gate proves the review was recorded against this candidate, not what it concluded.
+
+The `model_upgrade` gate accepts `comparison.status` of `passed` or `failed` by design: a changed model is expected to change outputs, so it requires the candidate-model checks (`native_contracts`, `binding_conformance`, `abi`) to pass and the comparison to complete, not to match the baseline.
 
 ## Release targets and the CI candidate run
 

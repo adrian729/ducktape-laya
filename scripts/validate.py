@@ -170,6 +170,8 @@ try:
     if not required <= set(report['ctest_registered']):
         raise RuntimeError('Required native tests are missing: ' + ', '.join(sorted(required - set(report['ctest_registered']))))
     run('native', ['ctest', '--test-dir', build, '--output-on-failure'], 'native_contracts' if model else None)
+    if WINDOWS: skip('examples-smoke', 'compiles the examples with a POSIX driver')
+    else: run('examples-smoke', [sys.executable, ROOT / 'tests/examples-smoke.py', '--build-dir', build])
     run('rust', ['cargo', 'test', '--locked', '--offline', '--manifest-path', ROOT / 'bindings/rust/Cargo.toml'])
     run('node', ['node', '--test', ROOT / 'bindings/node/test.cjs'])
     run('python', [sys.executable, '-m', 'unittest', 'discover', '-s', ROOT / 'bindings/python/tests'])
