@@ -37,15 +37,27 @@ def _open():
             return ctypes.CDLL(str(path))
         except OSError as error:
             raise OSError(f'DUCKTAPE_LAYA_LIB_DIR is set but {path} could not be loaded: {error}') from None
-    if platform.machine() not in _MACHINES.get(sys.platform, ()):
-        raise OSError(f'Unsupported platform {sys.platform}/{platform.machine()}; '
-                      'ducktape-laya supports Linux x86-64 and arm64, macOS arm64 and Windows x64')
-    bundled = pathlib.Path(__file__).with_name('_native') / _NAME
+    target = _target()
     try:
-        return ctypes.CDLL(str(bundled) if bundled.is_file() else _VERSIONED)
+        return ctypes.CDLL(target)
     except OSError as error:
         raise OSError('Native ducktape-laya library not found. Install a wheel that bundles it, '
                       f'or set DUCKTAPE_LAYA_LIB_DIR to its library directory: {error}') from None
+
+
+def _target(machine=None, plat=None, bundled=None):
+    """What to load without an override: the wheel's bundled library when present (the wheel tag already
+    matched this interpreter, and platform.machine() reports the OS architecture, which differs for x64
+    Python under emulation on Windows ARM64), else the soname through the system loader on a supported
+    platform. The machine check only decides the error message."""
+    bundled = bundled or pathlib.Path(__file__).with_name('_native') / _NAME
+    if bundled.is_file():
+        return str(bundled)
+    machine, plat = machine or platform.machine(), plat or sys.platform
+    if machine not in _MACHINES.get(plat, ()):
+        raise OSError(f'Unsupported platform {plat}/{machine}; '
+                      'ducktape-laya supports Linux x86-64 and arm64, macOS arm64 and Windows x64')
+    return _VERSIONED
 
 
 def load():

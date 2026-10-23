@@ -17,6 +17,22 @@ LONG = json.dumps([json.loads(STRUCTURED)] * 8)
 real = unittest.skipUnless(MODEL, 'LAYA_MODEL is not set')
 
 
+class LibraryChoice(unittest.TestCase):
+    def test_bundled_library_loads_regardless_of_machine(self):
+        # x64 Python under emulation on Windows ARM64 reports platform.machine() == 'ARM64'.
+        import pathlib
+        import tempfile
+        from ducktape_laya import _native
+        with tempfile.TemporaryDirectory() as directory:
+            bundled = pathlib.Path(directory, _native._NAME)
+            bundled.write_bytes(b'')
+            self.assertEqual(_native._target('ARM64', 'win32', bundled), str(bundled))
+            bundled.unlink()
+            with self.assertRaisesRegex(OSError, 'Unsupported platform win32/ARM64'):
+                _native._target('ARM64', 'win32', bundled)
+            self.assertEqual(_native._target('AMD64', 'win32', bundled), _native._VERSIONED)
+
+
 class Basics(unittest.TestCase):
     def test_runtime_info(self):
         self.assertEqual(laya.runtime_info()['abi_version'], 2)
