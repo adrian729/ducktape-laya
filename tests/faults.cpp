@@ -4,6 +4,7 @@
 // address-space limit cannot affect the parent or the other checks.
 #include "ducktape_laya.hpp"
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
@@ -48,6 +49,18 @@ void *operator new(std::size_t size) {
 }
 void operator delete(void *p) noexcept { std::free(p); }
 void operator delete(void *p, std::size_t) noexcept { std::free(p); }
+// Array allocations (the CPU backend's work buffer) larger than any recorded while
+// array_mode is 1 fail while it is 2; otherwise they count like operator new.
+static std::atomic<int> array_mode{0};
+static std::atomic<size_t> array_largest{0};
+static std::atomic<long> array_failed{0};
+void *operator new[](std::size_t size) {
+    if (array_mode == 1 && size > array_largest) array_largest = size;
+    if (array_mode == 2 && size > array_largest) { ++array_failed; throw std::bad_alloc(); }
+    return ::operator new(size);
+}
+void operator delete[](void *p) noexcept { ::operator delete(p); }
+void operator delete[](void *p, std::size_t) noexcept { ::operator delete(p); }
 static bool c_inject() {
     if (c_counting.load(std::memory_order_relaxed)) ++c_counted;
     if (c_fail_after.load(std::memory_order_relaxed) >= 0 && c_fail_after.fetch_sub(1) == 0) { ++c_failed; errno = ENOMEM; return true; }
@@ -243,10 +256,78 @@ static void c_allocation_sweep(const std::string &model, const std::string &batc
 }
 #endif
 
+static std::string words_request(size_t words) {
+    std::string state;
+    for (size_t i = 0; i < words; ++i) state += "refund ";
+    return R"({"state":")" + state + R"(","questions":{"q":{"type":"noul","instructions":"Is it a refund?"}}})";
+}
+static std::string execute_ok(dtl_engine *engine, const std::string &request, const char *what) {
+    char *result = nullptr, *error = nullptr;
+    const auto status = dtl_execute(engine, request.c_str(), nullptr, &result, &error);
+    const std::string text = result ? result : "", message = error ? error : "";
+    dtl_free(result); dtl_free(error);
+    expect(status == DTL_OK, std::string(what) + ": status " + std::to_string(status) + " " + message);
+    return text;
+}
+// Failures inside a forward pass: a CPU worker thread that cannot be created and a
+// work buffer that cannot grow are reported as DTL_OUT_OF_MEMORY, and the engine then
+// returns exact results for smaller and larger requests.
+static void runtime_faults(const std::string &model) {
+    const std::string small = words_request(5), large = words_request(400);
+    in_child("worker thread creation refused (RLIMIT_NPROC)", [&] {
+        dtl_engine *engine = nullptr; char *error = nullptr;
+        expect(dtl_open(model.c_str(), "{\"threads\":4}", &engine, &error) == DTL_OK, "open");
+        const auto expected = execute_ok(engine, small, "baseline");
+        rlimit old{};
+        expect(getrlimit(RLIMIT_NPROC, &old) == 0, "getrlimit");
+        rlimit limit = old;
+        limit.rlim_cur = 1;
+        expect(setrlimit(RLIMIT_NPROC, &limit) == 0, "setrlimit");
+        pthread_t probe;
+        if (pthread_create(&probe, nullptr, [](void *) -> void * { return nullptr; }, nullptr) == 0) {
+            pthread_join(probe, nullptr);
+            std::cerr << "RLIMIT_NPROC is not enforced for this user; skipped\n";
+            dtl_close(engine);
+            return;
+        }
+        char *result = nullptr;
+        const auto status = dtl_execute(engine, small.c_str(), nullptr, &result, &error);
+        dtl_free(result); dtl_free(error);
+        expect(status == DTL_OUT_OF_MEMORY, "expected DTL_OUT_OF_MEMORY without worker threads, got " + std::to_string(status));
+        expect(setrlimit(RLIMIT_NPROC, &old) == 0, "restore limit");
+        expect(execute_ok(engine, small, "after the limit was lifted") == expected, "result changed after a failed thread creation");
+        dtl_close(engine);
+    });
+#ifndef DTL_SANITIZED
+    // The request grows after the baseline, so the work buffer must grow while the
+    // allocation fails; the old buffer must not stay in use.
+    in_child("work buffer growth failure", [&] {
+        dtl_engine *reference = nullptr, *engine = nullptr; char *error = nullptr;
+        expect(dtl_open(model.c_str(), "{\"threads\":1}", &reference, &error) == DTL_OK, "open reference");
+        const auto small_expected = execute_ok(reference, small, "reference small"), large_expected = execute_ok(reference, large, "reference large");
+        dtl_close(reference);
+        expect(dtl_open(model.c_str(), "{\"threads\":1}", &engine, &error) == DTL_OK, "open");
+        array_mode = 1;
+        execute_ok(engine, small, "baseline");
+        array_mode = 2;
+        char *result = nullptr;
+        const auto status = dtl_execute(engine, large.c_str(), nullptr, &result, &error);
+        array_mode = 0;
+        dtl_free(result); dtl_free(error);
+        expect(array_failed > 0, "the larger request did not grow an array allocation");
+        expect(status == DTL_OUT_OF_MEMORY, "expected DTL_OUT_OF_MEMORY, got " + std::to_string(status));
+        expect(execute_ok(engine, small, "small after failure") == small_expected, "small result changed after the failure");
+        expect(execute_ok(engine, large, "large after failure") == large_expected, "large result changed after the failure");
+        dtl_close(engine);
+    });
+#endif
+}
+
 int main(int argc, char **argv) {
-    // --c-allocations runs only the C allocation sweep (registered as its own test).
-    if (argc < 2 || argc > 3 || (argc == 3 && std::string(argv[2]) != "--c-allocations")) {
-        std::cerr << "usage: laya-fault-tests MODEL [--c-allocations]\n"; return 2;
+    // --c-allocations runs only the C allocation sweep and --runtime-faults only the
+    // forward-pass failures (each registered as its own test).
+    if (argc < 2 || argc > 3 || (argc == 3 && std::string(argv[2]) != "--c-allocations" && std::string(argv[2]) != "--runtime-faults")) {
+        std::cerr << "usage: laya-fault-tests MODEL [--c-allocations|--runtime-faults]\n"; return 2;
     }
     const std::string model = fs::canonical(argv[1]).string();
     const auto work = fs::current_path() / ("fault-test-" + std::to_string(getpid()));
@@ -257,6 +338,11 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 2; ++i) batch += (i ? "," : "") + request;
         batch += "]";
 
+        if (argc == 3 && std::string(argv[2]) == "--runtime-faults") {
+            runtime_faults(model);
+            std::cout << "runtime fault tests passed\n";
+            return 0;
+        }
 #ifndef DTL_SANITIZED
         if (argc == 3) {
             c_allocation_sweep(model, batch);

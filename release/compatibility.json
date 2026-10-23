@@ -31,6 +31,21 @@
         "path": "patches/llama.cpp/ggml-check-allocations.patch",
         "sha256": "1719507fb2bf20bd2860b97de848c0ab8d9c658be74d24897dbb84e7e62328f4",
         "purpose": "ggml checks unchecked internal allocations: the CPU thread pool reports GGML_STATUS_ALLOC_FAILED, graph allocator/scheduler sites abort instead of dereferencing NULL; no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/tokenizer-linear-partition.patch",
+        "sha256": "7e7274bb461096e6e35fbdb7240d8aab918b5b83ea08c36a6a1d242f39a769d3",
+        "purpose": "Special-token partitioning keeps the previous list element instead of walking from the start for every match: linear instead of quadratic time, identical tokens; no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/ggml-cpu-work-buffer.patch",
+        "sha256": "3ad5fc5e6c8b6caaad68cce00778de7dd564cb55a542e5e73feffeda85f136d7",
+        "purpose": "A failed CPU work-buffer allocation leaves no freed buffer behind and reports GGML_STATUS_ALLOC_FAILED instead of throwing; no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/ggml-thread-creation-failure.patch",
+        "sha256": "359191030385d646d9c3128e81936c30c3300f781e26b17362050091d9a0ff0c",
+        "purpose": "A failed CPU worker thread creation joins the threads already started and reports GGML_STATUS_ALLOC_FAILED instead of aborting the process; no arithmetic changes"
       }
     ]
   },

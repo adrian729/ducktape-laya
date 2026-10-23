@@ -42,7 +42,7 @@ introspection includes the applied patch list; isolated candidate archives get
 their actual revision through `DUCKTAPE_LLAMA_REVISION`. A custom source directory
 without an explicit identity reports `unverified-custom-source`.
 
-`release/compatibility.json` lists five patches; [patches/README.md](../patches/README.md)
+`release/compatibility.json` lists eight patches; [patches/README.md](../patches/README.md)
 explains each and its removal condition:
 
 - `typed-cpu-callbacks.patch`: typed bridges for ggml CPU callbacks whose
@@ -61,6 +61,9 @@ explains each and its removal condition:
 - `ggml-check-allocations.patch`: unchecked ggml allocations report allocation
   failure (thread pool) or abort (graph allocator, scheduler) instead of using
   NULL. Remove when upstream checks them and `real-faults` passes.
+- `tokenizer-linear-partition.patch`: splitting text at special tokens takes linear instead of quadratic time, with identical tokens. Remove when upstream makes it linear and `tokenizer-partition` and `real-tokenizer` pass.
+- `ggml-cpu-work-buffer.patch`: a failed CPU work-buffer allocation reports status 4 instead of leaving a freed buffer in use. Remove when upstream handles it and `ggml-faults` and `real-runtime-faults` pass.
+- `ggml-thread-creation-failure.patch`: a refused CPU worker thread reports status 4 instead of aborting the process. Remove when upstream handles it and `ggml-faults` and `real-runtime-faults` pass.
 
 On an upgrade, a patch that no longer applies fails configuration; inspect the
 upstream change and remove or adapt the patch explicitly. Patch applicability

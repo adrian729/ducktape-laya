@@ -1,0 +1,342 @@
+# Token count and FNV-1a hash per vocabulary fingerprint, case and flags (tests/tokenizer.cpp).
+# Recorded with the unpatched llama.cpp 1e6f04a75e91 partition (before tokenizer-linear-partition.patch).
+5680b97dde97eeaa empty 0 0 cbf29ce484222325 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa empty 1 0 cbf29ce484222325 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa double-spaces 0 5460 b582f5fa33d8ef85 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa double-spaces 1 5460 b582f5fa33d8ef85 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa triple-spaces 0 4096 d822e31bb161e325 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa triple-spaces 1 4096 d822e31bb161e325 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa single-spaces 0 1639 f7eae4e6f93dd9c2 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa single-spaces 1 1639 f7eae4e6f93dd9c2 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa space-runs 0 454 b2a4aaff675a90d3 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa space-runs 1 454 b2a4aaff675a90d3 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa newline-lines 0 3410 08368239827357f5 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa newline-lines 1 3410 08368239827357f5 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa newline-runs 0 241 f9b752ead4772fec # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa newline-runs 1 241 f9b752ead4772fec # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa multilingual 0 6395 ff8f4cc4deecd7c4 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa multilingual 1 6395 ff8f4cc4deecd7c4 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-all 0 1440 46e7d935cd245dd9 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-all 1 1408 1936bdfb192a5231 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-spaced 0 213 38d52a67f0b6f8a8 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-spaced 1 197 a4807b6b9af13a9c # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-adjacent 0 113 80f934db0d0dc1c1 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-adjacent 1 89 a7279c7fbcb216e7 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-edges 0 158 a6d6b6ed7ea7fcc0 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-edges 1 142 0adf3ae117cdde08 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-partial 0 396 948573823505be4e # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa specials-partial 1 396 948573823505be4e # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa random-1 0 1900 350420129f51016a # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa random-1 1 1893 0aa9c74115a5a6c7 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa random-2 0 1921 66e56308dee94dcb # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa random-2 1 1918 5e50aa54d932f3e2 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa random-3 0 1895 680a43d9ea10bd14 # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa random-3 1 1889 cf5b0cee77a442cc # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa random-4 0 1932 5907dbac27e03f2c # ggml-vocab-gpt-neox.gguf
+5680b97dde97eeaa random-4 1 1924 012bd7cdd4891dfe # ggml-vocab-gpt-neox.gguf
+8d40a21e22b1f9f4 empty 0 0 cbf29ce484222325 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 empty 1 0 cbf29ce484222325 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 double-spaces 0 5460 acc5493c455d4b50 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 double-spaces 1 5460 acc5493c455d4b50 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 triple-spaces 0 4096 2d6b8845b2cc548d # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 triple-spaces 1 4096 2d6b8845b2cc548d # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 single-spaces 0 1639 f099e95aa96576c9 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 single-spaces 1 1639 f099e95aa96576c9 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 space-runs 0 286 27cc0238e6fdb382 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 space-runs 1 286 27cc0238e6fdb382 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 newline-lines 0 4092 a00a0fe739da2d1d # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 newline-lines 1 4092 a00a0fe739da2d1d # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 newline-runs 0 148 ce61cca0529e742c # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 newline-runs 1 148 ce61cca0529e742c # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 multilingual 0 4961 d36d8ea1575271bb # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 multilingual 1 4961 d36d8ea1575271bb # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-all 0 2697 2e3881c8b72a44ac # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-all 1 2647 e48a60355933258e # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-spaced 0 269 6222a52c41c93f85 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-spaced 1 240 e67735674d19e3d1 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-adjacent 0 163 2175f502ba68cd6b # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-adjacent 1 120 18fb163d4a369a8f # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-edges 0 222 7db8d78a55ce0df5 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-edges 1 199 4db64bd3bf8eabc1 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-partial 0 931 ab9319891f018101 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 specials-partial 1 931 ab9319891f018101 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 random-1 0 1665 f098015cca20ba70 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 random-1 1 1642 90df0c84df75d0de # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 random-2 0 1701 8c4e789337fde72a # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 random-2 1 1690 0d1da3ba88cdad08 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 random-3 0 1724 41f9559f56955802 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 random-3 1 1704 6e91100a45212177 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 random-4 0 1702 edecf52cea052fd3 # ggml-vocab-qwen2.gguf
+8d40a21e22b1f9f4 random-4 1 1684 07860c2cf802a7d3 # ggml-vocab-qwen2.gguf
+8e15b9ddb78eb06d empty 0 0 cbf29ce484222325 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d empty 1 0 cbf29ce484222325 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d double-spaces 0 5460 ff866c52a86a16b5 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d double-spaces 1 5460 ff866c52a86a16b5 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d triple-spaces 0 4096 e8a52ae083b728fc # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d triple-spaces 1 4096 e8a52ae083b728fc # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d single-spaces 0 1639 327faafa49726c24 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d single-spaces 1 1639 327faafa49726c24 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d space-runs 0 231 797e985cb2a9c10b # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d space-runs 1 231 797e985cb2a9c10b # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d newline-lines 0 3410 6d203a1a4da4e549 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d newline-lines 1 3410 6d203a1a4da4e549 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d newline-runs 0 148 7fb8b7f0096bfa2e # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d newline-runs 1 148 7fb8b7f0096bfa2e # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d multilingual 0 4182 b91593a13e005e24 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d multilingual 1 4182 b91593a13e005e24 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-all 0 8921 3896d52f624350ea # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-all 1 2305 17e93f47e2dfdc1e # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-spaced 0 780 a773538761d8a42d # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-spaced 1 240 74cbbc1da1e2a335 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-adjacent 0 931 eb9c675151c80c2b # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-adjacent 1 120 7c690d01518d2c65 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-edges 0 661 69711e58528b2882 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-edges 1 199 96c1fca43099c249 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-partial 0 882 b8a7364d37eaed6a # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d specials-partial 1 882 b8a7364d37eaed6a # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d random-1 0 2120 f554c0816e90b00a # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d random-1 1 947 f833bf23d476db0a # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d random-2 0 2245 ab74e04b10e2910b # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d random-2 1 955 87972486d1c5b42e # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d random-3 0 2186 fc2834e02b42ba91 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d random-3 1 965 acc87e222140de83 # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d random-4 0 2194 8fe7e841a61b289d # ggml-vocab-llama-bpe.gguf
+8e15b9ddb78eb06d random-4 1 1019 1a61108b2f7414c9 # ggml-vocab-llama-bpe.gguf
+1d6fbe1cb37dc662 empty 0 0 cbf29ce484222325 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 empty 1 0 cbf29ce484222325 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 double-spaces 0 5460 df7b12c8316d7c3e # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 double-spaces 1 5460 df7b12c8316d7c3e # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 triple-spaces 0 4096 fd41d3628be708f1 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 triple-spaces 1 4096 fd41d3628be708f1 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 single-spaces 0 1639 5ef5f0277bb4c54e # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 single-spaces 1 1639 5ef5f0277bb4c54e # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 space-runs 0 653 eff60e04a63f28eb # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 space-runs 1 653 eff60e04a63f28eb # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 newline-lines 0 4092 7e07da2c5f3f30f6 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 newline-lines 1 4092 7e07da2c5f3f30f6 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 newline-runs 0 953 31dd5e7637b3e50d # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 newline-runs 1 953 31dd5e7637b3e50d # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 multilingual 0 6109 24de3d134b795aa9 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 multilingual 1 6109 24de3d134b795aa9 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-all 0 43 1fed741c7cf7fb4f # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-all 1 36 1feeed6e7b207646 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-spaced 0 33 c351428f96260fb0 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-spaced 1 24 d73cacc4c77c859a # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-adjacent 0 19 37a8133701fdd8ea # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-adjacent 1 9 ed4ac0a5e5251ae6 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-edges 0 21 5aa2c88dba13b4ad # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-edges 1 14 8b6c6a4860e59596 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-partial 0 15 5bd9ffdea24d8b80 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 specials-partial 1 15 5bd9ffdea24d8b80 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 random-1 0 3223 bd23c8806a638a4f # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 random-1 1 2784 422f40b66683bc0f # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 random-2 0 3434 2c5963643538edb1 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 random-2 1 2911 caf76e1868c06d38 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 random-3 0 3312 315c63acd571bd8d # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 random-3 1 2850 353b31cc06bcdac7 # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 random-4 0 3254 21a8f9215999e02c # ggml-vocab-llama-spm.gguf
+1d6fbe1cb37dc662 random-4 1 2792 7f194454716af2e3 # ggml-vocab-llama-spm.gguf
+ac66b58e1bee8fbc empty 0 0 cbf29ce484222325 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc empty 1 0 cbf29ce484222325 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc double-spaces 0 5460 df7b12c8316d7c3e # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc double-spaces 1 5460 df7b12c8316d7c3e # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc triple-spaces 0 4096 fd41d3628be708f1 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc triple-spaces 1 4096 fd41d3628be708f1 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc single-spaces 0 1639 5ef5f0277bb4c54e # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc single-spaces 1 1639 5ef5f0277bb4c54e # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc space-runs 0 653 eff60e04a63f28eb # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc space-runs 1 653 eff60e04a63f28eb # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc newline-lines 0 4092 7e07da2c5f3f30f6 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc newline-lines 1 4092 7e07da2c5f3f30f6 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc newline-runs 0 953 31dd5e7637b3e50d # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc newline-runs 1 953 31dd5e7637b3e50d # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc multilingual 0 6109 24de3d134b795aa9 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc multilingual 1 6109 24de3d134b795aa9 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-all 0 2335 3a41bbedaa1eb569 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-all 1 484 c982959c9fcac94d # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-spaced 0 814 3d4119f85ba06dce # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-spaced 1 136 40a0dfc7e8874e2e # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-adjacent 0 802 e9dbc80c6ea5853f # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-adjacent 1 120 92ea0e7febbb372d # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-edges 0 654 dbc96cfe13b00a99 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-edges 1 163 4bf5a721acf5aaf1 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-partial 0 857 88b550aedcef053e # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc specials-partial 1 857 88b550aedcef053e # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc random-1 0 3967 01af40ac17ec6a2d # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc random-1 1 2118 149376c65c19da4f # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc random-2 0 4192 a349ecfb253ee19a # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc random-2 1 2053 6cb8a681bb80546a # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc random-3 0 3983 f12477ebc9e42989 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc random-3 1 2077 d668e7e888c96c25 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc random-4 0 3977 96533921af959234 # ggml-vocab-phi-3.gguf
+ac66b58e1bee8fbc random-4 1 2081 538688fd2f5f1a90 # ggml-vocab-phi-3.gguf
+561114557034a90a empty 0 0 cbf29ce484222325 # ggml-vocab-bert-bge.gguf
+561114557034a90a empty 1 0 cbf29ce484222325 # ggml-vocab-bert-bge.gguf
+561114557034a90a double-spaces 0 2730 132c36cf69ab6d95 # ggml-vocab-bert-bge.gguf
+561114557034a90a double-spaces 1 2730 132c36cf69ab6d95 # ggml-vocab-bert-bge.gguf
+561114557034a90a triple-spaces 0 2048 803b4683d1dde325 # ggml-vocab-bert-bge.gguf
+561114557034a90a triple-spaces 1 2048 803b4683d1dde325 # ggml-vocab-bert-bge.gguf
+561114557034a90a single-spaces 0 1638 32e37c05e817ed11 # ggml-vocab-bert-bge.gguf
+561114557034a90a single-spaces 1 1638 32e37c05e817ed11 # ggml-vocab-bert-bge.gguf
+561114557034a90a space-runs 0 132 8a9cfd6c62808367 # ggml-vocab-bert-bge.gguf
+561114557034a90a space-runs 1 132 8a9cfd6c62808367 # ggml-vocab-bert-bge.gguf
+561114557034a90a newline-lines 0 2046 df552ab3e50e18b5 # ggml-vocab-bert-bge.gguf
+561114557034a90a newline-lines 1 2046 df552ab3e50e18b5 # ggml-vocab-bert-bge.gguf
+561114557034a90a newline-runs 0 40 8b5a7860b14d42a5 # ggml-vocab-bert-bge.gguf
+561114557034a90a newline-runs 1 40 8b5a7860b14d42a5 # ggml-vocab-bert-bge.gguf
+561114557034a90a multilingual 0 5945 8b81cd309f660e8c # ggml-vocab-bert-bge.gguf
+561114557034a90a multilingual 1 5945 8b81cd309f660e8c # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-all 0 78 45fec970b4e870ba # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-all 1 30 09575185881f6e0e # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-spaced 0 39 f4a11f95bafce159 # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-spaced 1 15 dc7c70841fa4d995 # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-adjacent 0 51 d10302f096beabfe # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-adjacent 1 15 3b3643776fe80a95 # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-edges 0 39 fbf7ff7b331dbc46 # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-edges 1 15 a8b095b5ae420e7e # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-partial 0 24 300f19577e1953db # ggml-vocab-bert-bge.gguf
+561114557034a90a specials-partial 1 24 300f19577e1953db # ggml-vocab-bert-bge.gguf
+561114557034a90a random-1 0 2691 f1516758ce8baa69 # ggml-vocab-bert-bge.gguf
+561114557034a90a random-1 1 1948 0d8d200cbb078237 # ggml-vocab-bert-bge.gguf
+561114557034a90a random-2 0 2859 6fa3e814b33e35f3 # ggml-vocab-bert-bge.gguf
+561114557034a90a random-2 1 1962 1858cccd6aa924c5 # ggml-vocab-bert-bge.gguf
+561114557034a90a random-3 0 2744 457cc83f2708a990 # ggml-vocab-bert-bge.gguf
+561114557034a90a random-3 1 1951 9d5d0fa3d67df25f # ggml-vocab-bert-bge.gguf
+561114557034a90a random-4 0 2706 ba05f7358a3b4e73 # ggml-vocab-bert-bge.gguf
+561114557034a90a random-4 1 1934 6607a5bb4c052024 # ggml-vocab-bert-bge.gguf
+058918c61c071c54 empty 0 0 cbf29ce484222325 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 empty 1 0 cbf29ce484222325 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 double-spaces 0 5460 77a167b4a94be1e5 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 double-spaces 1 5460 77a167b4a94be1e5 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 triple-spaces 0 4096 42e67ff1f5546325 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 triple-spaces 1 4096 42e67ff1f5546325 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 single-spaces 0 1639 a05325a547e3d501 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 single-spaces 1 1639 a05325a547e3d501 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 space-runs 0 441 24d167e388ecc331 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 space-runs 1 441 24d167e388ecc331 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 newline-lines 0 4092 9d61fe8e0c8171cd # ggml-vocab-gemma-4.gguf
+058918c61c071c54 newline-lines 1 4092 9d61fe8e0c8171cd # ggml-vocab-gemma-4.gguf
+058918c61c071c54 newline-runs 0 182 d9934c5baf1e3936 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 newline-runs 1 182 d9934c5baf1e3936 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 multilingual 0 3403 1ab1d14062f2b8b9 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 multilingual 1 3403 1ab1d14062f2b8b9 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-all 0 359 53deddd14afff48f # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-all 1 217 0b2c04777e784d17 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-spaced 0 238 1b558bc5c76c2889 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-spaced 1 144 210a44beb6ac3489 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-adjacent 0 184 9d91351278afb25d # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-adjacent 1 72 010eee4ba63b5bf8 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-edges 0 178 13979f2d4e1e1174 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-edges 1 119 407c478abce824dd # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-partial 0 149 dfc3d90313929e4a # ggml-vocab-gemma-4.gguf
+058918c61c071c54 specials-partial 1 149 dfc3d90313929e4a # ggml-vocab-gemma-4.gguf
+058918c61c071c54 random-1 0 2406 b42fa3b790835a38 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 random-1 1 1911 4b4a9ffa9dbb8f28 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 random-2 0 2590 f75f54662349ca83 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 random-2 1 2001 f344f9f6e05561d6 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 random-3 0 2431 5d72b649a48459e6 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 random-3 1 1930 19de9bd809c29998 # ggml-vocab-gemma-4.gguf
+058918c61c071c54 random-4 0 2382 026bccd9401a5b9c # ggml-vocab-gemma-4.gguf
+058918c61c071c54 random-4 1 1931 4363ad830c7e1022 # ggml-vocab-gemma-4.gguf
+9a1d9ca5414c4fb6 empty 0 0 cbf29ce484222325 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 empty 1 0 cbf29ce484222325 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 double-spaces 0 2730 586c1d89083a6e99 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 double-spaces 1 2730 586c1d89083a6e99 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 triple-spaces 0 2048 ef95a77a5bd79325 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 triple-spaces 1 2048 ef95a77a5bd79325 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 single-spaces 0 1638 47be295354b798f1 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 single-spaces 1 1638 47be295354b798f1 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 space-runs 0 129 34022173d97abe94 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 space-runs 1 129 34022173d97abe94 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 newline-lines 0 2046 853d3169110936a9 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 newline-lines 1 2046 853d3169110936a9 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 newline-runs 0 40 6d72649e28bb92c5 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 newline-runs 1 40 6d72649e28bb92c5 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 multilingual 0 3280 82547e07f83b8bad # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 multilingual 1 3280 82547e07f83b8bad # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-all 0 71 47170d28d9775de5 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-all 1 30 dee4dfced6b9dc02 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-spaced 0 38 508e0b732d03e94c # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-spaced 1 15 d379506505b7032a # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-adjacent 0 34 3ec584611ef97b8f # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-adjacent 1 15 5ac29e73ca6455ef # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-edges 0 39 ca60f1863d5c3ebe # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-edges 1 15 b2edf8e581a1a9ff # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-partial 0 24 3f08819beeff2e3f # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 specials-partial 1 24 3f08819beeff2e3f # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 random-1 0 2505 c86f8c541b5ae4b5 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 random-1 1 1837 57d842209afc26f0 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 random-2 0 2647 3ea2307e4a7d3c8f # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 random-2 1 1854 f23c98f54a1d4976 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 random-3 0 2529 a6b2e5b9fbc90da3 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 random-3 1 1819 9bb2d6abcae6ad32 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 random-4 0 2474 fa537b38dbbf84d2 # ggml-vocab-nomic-bert-moe.gguf
+9a1d9ca5414c4fb6 random-4 1 1777 cd9da0631c924551 # ggml-vocab-nomic-bert-moe.gguf
+52de8d77d7a318af empty 0 0 cbf29ce484222325 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af empty 1 0 cbf29ce484222325 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af double-spaces 0 5460 b582f5fa33d8ef85 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af double-spaces 1 5460 b582f5fa33d8ef85 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af triple-spaces 0 4096 d822e31bb161e325 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af triple-spaces 1 4096 d822e31bb161e325 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af single-spaces 0 1639 f7eae4e6f93dd9c2 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af single-spaces 1 1639 f7eae4e6f93dd9c2 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af space-runs 0 454 b2a4aaff675a90d3 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af space-runs 1 454 b2a4aaff675a90d3 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af newline-lines 0 2728 9d86ae9714a50f1d # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af newline-lines 1 2728 9d86ae9714a50f1d # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af newline-runs 0 241 f9b752ead4772fec # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af newline-runs 1 241 f9b752ead4772fec # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af multilingual 0 6354 61493498137670a2 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af multilingual 1 6354 61493498137670a2 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-all 0 968 9ace15b95cf49116 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-all 1 896 debfae09305308b1 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-spaced 0 239 c5fc9ccd509bb3c8 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-spaced 1 197 a4807b6b9af13a9c # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-adjacent 0 138 c6a2afb4985e06b3 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-adjacent 1 89 a7279c7fbcb216e7 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-edges 0 170 4a8dbb21396bdbe8 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-edges 1 142 0adf3ae117cdde08 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-partial 0 301 ed4a884f12a6f33b # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af specials-partial 1 301 ed4a884f12a6f33b # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af random-1 0 1883 5227e1da88df3140 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af random-1 1 1845 726d28f48759e9c6 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af random-2 0 1918 b757079c0c1b87fa # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af random-2 1 1873 94544bf173082a6b # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af random-3 0 1922 d413b137cb521157 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af random-3 1 1853 4dad1f3a93e79652 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af random-4 0 1898 ed51a590b2d026d3 # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+52de8d77d7a318af random-4 1 1850 80f6fabc714c82db # Laya-Q8_0.gguf, laya-typed-decisions-q8_0.gguf
+ce22c1bbb4cd1fed empty 0 0 cbf29ce484222325 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed empty 1 0 cbf29ce484222325 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed double-spaces 0 5461 fd49d561b25291a8 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed double-spaces 1 5461 fd49d561b25291a8 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed triple-spaces 0 6145 77e380a84359eb58 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed triple-spaces 1 6145 77e380a84359eb58 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed single-spaces 0 1639 83dd8c186031d6a8 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed single-spaces 1 1639 83dd8c186031d6a8 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed space-runs 0 7200 b383b46e89fe0117 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed space-runs 1 7200 b383b46e89fe0117 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed newline-lines 0 4092 231dbfa95569a235 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed newline-lines 1 4092 231dbfa95569a235 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed newline-runs 0 195 9d2609b66a155366 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed newline-runs 1 195 9d2609b66a155366 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed multilingual 0 3567 d9c6ff6ef4942cf8 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed multilingual 1 3567 d9c6ff6ef4942cf8 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-all 0 3265 f82cc0fc1fe210e4 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-all 1 1911 318dc19c9e2fd575 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-spaced 0 516 0221980dcde4e092 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-spaced 1 277 0a38cb32c6370114 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-adjacent 0 418 5d104bdc50fd3454 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-adjacent 1 120 5096ad1a3ebb57a5 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-edges 0 396 67e3303b1e9262f1 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-edges 1 197 7c0e98c44f2f706c # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-partial 0 439 123ada9bdfe247aa # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed specials-partial 1 439 123ada9bdfe247aa # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed random-1 0 4494 4b57592030e6d3db # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed random-1 1 4107 68c08cbf64d19d6f # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed random-2 0 4284 545a367f6f0a9ba7 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed random-2 1 3788 9f123af9d7a97558 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed random-3 0 4404 3d698a1d3c01b158 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed random-3 1 4004 ff94837fd0563a51 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed random-4 0 4472 9cbff8294f8725d0 # laya-multilingual-f16.gguf
+ce22c1bbb4cd1fed random-4 1 4067 bd4b51421e20c7d2 # laya-multilingual-f16.gguf

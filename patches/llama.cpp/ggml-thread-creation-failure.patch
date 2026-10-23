@@ -1,0 +1,25 @@
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -3397,7 +3397,21 @@
+         ggml_thread_cpumask_next(tpp->cpumask, workers[j].cpumask, tpp->strict_cpu, &cpumask_iter);
+ 
+         int32_t rc = ggml_thread_create(&workers[j].thrd, NULL, ggml_graph_compute_secondary_thread, &workers[j]);
+-        GGML_ASSERT(rc == 0);
++        if (rc != 0) { // DTL: stop and join the threads already started, report the failure to the caller
++            ggml_mutex_lock(&threadpool->mutex);
++            threadpool->stop  = true;
++            threadpool->pause = false;
++            ggml_cond_broadcast(&threadpool->cond);
++            ggml_mutex_unlock(&threadpool->mutex);
++            for (int k = 1; k < j; k++) {
++                ggml_thread_join(workers[k].thrd, NULL);
++            }
++            ggml_mutex_destroy(&threadpool->mutex);
++            ggml_cond_destroy(&threadpool->cond);
++            ggml_aligned_free(workers, workers_size);
++            ggml_aligned_free(threadpool, sizeof(struct ggml_threadpool));
++            return NULL;
++        }
+     }
+ 
+     ggml_thread_cpumask_next(tpp->cpumask, workers[0].cpumask, tpp->strict_cpu, &cpumask_iter);

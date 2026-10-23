@@ -1,0 +1,24 @@
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -7,6 +7,7 @@
+ #include "amx/amx.h"
+ 
+ #include <cctype>
++#include <new>
+ #include <string>
+ #include <vector>
+ 
+@@ -174,9 +175,11 @@
+ 
+     if (cpu_ctx->work_size < cplan.work_size) {
+         delete[] cpu_ctx->work_data;
+-        cpu_ctx->work_data = new uint8_t[cplan.work_size];
++        // DTL: never keep the freed buffer; report a failed allocation instead of throwing
++        cpu_ctx->work_data = NULL;
++        cpu_ctx->work_size = 0;
++        cpu_ctx->work_data = new (std::nothrow) uint8_t[cplan.work_size];
+         if (cpu_ctx->work_data == NULL) {
+-            cpu_ctx->work_size = 0;
+             return GGML_STATUS_ALLOC_FAILED;
+         }
+         cpu_ctx->work_size = cplan.work_size;

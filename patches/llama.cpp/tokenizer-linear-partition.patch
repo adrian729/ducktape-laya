@@ -1,0 +1,81 @@
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -3397,6 +3397,9 @@
+         }
+ 
+         // for each text fragment
++        // DTL: prev is the element before it, so a split fragment is erased in O(1)
++        // instead of walking the list from its start for every match.
++        std::forward_list<fragment_buffer_variant>::iterator prev = buffer.before_begin();
+         std::forward_list<fragment_buffer_variant>::iterator it = buffer.begin();
+         while (it != buffer.end()) {
+             auto & fragment = (*it);
+@@ -3422,7 +3425,8 @@
+ #ifdef PRETOKENIZERDEBUG
+                     LLAMA_LOG_WARN("FF: (%ld %ld %ld) '%s'\n", raw_text->length(), raw_text_base_offset, raw_text_base_length, raw_text->substr(raw_text_base_offset, raw_text_base_length).c_str());
+ #endif
+-                    auto source = std::distance(buffer.begin(), it);
++                    const auto source = it;          // DTL: the fragment being split
++                    const auto source_prev = prev;  // DTL: the element before it
+ 
+                     // if match is further than base offset
+                     //  then we have some text to the left of it
+@@ -3439,6 +3443,7 @@
+ 
+                         if (left_reminder_length > 0) {
+                             buffer.emplace_after(it, raw_text, left_reminder_offset, left_reminder_length);
++                            prev = it; // DTL
+                             it++;
+                         }
+ 
+@@ -3449,6 +3454,7 @@
+ 
+                     // special token
+                     buffer.emplace_after(it, special_id);
++                    prev = it; // DTL
+                     it++;
+ 
+                     // right
+@@ -3465,6 +3471,7 @@
+ 
+                         if (right_reminder_length > 0) {
+                             buffer.emplace_after(it, raw_text, right_reminder_offset, right_reminder_length);
++                            prev = it; // DTL
+                             it++;
+                         }
+ 
+@@ -3472,11 +3479,10 @@
+                         LLAMA_LOG_WARN("FR: (%ld %ld) '%s'\n", right_reminder_offset, right_reminder_length, raw_text->substr(right_reminder_offset, right_reminder_length).c_str());
+ #endif
+ 
+-                        if (source == 0) {
+-                            buffer.erase_after(buffer.before_begin());
+-                        } else {
+-                            buffer.erase_after(std::next(buffer.begin(), (source - 1)));
++                        if (prev == source) { // DTL: erase the split fragment in O(1)
++                            prev = source_prev;
+                         }
++                        buffer.erase_after(source_prev);
+ 
+                         // repeat for the right side
+                         raw_text_base_offset = right_reminder_offset;
+@@ -3486,15 +3492,15 @@
+                         LLAMA_LOG_WARN("RR: (%ld %ld) '%s'\n", raw_text_base_offset, raw_text_base_length, raw_text->substr(raw_text_base_offset, raw_text_base_length).c_str());
+ #endif
+                     } else {
+-                        if (source == 0) {
+-                            buffer.erase_after(buffer.before_begin());
+-                        } else {
+-                            buffer.erase_after(std::next(buffer.begin(), (source - 1)));
++                        if (prev == source) { // DTL: erase the split fragment in O(1)
++                            prev = source_prev;
+                         }
++                        buffer.erase_after(source_prev);
+                         break;
+                     }
+                 }
+             }
++            prev = it; // DTL
+             it++;
+         }
+     }

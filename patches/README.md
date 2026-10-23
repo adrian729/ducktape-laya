@@ -84,3 +84,23 @@ sites assert, matching ggml's existing handling of small allocation failure
 
 Removal condition: upstream checks these allocations and `real-faults` passes
 unchanged. Upstream submission has not been performed.
+
+## tokenizer-linear-partition.patch
+
+Before tokenizing, llama.cpp splits text at every control, user-defined and unknown token (`tokenizer_st_partition`). For each match it found the fragment's position with `std::distance` from the list's start and erased it with `std::next` from the start again, so the split took time quadratic in the number of matches. The Laya vocabularies make ordinary text match often: the English and typed-decisions vocabularies have user-defined tokens for runs of 2 to 24 spaces, and the multilingual one for every newline. 64 KiB of `"x  "` took about 31 s, 1 MiB of log lines on the multilingual model minutes, and tokenization cannot be cancelled. The patch keeps the list element before the current fragment, so each split erases in constant time; the order of operations and the resulting fragments are the same. `tests/tokenizer.cpp` checks that token sequences equal those recorded with the unpatched runtime (`tests/fixtures/tokenizer-partition.txt`; upstream's vocabulary-only test files and the Laya models) and that time grows linearly. No arithmetic or output changes.
+
+Removal condition: upstream makes the partition linear; `tokenizer-partition` and `real-tokenizer` pass unchanged. Upstream master (e1e3b2c40, 2026-10-23) still has the quadratic code. Upstream submission has not been performed.
+
+## ggml-cpu-work-buffer.patch
+
+The CPU backend keeps a work buffer between graph computations and grows it with `delete[]` followed by `new[]`. When the `new[]` threw, the backend kept the freed pointer and its old size: the next smaller computation wrote into freed memory, and a later larger one or closing the engine corrupted the heap (found by the audit with an injected allocation failure; realistic under `RLIMIT_AS` or the 4 GiB WebAssembly ceiling). The patch clears the pointer and size first and allocates with `new (std::nothrow)`, so the existing `GGML_STATUS_ALLOC_FAILED` path runs; llama.cpp returns it from `llama_encode` and the library reports `DTL_OUT_OF_MEMORY` (4). No arithmetic or output changes.
+
+Removal condition: upstream handles the failed allocation; `ggml-faults` and `real-runtime-faults` pass unchanged. Upstream master (e1e3b2c40) still has the code. Upstream submission has not been performed.
+
+## ggml-thread-creation-failure.patch
+
+ggml creates the CPU worker threads for every graph computation (the library attaches no persistent thread pool) and asserted that `pthread_create` succeeded, so a refused thread (`RLIMIT_NPROC`, a container's pids limit) aborted the host process. The patch stops and joins the workers already started, frees the pool and returns NULL, which `ggml_graph_compute` already reports as `GGML_STATUS_ALLOC_FAILED` (`ggml-check-allocations.patch`); the caller gets status 4 and the engine stays usable. No arithmetic or output changes.
+
+A persistent thread pool per engine (`ggml_threadpool_new` and `llama_attach_threadpool` at open) would report the failure at open and stop creating threads for every pass, but it was not adopted: its workers would not exist in a child process after `fork()`, so a host that forks after opening an engine (Python `multiprocessing` with the fork start method, the fault suite) would hang on the next call; every loaded router model would keep `threads - 1` idle threads; and it changes the threading the qualified results were measured with.
+
+Removal condition: upstream handles thread creation failure; `ggml-faults` and `real-runtime-faults` pass unchanged. Upstream master (e1e3b2c40) still asserts. Upstream submission has not been performed.

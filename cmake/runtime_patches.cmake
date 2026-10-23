@@ -4,11 +4,12 @@
 # Patched headers are used through DTL_VENDOR_INCLUDE, ahead of upstream's copy.
 set(DTL_PATCH_ROOT "${CMAKE_CURRENT_BINARY_DIR}/runtime-patched")
 set(DTL_PATCHED_FILES ggml/src/ggml.c ggml/src/ggml-alloc.c ggml/src/ggml-backend.cpp ggml/src/ggml-cpu/ggml-cpu.c
-  ggml/src/ggml-cpu/arch/wasm/quants.c common/json.cpp common/jinja/runtime.cpp common/jinja/value.cpp)
-set(DTL_PATCHED_TARGETS ggml-base ggml-base ggml-base ggml-cpu ggml-cpu ducktape_laya ducktape_laya ducktape_laya)
-set(DTL_PATCHED_REQUIRED ON ON ON ON OFF ON ON ON)
+  ggml/src/ggml-cpu/arch/wasm/quants.c common/json.cpp common/jinja/runtime.cpp common/jinja/value.cpp
+  ggml/src/ggml-cpu/ggml-cpu.cpp src/llama-vocab.cpp)
+set(DTL_PATCHED_TARGETS ggml-base ggml-base ggml-base ggml-cpu ggml-cpu ducktape_laya ducktape_laya ducktape_laya ggml-cpu llama)
+set(DTL_PATCHED_REQUIRED ON ON ON ON OFF ON ON ON ON ON)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "wasm")
-  set(DTL_PATCHED_REQUIRED ON ON ON ON ON ON ON ON)
+  set(DTL_PATCHED_REQUIRED ON ON ON ON ON ON ON ON ON ON)
 endif()
 set(DTL_PATCHED_HEADERS vendor/nlohmann/json.hpp)
 set(DTL_VENDOR_INCLUDE "${DTL_PATCH_ROOT}/vendor")
@@ -95,3 +96,4 @@ function(dtl_use_patched_sources target)
 endfunction()
 dtl_use_patched_sources(ggml-base)
 dtl_use_patched_sources(ggml-cpu)
+dtl_use_patched_sources(llama)
