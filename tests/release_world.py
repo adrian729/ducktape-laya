@@ -142,9 +142,10 @@ class World:
     def validation(self, platform):
         item = self.targets[platform]
         linux = item['os'] == 'linux'
-        tests = ['abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'real-model', 'real-features', 'real-control']
-        tests += ['real-faults', 'real-c-faults'] + (['cpu-guard'] if platform == 'linux-x64' else []) if linux else []
-        skipped = {} if linux else {'real-faults': 'Linux only', 'real-c-faults': 'Linux only', 'cpu-guard': 'Linux only'}
+        tests = ['abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition',
+                 'real-model', 'real-features', 'real-control', 'real-tokenizer']
+        tests += ['real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults'] + (['cpu-guard'] if platform == 'linux-x64' else []) if linux else []
+        skipped = {} if linux else {name: 'Linux only' for name in ('real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults', 'cpu-guard')}
         return {'schema_version': 1, 'source_commit': self.commit, 'source_tracked_dirty': False, 'mode': 'real_model',
                 'model': {'sha256': self.model}, 'platform': platform, 'node_version': 'v' + item['build']['node_headers'],
                 'library_sha256': digest(self.library(platform)), 'addon_sha256': digest(self.addon(platform)),

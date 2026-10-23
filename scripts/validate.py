@@ -155,13 +155,15 @@ try:
     # Assert model-dependent tests were registered; an empty green suite is not evidence.
     registered = json.loads(subprocess.check_output(['ctest', '--test-dir', build, '--show-only=json-v1'], env=env))
     report['ctest_registered'] = sorted(test['name'] for test in registered['tests'])
-    required = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing'}
-    if model: required |= {'real-model', 'real-features', 'real-control'}
+    required = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
+    if model: required |= {'real-model', 'real-features', 'real-control', 'real-tokenizer'}
     linux = sys.platform.startswith('linux')
     # Fault injection uses Linux process controls (prctl, rlimits); CMake registers it on Linux only.
-    if model and linux: required |= {'real-faults', 'real-c-faults'}
+    if linux: required.add('ggml-faults')
+    else: report['skipped']['ggml-faults'] = 'fault injection uses Linux process controls (rlimits, fork); registered on Linux only'
+    if model and linux: required |= {'real-faults', 'real-c-faults', 'real-runtime-faults'}
     elif model:
-        for name in ('real-faults', 'real-c-faults'):
+        for name in ('real-faults', 'real-c-faults', 'real-runtime-faults'):
             report['skipped'][name] = 'fault injection uses Linux process controls (prctl, rlimits); registered on Linux only'
     # The emulated-CPU guard test exercises the x86-64 AVX2 guard under QEMU user mode (Linux only).
     if model and linux and platform.machine() in ('x86_64', 'AMD64'): required |= {'cpu-guard'}

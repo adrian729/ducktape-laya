@@ -38,9 +38,9 @@ def need(condition, message):
 
 
 # Native tests every target registers; real-faults and real-c-faults are Linux-only (CMakeLists.txt).
-MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing'}
-REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control'}
-LINUX_TESTS = {'real-faults', 'real-c-faults'}
+MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
+REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-tokenizer'}
+LINUX_TESTS = {'real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults'}
 # The run that may produce candidate evidence.
 CI_EVENT, CI_CONCLUSION = 'workflow_dispatch', 'success'
 # The only repository whose runs are candidate evidence (scripts/fetch-ci-evidence.py has the same constant).
