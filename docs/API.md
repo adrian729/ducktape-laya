@@ -1,5 +1,26 @@
 # Shared decision API
 
+The request and result format, configuration and error behaviour shared by every binding. It describes `main`; the [changelog](../CHANGELOG.md#unreleased) lists what changed since the 0.2.0 release (mainly stricter limits, new error codes and fixes). Language-specific details (installation, types, threading) are in each package README.
+
+## Terms
+
+| Term | Meaning |
+| --- | --- |
+| Model | A Laya GGUF file ([models](MODELS.md)) |
+| Engine | One open model, or a router (below); the handle every call goes through |
+| Router | An engine that holds several models and picks one per request, by name or by language |
+| State | What the questions are about: text or any JSON value |
+| `choice` | A question that picks one of several labelled options |
+| `noul` | A yes/no question: the answer is the probability that the statement is true |
+| `score` | A question that picks a level on an ordered scale (for example low, medium, high) |
+| Structured decision | A request given as a small JSON Schema instead of questions; the answers fill its properties |
+| Calibration temperature | A per-question-type divisor applied to the model's scores before they become probabilities; stored in the model, and overridable |
+| Context (`context_tokens`) | The longest prompt (state plus one question, in tokens) an engine reserves memory for |
+| Overflow policy | What happens when a prompt is longer than its limit: reject (default), truncate or scan in windows |
+| Status | The numeric result code every binding reports (0 success, 1 invalid request, ... 7 unsupported platform; [table](#ownership-admission-and-errors)) |
+
+## Interfaces
+
 All planning, validation, projection, inference and model caching run in C++. C++, Rust, Node/TypeScript, Python, Go, Java, .NET and browser bindings adapt the same C ABI. Native inference performs no downloads and uses no server. Browser asset fetching is explicitly controlled by the host; see [BROWSER.md](BROWSER.md).
 
 The C ABI (version 2) has one handle type for a single model or a router, one call function and JSON for configuration and requests. All results/errors use `dtl_free`. No partial result is returned on failure. Requests are strict: unsupported fields are rejected.
@@ -122,9 +143,9 @@ Probabilities are a softmax of the model's scores divided by the calibration tem
 
 Results contain `answers` keyed by question ID and `usage` with `input_tokens` and `output_tokens: 0` (plus the overflow fields under [Long input](#long-input)). No chat text is generated. Input insertion order is preserved by the core and can affect inference; ties choose the first option. JavaScript object serialization reorders integer-like keys: pass a raw JSON string when literal ordering matters. Node and the browser serialize request objects with `JSON.stringify`, which also writes `149.0` as `149`, so a structured value's prompt text, and with it the results, can differ from the same request sent as a raw JSON string or from Python. Bindings return identical results for the same request text. Node and browser results are parsed JavaScript objects, so their members follow ECMAScript property order (integer-like keys ascending, then insertion order); names and values match the core result exactly. Literal mask text in values is replaced by a space before rendering, and the text between mask tokens is tokenized on its own, as the model was trained. Other special tokens written literally in text (for example `[SEP]` or `[CLS]`) are tokenized as those special tokens, as upstream llama.cpp and the original Laya's tokenizer do; a `[SEP]` in the last option's description therefore breaks the prompt layout and is rejected with status 1. Input longer than its limit follows the request's [overflow policy](#long-input).
 
-### Example requests and option order
+### Option order
 
-`examples/request.json` is a primitive request, `examples/structured.json` a structured one and `examples/batch.json` a batch. `examples/presets/` has ready requests for common uses: support triage, email triage, prompt-injection screening and moderation. They are ordinary requests: copy one and adapt its questions. To run one, build the `laya-decide` (C, `examples/decide.c`) or `laya-decide-cpp` (C++, `examples/decide.cpp`) target with `-DDUCKTAPE_BUILD_EXAMPLES=ON`, or the Rust example (`cargo run --example decide` in `bindings/rust/ducktape-laya`), and pass the model path with the request on standard input.
+Ready-made requests (`examples/request.json`, a structured and a batch request, and presets for support triage, email triage, prompt-injection screening and moderation) are described in [examples/](../examples/README.md).
 
 Option order can influence a `choice`. To reduce that bias, ask the same question several times in one request with the options in rotated order (for example `intent_r0`, `intent_r1`, `intent_r2`), then average each label's probability across the copies. Each copy costs one more model pass.
 
@@ -186,7 +207,7 @@ try {
 
 The registry accepts 1–16 model IDs (1–128 bytes each) mapped to local regular files. Paths are canonicalized at open, so relative paths resolve then and symlink aliases share a cache entry. Hard links with different canonical paths are separate entries. Requests must specify a registered `model`; missing or unknown IDs fail with invalid argument. Single-model engines reject routing fields. Routed results include the chosen `model` ID. `auto` is reserved and cannot be a model ID; `"model": "auto"` chooses a route by language (below).
 
-Loads are lazy and serialized. Before inference, each model must pass the core's Laya GGUF metadata, three-column output, template, marker, head-budget and calibration checks. This verifies format compatibility, **not model quality or artifact authenticity**. Applications should verify bundled weights against `models/manifest.json` and keep resources immutable. `scripts/verify-model.py` does this from a checkout (it imports the repository's `scripts/release_support.py` and needs Python 3.11+); the installed and npm `download-model.py` checks the hash of the file it downloads. The pinned English, multilingual and typed-decisions models are qualified here: each is checked against the original Laya's recorded results (identical token counts, probabilities within 0.05) and against upstream llama.cpp processing (see [RELEASE_CHECKS.md](RELEASE_CHECKS.md)). Other models require their own tokenizer, calibration and decision tests before use. There is no fallback model or network download.
+Loads are lazy and serialized. Before inference, each model must pass the core's Laya GGUF metadata, three-column output, template, marker, head-budget and calibration checks. This verifies format compatibility, **not model quality or artifact authenticity**. Applications should verify bundled weights against their manifest and keep resources immutable ([models](MODELS.md#verifying-a-model-you-ship)). The pinned English, multilingual and typed-decisions models are qualified here: each is checked against the original Laya's recorded results (identical token counts, probabilities within 0.05) and against upstream llama.cpp processing ([accuracy](PERFORMANCE.md#accuracy-against-the-original-laya)). Other models require their own tokenizer, calibration and decision tests before use. There is no fallback model or network download.
 
 ### Choosing the model by language
 
@@ -204,7 +225,7 @@ Text that is confidently English goes to `english`; everything else goes to `def
 
 `usage.routing` reports why: `reason` is `lang` (with the request's `lang`), `english_text` (with `language: "en"`), `no_letters`, `non_latin_script` (with `script`), `too_short`, `other_language` (with `language`), `non_english_letters` (with `language` when another language's words were found) or `no_english_words`. Explicitly routed requests have no `routing`.
 
-`max_loaded` defaults to 1, allows 1–4, and bounds the number of loaded models: one per canonical path and configured `threads`, `context_tokens` and `temperatures` (see [Engine configuration](#engine-configuration)). Least-recently-used models are unloaded **before** another is loaded at capacity. This avoids temporarily holding one extra model. A failed load can therefore evict a previously cached model. Failed loads are not cached. This is a model-count bound, not a byte-accurate RAM quota; size and runtime buffers vary with the artifact. Closing releases every cached model/context. Native close must never race an active call; see the closing table under [Shared decision API](#shared-decision-api) for what each binding does.
+`max_loaded` defaults to 1, allows 1–4, and bounds the number of loaded models: one per canonical path and configured `threads`, `context_tokens` and `temperatures` (see [Engine configuration](#engine-configuration)). Least-recently-used models are unloaded **before** another is loaded at capacity. This avoids temporarily holding one extra model. A failed load can therefore evict a previously cached model. Failed loads are not cached. This is a model-count bound, not a byte-accurate RAM quota; size and runtime buffers vary with the artifact. Closing releases every cached model/context. Native close must never race an active call; see the closing table under [Interfaces](#interfaces) for what each binding does.
 
 ## Cancellation and deadlines
 
@@ -243,6 +264,4 @@ Every binding exposes native statuses through its error type, with named constan
 
 C++ exposes `ducktape::info()` and `engine.info()`. Rust exposes `runtime_info()` and `Engine::info()`. Node exposes `Laya.runtimeInfo()` and async `engine.info()`; browser engines expose async `info()`. Python, Go, Java and .NET expose `runtime_info()`/`RuntimeInfo()`/`Laya.runtimeInfo()`/`LayaEngine.RuntimeInfo()` and `info()` on an engine. Routers report common runtime capabilities in every binding, since models are loaded lazily. Inference and model identities are shared C ABI results, not independently maintained binding constants.
 
-`numerical_profile` contains an `id` derived from the backend and required CPU features, plus `cross_profile_equivalence: false`. The ID is a profile label, not a complete reproducibility fingerprint: also record runtime/patch and model hashes, artifact/compiler/flags, execution settings, and device/driver identity. Bindings using the same native binary, model and settings must return identical results. Each backend must match upstream processing at its declared tolerance. Different profiles can change probabilities, winning choices and threshold projections. Consumers should qualify thresholds for the profiles they deploy. Initialization fallback may select another profile; inspect `info()` afterward. Inference failures never silently switch profiles.
-
-On the Linux x86-64 build, CPU features selected by the supported GGML options are checked before calling the backend. Missing required features produce `DTL_UNSUPPORTED_PLATFORM` (7). This guard covers the declared configuration; custom compiler ISA flags can invalidate that guarantee. AVX512/VNNI variants are rejected by this package's CMake configuration until their guard/coverage is implemented. A portable build disables GGML_AVX, GGML_AVX2, GGML_FMA, GGML_F16C, GGML_BMI2 and GGML_SSE42. Different CPU profiles can change floating-point outputs and require their own conformance results. The `cpu-guard` test checks the guard on emulated CPUs (QEMU user mode); older physical CPUs remain untested.
+`numerical_profile` contains an `id` derived from the backend and required CPU features, plus `cross_profile_equivalence: false`. Bindings using the same native binary, model and settings return identical results; different profiles (CPU architectures, WebAssembly, WebGPU) can change probabilities, winning choices and threshold projections, so qualify thresholds on the profiles you deploy. The ID is a label, not a complete reproducibility fingerprint: also record the runtime and model hashes, the build and the device. In the browser, initialization fallback may select another profile, so inspect `info()` afterwards; inference failures never silently switch profiles. Profiles, measured differences and the CPU check behind status 7: [PLATFORMS.md](PLATFORMS.md#numerical-results-across-platforms).

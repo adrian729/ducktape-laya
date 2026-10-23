@@ -1,24 +1,23 @@
-# Compatibility and release policy
+# Compatibility and versioning
 
-Version 0.1.0 (ABI 1, `libducktape_laya.so.0`) is released from tag `v0.1.0` (candidate `b375b04`). Version 0.2.0 (ABI 2, `libducktape_laya.so.1`) is released from tag `v0.2.0`; [CHANGELOG.md](../CHANGELOG.md) lists the changes. A passing demo or a model-less test does not establish release readiness. Runtime/model combinations are identified by `release/compatibility.json`, immutable model manifests and applied patch hashes.
+What stays stable between versions, how breaking changes are versioned, and how to migrate. Platform support is in [PLATFORMS.md](PLATFORMS.md); the changes per version are in the [changelog](../CHANGELOG.md).
 
-The C ABI owns shared behavior. Additive functions/status codes keep the ABI version; changes to existing layouts, ownership or semantics require a new ABI and SONAME. Bindings follow package semantic versions, and released artifacts must be immutable. Before 1.0, a breaking change bumps the minor version (0.1.0 to 0.2.0) and comes with migration notes; after 1.0, the major version. Do not silently replace artifacts under an existing version.
+## Versions
 
-Existing status numbers, ordering, the meaning of answers and confidence fields, the default `reject` overflow policy, no-partial-result behavior and JSON field meanings are compatibility contracts. Introspection may add fields; consumers ignore unknown fields there. Requests are strict: unsupported fields are rejected. New model capabilities require validation and explicit adapter support, not just an unchanged file extension.
+| Version | C ABI | Linux library | Released |
+| --- | --- | --- | --- |
+| 0.1.0 | 1 | `libducktape_laya.so.0` | GitHub Releases, npm, crates.io |
+| 0.2.0 | 2 | `libducktape_laya.so.1` | GitHub Releases, npm, crates.io, PyPI, NuGet, Maven Central, Go module proxy |
 
-A release identifies its architecture, CPU features, system-library floor, tested Linux userspaces, Node/Electron/browser versions and backend. The same model may have numeric differences between CPU/GPU/ISA profiles; bindings using the same native binary and settings must agree exactly. Each backend must agree with upstream processing within its declared strict tolerance. Cross-profile probability and discrete-decision drift is reported, without an interchangeability guarantee. Browser delivery is experimental: 0.1.0 and 0.2.0 passed the browser gates on Chromium 152 only. Unvalidated platforms must not be advertised as supported merely because the source can compile there.
+Released files are never replaced: a fix is a new version. Before 1.0, a breaking change bumps the minor version (0.1.0 to 0.2.0) and comes with migration notes below; after 1.0, the major version.
 
-Release targets and tiers are in `release/compatibility.json` and [QUALIFICATION.md](QUALIFICATION.md#release-targets-and-tiers). From the next release, a release identifies, per target:
+## What is a compatibility contract
 
-| Target | Tier | CPU features | System floor | Build and math library | Tested on |
-| --- | --- | --- | --- | --- | --- |
-| Linux x86-64 | 1 | AVX, AVX2, FMA, F16C, BMI2, SSE4.2 | glibc 2.38+ (symbols up to 2.39), `GLIBCXX_3.4.29` | gcc, glibc | Ubuntu 24.04 and 26.04 userspaces, Node 24 and 26, Electron 44, Chromium 152 (WASM and WebGPU) |
-| Linux arm64 | 2 | `asimddp`, `fphp`, `asimdhp` (Armv8.2-A with dot product and FP16) | same as x86-64 | gcc, glibc | GitHub `ubuntu-24.04-arm`, Node 24, Electron 44 |
-| Windows x64 | 2 | same as Linux x86-64 | Microsoft Visual C++ Redistributable | clang-cl, UCRT | GitHub `windows-2025` (Windows Server 2025), Node 24, Electron 44 |
-
-Tier 2 is CI-tested with the English model only. Against the Linux x86-64 profile, on the fixture corpus, the maximum probability drift is 0.0334 on Linux arm64 and 0.0865 on Windows x64, with no changed decision; these are measurements, not guarantees. The Windows DLL is `ducktape_laya.dll` and carries no ABI number in its name: There is no SONAME or symbol versioning there, so keep the DLL of the ABI the program was built against; the bindings check `dtl_abi_version()` when they load it. Linux libraries keep `libducktape_laya.so.1`. The Windows DLL also links the build image's MSVC and SDK libraries, so its bytes depend on the runner image; reports record the `build_environment`. 0.1.0 and 0.2.0 identify Linux x86-64 only.
-
-Release acceptance includes actual artifact installation, model integrity, ABI and cross-binding checks, upstream-reference and original-reference agreement, sanitizer/resource regressions, platform coverage, license/provenance inventory and reproducibility. Failed and unrun gates remain visible. Public publication, signing keys, security contact and release hosting are separate deployment decisions, not silently inferred from local implementation work. See [SECURITY.md](../SECURITY.md) and [PLAN.md](PLAN.md) for boundaries.
+- **The C ABI.** Every binding adapts it. Added functions and status codes keep the ABI version; any change to an existing layout, ownership rule or meaning needs a new ABI version and a new Linux library name (SONAME) with its own symbol version, so programs built against one ABI never load another by accident. On Windows the DLL name carries no ABI number; the bindings check `dtl_abi_version()` when they load it.
+- **Behaviour.** Status numbers, result ordering, the meaning of answers and confidence fields, the default `reject` overflow policy, returning no partial result on failure, and the meaning of every JSON field.
+- **Requests are strict.** Unknown fields are rejected, so a request that works keeps meaning the same thing. Runtime and model info may gain fields; ignore unknown fields there.
+- **Results within one numerical profile.** The same request on the same build, model and settings gives the same result in every binding. Results on different CPUs, operating systems or the browser can differ slightly ([PLATFORMS.md](PLATFORMS.md#numerical-results-across-platforms)); that is measured for each release, not guaranteed.
+- **Models.** Each supported model file is pinned by an immutable manifest; a model upgrade can change answers and is announced in the changelog. A new model capability needs explicit support in the library, not just a compatible file format.
 
 ## Known deviations
 
@@ -26,7 +25,7 @@ Agreement with the original Laya is checked per platform against the same limits
 
 | Platform | Model | Answer | Drift | Cap | Cause |
 | --- | --- | --- | --- | --- | --- |
-| Windows x64 (clang-cl) | English Q8_0 | `json_escaping/spam` | 0.0541 (Linux x86-64: 0.0373) | 0.06 | The Windows C runtime's `erff` (GEGLU-erf) and `sinf`/`cosf` (RoPE cache) round some last bits differently from glibc. Upstream llama.cpp calls the platform math library on CPU, so this is upstream behaviour; the ggml kernels are the same as on Linux, and agreement with upstream llama.cpp is exact. Q8_0 activation quantization amplifies the difference on this answer. |
+| Windows x64 (clang-cl; released from the next version) | English Q8_0 | `json_escaping/spam` | 0.0541 (Linux x86-64: 0.0373) | 0.06 | The Windows C runtime's `erff` (GEGLU-erf) and `sinf`/`cosf` (RoPE cache) round some last bits differently from glibc. Upstream llama.cpp calls the platform math library on CPU, so this is upstream behaviour; the ggml kernels are the same as on Linux, and agreement with upstream llama.cpp is exact. Q8_0 activation quantization amplifies the difference on this answer. |
 
 ## Upgrading across the ABI break
 
@@ -81,4 +80,4 @@ These change results or accepted input without any code change:
 - **`"auto"` is reserved** and cannot be a route ID.
 - **Rejecting over-long input is now the default policy**, not the only behavior: requests or engines may choose `truncate_end`, `truncate_start` or `scan`. Under the default, results are unchanged.
 - **Text between mask tokens is tokenized separately**, as the models were trained. This fixes whitespace dropped before a mask token with the multilingual model's vocabulary.
-- **New input limits** (status 1): unknown keys inside a question, `null` `score` levels, JSON objects with more than 1,024 members, runs of more than 4,096 consecutive ASCII spaces in a question or the state, and calls that would plan more than 4,096 forward passes. See [API.md](API.md#batches).
+- **New input limits** (status 1): unknown keys inside a question, `null` `score` levels, JSON objects with more than 1,024 members, runs of more than 4,096 consecutive ASCII spaces in a question or the state (lifted again after 0.2.0), and calls that would plan more than 4,096 forward passes. See [API.md](API.md#batches).

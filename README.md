@@ -5,313 +5,132 @@
   </picture>
 </p>
 
-Embed local Laya decisions in C/C++, Rust, Node.js and Electron, Python, Go, Java/Kotlin, .NET and the browser (WebAssembly/WebGPU). One native library loads a GGUF model and returns `choice`, `noul` (probability of true) and ordinal `score` results. Inference needs no server, Python or network access. This is a decision model; it does not generate chat text.
+ducktape-laya runs [Laya](https://github.com/NandhaKishorM/laya) decision models inside your application. You pass a text (or a JSON value) and a few named questions; it answers each one with calibrated probabilities, on the CPU, in-process. There is no server, no network access and no Python at run time, and it does not generate text.
 
-**Status:**
+One native library does the work; thin bindings expose it to C/C++, Rust, Node.js and Electron, Python, Go, Java/Kotlin and .NET, plus an experimental browser build (WebAssembly, optional WebGPU).
 
-- **0.2.0 (current release, 2026-10-22):** [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), npm (`ducktape-laya`, `ducktape-laya-browser`), crates.io (`ducktape-laya`, `ducktape-laya-sys`), PyPI (`ducktape-laya`), NuGet (`DucktapeLaya`), Maven Central (`io.github.adrian729:ducktape-laya`) and the Go module proxy (`bindings/go`, tag `bindings/go/v0.2.0`). Every release asset is attested. C ABI 2 with a breaking API change ([migration](docs/COMPATIBILITY.md#migrating-from-010-abi-1-to-020-abi-2), [changelog](CHANGELOG.md)), new features (below), and the multilingual and typed-decisions models next to the English one, all held to the same gates: agreement with the original Laya's recorded results and with upstream llama.cpp. All 0.2.0 registry packages are Linux x86-64 only; the browser build is [experimental](docs/BROWSER.md). Linux arm64 and Windows x64 packages come with the next release (see [release coverage](#release-coverage)); until then they and macOS build from a checkout (see the requirements below).
-- **0.1.0:** earlier release (C ABI 1, English model), still on npm and crates.io under the 0.1 versions.
+**Terms used below.** The *state* is the text or JSON the questions are about. A question has one of three types: `choice` picks one of several labelled options, `noul` gives the probability that a statement is true (a yes/no question; the name comes from Laya), and `score` picks a level on an ordered scale. A *model* is a GGUF file (the llama.cpp format) that you download once; an *engine* is a model opened by the library.
 
-This README and the guides in `docs/` describe main, which is 0.2.0 until the next release.
+## Status
 
-## Features
-
-- Three question types, batches of up to 32 requests, and [structured decisions](docs/API.md#structured-decisions) from a small JSON Schema subset.
-- [`answer_confidence` and `confidence`](docs/API.md#primitive-requests-and-results) on every answer: the calibrated probability of the answer, and how concentrated the distribution is.
-- [Long input](docs/API.md#long-input): reject (default), truncate from either end, or scan the whole text in windows.
-- [Engine configuration](docs/API.md#engine-configuration): threads, prompt capacity up to the model's trained length, and calibration temperatures.
-- [Local routing](docs/API.md#local-routing) between several models, including [routing by language](docs/API.md#choosing-the-model-by-language) between the English and multilingual models.
-- Deadlines, cooperative cancellation and passive events in every binding, with the same results from every binding on the same build for the same request text (Node and the browser serialize request objects with `JSON.stringify`, which writes `149.0` as `149`; see [the API guide](docs/API.md#primitive-requests-and-results)).
-
-## Release coverage
-
-Releases from the next one on cover three platforms. The tier says how much evidence backs a platform ([qualification](docs/QUALIFICATION.md)).
-
-| Platform | Tier | Packages |
-| --- | --- | --- |
-| Linux x86-64 | 1 | Native tarball, npm, crates, wheel, jar, NuGet, Go; 0.1.0 and 0.2.0 |
-| Linux arm64 | 2 | Same packages, from the next release |
-| Windows x64 | 2 | `ducktape-laya-V-windows-x64.zip` and the same packages, from the next release |
-| macOS arm64 | none yet | Built and tested in CI, not released; the next tier-2 candidate (macOS 14.0 minimum) |
-
-Tier 1 passes every release gate: the full real-model checks with all three models, sanitizers, a one-hour stress run, eight-hour soak, performance budgets, the Linux userspace and browser matrices and upgrade rollback. Tier 2 is CI-tested on the release candidate's run, on GitHub-hosted runners: the native tests, every binding and the installed packages (Electron included) with the English model only, agreement with llama.cpp and the original Laya, reproducible builds, a 600-second stress run, and probability drift against Linux x86-64 reported. It has no soak or performance budgets yet, and the multilingual and typed-decisions models are not part of it.
+- **Current release: 0.2.0** (2026-10-22), on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), npm, crates.io, PyPI, NuGet, Maven Central and the Go module proxy. Every release file is attested ([verify a download](SECURITY.md#verify-a-download)). Its packages run on **Linux x86-64**; the browser package is experimental.
+- **Platforms:** Linux x86-64 is tier 1 (passes every release check); Linux arm64 and Windows x64 are tier 2 (tested in CI with the English model) from the next release; macOS on Apple silicon builds from source. Details: [docs/PLATFORMS.md](docs/PLATFORMS.md).
+- **Unreleased on main:** Linux arm64 and Windows x64 packages and the fixes listed in the [changelog](CHANGELOG.md#unreleased). Until the next release, they are available by [building from source](docs/BUILDING.md).
 
 ## Requirements
 
-Native packages (C/C++, Rust, Node.js, Electron) need:
-
-- **Linux x86-64 CPU:** AVX2, FMA, F16C, BMI2 and SSE4.2: Intel Haswell,
-  AMD Excavator/Zen or newer. Some low-power Atom, Celeron and Pentium chips lack
-  AVX2. On those, opening an engine fails with status 7
-  (`DTL_UNSUPPORTED_PLATFORM`) and names the missing feature.
-- **Linux system libraries (x86-64 and arm64):** glibc 2.38+ and libstdc++ with
-  `GLIBCXX_3.4.29`, as in Ubuntu 24.04+, Debian 13+ and Fedora 39+. Tested on
-  Ubuntu 24.04 and 26.04 (x86-64) and Ubuntu 24.04 (arm64).
-- **Linux arm64 (tier 2, from the next release):** Armv8.2-A with dot product and
-  half precision (Graviton2+, Ampere Altra, Cortex-A76 / Raspberry Pi 5);
-  opening an engine elsewhere fails with status 7. Tested only on GitHub's
-  `ubuntu-24.04-arm` runners, with the English model.
-- **Windows x64 (tier 2, from the next release):** the same CPU features as Linux
-  x86-64 (AVX2, FMA, F16C, BMI2, SSE4.2) and the Microsoft Visual C++
-  Redistributable, which the DLL needs and the packages do not bundle. The build
-  is clang-cl (Visual Studio's LLVM) and is tested only on GitHub's Windows Server
-  2025 runners with the English model: all bindings (C, C++, Rust, Node, Electron,
-  Python, Go, Java, .NET) agree exactly, agreement with llama.cpp is exact, and
-  agreement with the original Laya holds within one
-  [documented deviation](docs/COMPATIBILITY.md#known-deviations). Its results
-  differ slightly from Linux's, because the Windows C runtime rounds some math
-  functions differently.
-- **macOS on Apple silicon (not released):** CI builds and tests it on macOS 15
-  arm64, with and without the real model, and builds its packages (macOS 14.0
-  minimum), but no release carries them yet. Build it from a checkout and point
-  the bindings at `libducktape_laya.dylib` with `DUCKTAPE_LAYA_LIB_DIR`. Intel
-  Macs are not supported.
-- **Memory:** about 0.5 GB per open engine with the English model and the default 512-token context (measured natively: 475 MiB after opening, 600 MiB while deciding). Plan for 1 GB per engine. Other models and longer contexts need more; see [other checkpoints](#other-laya-checkpoints).
-- **Disk:** 449 MB for the English model, plus 15 MB for the library or npm package.
-- **Model:** `Laya-Q8_0.gguf`, downloaded separately (see below).
-
-What each package needs on top:
-
-| Package | Install | Also needs |
+| Platform | CPU | System |
 | --- | --- | --- |
-| Node.js | `npm install ducktape-laya` | Node.js 20+ (tested on 24 and 26). The native addon is prebuilt; no compiler. From the next release the package carries Linux x86-64, Linux arm64 and Windows x64; 0.2.0 carries Linux x86-64 only. |
-| Electron | `npm install ducktape-laya` | Tested with Electron 44 on Linux x86-64, Linux arm64 and Windows x64 (the last two from the next release). Unpack the whole `node_modules/ducktape-laya` package (its worker script and native files) and the model from ASAR. |
-| Rust | `cargo add ducktape-laya` | The native library from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), found through `pkg-config` or `DUCKTAPE_LAYA_LIB_DIR`. On Windows, from the next release, use the `windows-x64` zip: `DUCKTAPE_LAYA_LIB_DIR` names its `lib` directory (the import library) and `bin` (the DLL) goes on `PATH` at run time. Tested with Rust 1.98. |
-| C/C++ | [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (`ducktape-laya-0.2.0-linux-x64.tar.gz`); from the next release also `ducktape-laya-V-linux-arm64.tar.gz` and `ducktape-laya-V-windows-x64.zip` | A C or C++ compiler; CMake 3.22+ or `pkg-config` to link. |
-| Python | `pip install ducktape-laya` | Python 3.10+. The wheel bundles the native library; no compiler. Wheel tags: `manylinux_2_38_x86_64` (0.2.0), and from the next release `manylinux_2_38_aarch64` and `win_amd64`. See [bindings/python](bindings/python/README.md). |
-| Go | `go get github.com/adrian729/ducktape-laya/bindings/go@v0.2.0` | Go 1.22+, cgo with a C compiler, and the native library and header from the [v0.2.0 release tarball](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (on Windows, from the next release, the `windows-x64` zip and a MinGW-w64 gcc). See [bindings/go](bindings/go/README.md). |
-| Java/Kotlin | `io.github.adrian729:ducktape-laya:0.2.0` (Maven Central) | Java 22+ (FFM API), run with `--enable-native-access`. The jar bundles the native library (Linux x86-64 in 0.2.0; from the next release also Linux arm64 and Windows x64). See [bindings/java](bindings/java/README.md). |
-| .NET | `dotnet add package DucktapeLaya` | .NET 10. The package bundles the native library (runtime identifiers `linux-x64` in 0.2.0; from the next release also `linux-arm64` and `win-x64`). See [bindings/dotnet](bindings/dotnet/README.md). |
-| Browser (experimental) | `npm install ducktape-laya-browser` | Tested on Chromium 152 only. WASM SIMD in a module worker, secure context; WebGPU is optional. See the [browser guide](docs/BROWSER.md) and [package README](bindings/browser/README.md). |
+| Linux x86-64 | AVX2, FMA, F16C, BMI2, SSE4.2 (Intel Haswell, AMD Excavator/Zen or newer) | glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29` (Ubuntu 24.04+); not musl/Alpine |
+| Linux arm64 (next release) | Armv8.2-A with dot product and FP16 (Graviton2+, Ampere Altra, Raspberry Pi 5) | as Linux x86-64 |
+| Windows x64 (next release) | as Linux x86-64 | Microsoft Visual C++ Redistributable |
 
-The versions above are minimums the packages declare. CI tests Node 24 and 26, Rust 1.98, Go 1.27, Java 25, .NET 10 and the Ubuntu 24.04 runner's system Python; the older minimums (Node 20, Go 1.22, Java 22, Python 3.10) are not tested. `./demo ts` needs Node 22.6+ (`--experimental-strip-types`).
+On a CPU without the required features, opening an engine fails with status 7 and names the missing feature. Plan for about 0.6 GiB of memory per open engine with the English model (1.2 GiB with the multilingual one) and 449 MB of disk for the English model. Language runtimes, tested versions and macOS: [docs/PLATFORMS.md](docs/PLATFORMS.md).
 
-The packages and the release tarball above are 0.2.0, for Linux x86-64; the multi-platform packages arrive with the next release. The [Node](bindings/node/README.md), [Rust](bindings/rust/ducktape-laya/README.md), [Python](bindings/python/README.md), [Go](bindings/go/README.md), [Java](bindings/java/README.md) and [.NET](bindings/dotnet/README.md) READMEs describe the 0.2.0 APIs. Until then, on Linux arm64, Windows and macOS, build the library from a checkout ([manual setup](#manual-setup)).
+## Install
 
-Building from source instead needs CMake 3.22+, a C/C++17 compiler and Git. The
-setup wizard and `scripts/download-model.py` need Python 3; the maintainer
-scripts that import `scripts/release_support.py` (`convert-model.py`,
-`verify-model.py`, `check-release.py`, the packaging and validation scripts) need
-Python 3.11+.
+| Language | Install | Notes |
+| --- | --- | --- |
+| Node.js, Electron | `npm install ducktape-laya` | Node 20+; prebuilt addon. [Package README](bindings/node/README.md) |
+| Python | `pip install ducktape-laya` | Python 3.10+; the wheel bundles the library. [Package README](bindings/python/README.md) |
+| Rust | `cargo add ducktape-laya` | Links the native library from the release archive. [Crate README](bindings/rust/ducktape-laya/README.md) |
+| Go | `go get github.com/adrian729/ducktape-laya/bindings/go@v0.2.0` | cgo; links the native library from the release archive. [Package README](bindings/go/README.md) |
+| Java, Kotlin | `io.github.adrian729:ducktape-laya:0.2.0` | Java 22+, run with `--enable-native-access`; the jar bundles the library. [Package README](bindings/java/README.md) |
+| .NET | `dotnet add package DucktapeLaya` | .NET 10; the package bundles the library. [Package README](bindings/dotnet/README.md) |
+| C, C++ | [`ducktape-laya-0.2.0-linux-x64.tar.gz`](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) | Headers, library, CMake and pkg-config files. [Linking guide](docs/PACKAGING.md) |
+| Browser | `npm install ducktape-laya-browser` | Experimental, tested on Chromium only. [Browser guide](docs/BROWSER.md) |
 
-## Optional setup wizard
+## Get the model
 
-From a clone with submodules (see below), run `python3 scripts/setup.py`. It asks
-where to install the library and model, and can build a local Node.js package.
-At the end, it prints project paths and settings. It does not edit your shell
-profile or `PATH`.
+The model is not inside any package. Download the pinned English model (449 MB) and check its hash:
 
 ```sh
-python3 scripts/setup.py                 # interactive
-python3 scripts/setup.py --yes --dry-run # preview without installing
-python3 scripts/setup.py --yes           # accept defaults (~/.local)
+curl -fL -o Laya-Q8_0.gguf https://huggingface.co/ggml-org/Laya-GGUF/resolve/22265007700297ba9e128297e82540cf28c5d7d4/Laya-Q8_0.gguf
+echo 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2  Laya-Q8_0.gguf' | sha256sum --check
 ```
 
-Use `--node` for Node.js or `--skip-model` if you already have the GGUF. Run
-`python3 scripts/setup.py --help` for prefix, model-directory and Node-header
-options. The wizard is optional; the manual steps follow.
+The multilingual (100+ languages) and typed-decisions models are built from the official checkpoints with one command; see [docs/MODELS.md](docs/MODELS.md).
 
-## Manual setup
+## Quick start
 
-You need CMake 3.22+, a C/C++17 compiler and Git. The default Linux x86-64 build
-requires AVX2, FMA, F16C, BMI2 and SSE4.2; the Linux arm64 build requires
-Armv8.2-A with dot product and half precision.
+The same request in three languages: one `noul` question about a short text.
 
-```sh
-git clone --recurse-submodules https://github.com/adrian729/ducktape-laya.git
-cd ducktape-laya
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j 3
-cmake --install build --prefix "$PWD/build/staging"
-```
-
-On Windows x64 (from a checkout; the next release ships a zip), build with
-Visual Studio's clang-cl and Ninja from an x64 Native Tools Command Prompt;
-CMake also needs a GNU `patch`, which Git for Windows includes. For the Node
-addon, `python scripts/fetch-node-sdk.py build-node-sdk --lib` downloads the
-Node-API headers and `node.lib` of your Node version and checks them against
-the release's `SHASUMS256.txt`; add `-DDUCKTAPE_BUILD_NODE=ON` with the
-`NODE_INCLUDE_DIR` and `NODE_LIB` it prints.
-
-```bat
-set "CLANG=%VCINSTALLDIR%Tools\Llvm\x64\bin\clang-cl.exe"
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
-cmake --build build -j 3
-```
-
-The 449 MB model is not in Git or the native, npm or Rust packages. Download the
-exact tested file and check it against [the pinned manifest](models/manifest.json):
-
-```sh
-mkdir -p resources
-curl --fail --location \
-  'https://huggingface.co/ggml-org/Laya-GGUF/resolve/22265007700297ba9e128297e82540cf28c5d7d4/Laya-Q8_0.gguf' \
-  --output resources/Laya-Q8_0.gguf
-printf '%s  %s\n' \
-  'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2' \
-  'resources/Laya-Q8_0.gguf' | sha256sum --check
-export LAYA_MODEL="$PWD/resources/Laya-Q8_0.gguf"
-```
-
-For a shorter explicit download command, use
-`python3 scripts/download-model.py resources`; it verifies the file before
-placing it there. Applications must pass their own local model path to the
-library. `LAYA_MODEL` is only a convenience for examples and tests.
-
-### Other Laya checkpoints
-
-The original Laya also publishes a multilingual checkpoint (mmBERT-base, 100+ languages) and a typed-decisions checkpoint. On main both are supported and qualified like the English model: against the original's recorded results and against upstream llama.cpp processing. No official GGUF exists yet, so build them from the official checkpoint with the pinned converter (in the repository root, where `.venv-convert` is ignored by Git). The script
-downloads the source files at a fixed revision, checks their hashes, converts,
-and checks the result against the manifest:
-
-| Model | Manifest | File | Precision |
-|---|---|---|---|
-| Multilingual | [models/laya-multilingual.json](models/laya-multilingual.json) | 658 MB | F16: Q8_0 moved probabilities up to 0.056 from the original's, over the 0.05 limit |
-| Typed decisions | [models/laya-typed-decisions.json](models/laya-typed-decisions.json) | 449 MB | Q8_0 |
-
-```sh
-python3 -m venv .venv-convert
-.venv-convert/bin/pip install -r third_party/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt
-cmake -S third_party/llama.cpp -B build-llama-tools -DGGML_OPENMP=OFF -DBUILD_SHARED_LIBS=OFF
-cmake --build build-llama-tools --target llama-quantize -j 3
-python3 scripts/convert-model.py models/laya-typed-decisions.json resources/laya-typed-decisions-q8_0.gguf \
-  --python .venv-convert/bin/python --quantize build-llama-tools/bin/llama-quantize
-```
-
-Both were trained with 1,024-token prompts; open them with `context_tokens`
-1024 to match the original. The files accept up to 8,192, but cost grows faster
-than the prompt length, and longer prompts are untested for accuracy. Native measurements, one yes/no question, 4 threads, on an i7-1165G7 that was also running other work (the browser build is wasm32, with a heap of at most 4 GiB, so the largest contexts do not fit there):
-
-| Prompt tokens | Multilingual (F16): time, peak memory | Typed decisions (Q8_0): time, peak memory |
-|---|---|---|
-| 512 | 3.2 s, 1.3 GB | 10 s, 0.6 GB |
-| 1,024 | 7 s, 1.8 GB | 22 s, 0.7 GB |
-| 2,048 | 19 s, 2.8 GB | 52 s, 1.0 GB |
-| 4,096 | 55 s, 5.0 GB | 137 s, 1.5 GB |
-| 8,192 | 172 s, 6.6 GB | 413 s, 2.7 GB |
-
-## Use it in a project
-
-For C++, point CMake at the installed prefix and link the target:
-
-```sh
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/ducktape-laya/build/staging
-```
-
-```cmake
-find_package(ducktape_laya 0.2 CONFIG REQUIRED)
-target_link_libraries(my_application PRIVATE ducktape::laya)
-```
-
-The CMake package accepts only the same minor version, so a 0.1.0 installation (ABI 1) does not satisfy `0.2`.
-
-```cpp
-#include <ducktape_laya.hpp>
-auto engine = ducktape::engine::open("/absolute/path/to/Laya-Q8_0.gguf");
-std::string result = engine.execute(request_json);
-```
-
-`request_json` is your JSON request; see [the request example](examples/request.json)
-and [API guide](docs/API.md). For C, use [ducktape_laya.h](include/ducktape_laya.h).
-Set the normal shared-library loader path or bundle the library with your app.
-Relative model paths use the process working directory. See
-[packaging](docs/PACKAGING.md) for pkg-config, loader and distribution details.
-
-For Rust, add the crate and point it at the installed native library (from the v0.2.0 release tarball, or your own build's `lib` directory):
-
-```sh
-cargo add ducktape-laya
-```
-
-```toml
-[dependencies]
-ducktape-laya = "0.2"
-```
-
-```sh
-export DUCKTAPE_LAYA_LIB_DIR=/path/to/ducktape-laya/build/staging/lib
-export LD_LIBRARY_PATH="$DUCKTAPE_LAYA_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-```
-
-```rust
-let engine = ducktape_laya::Engine::open("/absolute/path/to/Laya-Q8_0.gguf", &ducktape_laya::Config::default())?;
-let result_json = engine.execute(&request_json)?;
-```
-
-For Node.js 20+, build the addon with Node development headers, then run the
-source-checkout example:
-
-```sh
-cmake -S . -B build -DDUCKTAPE_BUILD_NODE=ON -DNODE_INCLUDE_DIR=/path/to/include/node
-cmake --build build -j 3
-export DUCKTAPE_LAYA_ADDON="$PWD/build/ducktape_laya.node"
-node bindings/node/decide.cjs "$LAYA_MODEL" < examples/request.json
-```
-
-In an application, call `Laya.open(modelPath)` and close the engine when done:
+Node.js (an ES module; `require('ducktape-laya')` works too):
 
 ```js
-const { Laya } = require('./bindings/node/index.cjs');
-async function main() {
-  const engine = await Laya.open(process.env.LAYA_MODEL);
-  try {
-    const result = await engine.execute({
-      state: 'Please refund the duplicate charge.',
-      questions: {
-        refund: { type: 'noul', instructions: 'Does the customer request a refund?' }
-      }
-    });
-    console.log(result.answers.refund.noul);
-  } finally {
-    await engine.close();
-  }
+import { Laya } from 'ducktape-laya';
+
+const engine = await Laya.open('/path/to/Laya-Q8_0.gguf');
+try {
+  const result = await engine.execute({
+    state: 'Please refund the duplicate charge.',
+    questions: { refund: { type: 'noul', instructions: 'Does the customer request a refund?' } },
+  });
+  console.log(result.answers.refund.noul); // probability that the answer is "true"
+} finally {
+  await engine.close(); // required: the worker keeps the process alive
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
 ```
 
-The wizard's `--node` option stages a package you can install into a separate
-Node project. [Packaging](docs/PACKAGING.md) also shows how to build the npm
-tarball manually. In an installed project, import it with
-`require('ducktape-laya')`. For Electron, keep the GGUF and the whole
-`node_modules/ducktape-laya` package unpacked from ASAR (the worker script is
-started from the package directory) and open the engine in the main process.
+Python:
 
-Structured results, batches, model routing, limits and the full request format are in the [API guide](docs/API.md). Browser setup is in the [browser guide](docs/BROWSER.md). `npm install ducktape-laya` installs 0.2.0; the [Node README](bindings/node/README.md) describes its API (0.1.0 used `decide` and had no `contextTokens`).
+```python
+import ducktape_laya
 
-## Verify and explore
-
-Run `./demo cpp "$LAYA_MODEL"` for an interactive example. `examples/request.json`,
-`examples/structured.json`, `examples/batch.json` and the presets in
-`examples/presets/` are ready requests; `examples/decide.c` and
-`examples/decide.cpp` (CMake targets `laya-decide` and `laya-decide-cpp`, built
-with `-DDUCKTAPE_BUILD_EXAMPLES=ON`) and `bindings/rust/ducktape-laya/examples/decide.rs`
-run one request from standard input. To run native tests against the downloaded
-model:
-
-```sh
-cmake -S . -B build -DDUCKTAPE_TEST_MODEL="$LAYA_MODEL"
-cmake --build build -j 3
-ctest --test-dir build --output-on-failure
+with ducktape_laya.Engine.open("/path/to/Laya-Q8_0.gguf") as engine:
+    result = engine.execute({
+        "state": "Please refund the duplicate charge.",
+        "questions": {"refund": {"type": "noul", "instructions": "Does the customer request a refund?"}},
+    })
+    print(result["answers"]["refund"]["noul"])
 ```
 
-See [release checks](docs/RELEASE_CHECKS.md) for installed-package, Rust, Node and browser validation. Code is MIT; see [third-party notices](THIRD_PARTY_NOTICES.md) for runtime and model licenses. This repository is independent of the upstream Laya project.
+Rust, inside a function that returns a `Result` (results are JSON text):
+
+```rust
+use ducktape_laya::{Config, Engine};
+
+let engine = Engine::open("/path/to/Laya-Q8_0.gguf", &Config::default())?;
+let result_json = engine.execute(
+    r#"{"state":"Please refund the duplicate charge.",
+        "questions":{"refund":{"type":"noul","instructions":"Does the customer request a refund?"}}}"#,
+)?;
+```
+
+Every answer also carries `answer_confidence` (the probability of the reported answer) and `confidence` (how decided the model is). C, C++, Go, Java, .NET and the browser take the same request JSON; see their package READMEs, the ready-made requests in [examples/](examples/README.md) and the [API guide](docs/API.md) for structured decisions, batches, long input and routing between models.
+
+## Performance
+
+Native Linux x86-64 build, Intel Core i7-1165G7 (4 cores), 4 threads, default 512-token context. Ranges span three benchmark runs.
+
+| | English Q8_0 | Multilingual F16 | Typed decisions Q8_0 |
+| --- | --- | --- | --- |
+| Open the model | 0.11–0.14 s | 0.58–0.72 s | 0.10–0.14 s |
+| Request with 3 short questions (median) | 1.5–1.8 s | 0.4–0.6 s | 1.5 s |
+| One question near the 512-token limit (median) | 6.6–7.9 s | 2.0–2.2 s | 6.2–6.4 s |
+| Memory of one open engine | 0.6 GiB | 1.2 GiB | 0.6 GiB |
+
+Each question is one model pass, so time grows with the number of questions and the length of the text. Method, more measurements and how to reproduce them: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+## Accuracy
+
+Each model is checked against results recorded with the original Laya implementation (29 answers per model): input token counts must match exactly and probabilities must stay within 0.05. In the 0.2.0 qualification run on Linux x86-64, the largest probability difference was 0.037 for the English model (mean 0.007), 0.003 for the multilingual model (mean 0.0004) and 0.046 for the typed-decisions model (mean 0.006). Other platforms: [docs/PLATFORMS.md](docs/PLATFORMS.md#numerical-results-across-platforms).
 
 ## Documentation
 
-- [API guide](docs/API.md): requests, results, configuration, routing, errors.
-- [Changelog](CHANGELOG.md) and [compatibility and migration](docs/COMPATIBILITY.md).
-- [Browser guide](docs/BROWSER.md) and [packaging](docs/PACKAGING.md).
-- [Architecture](docs/ARCHITECTURE.md), [roadmap](docs/ROADMAP.md) and [product plan](docs/PLAN.md).
-- [Release checks](docs/RELEASE_CHECKS.md), [qualification](docs/QUALIFICATION.md), [publishing](docs/PUBLISHING.md) and [upgrades](docs/UPGRADES.md).
-- [Security](SECURITY.md): trust boundaries and vulnerability reporting.
+- [API guide](docs/API.md): requests, results, configuration, long input, routing, cancellation, errors.
+- [Models](docs/MODELS.md), [performance](docs/PERFORMANCE.md), [platforms](docs/PLATFORMS.md).
+- [Linking and deployment](docs/PACKAGING.md) (CMake, pkg-config, loader paths, Electron) and the [browser guide](docs/BROWSER.md).
+- [Changelog](CHANGELOG.md), [compatibility and migration](docs/COMPATIBILITY.md), [roadmap](docs/ROADMAP.md).
+- [Building from source](docs/BUILDING.md) and the [examples](examples/README.md).
+- For maintainers: [architecture](docs/ARCHITECTURE.md), [qualification](docs/QUALIFICATION.md), [release checks](docs/RELEASE_CHECKS.md), [releasing](docs/RELEASING.md), [upgrades](docs/UPGRADES.md).
+
+## Licence and security
+
+The code is MIT. The packages also carry Apache-2.0 components, and the Laya models are Apache-2.0; see [third-party notices](THIRD_PARTY_NOTICES.md). Treat model files as trusted code and report vulnerabilities privately: [SECURITY.md](SECURITY.md). This project is independent of the upstream Laya authors.
 
 ## Alternatives
 
-- [Official Laya / laya-ts](https://github.com/NandhaKishorM/laya/tree/main/laya-ts):
-  richer TypeScript workflows and an ONNX browser path.
-- [LibLayaX](https://github.com/DaragonTech/LibLayaX) and
-  [RLaya](https://github.com/DaragonTech/RLaya): native C and Rust embedding.
-- [laya.cpp](https://github.com/lkarlslund/laya.cpp): a dedicated native C++ runtime.
-- [Candle-based laya-rust](https://github.com/aovestdipaperino/laya-rust) and
-  [GGUF laya-rust](https://github.com/zerodegress/laya-rust): Rust inference.
-- [receptron/laya](https://github.com/receptron/laya): another Node/ONNX integration.
+- [Official Laya / laya-ts](https://github.com/NandhaKishorM/laya/tree/main/laya-ts): richer TypeScript workflows and an ONNX browser path.
+- [LibLayaX](https://github.com/DaragonTech/LibLayaX), [RLaya](https://github.com/DaragonTech/RLaya), [laya.cpp](https://github.com/lkarlslund/laya.cpp): native C, Rust and C++ runtimes.
+- [laya-rust (Candle)](https://github.com/aovestdipaperino/laya-rust), [laya-rust (GGUF)](https://github.com/zerodegress/laya-rust), [receptron/laya](https://github.com/receptron/laya): Rust inference and another Node/ONNX integration.
