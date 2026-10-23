@@ -67,8 +67,10 @@ public:
     engine(const engine &) = delete;
     engine &operator=(const engine &) = delete;
     // Model metadata for a single model (waits for a running call); runtime
-    // capabilities for a router.
+    // capabilities for a router. Throws DTL_INVALID_ARGUMENT on a moved-from
+    // engine (use ducktape::info() for runtime capabilities without an engine).
     std::string info() const {
+        if (!engine_) throw error(DTL_INVALID_ARGUMENT, "Engine is empty (moved from)");
         char *result = nullptr, *message = nullptr;
         auto status = dtl_info(engine_.get(), &result, &message);
         std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);

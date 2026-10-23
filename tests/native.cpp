@@ -5,6 +5,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <utility>
 static void expect(bool ok, const char *message) {
     if (!ok) throw std::runtime_error(message);
 }
@@ -55,6 +56,12 @@ int main(int argc, char **argv) {
             auto router = ducktape::engine::open_router(self(R"({"models":{"a":"SELF"}})").c_str());
             const auto info = router.info();
             expect(info.find("\"abi_version\":2") != std::string::npos && info.find("\"model\"") == std::string::npos, "router info has no model");
+            // A moved-from engine must not silently answer with runtime info.
+            auto moved = std::move(router);
+            bool refused = false;
+            try { router.info(); } catch (const ducktape::error &e) { refused = e.status == DTL_INVALID_ARGUMENT; }
+            expect(refused, "info() on a moved-from engine throws");
+            expect(moved.info().find("\"abi_version\":2") != std::string::npos, "the moved-to engine still works");
         }
         {
             // Paths are UTF-8 in the C ABI on every platform, including outside the
