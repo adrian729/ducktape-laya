@@ -1,9 +1,10 @@
 # Packaging
 
-Released native packages target Linux x86-64. Linux arm64, macOS arm64 and
-Windows x64 are packaged and tested in CI with the same scripts but not yet
-released (see [Package artifacts](#package-artifacts)). The default x86-64 CPU
-build requires AVX2/FMA/F16C/BMI2/SSE4.2. A release must declare its CPU profile,
+Released native packages: Linux x86-64 in 0.1.0 and 0.2.0; from the next
+release also Linux arm64 and Windows x64 (the release targets in
+`release/compatibility.json`). macOS arm64 is packaged and tested in CI with the
+same scripts but not released yet (see [Package artifacts](#package-artifacts)).
+The default x86-64 CPU build requires AVX2/FMA/F16C/BMI2/SSE4.2. A release must declare its CPU profile,
 system-library requirements and supported userspaces; a build on one host does
 not establish a minimum distribution baseline. See [COMPATIBILITY.md](COMPATIBILITY.md).
 
@@ -162,6 +163,12 @@ files come out the same on every runner. `tests/package-smoke.py` and
 `tests/installed-packages.py` take either kind of directory and test the files
 for the machine they run on.
 
+A release candidate run (`native.yml` dispatched with `candidate=true`, see
+[RELEASE_CHECKS.md](RELEASE_CHECKS.md#release-targets-and-the-ci-candidate-run))
+builds each target's output on a GitHub-hosted runner, assembles the release
+packages from those and installs them with the real model on every runner. The
+release assets are exactly the assembled packages.
+
 CI (`.github/workflows/native.yml`) keeps each runner's output as the artifact
 `packages-<platform>` (`packages-linux-x64` from the gcc build,
 `packages-linux-arm64`, `packages-windows-x64`; `platforms.yml` keeps
@@ -183,6 +190,16 @@ in `lib/ducktape-laya/node` loads only with `bin` on `PATH`; use the npm package
 which keeps the DLL next to the addon. The jar extracts the DLL once per library
 content into the user's temporary directory and reuses it (a loaded DLL cannot be
 deleted at exit); elsewhere it extracts a per-process copy that is deleted at exit.
+
+The DLL's bytes depend on the runner image, not only on the sources: it links the
+image's MSVC and Windows SDK libraries (UCRT, vcruntime), and two images built
+different, individually reproducible DLLs from one commit. Package inventories and
+reports therefore record `build_environment` (`ImageOS`, `ImageVersion`,
+`VCToolsVersion`, `WindowsSDKVersion`, `VSCMD_VER`), and the reproducibility check
+must run on the image of the build it validates; it rejects a reproduction from
+another environment. An ordinary Linux host sets none of these variables, and Linux x86-64
+builds with the same compiler and Node headers matched across hosts
+(below).
 
 To use the local npm tarball in an application without the wizard:
 
@@ -321,7 +338,10 @@ python scripts/check-reproducibility.py --output build-repro --cc "%CLANG%" --cx
 ```
 
 This check covers identical inputs and toolchains, not different compilers or
-architectures. Keep its reports in CI/PR artifacts or ignored build directories.
+architectures. Across hosts, the Linux x86-64 library and Node addon built by CI
+(`ubuntu-24.04`, gcc 13.3.0, Node 26.7.0 headers) are byte-identical to the release
+host's build of the same commit; the release procedure compares their hashes
+(`library_sha256`, `addon_sha256`) and stops when they differ. Keep its reports in CI/PR artifacts or ignored build directories.
 A reproducible build is one release requirement, not a substitute for runtime,
 platform or installed-consumer checks.
 

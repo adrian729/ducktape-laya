@@ -4,6 +4,8 @@ Where each package is published, and what is still missing. Publication follows 
 
 ## Status
 
+0.1.0 and 0.2.0 shipped Linux x86-64 only. The next release publishes every release target (Linux x86-64 tier 1; Linux arm64 and Windows x64 tier 2) through the channels below; macOS arm64 is built in CI but not released.
+
 | Package | Channel | 0.1.0 | 0.2.0 |
 | --- | --- | --- | --- |
 | Native tarball, SBOMs, inventories | GitHub Releases | Published, attested | Published, attested |
@@ -15,6 +17,19 @@ Where each package is published, and what is still missing. Publication follows 
 | `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Published (`publish-release` signs at upload; token and key in the `release` environment) |
 | `DucktapeLaya` (.NET) | NuGet | — | Published |
 
+Per channel, from the next release (the 0.2.0 files carry Linux x86-64 only):
+
+| Channel | Linux x86-64 | Linux arm64 | Windows x64 |
+| --- | --- | --- | --- |
+| GitHub Releases | `-linux-x64.tar.gz` | `-linux-arm64.tar.gz` | `-windows-x64.zip` |
+| npm | `native/linux-x64/` | `native/linux-arm64/` | `native/win32-x64/` |
+| PyPI | `manylinux_2_38_x86_64` wheel | `manylinux_2_38_aarch64` wheel | `win_amd64` wheel |
+| Maven Central | `native/linux-x64/` in the jar | `native/linux-arm64/` | `native/windows-x64/` |
+| NuGet | `runtimes/linux-x64/native/` | `runtimes/linux-arm64/native/` | `runtimes/win-x64/native/` |
+| crates.io, Go proxy | source only; the native library comes from the platform's archive | same | same (the zip's import library) |
+
+The npm package, the jar and the NuGet package are one file each and carry every platform. Registry installation is checked on Linux x86-64 only ([ROADMAP.md](ROADMAP.md)).
+
 All names above were unclaimed on 2026-10-19.
 
 ## Work before the next release
@@ -23,15 +38,15 @@ These are code changes; they need no accounts.
 
 - Versions are already 0.2.0 in `release/compatibility.json` and every binding manifest. For later releases, bump them together: `check_record` rejects any mismatch, including the Python, Java and .NET versions.
 - Write the release notes: give the unreleased section of [CHANGELOG.md](../CHANGELOG.md) its version and date, and use it for the GitHub release text.
-- Python: the real wheel comes only from `scripts/python_wheel.py` (run by `scripts/package-native.py`, one wheel per platform), which bundles the native library. Building `bindings/python` with its `pyproject.toml` alone (`pip wheel`, `python -m build`) produces a wheel without the library; never upload that.
+- Python: the real wheel comes only from `scripts/python_wheel.py` (run by `scripts/package-native.py`, one wheel per platform: `manylinux_2_38_x86_64`, `manylinux_2_38_aarch64`, `win_amd64`), which bundles the native library; `publish-release` uploads every wheel the verified inventory lists. Building `bindings/python` with its `pyproject.toml` alone (`pip wheel`, `python -m build`) produces a wheel without the library; never upload that.
 - Java and .NET: `scripts/package-native.py` builds `ducktape-laya-VERSION.jar`
   (library at `native/<platform>/`), the sources and javadoc jars and the POM
   (`scripts/java_package.py`), and `DucktapeLaya.VERSION.nupkg` (library at
   `runtimes/<rid>/native/`), all byte-reproducible on one host.
   `scripts/assemble-packages.py` merges the platforms' outputs into one npm
   package, one jar and one NuGet package carrying every platform
-  ([PACKAGING.md](PACKAGING.md#multi-platform-packages)); releases still publish
-  the Linux x86-64 packages until the release checks cover the other platforms.
+  ([PACKAGING.md](PACKAGING.md#multi-platform-packages)); the next release
+  publishes the assembled packages of Linux x86-64, Linux arm64 and Windows x64.
   `tests/installed-packages.py` runs both, and a Go consumer built against the
   tarball, outside the checkout. A plain `dotnet pack` without
   `-p:DucktapeLayaNativeLibrary=...` produces a package without the library;
