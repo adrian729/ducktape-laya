@@ -166,6 +166,11 @@ jobs:
       - name: Two independent builds of one source snapshot (tier-2 target)
         if: inputs.candidate && matrix.platform == 'linux-arm64'
         run: python3 scripts/check-reproducibility.py --output build-repro --jobs 4 --cc gcc --cxx g++
+      # Model-free and after every other use of the build: reconfiguring the validated build
+      # recompiles nothing, and an edited patched runtime copy is restored and recompiled alone.
+      - name: Reconfigure without recompiling
+        if: matrix.compiler == 'clang'
+        run: python3 tests/reconfigure.py --build build-validation --jobs 4 --edit-copy
       # The gcc builds' packages (the release compiler) are this platform's fragment for
       # scripts/assemble-packages.py, which the assemble job below merges with Windows.
       - name: Retain this platform's packages

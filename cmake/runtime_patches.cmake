@@ -16,8 +16,12 @@ endif()
 set(DTL_PATCHED_HEADERS vendor/nlohmann/json.hpp)
 set(DTL_VENDOR_INCLUDE "${DTL_PATCH_ROOT}/vendor")
 find_program(DTL_PATCH_EXECUTABLE patch REQUIRED)
+# Copy and patch in a fresh staging directory; dtl_sync_patched_copies() below then
+# replaces only the copies whose content changed, so a reconfigure recompiles nothing.
+set(DTL_PATCH_STAGE "${CMAKE_CURRENT_BINARY_DIR}/runtime-patched.stage")
+file(REMOVE_RECURSE "${DTL_PATCH_STAGE}")
 foreach(path IN LISTS DTL_PATCHED_FILES DTL_PATCHED_HEADERS)
-  configure_file("${UPSTREAM}/${path}" "${DTL_PATCH_ROOT}/${path}" COPYONLY)
+  configure_file("${UPSTREAM}/${path}" "${DTL_PATCH_STAGE}/${path}" COPYONLY)
 endforeach()
 string(JSON DTL_PATCH_COUNT LENGTH "${DTL_RELEASE_RECORD}" runtime patches)
 if(DTL_PATCH_COUNT GREATER 0)
@@ -31,13 +35,15 @@ if(DTL_PATCH_COUNT GREATER 0)
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${path}")
     execute_process(COMMAND "${DTL_PATCH_EXECUTABLE}" --batch --forward --fuzz=0 -p1
-      -d "${DTL_PATCH_ROOT}" -i "${CMAKE_CURRENT_SOURCE_DIR}/${path}"
+      -d "${DTL_PATCH_STAGE}" -i "${CMAKE_CURRENT_SOURCE_DIR}/${path}"
       RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
     if(NOT result EQUAL 0)
       message(FATAL_ERROR "Runtime patch conflict: ${path}\n${output}\n${error}")
     endif()
   endforeach()
 endif()
+dtl_sync_patched_copies("${DTL_PATCH_STAGE}" "${DTL_PATCH_ROOT}")
+file(REMOVE_RECURSE "${DTL_PATCH_STAGE}")
 
 # Replace a target's upstream sources with their patched copies. Each required file
 # must be replaced exactly once in its own target and nowhere else; otherwise the

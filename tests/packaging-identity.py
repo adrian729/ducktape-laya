@@ -219,18 +219,24 @@ class RuntimeSourcesTests(unittest.TestCase):
             (self.runtime / path).parent.mkdir(parents=True, exist_ok=True)
             (self.runtime / path).write_text(text)
         (self.root / 'cmake').mkdir()
-        shutil.copy(ROOT / 'cmake/runtime_sources.cmake', self.root / 'cmake/runtime_sources.cmake')
+        for name in ['runtime_sources.cmake', 'generated_files.cmake']:
+            shutil.copy(ROOT / 'cmake' / name, self.root / 'cmake' / name)
         (self.root / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.22)
 project(runtime_fixture C)
 set(UPSTREAM "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp")
 set(DTL_PATCH_ROOT "${CMAKE_CURRENT_BINARY_DIR}/runtime-patched")
-# Stands in for cmake/runtime_patches.cmake: a patched copy of one runtime file, made at configure time.
+# Stands in for cmake/runtime_patches.cmake: a patched copy of one runtime file, made at configure time
+# in a staging directory and copied over the build's copy only when its content changed.
+include(cmake/generated_files.cmake)
+set(stage "${CMAKE_CURRENT_BINARY_DIR}/runtime-patched.stage")
+file(REMOVE_RECURSE "${stage}")
 file(READ "${UPSTREAM}/ggml/src/ggml.c" original)
-file(WRITE "${DTL_PATCH_ROOT}/ggml/src/ggml.c" "${original}int patched(void) { return 2; }\\n")
+file(WRITE "${stage}/ggml/src/ggml.c" "${original}int patched(void) { return 2; }\\n")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${UPSTREAM}/ggml/src/ggml.c")
 if(UNCOVERED_PATCH)
-  file(WRITE "${DTL_PATCH_ROOT}/tools/tool.c" "int tool(void) { return 3; }\\n")
+  file(WRITE "${stage}/tools/tool.c" "int tool(void) { return 3; }\\n")
 endif()
+dtl_sync_patched_copies("${stage}" "${DTL_PATCH_ROOT}")
 include(cmake/runtime_sources.cmake)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 add_library(ducktape_laya SHARED "${UPSTREAM}/src/runtime.c" "${DTL_PATCH_ROOT}/ggml/src/ggml.c")
@@ -303,6 +309,28 @@ dtl_record_runtime_sources(ducktape_laya)
         with self.assertRaisesRegex(ValueError, r'not recompiled \(upstream/src/runtime.c\)'):
             self.check()
         self.write(source, original)
+        self.compile()
+        self.check()
+
+    def test_reconfigure_keeps_unchanged_copies(self):
+        # An unchanged reconfigure leaves the patched copy (and its old timestamp) alone, so nothing is
+        # recompiled or relinked, and the build is still accepted.
+        copy, library = self.build / 'runtime-patched/ggml/src/ggml.c', self.build / LIBRARY
+        old = os.stat(copy).st_mtime - 100
+        os.utime(copy, (old, old))
+        before = (copy.stat().st_mtime_ns, library.stat().st_mtime_ns, sha256(library))
+        self.configure()
+        self.compile()
+        self.assertEqual((copy.stat().st_mtime_ns, library.stat().st_mtime_ns, sha256(library)), before)
+        self.check()
+
+    def test_removed_patch_output_is_removed(self):
+        # A copy the configure no longer makes does not stay behind in the patch root (or its record).
+        self.configure('-DUNCOVERED_PATCH=OFF')
+        stray = self.build / 'runtime-patched/ggml/src/stray.c'
+        stray.write_text('int stray(void) { return 5; }\n')
+        self.configure()
+        self.assertFalse(stray.exists())
         self.compile()
         self.check()
 

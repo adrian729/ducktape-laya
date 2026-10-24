@@ -118,11 +118,13 @@ if(NOT EMSCRIPTEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
 # Upstream Git discovery can find the parent project's repository in an archive.
-# Normalize its generated metadata to the explicit runtime identity instead.
+# Normalize its generated metadata to the explicit runtime identity instead (upstream
+# rewrites the header on every configure; ours keeps its timestamp while unchanged).
+include(cmake/generated_files.cmake)
 set(DTL_GGML_VERSION_HEADER "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp/ggml/src/ggml-version.h")
 file(READ "${DTL_GGML_VERSION_HEADER}" DTL_GGML_VERSION_TEXT)
 string(REGEX REPLACE "#define GGML_COMMIT[ \t]+\"[^\"]*\"" "#define GGML_COMMIT \"${DTL_RUNTIME_COMMIT}\"" DTL_GGML_VERSION_TEXT "${DTL_GGML_VERSION_TEXT}")
-file(WRITE "${DTL_GGML_VERSION_HEADER}" "${DTL_GGML_VERSION_TEXT}")
+dtl_write_generated("${DTL_GGML_VERSION_HEADER}" "${CMAKE_CURRENT_BINARY_DIR}/ggml-version.stage/ggml-version.h" "${DTL_GGML_VERSION_TEXT}")
 include(cmake/runtime_patches.cmake)
 if(NOT EMSCRIPTEN)
   # The runtime sources this build compiles, checked by packaging (cmake/runtime_sources.cmake).
