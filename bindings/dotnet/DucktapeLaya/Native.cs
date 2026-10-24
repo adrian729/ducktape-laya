@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -87,6 +86,8 @@ internal static unsafe partial class Native
     static LayaException Incompatible(string why) =>
         new((int)LayaStatus.UnsupportedPlatform, $"The ducktape_laya native library is incompatible or too old: {why}.");
 
+    static LayaException LoadError(string message, Exception? inner = null) => new((int)LayaStatus.UnsupportedPlatform, message, inner);
+
     // Rejects a library of the wrong ABI; returns dtl_cancel_flag.
     static IntPtr Validate(IntPtr handle)
     {
@@ -99,47 +100,82 @@ internal static unsafe partial class Native
         return cancel;
     }
 
-    /// <summary>Loads exactly this file, or returns zero. A missing explicit path must fail:
-    /// macOS dyld would otherwise find a library of the same name on DYLD_LIBRARY_PATH.</summary>
-    internal static IntPtr LoadExplicit(string path) =>
-        System.IO.File.Exists(path) && NativeLibrary.TryLoad(path, out var handle) ? handle : IntPtr.Zero;
+    /// <summary>Loads exactly this file, or throws status 7 with the operating system's reason. A missing path
+    /// fails before the loader runs: macOS dyld would otherwise find a library of the same name on DYLD_LIBRARY_PATH.</summary>
+    internal static IntPtr LoadFile(string path, string what, string? hint)
+    {
+        if (!System.IO.File.Exists(path)) throw LoadError($"{what} {path} does not exist.", new DllNotFoundException(path));
+        try { return NativeLibrary.Load(path); }
+        catch (Exception ex) when (ex is DllNotFoundException or BadImageFormatException)
+        {
+            throw LoadError($"{what} {path} was found but could not be loaded: {ex.Message}" + (hint is null ? "" : $" ({hint})"), ex);
+        }
+    }
+
+    /// <summary>Why a library file that exists may fail to load on this platform.</summary>
+    internal static string LoadHint() => OperatingSystem.IsWindows() ? "it needs the Microsoft Visual C++ Redistributable"
+        : OperatingSystem.IsMacOS() ? "it needs macOS 14 or newer" : "it needs glibc 2.38+ and libstdc++ with GLIBCXX_3.4.29";
+
+    /// <summary>True when the directories hold a musl dynamic loader and no glibc one (by default /lib and /lib64).</summary>
+    internal static bool IsMusl(params string[] dirs)
+    {
+        if (dirs.Length == 0) dirs = ["/lib", "/lib64"];
+        bool musl = false, glibc = false;
+        foreach (var dir in dirs)
+        {
+            string[] names;
+            try { names = System.IO.Directory.GetFiles(dir); } catch (Exception) { continue; }
+            foreach (var name in names)
+            {
+                var file = System.IO.Path.GetFileName(name);
+                musl |= file.StartsWith("ld-musl-", StringComparison.Ordinal);
+                glibc |= file.StartsWith("ld-linux-", StringComparison.Ordinal);
+            }
+        }
+        return musl && !glibc;
+    }
+
+    internal static LayaException MuslUnsupported() => LoadError(
+        "The bundled ducktape_laya library needs glibc, and this looks like a musl system (for example Alpine), and no musl build of "
+        + "libducktape_laya.so.1 is on the loader path; use a glibc-based image, or set DUCKTAPE_LAYA_LIB_DIR to a musl build.");
+
+    // Released packages; any other platform needs a library built from source.
+    const string Released = "packages exist for Linux x86-64 and arm64 and Windows x64; on other platforms build the library from source and set DUCKTAPE_LAYA_LIB_DIR";
 
     static (IntPtr, IntPtr) Load()
     {
+        // An explicit override is honoured or fails; it never falls back to other locations.
         var dir = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
-        var assembly = typeof(Native).Assembly;
-        // An explicit override never falls back to other locations. Otherwise the copy shipped with the package
-        // (runtimes/<rid>/native/, or next to the assembly) comes first, so an unrelated installed version of
-        // the library cannot shadow it; only then the soname and the plain name through the system loader
-        // (assembly directory and safe system directories only, never the current directory or PATH). A
-        // library of the wrong ABI is skipped in favour of the next candidate.
-        var overridden = !string.IsNullOrEmpty(dir);
-        var candidates = new List<string>();
-        if (overridden) candidates.Add(System.IO.Path.Combine(dir!, FileName));
-        else
+        if (!string.IsNullOrEmpty(dir)) return Checked(LoadFile(System.IO.Path.Combine(dir, FileName), "DUCKTAPE_LAYA_LIB_DIR is set but", null));
+        // On a glibc system, the copy shipped with the package (runtimes/<rid>/native/, or next to the assembly) comes
+        // first, so an unrelated installed version of the library cannot shadow it; present, it must load. On musl
+        // the bundled glibc build cannot load, so only a musl build through the system loader can.
+        var musl = OperatingSystem.IsLinux() && IsMusl();
+        if (!musl && BundledPath(AppContext.BaseDirectory) is { } bundled)
+            return Checked(LoadFile(bundled, "The bundled library", LoadHint()));
+        // The soname, then the plain name, through the system loader: the assembly directory and the safe system
+        // directories (never the current directory or PATH) on Windows, the dynamic loader's search on Linux.
+        foreach (var name in new[] { VersionedName, FileName })
         {
-            if (BundledPath(AppContext.BaseDirectory) is { } bundled) candidates.Add(bundled);
+            if (NativeLibrary.TryLoad(name, typeof(Native).Assembly, DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.SafeDirectories, out var handle))
+                return Checked(handle);
         }
-        var explicitCount = candidates.Count;
-        if (!overridden) { candidates.Add(VersionedName); candidates.Add(FileName); }
-        LayaException? incompatible = null;
-        for (var i = 0; i < candidates.Count; i++)
+        if (musl) throw MuslUnsupported();
+        var missing = new DllNotFoundException($"{FileName} was not found.");
+        throw LoadError(RuntimeId() is null
+            ? $"Unsupported platform {RuntimeInformation.OSDescription} {RuntimeInformation.ProcessArchitecture}: ducktape-laya {Released}."
+            : $"{FileName} was not found: the application has no bundled copy (runtimes/{RuntimeId()}/native/) and the system loader has none. "
+              + $"Install the DucktapeLaya package for this platform, or set DUCKTAPE_LAYA_LIB_DIR (ducktape-laya {Released}).", missing);
+    }
+
+    static (IntPtr, IntPtr) Checked(IntPtr handle)
+    {
+        try { return (handle, Validate(handle)); }
+        catch (LayaException)
         {
-            var candidate = candidates[i];
-            var loaded = i < explicitCount ? LoadExplicit(candidate)
-                : NativeLibrary.TryLoad(candidate, assembly, DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.SafeDirectories, out var h) ? h : IntPtr.Zero;
-            if (loaded == IntPtr.Zero) continue;
-            try { return (loaded, Validate(loaded)); }
-            catch (LayaException ex)
-            {
-                incompatible = ex;
-                NativeLibrary.Free(loaded);
-            }
+            NativeLibrary.Free(handle);
+            throw;
         }
-        if (incompatible is not null) throw incompatible;
-        throw overridden
-            ? new DllNotFoundException($"DUCKTAPE_LAYA_LIB_DIR is set but '{candidates[0]}' could not be loaded.")
-            : new DllNotFoundException($"{FileName} was not found. Set DUCKTAPE_LAYA_LIB_DIR or install the native library.");
     }
 
     static IntPtr Resolve(string name, Assembly assembly, DllImportSearchPath? path) => name == Lib ? _handle : IntPtr.Zero;

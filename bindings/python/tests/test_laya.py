@@ -26,11 +26,69 @@ class LibraryChoice(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             bundled = pathlib.Path(directory, _native._NAME)
             bundled.write_bytes(b'')
-            self.assertEqual(_native._target('ARM64', 'win32', bundled), str(bundled))
+            self.assertEqual(_native._target('ARM64', 'win32', bundled), (str(bundled), True))
             bundled.unlink()
-            with self.assertRaisesRegex(OSError, 'Unsupported platform win32/ARM64'):
+            with self.assertRaisesRegex(laya.LayaLoadError, 'Unsupported platform win32/ARM64: .*Linux x86-64 and arm64 and Windows x64'):
                 _native._target('ARM64', 'win32', bundled)
-            self.assertEqual(_native._target('AMD64', 'win32', bundled), _native._VERSIONED)
+            self.assertEqual(_native._target('AMD64', 'win32', bundled), (_native._VERSIONED, False))
+
+    def _open(self, plat, bundled, error=None, env=None):
+        """Runs the loader with a fake ctypes.CDLL; returns the calls it made and the result or error."""
+        from unittest import mock
+        from ducktape_laya import _native
+        calls = []
+        def cdll(name, **kwargs):
+            calls.append((name, kwargs))
+            if error:
+                raise OSError(error)
+            return 'library'
+        with mock.patch.dict(os.environ, env or {}, clear=False):
+            if not env:
+                os.environ.pop('DUCKTAPE_LAYA_LIB_DIR', None)
+            try:
+                return calls, _native._open(cdll, 'AMD64', plat, bundled)
+            except laya.LayaLoadError as caught:
+                return calls, caught
+
+    def test_load_failures_are_status_7_and_oserrors(self):
+        import pathlib
+        import tempfile
+        from ducktape_laya import _native
+        with tempfile.TemporaryDirectory() as directory:
+            bundled = pathlib.Path(directory, _native._NAME)
+            # A bundled file that exists but does not load is reported as found, with the reason and a hint.
+            bundled.write_bytes(b'')
+            _, error = self._open('linux', bundled, 'version GLIBC_2.38 not found')
+            self.assertIsInstance(error, laya.LayaError)
+            self.assertIsInstance(error, OSError)
+            self.assertEqual(error.status, laya.Status.UNSUPPORTED_PLATFORM)
+            self.assertIn(f'The bundled library {bundled} was found but could not be loaded: version GLIBC_2.38 not found', str(error))
+            self.assertIn('glibc 2.38+', str(error))
+            _, error = self._open('win32', bundled, 'The specified module could not be found')
+            self.assertIn('Visual C++ Redistributable', str(error))
+            # Without a bundled file, the system loader's failure is "not found".
+            bundled.unlink()
+            _, error = self._open('linux', bundled, 'cannot open shared object file')
+            self.assertEqual(error.status, laya.Status.UNSUPPORTED_PLATFORM)
+            self.assertIn('not found', str(error))
+            # An explicit directory without the library fails without trying any other location.
+            calls, error = self._open('linux', bundled, env={'DUCKTAPE_LAYA_LIB_DIR': directory})
+            self.assertEqual(calls, [])
+            self.assertIn('DUCKTAPE_LAYA_LIB_DIR is set but', str(error))
+            self.assertEqual(error.status, laya.Status.UNSUPPORTED_PLATFORM)
+
+    def test_windows_fallback_searches_only_safe_directories(self):
+        import pathlib
+        import tempfile
+        from ducktape_laya import _native
+        with tempfile.TemporaryDirectory() as directory:
+            missing = pathlib.Path(directory, _native._NAME)
+            calls, result = self._open('win32', missing)
+            self.assertEqual(result, 'library')
+            # LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: never the current directory or PATH.
+            self.assertEqual(calls, [(_native._VERSIONED, {'winmode': 0x1000})])
+            calls, _ = self._open('linux', missing)
+            self.assertEqual(calls, [(_native._VERSIONED, {})])
 
 
 class Basics(unittest.TestCase):
@@ -69,6 +127,7 @@ class Basics(unittest.TestCase):
                                 env=env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('DUCKTAPE_LAYA_LIB_DIR is set', result.stderr)
+        self.assertIn('ducktape_laya.LayaLoadError: DUCKTAPE_LAYA_LIB_DIR is set', result.stderr)
 
     def test_invalid_open_options(self):
         for kwargs in ({'threads': -1}, {'threads': 257}, {'threads': True}):

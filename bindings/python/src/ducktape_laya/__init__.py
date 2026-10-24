@@ -8,38 +8,21 @@ JSON: a ``str`` is sent as is, any other value is serialized with ``json.dumps``
 Errors: native failures and invalid request text raise ``LayaError`` (with a C ABI
 ``status``); calls after ``close()`` raise ``EngineClosedError``; arguments the
 binding checks itself (``threads``, ``timeout``, ``request_id``) raise
-``ValueError``/``TypeError``; a missing or incompatible library raises ``OSError``.
+``ValueError``/``TypeError``; a missing, unloadable or incompatible library raises
+``LayaLoadError`` (status ``UNSUPPORTED_PLATFORM``, also an ``OSError``).
 """
 import asyncio
 import ctypes
-import enum
 import json
 import math
 import os
 import threading
 
 from . import _native
+from ._errors import LayaError, LayaLoadError, Status
 
-__all__ = ['CancelToken', 'Engine', 'EngineClosedError', 'LayaError', 'Status', 'runtime_info']
+__all__ = ['CancelToken', 'Engine', 'EngineClosedError', 'LayaError', 'LayaLoadError', 'Status', 'runtime_info']
 __version__ = '0.2.0'
-
-
-class Status(enum.IntEnum):
-    OK = 0
-    INVALID_ARGUMENT = 1
-    MODEL_ERROR = 2
-    INFERENCE_ERROR = 3
-    OUT_OF_MEMORY = 4
-    CANCELLED = 5
-    DEADLINE_EXCEEDED = 6
-    UNSUPPORTED_PLATFORM = 7
-
-
-class LayaError(Exception):
-    """A native failure; ``status`` is the C ABI status code."""
-    def __init__(self, status, message):
-        super().__init__(message)
-        self.status = status
 
 
 class EngineClosedError(LayaError):

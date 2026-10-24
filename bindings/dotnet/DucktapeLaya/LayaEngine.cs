@@ -25,8 +25,8 @@ public sealed unsafe class LayaEngine : IDisposable
     /// <summary>Opens one model.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="modelPath"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A <paramref name="config"/> value is invalid (see <see cref="LayaConfig"/>).</exception>
-    /// <exception cref="LayaException">Native failure, or the path contains a NUL character (status 1).</exception>
-    /// <exception cref="DllNotFoundException">The native library cannot be loaded.</exception>
+    /// <exception cref="LayaException">Native failure, the path contains a NUL character (status 1), or the native
+    /// library is missing, cannot be loaded or is incompatible (status 7, with the loader's exception as InnerException).</exception>
     public static LayaEngine Open(string modelPath, LayaConfig? config = null)
     {
         var cfg = config?.ToJson();

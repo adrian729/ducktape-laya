@@ -23,9 +23,57 @@ public class EngineTests
         // The real library is loadable by name (DUCKTAPE_LAYA_LIB_DIR in the tests), yet an explicit
         // path to a missing file must not resolve to it through the loader's search path.
         var missing = Path.Combine(Path.GetTempPath(), "ducktape-laya-missing", Native.FileName);
-        Assert.Equal(IntPtr.Zero, Native.LoadExplicit(missing));
+        var error = Assert.Throws<LayaException>(() => Native.LoadFile(missing, "The bundled library", Native.LoadHint()));
+        Assert.Equal(LayaStatus.UnsupportedPlatform, error.Code);
+        Assert.Contains("does not exist", error.Message);
+        Assert.IsType<DllNotFoundException>(error.InnerException);
         var real = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
-        if (!string.IsNullOrEmpty(real)) Assert.NotEqual(IntPtr.Zero, Native.LoadExplicit(Path.Combine(real, Native.FileName)));
+        if (!string.IsNullOrEmpty(real)) Assert.NotEqual(IntPtr.Zero, Native.LoadFile(Path.Combine(real, Native.FileName), "test", null));
+    }
+
+    [Fact]
+    public void UnloadableLibraryIsReportedAsFoundWithTheOsReason()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ducktape-laya-broken-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, Native.FileName);
+            File.WriteAllBytes(path, "not a library"u8.ToArray());
+            var error = Assert.Throws<LayaException>(() => Native.LoadFile(path, "The bundled library", Native.LoadHint()));
+            Assert.Equal(7, error.Status);
+            Assert.Contains($"The bundled library {path} was found but could not be loaded: ", error.Message);
+            Assert.EndsWith($"({Native.LoadHint()})", error.Message);
+            Assert.DoesNotContain("not found", error.Message.Split(": ")[0]);
+            Assert.NotNull(error.InnerException);
+            Assert.Contains(error.InnerException!.Message, error.Message);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void MuslIsDetectedFromTheDynamicLoaders()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ducktape-laya-musl-" + Guid.NewGuid().ToString("N"));
+        string Dir(string name, params string[] files)
+        {
+            var dir = Directory.CreateDirectory(Path.Combine(root, name)).FullName;
+            foreach (var file in files) File.WriteAllBytes(Path.Combine(dir, file), []);
+            return dir;
+        }
+        try
+        {
+            Assert.True(Native.IsMusl(Dir("alpine", "ld-musl-x86_64.so.1", "libc.musl-x86_64.so.1")));
+            Assert.False(Native.IsMusl(Dir("gcompat", "ld-musl-aarch64.so.1", "ld-linux-aarch64.so.1")));
+            Assert.False(Native.IsMusl(Dir("glibc", "ld-linux-x86-64.so.2")));
+            Assert.False(Native.IsMusl(Path.Combine(root, "absent")));
+            // This host is not musl (the suite runs on glibc, macOS and Windows).
+            Assert.False(Native.IsMusl());
+            var error = Native.MuslUnsupported();
+            Assert.Equal(7, error.Status);
+            Assert.Contains("needs glibc, and this looks like a musl system", error.Message);
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     [Fact]

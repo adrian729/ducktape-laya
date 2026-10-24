@@ -58,11 +58,11 @@ Calls block and release the GIL. An engine is safe to share between threads; cal
 - Native failures and invalid requests raise `LayaError`, whose `status` matches the C ABI (`ducktape_laya.Status`).
 - Calls after `close()` raise `EngineClosedError`, a `LayaError`.
 - Arguments the binding checks itself raise `ValueError` or `TypeError`: `threads` outside 0..256, an unknown `overflow`, a non-integer `context_tokens`, non-finite numbers or non-serializable configs, and bad `timeout` or `request_id` values. Other invalid values (a non-positive `context_tokens` or temperature, a NUL character or invalid Unicode in a path or config) raise `LayaError` with status 1.
-- A missing or incompatible native library raises `OSError` on the first `Engine.open`, `Engine.open_router` or `runtime_info` call (loading is lazy, so the import itself succeeds).
+- A missing, unloadable or incompatible native library raises `LayaLoadError` (a `LayaError` with status 7, `UNSUPPORTED_PLATFORM`, that is also an `OSError`) on every `Engine.open`, `Engine.open_router` or `runtime_info` call (loading is lazy, so the import itself succeeds). A bundled library that exists but cannot be loaded is reported as found, with the operating system's reason (on Linux typically a glibc older than 2.38, on Windows a missing Visual C++ Redistributable).
 
 ## Native library
 
-The package uses `ctypes`. It loads the library bundled in the wheel (`ducktape_laya/_native/`), or else the system's `libducktape_laya.so.1`. Setting `DUCKTAPE_LAYA_LIB_DIR` (on Windows, the directory that holds `ducktape_laya.dll`) selects a specific library instead; if that one cannot be loaded, the call raises `OSError` rather than falling back.
+The package uses `ctypes`. It loads the library bundled in the wheel (`ducktape_laya/_native/`), or else the system's `libducktape_laya.so.1` through the dynamic loader (on macOS `libducktape_laya.1.dylib`; on Windows `ducktape_laya.dll` from the application directory, the system directories and `os.add_dll_directory()` directories only, never the current directory or `PATH`). Setting `DUCKTAPE_LAYA_LIB_DIR` (on Windows, the directory that holds `ducktape_laya.dll`) selects a specific library instead; if that one cannot be loaded, the call raises `LayaLoadError` rather than falling back. Wheels exist for Linux x86-64 and arm64 and Windows x64; on other platforms build the library from source and set `DUCKTAPE_LAYA_LIB_DIR`.
 
 ## From a checkout
 

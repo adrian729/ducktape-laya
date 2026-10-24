@@ -22,4 +22,7 @@ public sealed class LayaException : Exception
     public LayaStatus Code => (LayaStatus)Status;
 
     public LayaException(int status, string message) : base(message) => Status = status;
+
+    /// <summary>A failure caused by <paramref name="inner"/>, such as the operating system's reason a library could not load.</summary>
+    public LayaException(int status, string message, Exception? inner) : base(message, inner) => Status = status;
 }
