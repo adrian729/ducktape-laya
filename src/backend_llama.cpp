@@ -282,11 +282,15 @@ struct backend::impl {
         head.push_back(sep);
         require(!separate_state || opts_end + 2 == tokens.size(), "Invalid decision prompt layout");
         if (separate_state && state_text != cached_state_text) {
-            // Replace the cache only once tokenization succeeded.
+            // Replace the cache only once tokenization and both copies succeeded, so text and
+            // tokens always match. The tokens are copied to their exact size: the buffer
+            // tokenize_into fills has room for text.size() + 2.
             std::vector<llama_token> fresh;
             tokenize_into(fresh, state_text, control);
-            cached_state_tokens = std::move(fresh);
-            cached_state_text = state_text;
+            std::vector<llama_token> tokens(fresh.begin(), fresh.end());
+            std::string text(state_text);
+            cached_state_tokens.swap(tokens);
+            cached_state_text.swap(text);
         }
         const std::vector<llama_token> state_tokens = separate_state ? cached_state_tokens
             : std::vector<llama_token>(tokens.begin() + opts_end + 1, tokens.end() - 1);
