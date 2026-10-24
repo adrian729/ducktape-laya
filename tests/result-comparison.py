@@ -8,7 +8,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from compare_results import compare_results, js_object_order, measure_profile_drift
+from compare_results import compare_results, decision_paths, js_object_order, measure_profile_drift
 
 
 class Comparison(unittest.TestCase):
@@ -104,6 +104,41 @@ class Comparison(unittest.TestCase):
                         self.assertFalse(drift['probability_equivalence'])
                         self.assertEqual(len(drift['decision_differences']), 1)
                         self.assertAlmostEqual(drift['maximum_absolute_difference'], 0.02)
+
+    def test_decision_paths_cover_choices_and_structured_values(self):
+        choice = {'answers': {'team': {'type': 'choice', 'choice': 'a'}, 'refund': {'type': 'noul', 'noul': 0.9}}}
+        structured = {'answers': {}, 'values': {'urgent': True, 'level': 2}}
+        self.assertEqual(decision_paths({'one.json': choice, 'batch.json': [structured, choice]}),
+                         [('one.json', 'answers', 'team', 'choice'), ('batch.json', 0, 'values', 'urgent'),
+                          ('batch.json', 0, 'values', 'level'), ('batch.json', 1, 'answers', 'team', 'choice')])
+        self.assertEqual(decision_paths({}), [])
+
+    def test_profile_cli_fails_on_changed_decisions_and_on_nothing_to_compare(self):
+        runtime = {'llama_cpp_commit': 'c', 'runtime_patches': [], 'package_version': '0', 'abi_version': 2,
+                   'numerical_profile': {'id': 'p', 'cross_profile_equivalence': False}}
+        result = {'answers': {'q': {'type': 'choice', 'choice': 'a', 'probabilities': {'a': 0.51, 'b': 0.49}}}, 'usage': {'input_tokens': 10}}
+        def outputs(fixtures):
+            return {'fixtures': fixtures, 'runtime': runtime, 'model_sha256': 'm', 'library_sha256': 'l',
+                    'fixture_hashes': {name: 'h' for name in fixtures}}
+        changed = copy.deepcopy(result)
+        changed['answers']['q'].update(choice='b', probabilities={'a': 0.49, 'b': 0.51})
+        drifted = copy.deepcopy(result)
+        drifted['answers']['q']['probabilities'] = {'a': 0.52, 'b': 0.48}
+        no_decision = {'answers': {'q': {'type': 'noul', 'noul': 0.5}}, 'usage': {'input_tokens': 10}}
+        script = pathlib.Path(__file__).with_name('compare-profiles.py')
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            for reference, target, passes in [(result, drifted, True), (result, changed, False),
+                                              (None, None, False), (no_decision, no_decision, False)]:
+                fixtures = lambda value: {} if value is None else {'case.json': {'C': value}}
+                (base / 'reference.json').write_text(json.dumps(outputs(fixtures(reference))))
+                (base / 'target.json').write_text(json.dumps(outputs(fixtures(target))))
+                process = subprocess.run([sys.executable, script, base / 'reference.json', base / 'target.json',
+                                          '--target-platform', 'test', '--report', base / 'report.json'], capture_output=True, text=True)
+                report = json.loads((base / 'report.json').read_text())
+                with self.subTest(target=target):
+                    self.assertEqual(process.returncode == 0, passes, process.stdout + process.stderr)
+                    self.assertEqual(report['status'], 'passed' if passes else 'failed')
 
     def test_bad_tolerance(self):
         for tolerance in [-1, float('nan'), float('inf'), True]:

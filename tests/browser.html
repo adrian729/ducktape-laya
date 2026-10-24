@@ -114,12 +114,15 @@ window.startGpuMemory = async () => {
   const options = { backend: 'webgpu', webgpuModuleUrl: '/webgpu/laya.mjs', workerUrl: '/gpu-memory-worker.mjs', initializationTimeoutMs: 240000,
     onDiagnostic: text => { if (text.startsWith('test: failed buffer')) failure = text; } };
   const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
-  const expectFailure = async (name, promise) => {
+  // `stage` is the native message of the step that must fail: the failed buffer must belong to it
+  // (weights fail model loading, the compute buffer fails creating the inference context).
+  const expectFailure = async (name, promise, stage) => {
     try { await promise; throw new Error('Unexpected success: ' + name); }
     catch (error) {
       if (error.message.startsWith('Unexpected success')) throw error;
       if (!failure) throw new Error(`${name}: no buffer failure was injected (${error.message})`);
       if (error.status !== 2 || error.code) throw new Error(`${name}: expected status 2, got ${error.status} ${error.code ?? ''}: ${error.message}`);
+      if (stage && !error.message.includes(stage)) throw new Error(`${name}: the failed buffer (${failure}) did not fail ${JSON.stringify(stage)}: ${error.message}`);
       window.gpuMemory.checks.push({ case: name, injected: failure, status: error.status, error: error.message });
       failure = undefined;
     }
@@ -127,12 +130,13 @@ window.startGpuMemory = async () => {
   let router;
   try {
     // The arming message precedes initialization in the worker's queue.
-    for (const [name, label, skip] of [['model weights', 'tensor_buf', 0], ['inference buffers', 'tensor_buf', 1],
+    const loading = 'Could not load local GGUF model', context = 'Could not create the inference context';
+    for (const [name, label, skip, stage] of [['model weights', 'tensor_buf', 0, loading], ['inference buffers', 'tensor_buf', 1, context],
       ['backend state', 'ggml_webgpu_param_arena', 0]]) {
       globalThis.Worker = class extends OriginalWorker {
         constructor(...args) { super(...args); this.postMessage({ kind: 'cancel', id: -1, testFailBuffer: { label, skip } }); }
       };
-      try { await expectFailure('open: ' + name, Laya.open({ ...options, modelUrl: '/model.gguf' })); }
+      try { await expectFailure('open: ' + name, Laya.open({ ...options, modelUrl: '/model.gguf' }), stage); }
       finally { globalThis.Worker = OriginalWorker; }
     }
     globalThis.Worker = class extends OriginalWorker { constructor(...args) { super(...args); worker = this; } };
@@ -140,7 +144,7 @@ window.startGpuMemory = async () => {
     finally { globalThis.Worker = OriginalWorker; }
     const expected = JSON.stringify((await router.execute({ ...request, model: 'a' })).answers);
     worker.postMessage({ kind: 'cancel', id: -1, testFailBuffer: { label: 'tensor_buf', skip: 0 } });
-    await expectFailure('router request loading a model', router.execute({ ...request, model: 'b' }));
+    await expectFailure('router request loading a model', router.execute({ ...request, model: 'b' }), loading);
     const again = JSON.stringify((await router.execute({ ...request, model: 'a' })).answers);
     if (again !== expected) throw new Error(`Answers changed after a failed allocation: ${again} != ${expected}`);
     await router.execute({ ...request, model: 'b' });

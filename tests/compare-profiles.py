@@ -45,9 +45,14 @@ try:
     for runtime in (reference['runtime'], target['runtime']):
         require(runtime['numerical_profile']['cross_profile_equivalence'] is False, 'Unexpected profile policy')
     require(set(reference['fixtures']) == set(target['fixtures']), 'Fixture set changed')
+    # An empty comparison would pass without comparing anything.
+    require(reference['fixtures'], 'No fixtures to compare')
     expected = {name: outputs['C'] for name, outputs in reference['fixtures'].items()}
     actual = {name: target['fixtures'][name]['C'] for name in expected}
-    report.update(measure_profile_drift(expected, actual, decision_paths(expected)))
+    decisions = decision_paths(expected)
+    require(decisions, 'The fixtures have no decision (choice or structured value) to compare')
+    report['decisions_compared'] = len(decisions)
+    report.update(measure_profile_drift(expected, actual, decisions))
     report['status'] = 'failed' if report['decision_differences'] else 'passed'
 except (AssertionError, KeyError, TypeError) as error:
     report['error'] = f'{type(error).__name__}: {error}'

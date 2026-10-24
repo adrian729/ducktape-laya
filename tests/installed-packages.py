@@ -63,8 +63,9 @@ with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
         with tarfile.open(artifact) as tar:
             tar.extractall(directory, filter='data')
     native = extract_native(artifacts, version, target, directory)
-    subprocess.run([sys.executable, str(root / 'tests/installed-native.py'), str(native), str(model), '--outputs', str(directory / 'native.json')],
-                   check=True)
+    subprocess.run([sys.executable, str(root / 'tests/installed-native.py'), str(native), str(model), '--outputs', str(directory / 'native.json'),
+                    '--skipped', str(directory / 'native-skipped.json')], check=True)
+    report['skipped'] = json.loads((directory / 'native-skipped.json').read_text())
     for name, output in json.loads((directory / 'native.json').read_text()).items():
         record(name, output)
     libdir = next(native.glob('lib*/pkgconfig/ducktape-laya.pc')).parent.parent

@@ -9,8 +9,10 @@
 static void expect(bool ok, const char *message) {
     if (!ok) throw std::runtime_error(message);
 }
-// A hard link (or a copy, across file systems) of a file under a non-ASCII name in
-// the working directory; the path is UTF-8 with forward slashes, ready for JSON.
+// A hard link of a file under a non-ASCII name in the working directory; the path is
+// UTF-8 with forward slashes, ready for JSON. Across file systems a small file is
+// copied; a model (hundreds of MB, left behind if the test were killed) is not, and
+// the path is then empty: the caller skips its checks and says so.
 struct unicode_link {
     std::filesystem::path dir;
     std::string path;
@@ -22,10 +24,17 @@ struct unicode_link {
         const auto target = dir / fs::u8path("m\u00f6del-\u6a21\u578b-\U0001F986" + source.extension().u8string());
         std::error_code ec;
         fs::create_hard_link(fs::canonical(source), target, ec);
+        if (ec && fs::file_size(source) > (64u << 20)) {
+            std::cout << "SKIPPED: " << source.filename().u8string() << " under a Unicode path (cannot hard-link it into the working directory: "
+                      << ec.message() << ")\n";
+            remove();
+            return;
+        }
         if (ec) fs::copy_file(fs::canonical(source), target);
         path = target.generic_u8string();
     }
-    ~unicode_link() { std::error_code ec; std::filesystem::remove_all(dir, ec); }
+    void remove() { std::error_code ec; std::filesystem::remove_all(dir, ec); }
+    ~unicode_link() { remove(); }
 };
 int main(int argc, char **argv) {
     // Forward slashes: the path goes into JSON, and Windows accepts them.
@@ -108,7 +117,8 @@ int main(int argc, char **argv) {
             auto b = std::async(std::launch::async, [&] { return engine.execute(request); });
             expect(a.get() == first && b.get() == first, "serialized concurrent inference parity");
             unicode_link model(argv[1]);
-            expect(ducktape::engine::open(model.path, R"({"threads":2})").execute(request) == first, "non-ASCII model path");
+            if (!model.path.empty())
+                expect(ducktape::engine::open(model.path, R"({"threads":2})").execute(request) == first, "non-ASCII model path");
         }
         std::cout << "passed\n";
         return 0;

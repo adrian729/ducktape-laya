@@ -94,7 +94,7 @@ try:
                        for name, body in inputs[label].items()}
             library = sha256(lib / 'libducktape_laya.so')
             section = platform_section(inventories[label], 'linux-x64')
-            # Libraries are shipped stripped since 0.2.0 (the build identity is the unstripped build); 0.2.0 itself shipped the build.
+            # Libraries are shipped stripped from 0.3.0 on (the build identity is the unstripped build); 0.2.0 and earlier shipped the build itself.
             expected = (section.get('toolchain', {}).get('strip', {}).get('shipped_sha256', {}).get('ducktape_laya')
                         or section['build_identities']['ducktape_laya']['binary_sha256'])
             if library != expected: raise AssertionError(f'{label}: installed library is not the inventoried library')

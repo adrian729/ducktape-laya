@@ -127,7 +127,39 @@ int main(int argc, char **argv) {
         auto elapsed_seconds = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(); };
         const std::string settings = R"({"threads":2})";
         std::string expected;
-        { auto warm = ducktape::engine::open(argv[1], settings); expected = warm.execute(request); }
+        // The should_cancel poll that falls in the middle of the request's forward pass (see
+        // tests/control.cpp): every round cancels there once, so the graph abort and the reuse
+        // of the aborted context are exercised, not only stops before inference.
+        unsigned graph_poll = 0;
+        {
+            auto warm = ducktape::engine::open(argv[1], settings);
+            expected = warm.execute(request);
+            const auto count = [&](const std::string &body, std::string *out) {
+                std::atomic<unsigned> polls{0};
+                ducktape::call_options call;
+                call.should_cancel = [](void *p) -> uint32_t { ++*static_cast<std::atomic<unsigned> *>(p); return 0; };
+                call.cancel_user_data = &polls;
+                const auto result = warm.execute(body, call);
+                if (out) *out = result;
+                return polls.load();
+            };
+            std::string words, out;
+            for (int i = 0; i < 4; ++i) words += "Order " + std::to_string(1000 + i) + " was charged twice and the customer asks for the money back. ";
+            const auto graph_request = [&](unsigned max_tokens) {
+                return R"({"state":")" + words + R"(","overflow":"scan","max_tokens":)" + std::to_string(max_tokens) +
+                       R"(,"questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
+            };
+            warm.execute(graph_request(512));
+            const unsigned one = count(graph_request(512), nullptr), several = count(graph_request(48), &out);
+            const auto at = out.find("\"windows\":");
+            const unsigned windows = at == std::string::npos ? 0 : unsigned(std::stoul(out.substr(at + 10)));
+            if (windows < 2 || several <= one || (several - one) % (windows - 1)) throw std::runtime_error("Could not measure the forward pass's polls");
+            const unsigned per_window = (several - one) / (windows - 1);
+            warm.execute(request);
+            const unsigned polls = count(request, nullptr);
+            if (per_window < 32 || polls <= per_window) throw std::runtime_error("The forward pass does not poll the cancellation callback");
+            graph_poll = polls - per_window / 2;
+        }
         // Distinct canonical paths (hard links, same filesystem as the model) force real
         // router loads and evictions with one loaded model.
         const auto links = std::filesystem::current_path() / ("stress-router-" + std::to_string(process_id()));
@@ -156,6 +188,14 @@ int main(int argc, char **argv) {
             try { engine.execute(request, options); throw std::runtime_error("Deadline ignored"); }
             catch (const ducktape::error &error) { if (error.status != DTL_DEADLINE_EXCEEDED) throw; }
             if (engine.execute(request) != expected) throw std::runtime_error("Post-deadline result changed");
+            struct one_shot { std::atomic<unsigned> polls{0}; unsigned at; } stop{{0}, graph_poll};
+            ducktape::call_options cancelled;
+            cancelled.cancel_user_data = &stop;
+            cancelled.should_cancel = [](void *p) -> uint32_t { auto *s = static_cast<one_shot *>(p); return ++s->polls == s->at ? 1 : 0; };
+            try { engine.execute(request, cancelled); throw std::runtime_error("Cancellation in the forward pass ignored"); }
+            catch (const ducktape::error &error) { if (error.status != DTL_CANCELLED) throw; }
+            if (stop.polls != graph_poll) throw std::runtime_error("Cancellation in the forward pass was not latched at its poll");
+            if (engine.execute(request) != expected) throw std::runtime_error("Result changed after a graph abort");
             // Concurrent callers share the handle while the main thread issues mixed traffic.
             std::atomic<unsigned> mismatches{0};
             std::vector<std::thread> callers;

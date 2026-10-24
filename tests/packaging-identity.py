@@ -11,13 +11,54 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from release_support import (LIBRARY, require_uninstrumented_binary, ROOT, browser_build_identity, sha256, source_identity, native_build_identity,
-                             require_mapped_source_paths, require_runtime_identity, require_runtime_sources)
+                             require_mapped_source_paths, require_runtime_identity, require_runtime_sources, require_elf_hardening,
+                             require_guard_cf)
 WINDOWS = sys.platform == 'win32'
 
 from artifact_support import verify_inventory
 
 
 class ArtifactInventoryTests(unittest.TestCase):
+    def test_guard_cf_check_rejects_a_dll_without_it(self):
+        """package-native.py's hardening checks on tiny fixtures: a PE header with and without GUARD_CF
+        here, shared objects linked with and without full RELRO below."""
+        import struct
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            def pe(characteristics):
+                data = bytearray(0x40 + 24 + 240)
+                data[:2] = b'MZ'
+                struct.pack_into('<I', data, 0x3c, 0x40)
+                data[0x40:0x44] = b'PE\0\0'
+                struct.pack_into('<HHIIIHH', data, 0x44, 0x8664, 0, 0, 0, 0, 240, 0x2022)
+                optional = 0x40 + 24
+                struct.pack_into('<H', data, optional, 0x20b)
+                struct.pack_into('<H', data, optional + 70, characteristics)
+                struct.pack_into('<I', data, optional + 108, 16)
+                path = base / f'fixture-{characteristics:x}.dll'
+                path.write_bytes(bytes(data))
+                return path
+            require_guard_cf(pe(0x4000 | 0x0160))
+            with self.assertRaisesRegex(SystemExit, 'Control Flow Guard'):
+                require_guard_cf(pe(0x0160))
+
+    @unittest.skipIf(WINDOWS or not (shutil.which('cc') or shutil.which('gcc')) or not shutil.which('readelf'), 'needs cc and readelf')
+    def test_elf_hardening_check_rejects_partial_relro(self):
+        compiler = shutil.which('cc') or shutil.which('gcc')
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            (base / 'tiny.c').write_text('int tiny(void) { return 1; }\n')
+            for name, flags, hardened in [('full', ['-Wl,-z,relro,-z,now'], True), ('lazy', ['-Wl,-z,relro,-z,lazy'], False),
+                                          ('norelro', ['-Wl,-z,norelro,-z,now'], False)]:
+                library = base / f'lib{name}.so'
+                subprocess.run([compiler, '-shared', '-fPIC', *flags, str(base / 'tiny.c'), '-o', str(library)], check=True)
+                with self.subTest(name=name):
+                    if hardened:
+                        require_elf_hardening(library)
+                    else:
+                        with self.assertRaisesRegex(SystemExit, 'full RELRO'):
+                            require_elf_hardening(library)
+
     def test_installed_consumers_reject_tampered_or_missing_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory)

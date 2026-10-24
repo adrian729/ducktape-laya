@@ -7,6 +7,9 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#ifdef __linux__
+#include <sched.h>
+#endif
 #define CHECK(v) do { if (!(v)) { std::cerr << "Failed: " #v << " at " << __LINE__ << '\n'; return 1; } } while (0)
 static const std::string request = R"({"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
 int main(int argc, char **argv) {
@@ -85,50 +88,217 @@ int main(int argc, char **argv) {
     options.cancel_user_data = &cancel;
     try { engine.execute(request, options); CHECK(false); }
     catch (const ducktape::error &e) { CHECK(e.status == DTL_CANCELLED); }
+    // A deadline that has passed by the first check (1 ms) stops the call wherever it is then.
     cancel = false;
     options.timeout_ms = 1;
     try { engine.execute(request, options); CHECK(false); }
     catch (const ducktape::error &e) { CHECK(e.status == DTL_DEADLINE_EXCEEDED); }
-    CHECK(engine.execute(request) == baseline); // aborted CPU graph must be reusable
+    CHECK(engine.execute(request) == baseline);
     options.timeout_ms = 0;
+    // Stops inside the forward pass. The library polls should_cancel at its own checks, in
+    // tokenization (tokenizer-stop-check.patch) and, through ggml's abort callback, after every
+    // node of the forward pass's graph; once a stop is latched it polls no more. The polls of a
+    // call are counted, not assumed: a state needing several windows under "scan" is tokenized
+    // exactly like the one-window request (the state's tokens are cached; max_tokens does not
+    // change the prompt), so the difference between the two counts is the polls of the extra
+    // windows, and the last polls of the one-window call are its forward pass. A stop at a
+    // chosen poll among those lands in the graph, which ggml then abandons (llama_encode
+    // returns 2), and the same context must then give unchanged results.
+    using clock = std::chrono::steady_clock;
+    struct counter {
+        std::atomic<unsigned> polls{0};
+        unsigned mark = 0;                 // the poll whose time is recorded
+        clock::time_point marked{};
+    };
+    const auto counting = [](void *p) -> uint32_t {
+        auto *c = static_cast<counter *>(p);
+        if (++c->polls == c->mark) c->marked = clock::now();
+        return 0;
+    };
+    const auto count_polls = [&](const std::string &body, std::string &out, counter &c) {
+        ducktape::call_options call;
+        call.should_cancel = counting;
+        call.cancel_user_data = &c;
+        out = engine.execute(body, call);
+        return c.polls.load();
+    };
+    const auto windows_of = [](const std::string &result) {
+        const auto at = result.find("\"windows\":");
+        return at == std::string::npos ? 0ul : std::stoul(result.substr(at + 10));
+    };
+    std::string words;
+    for (int i = 0; i < 4; ++i) words += "Order " + std::to_string(1000 + i) + " was charged twice and the customer asks for the money back. ";
+    const auto graph_request = [&](unsigned max_tokens) {
+        return R"({"state":")" + words + R"(","overflow":"scan","max_tokens":)" + std::to_string(max_tokens) +
+               R"(,"questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
+    };
+    const std::string single = graph_request(512), scanned = graph_request(48);
+    const std::string single_result = engine.execute(single); // also caches the state's tokens
+    std::string out;
+    counter c1, c2, cw;
+    const unsigned polls = count_polls(single, out, c1);
+    CHECK(out == single_result && windows_of(out) == 1);
+    CHECK(count_polls(single, out, c2) == polls); // the count is deterministic
+    const unsigned scanned_polls = count_polls(scanned, out, cw);
+    const unsigned windows = static_cast<unsigned>(windows_of(out));
+    CHECK(windows >= 2 && scanned_polls > polls && (scanned_polls - polls) % (windows - 1) == 0);
+    const unsigned per_window = (scanned_polls - polls) / (windows - 1);
+    std::cerr << "polls: " << polls << " for one window, " << per_window << " per forward pass\n";
+    // The abort callback polls after each graph node: dozens per pass (a check before and after
+    // the pass make 2). Without it, a stop could only land between passes.
+    CHECK(per_window >= 32 && polls > per_window);
+    const unsigned first_graph_poll = polls - per_window + 2, mid_graph_poll = polls - per_window / 2;
     {
-        // Cross-thread cancellation that must land mid-request. A timed sleep races the request on a
-        // fast host. Instead the callback, polled from inside the evaluation, reports that work has
-        // started and holds that poll (bounded) until another thread has set the cancel flag, so the
-        // request cannot finish before the cancel is visible and must end DTL_CANCELLED.
-        struct gate { std::atomic<bool> *cancel; std::atomic<unsigned> polls{0}; std::atomic<bool> started{false}, finished{false}; };
-        gate g{&cancel};
+        // Cross-thread cancellation that lands mid-pass. The callback holds the poll in the middle
+        // of the graph (bounded) until another thread has set the cancel flag, so the request
+        // cannot finish first; the stop must be latched there and polled no more.
+        struct gate { std::atomic<bool> cancel{false}; std::atomic<unsigned> polls{0}; unsigned at = 0; std::atomic<bool> started{false}, finished{false}; };
+        gate g;
+        g.at = mid_graph_poll;
         const auto until = [](auto &&done) {
-            const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-            while (!done() && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            const auto limit = clock::now() + std::chrono::seconds(60);
+            while (!done() && clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
         };
-        options.cancel_user_data = &g;
-        options.should_cancel = [](void *p) -> uint32_t {
+        ducktape::call_options gated;
+        gated.cancel_user_data = &g;
+        gated.should_cancel = [](void *p) -> uint32_t {
             auto *x = static_cast<gate *>(p);
-            if (++x->polls == 5) {
+            if (++x->polls == x->at) {
                 x->started = true;
-                const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-                while (!x->cancel->load() && std::chrono::steady_clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                const auto limit = clock::now() + std::chrono::seconds(60);
+                while (!x->cancel.load() && clock::now() < limit) std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            return x->cancel->load() ? 5 : 0;
+            return x->cancel.load() ? 5 : 0;
         };
-        std::thread stopper([&] { until([&] { return g.started.load() || g.finished.load(); }); cancel = true; });
+        std::thread stopper([&] { until([&] { return g.started.load() || g.finished.load(); }); g.cancel = true; });
         dtl_status status = DTL_OK;
-        try { engine.execute(request, options); }
+        try { engine.execute(single, gated); }
         catch (const ducktape::error &e) { status = e.status; }
         g.finished = true;
         stopper.join();
-        CHECK(g.started.load()); // work was in flight when the cancel was issued
+        CHECK(g.started.load()); // the pass was running when the cancel was issued
         CHECK(status == DTL_CANCELLED);
+        CHECK(g.polls.load() == mid_graph_poll); // latched at that poll, inside the graph
+        CHECK(engine.execute(single) == single_result); // the aborted graph's context is reusable
+    }
+    {
+        // A one-shot callback (nonzero at one poll only) must stay latched after the backend
+        // abort: the check after the pass would otherwise see 0 and let the call succeed. The
+        // stop at the graph's first poll must also end the pass early: the time from that poll
+        // to the call's return is compared with the same span of a full call (fastest of three
+        // each; the full span is the whole graph, the stopped one a node and the unwinding).
+        struct once { std::atomic<unsigned> polls{0}; unsigned at = 0; clock::time_point marked{}; };
+        clock::duration stopped_tail = clock::duration::max(), full_tail = clock::duration::max();
+        for (int sample = 0; sample < 3; ++sample) {
+            once o;
+            o.at = first_graph_poll;
+            ducktape::call_options one_shot;
+            one_shot.cancel_user_data = &o;
+            one_shot.should_cancel = [](void *p) -> uint32_t {
+                auto *x = static_cast<once *>(p);
+                if (++x->polls != x->at) return 0;
+                x->marked = clock::now();
+                return 1;
+            };
+            dtl_status status = DTL_OK;
+            try { engine.execute(single, one_shot); } catch (const ducktape::error &e) { status = e.status; }
+            const auto returned = clock::now();
+            CHECK(status == DTL_CANCELLED && o.polls.load() == first_graph_poll);
+            stopped_tail = std::min(stopped_tail, returned - o.marked);
+            counter full;
+            full.mark = first_graph_poll;
+            CHECK(count_polls(single, out, full) == polls && out == single_result);
+            full_tail = std::min(full_tail, clock::now() - full.marked);
+        }
+        std::cerr << "from the graph's first poll: " << std::chrono::duration<double>(full_tail).count() << " s to the end of a full call, "
+                  << std::chrono::duration<double>(stopped_tail).count() << " s to the return of a cancelled one\n";
+        CHECK(stopped_tail * 2 < full_tail);
+    }
+    {
+        // A deadline that expires inside the pass. The callback, at the graph's middle poll, waits
+        // until the deadline has passed and reports no cancellation; the library's own deadline
+        // check in that same poll must then stop the call. The deadline is set well beyond the
+        // time a call takes to reach that poll; a call that stopped earlier (polls below the mark,
+        // a stalled host) is repeated with twice the deadline.
+        struct waiter { std::atomic<unsigned> polls{0}; unsigned at = 0; clock::time_point until{}; };
+        counter timing;
+        timing.mark = mid_graph_poll;
+        const auto started = clock::now();
+        CHECK(count_polls(single, out, timing) == polls);
+        auto deadline = std::max<long long>(250, 4 * std::chrono::duration_cast<std::chrono::milliseconds>(timing.marked - started).count());
+        bool landed = false;
+        for (int attempt = 0; attempt < 4 && !landed; ++attempt, deadline *= 2) {
+            waiter w;
+            w.at = mid_graph_poll;
+            ducktape::call_options timed;
+            timed.timeout_ms = static_cast<uint64_t>(deadline);
+            timed.cancel_user_data = &w;
+            timed.should_cancel = [](void *p) -> uint32_t {
+                auto *x = static_cast<waiter *>(p);
+                if (++x->polls == x->at) std::this_thread::sleep_until(x->until);
+                return 0;
+            };
+            const auto call_started = clock::now();
+            w.until = call_started + std::chrono::milliseconds(deadline + 20);
+            dtl_status status = DTL_OK;
+            try { engine.execute(single, timed); } catch (const ducktape::error &e) { status = e.status; }
+            CHECK(status == DTL_DEADLINE_EXCEEDED);
+            landed = w.polls.load() == mid_graph_poll;
+            if (!landed) std::cerr << "a " << deadline << " ms deadline expired before the graph (poll " << w.polls.load() << "); repeating\n";
+            CHECK(w.polls.load() <= mid_graph_poll);
+            CHECK(engine.execute(single) == single_result);
+        }
+        CHECK(landed);
     }
     CHECK(engine.execute(request) == baseline);
-    // A one-shot cancellation callback must remain latched after backend abort.
-    std::atomic<unsigned> calls{0};
-    options.cancel_user_data = &calls;
-    options.should_cancel = [](void *p) -> uint32_t { return ++*static_cast<std::atomic<unsigned> *>(p) == 20 ? 1 : 0; };
-    try { engine.execute(request, options); CHECK(false); }
-    catch (const ducktape::error &e) { CHECK(e.status == DTL_CANCELLED); }
-    CHECK(engine.execute(request) == baseline);
+#ifdef __linux__
+    {
+        // The automatic thread count (threads 0) is at most the CPUs in the affinity mask
+        // (platform.cpp default_threads, read when the engine opens). ggml starts threads - 1
+        // workers for each pass, so the process's thread count in the middle of the graph,
+        // less its count at the call's first poll, is the engine's thread count - 1.
+        struct census { std::atomic<unsigned> polls{0}; unsigned at = 0; long before = -1, during = -1; };
+        const auto tasks = []() -> long {
+            long n = 0;
+            for (const auto &entry : std::filesystem::directory_iterator("/proc/self/task")) { (void)entry; ++n; }
+            return n;
+        };
+        static long (*count_tasks)() = +tasks;
+        // Returns -100 when the call does not match the layout measured above.
+        const auto workers = [&](ducktape::engine &target) -> long {
+            if (target.execute(single) != single_result) return -100; // the poll layout above holds once the state is cached
+            census s;
+            s.at = mid_graph_poll;
+            ducktape::call_options call;
+            call.cancel_user_data = &s;
+            call.should_cancel = [](void *p) -> uint32_t {
+                auto *x = static_cast<census *>(p);
+                const auto n = ++x->polls;
+                if (n == 1) x->before = count_tasks();
+                if (n == x->at) x->during = count_tasks();
+                return 0;
+            };
+            if (target.execute(single, call) != single_result || s.polls.load() != polls) return -100;
+            return s.during - s.before;
+        };
+        CHECK(workers(engine) == 1); // "threads": 2; the probe sees ggml's workers
+        cpu_set_t original, one;
+        CHECK(sched_getaffinity(0, sizeof original, &original) == 0);
+        int first = 0;
+        while (first < CPU_SETSIZE && !CPU_ISSET(first, &original)) ++first;
+        CHECK(first < CPU_SETSIZE);
+        CPU_ZERO(&one);
+        CPU_SET(first, &one);
+        CHECK(sched_setaffinity(0, sizeof one, &one) == 0);
+        auto pinned = ducktape::engine::open(argv[1], R"({"threads":0})");
+        CHECK(sched_setaffinity(0, sizeof original, &original) == 0);
+        const long pinned_workers = workers(pinned);
+        std::cerr << "automatic threads with one allowed CPU: " << pinned_workers + 1 << "\n";
+        CHECK(pinned_workers == 0);
+    }
+#else
+    std::cerr << "SKIPPED: the automatic thread count probe reads the affinity mask and /proc (Linux only)\n";
+#endif
     {
         // Tokenization honours deadlines and cancellation (tokenizer-stop-check.patch). A 1 MiB state
         // under "reject" is tokenized in full and then rejected with status 1 before any inference,
@@ -150,7 +320,6 @@ int main(int argc, char **argv) {
             const std::string body = R"({"state":")" + text + R"(","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
             return body;
         };
-        using clock = std::chrono::steady_clock;
         auto timed_status = [&](const std::string &body, const ducktape::call_options &call, clock::duration &elapsed) {
             const auto started = clock::now();
             dtl_status status = DTL_OK;
@@ -165,22 +334,34 @@ int main(int argc, char **argv) {
         CHECK(timed_status(again_body, {}, again) == DTL_INVALID_ARGUMENT);
         full = std::min(full, again);
         const auto tenth = std::max<long long>(1, std::chrono::duration_cast<std::chrono::milliseconds>(full).count() / 10);
+        // Each stop is sampled three times and the fastest counts, as for the full time: a single
+        // sample would compare one possibly preempted call with the better of two. A stopped call
+        // caches no tokens, so the same state is tokenized afresh each time.
         ducktape::call_options deadline;
         deadline.timeout_ms = static_cast<uint32_t>(tenth);
-        CHECK(timed_status(deadline_body, deadline, stopped) == DTL_DEADLINE_EXCEEDED);
+        clock::duration fastest = clock::duration::max();
+        for (int sample = 0; sample < 3; ++sample) {
+            CHECK(timed_status(deadline_body, deadline, stopped) == DTL_DEADLINE_EXCEEDED);
+            fastest = std::min(fastest, stopped);
+        }
         std::cerr << "1 MiB tokenization " << std::chrono::duration<double>(full).count() << " s; stopped by a " << tenth
-                  << " ms deadline after " << std::chrono::duration<double>(stopped).count() << " s\n";
-        CHECK(stopped * 2 < full);
+                  << " ms deadline after " << std::chrono::duration<double>(fastest).count() << " s (fastest of 3)\n";
+        CHECK(fastest * 2 < full);
         std::atomic<bool> stop{false};
         ducktape::call_options cancellable;
         cancellable.should_cancel = [](void *p) -> uint32_t { return static_cast<std::atomic<bool> *>(p)->load() ? 1 : 0; };
         cancellable.cancel_user_data = &stop;
-        std::thread canceller([&] { std::this_thread::sleep_for(std::chrono::milliseconds(tenth)); stop = true; });
-        const auto cancel_status = timed_status(cancel_body, cancellable, stopped);
-        canceller.join();
-        std::cerr << "cancelled after " << tenth << " ms, returned after " << std::chrono::duration<double>(stopped).count() << " s\n";
-        CHECK(cancel_status == DTL_CANCELLED);
-        CHECK(stopped * 2 < full);
+        fastest = clock::duration::max();
+        for (int sample = 0; sample < 3; ++sample) {
+            stop = false;
+            std::thread canceller([&] { std::this_thread::sleep_for(std::chrono::milliseconds(tenth)); stop = true; });
+            const auto cancel_status = timed_status(cancel_body, cancellable, stopped);
+            canceller.join();
+            CHECK(cancel_status == DTL_CANCELLED);
+            fastest = std::min(fastest, stopped);
+        }
+        std::cerr << "cancelled after " << tenth << " ms, returned after " << std::chrono::duration<double>(fastest).count() << " s (fastest of 3)\n";
+        CHECK(fastest * 2 < full);
         CHECK(engine.execute(request) == baseline);
     }
     std::cout << "Cancellation, deadline, latch and post-abort recovery passed\n";

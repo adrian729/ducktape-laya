@@ -358,6 +358,21 @@ def pe_info(path):
         raise ValueError(f'{path}: not a readable PE32+ image ({error})') from None
 
 
+def require_elf_hardening(path):
+    """Full RELRO: a GNU_RELRO segment and BIND_NOW (flags NOW), so the GOT is read-only after load."""
+    path = pathlib.Path(path)
+    dynamic = subprocess.check_output(['readelf', '-dW', str(path)], text=True)
+    segments = subprocess.check_output(['readelf', '-lW', str(path)], text=True)
+    if 'GNU_RELRO' not in segments or not re.search(r'\(FLAGS\).*\bBIND_NOW\b|\(FLAGS_1\).*\bNOW\b', dynamic):
+        raise SystemExit(f'{path.name} lacks full RELRO (GNU_RELRO and BIND_NOW)')
+
+
+def require_guard_cf(path):
+    """Control Flow Guard: IMAGE_DLLCHARACTERISTICS_GUARD_CF set in the PE header."""
+    if not pe_info(path)['dll_characteristics'] & 0x4000:
+        raise SystemExit(f'{pathlib.Path(path).name} is not linked with Control Flow Guard (GUARD_CF)')
+
+
 def macho_info(path):
     """Linked dylibs, run-path entries and minimum macOS version of a 64-bit Mach-O image."""
     import struct

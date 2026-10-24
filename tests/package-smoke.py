@@ -70,7 +70,13 @@ def check_dotnet_resolution(out, native, target, directory, env):
     bare = directory / 'dotnet-unbundled'
     shutil.copytree(out, bare, ignore=shutil.ignore_patterns('runtimes', 'Probe.deps.json', target.library))
     result, files = loaded(bare, search if target.os == 'win32' else env)
-    if result.returncode == 0 or files or f'{target.library} was not found' not in result.stderr:
+    # A copy installed in the system's own library directories (ldconfig, /usr/local/lib) is a
+    # legitimate answer of the system fallback; only a decoy must never load.
+    system_copy = (result.returncode == 0 and len(files) == 1 and files[0].name in names and
+                   not files[0].is_relative_to(directory.resolve()))
+    if system_copy:
+        print(f'NuGet package without its bundled library loaded the system copy {files[0]} (not a decoy)')
+    elif result.returncode == 0 or files or f'{target.library} was not found' not in result.stderr:
         raise SystemExit(f'NuGet package without its bundled library loaded {files} (exit {result.returncode}); expected '
                          f'"{target.library} was not found" with decoys only in the current directory'
                          f'{" and on PATH" if target.os == "win32" else ""}: {result.stdout}{result.stderr}')

@@ -20,7 +20,7 @@ import sys
 import tempfile
 from release_support import (ROOT, build_environment, host_target, check_record, sha256, git, binary_info, source_identity, native_build_identity,
                              require_runtime_identity, require_runtime_sources, require_uninstrumented_binary, require_mapped_source_paths,
-                             pe_info, macho_info)
+                             pe_info, macho_info, require_elf_hardening, require_guard_cf)
 from artifact_support import write_zip, archive_tree, archive_zip, set_npm_platforms, native_payload
 import java_package
 import python_wheel
@@ -29,18 +29,6 @@ p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDes
 p.add_argument('--build', type=pathlib.Path, default=ROOT / 'build')
 p.add_argument('--output', type=pathlib.Path, required=True)
 a = p.parse_args()
-def require_elf_hardening(path):
-    """Full RELRO: a GNU_RELRO segment and BIND_NOW (flags NOW), so the GOT is read-only after load."""
-    dynamic = subprocess.check_output(['readelf', '-dW', str(path)], text=True)
-    segments = subprocess.check_output(['readelf', '-lW', str(path)], text=True)
-    if 'GNU_RELRO' not in segments or not re.search(r'\(FLAGS\).*\bBIND_NOW\b|\(FLAGS_1\).*\bNOW\b', dynamic):
-        raise SystemExit(f'{path.name} lacks full RELRO (GNU_RELRO and BIND_NOW)')
-
-def require_guard_cf(path):
-    """Control Flow Guard: IMAGE_DLLCHARACTERISTICS_GUARD_CF set in the PE header."""
-    if not pe_info(path)['dll_characteristics'] & 0x4000:
-        raise SystemExit(f'{path.name} is not linked with Control Flow Guard (GUARD_CF)')
-
 def normalize_nupkg(source, destination, epoch):
     """Rewrite a nupkg deterministically: NuGet stamps entries with the pack time and
     gives relationships random IDs, and writes its XML parts with the platform's line

@@ -50,13 +50,15 @@ void *operator new(std::size_t size) {
 void operator delete(void *p) noexcept { std::free(p); }
 void operator delete(void *p, std::size_t) noexcept { std::free(p); }
 // Array allocations (the CPU backend's work buffer) larger than any recorded while
-// array_mode is 1 fail while it is 2; otherwise they count like operator new.
+// array_mode is 1 fail while it is 2, and are counted while it is 3 (at least that
+// size); otherwise they count like operator new.
 static std::atomic<int> array_mode{0};
 static std::atomic<size_t> array_largest{0};
-static std::atomic<long> array_failed{0};
+static std::atomic<long> array_failed{0}, array_counted{0};
 void *operator new[](std::size_t size) {
     if (array_mode == 1 && size > array_largest) array_largest = size;
     if (array_mode == 2 && size > array_largest) { ++array_failed; throw std::bad_alloc(); }
+    if (array_mode == 3 && size >= array_largest) ++array_counted;
     return ::operator new(size);
 }
 void operator delete[](void *p) noexcept { ::operator delete(p); }
@@ -166,16 +168,23 @@ static void unlimit_address_space() {
     expect(setrlimit(RLIMIT_AS, &limit) == 0, "setrlimit");
 }
 // Runs fn in a child; a signal, abort or unexpected exit fails the parent check.
+// A check that cannot run here exits its child with this code; the test then exits with it
+// too, which CTest reports as skipped (SKIP_RETURN_CODE), never as passed.
+constexpr int skipped_exit = 77;
+static unsigned skipped_checks = 0;
+struct skipped : std::runtime_error { using std::runtime_error::runtime_error; };
 static void in_child(const char *name, const std::function<void()> &fn) {
     std::cout.flush(); std::cerr.flush();
     pid_t pid = fork();
     expect(pid >= 0, "fork");
     if (!pid) {
         try { fn(); std::_Exit(0); }
+        catch (const skipped &e) { std::cerr << name << ": SKIPPED: " << e.what() << '\n'; std::_Exit(skipped_exit); }
         catch (const std::exception &e) { std::cerr << name << ": " << e.what() << '\n'; std::_Exit(2); }
     }
     int status = 0;
     expect(waitpid(pid, &status, 0) == pid, "waitpid");
+    if (WIFEXITED(status) && WEXITSTATUS(status) == skipped_exit) { ++skipped_checks; return; }
     expect(WIFEXITED(status) && WEXITSTATUS(status) == 0,
            std::string(name) + (WIFSIGNALED(status) ? ": child killed by signal " + std::to_string(WTERMSIG(status)) : ": child failed"));
     std::cerr << name << ": passed\n";
@@ -286,9 +295,8 @@ static void runtime_faults(const std::string &model) {
         pthread_t probe;
         if (pthread_create(&probe, nullptr, [](void *) -> void * { return nullptr; }, nullptr) == 0) {
             pthread_join(probe, nullptr);
-            std::cerr << "RLIMIT_NPROC is not enforced for this user; skipped\n";
             dtl_close(engine);
-            return;
+            throw skipped("RLIMIT_NPROC is not enforced for this user (root or CAP_SYS_RESOURCE)");
         }
         char *result = nullptr;
         const auto status = dtl_execute(engine, small.c_str(), nullptr, &result, &error);
@@ -300,7 +308,10 @@ static void runtime_faults(const std::string &model) {
     });
 #ifndef DTL_SANITIZED
     // The request grows after the baseline, so the work buffer must grow while the
-    // allocation fails; the old buffer must not stay in use.
+    // allocation fails; the old buffer must not stay in use. That is checked directly: a
+    // repeated small call allocates no work buffer (it keeps the one it has), but the first
+    // small call after the failure must allocate one, since the failed growth left none (the
+    // unpatched backend kept the freed buffer and its size, and wrote into it).
     in_child("work buffer growth failure", [&] {
         dtl_engine *reference = nullptr, *engine = nullptr; char *error = nullptr;
         expect(dtl_open(model.c_str(), "{\"threads\":1}", &reference, &error) == DTL_OK, "open reference");
@@ -309,6 +320,10 @@ static void runtime_faults(const std::string &model) {
         expect(dtl_open(model.c_str(), "{\"threads\":1}", &engine, &error) == DTL_OK, "open");
         array_mode = 1;
         execute_ok(engine, small, "baseline");
+        array_mode = 3;
+        execute_ok(engine, small, "baseline again");
+        array_mode = 0;
+        expect(array_counted == 0, "a repeated small request allocated its work buffer again");
         array_mode = 2;
         char *result = nullptr;
         const auto status = dtl_execute(engine, large.c_str(), nullptr, &result, &error);
@@ -316,7 +331,11 @@ static void runtime_faults(const std::string &model) {
         dtl_free(result); dtl_free(error);
         expect(array_failed > 0, "the larger request did not grow an array allocation");
         expect(status == DTL_OUT_OF_MEMORY, "expected DTL_OUT_OF_MEMORY, got " + std::to_string(status));
-        expect(execute_ok(engine, small, "small after failure") == small_expected, "small result changed after the failure");
+        array_mode = 3;
+        const auto small_after = execute_ok(engine, small, "small after failure");
+        array_mode = 0;
+        expect(array_counted > 0, "the small request after the failure reused the work buffer the failed growth released");
+        expect(small_after == small_expected, "small result changed after the failure");
         expect(execute_ok(engine, large, "large after failure") == large_expected, "large result changed after the failure");
         dtl_close(engine);
     });
@@ -340,6 +359,7 @@ int main(int argc, char **argv) {
 
         if (argc == 3 && std::string(argv[2]) == "--runtime-faults") {
             runtime_faults(model);
+            if (skipped_checks) { std::cout << "runtime fault tests passed; " << skipped_checks << " check(s) skipped\n"; return skipped_exit; }
             std::cout << "runtime fault tests passed\n";
             return 0;
         }

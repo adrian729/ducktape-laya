@@ -127,12 +127,15 @@ def native_gate(gate):
     def check():
         report = native()
         need(report['gates'][gate]['status'] == 'passed', f'native: {gate} {report["gates"][gate]["status"]}')
-        if gate in ('original_reference', 'upstream_reference'):
-            # Every additional pinned model is qualified like the primary one.
-            for name in record.get('additional_models', []):
-                model_id = read_json(candidate_tree / name)['id']
-                status = report.get('additional_model_gates', {}).get(model_id, {}).get(gate, 'not_run')
-                need(status == 'passed', f'native: {gate} for {model_id} {status}')
+        # Every additional pinned model is qualified like the primary one: the reference gates, and
+        # within the native contracts its tokenizer golden entries and selected decision head
+        # (real-tokenizer and real-decision-head run on the primary model).
+        per_model = {'original_reference': [gate], 'upstream_reference': [gate], 'native_contracts': ['tokenizer', 'decision_head']}
+        for name in record.get('additional_models', []) if gate in per_model else []:
+            model_id = read_json(candidate_tree / name)['id']
+            for model_gate in per_model[gate]:
+                status = report.get('additional_model_gates', {}).get(model_id, {}).get(model_gate, 'not_run')
+                need(status == 'passed', f'native: {model_gate} for {model_id} {status}')
         if gate == 'original_reference':
             # Only the tier-1 target's documented deviations (none today) may exceed the limit.
             result = json.loads((paths['native'].parent / 'original-reference.json').read_text())
@@ -233,7 +236,7 @@ def browser_gate(backend):
             for name in ('laya.mjs', 'laya.wasm'):
                 need(report['asset_hashes'][f'{backend}/{name}'] == package['assets'][f'{backend}/{name}'], f'{page}: {backend} assets are not the candidate package')
             gates = report['backends'][backend]
-            required = ['execution', 'reference', 'controls', 'assets', 'upstream_numeric'] + (['device_loss', 'gpu_memory'] if backend == 'webgpu' else [])
+            required = ['execution', 'reference', 'controls', 'assets', 'upstream_numeric'] + (['device_loss', 'gpu_memory'] if backend == 'webgpu' else ['memory'])
             for name in required:
                 need(gates.get(name, {}).get('status') == 'passed', f'{page}: {backend}/{name} {gates.get(name, {}).get("status", "missing")}')
     return check

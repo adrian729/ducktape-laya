@@ -22,7 +22,7 @@ const { values: args } = parseArgs({ options: {
   'constrained-wasm': { type: 'string' },
 } });
 if (!args.model || !args.output || !['wasm', 'webgpu', 'both'].includes(args.backend)) {
-  throw new Error('Usage: node tests/browser-automation/run.mjs --model GGUF --output NEW_DIR [--native REPORT] [--package-dir EXTRACTED_PACKAGE] [--backend wasm|webgpu|both] [--isolated] [--headless] [--stage-timeout-ms MS]');
+  throw new Error('Usage: node tests/browser-automation/run.mjs --model GGUF --output NEW_DIR [--native REPORT] [--package-dir EXTRACTED_PACKAGE] [--backend wasm|webgpu|both] [--isolated] [--headless] [--constrained-wasm BUILD] [--skip-reference] [--skip-controls] [--stage-timeout-ms MS]');
 }
 const stageTimeout = Number(args['stage-timeout-ms']);
 if (!Number.isInteger(stageTimeout) || stageTimeout < 1000) throw new Error('--stage-timeout-ms must be an integer >= 1000');

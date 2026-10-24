@@ -126,6 +126,19 @@ def run(label, command, gate=None, extra_env=None):
     save()
     print(f'{label}: {"FAILED" if code else "passed"}', flush=True)
     if code: raise RuntimeError(f'{label} failed; see {out / (label + ".log")}')
+def record_ctest_skips(junit):
+    """Record tests CTest reports as skipped (SKIP_RETURN_CODE) and checks inside passing tests
+    that report a 'SKIPPED:' line, so no skipped check is left out silently."""
+    import xml.etree.ElementTree as ElementTree
+    if not junit.is_file(): return
+    for case in ElementTree.parse(junit).getroot().iter('testcase'):
+        name, output = case.get('name'), case.findtext('system-out') or ''
+        lines = [line.strip() for line in output.splitlines() if 'SKIPPED' in line]
+        if case.get('status') in ('notrun', 'disabled') or case.find('skipped') is not None:
+            report['skipped'][name] = 'reported skipped by the test: ' + ('; '.join(lines) or case.get('status', 'skipped'))
+        elif lines:
+            report['skipped'][name + ' (partly)'] = '; '.join(lines)
+    save()
 save()
 try:
     run('result-comparison', [sys.executable, ROOT / 'tests/result-comparison.py'])
@@ -185,7 +198,7 @@ try:
     registered = json.loads(subprocess.check_output(['ctest', '--test-dir', build, '--show-only=json-v1'], env=env))
     report['ctest_registered'] = sorted(test['name'] for test in registered['tests'])
     required = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
-    if model: required |= {'real-model', 'real-features', 'real-control', 'real-tokenizer'}
+    if model: required |= {'real-model', 'real-features', 'real-control', 'real-tokenizer', 'real-decision-head'}
     linux = sys.platform.startswith('linux')
     # Fault injection uses Linux process controls (prctl, rlimits); CMake registers it on Linux only.
     if linux: required.add('ggml-faults')
@@ -198,10 +211,18 @@ try:
     if model and linux and platform.machine() in ('x86_64', 'AMD64'): required |= {'cpu-guard'}
     elif model and platform.machine() in ('x86_64', 'AMD64'):
         report['skipped']['cpu-guard'] = 'QEMU user-mode CPU emulation runs on Linux only'
+    elif model:
+        report['skipped']['cpu-guard'] = 'the emulated-CPU guard checks the x86-64 build (AVX2 baseline); not registered on ' + platform.machine()
     if not required <= set(report['ctest_registered']):
         raise RuntimeError('Required native tests are missing: ' + ', '.join(sorted(required - set(report['ctest_registered']))))
+    junit = out / 'ctest-junit.xml'
     if a.skip_native_tests: skip('native', 'not run (--skip-native-tests)')
-    else: run('native', ['ctest', '--test-dir', build, '--output-on-failure'], 'native_contracts' if model else None)
+    else:
+        try:
+            run('native', ['ctest', '--test-dir', build, '--output-on-failure', '--output-junit', junit,
+                           '--test-output-size-passed', 1 << 20], 'native_contracts' if model else None)
+        finally:
+            record_ctest_skips(junit)
     if WINDOWS: skip('examples-smoke', 'compiles the examples with a POSIX driver')
     else: run('examples-smoke', [sys.executable, ROOT / 'tests/examples-smoke.py', '--build-dir', build])
     for name in BINDINGS:
@@ -245,6 +266,11 @@ try:
         save()
     for extra, extra_manifest in extra_models:
         name = extra_manifest['id']
+        # The runtime patches' token and score identity holds for every model: the tokenizer
+        # golden entries recorded for this vocabulary, and the selected decision head's scores.
+        extra_gate(name, 'tokenizer', f'tokenizer-{name}',
+                   [build / ('laya-tokenizer-tests' + EXE), ROOT / 'tests/fixtures/tokenizer-partition.txt', extra])
+        extra_gate(name, 'decision_head', f'decision-head-{name}', [build / ('laya-decision-head-tests' + EXE), extra])
         extra_gate(name, 'original_reference', f'original-reference-{name}',
                    [sys.executable, ROOT / 'tests/original-reference.py', extra, '--build-dir', build,
                     '--cases', ROOT / extra_manifest['original_reference_cases'], '--report', out / f'original-reference-{name}.json'])

@@ -17,6 +17,7 @@ p = argparse.ArgumentParser()
 p.add_argument('prefix', type=pathlib.Path)
 p.add_argument('model', type=pathlib.Path)
 p.add_argument('--outputs', type=pathlib.Path, help='Write each consumer\'s result here as JSON')
+p.add_argument('--skipped', type=pathlib.Path, help='Write the consumers not run here, with the reason, as JSON')
 a = p.parse_args()
 prefix, model = a.prefix.resolve(), a.model.resolve()
 target = host_target()
@@ -49,8 +50,10 @@ target_link_libraries(cpp PRIVATE ducktape::laya)
     # pkg-config with a GNU-style compiler: cc on Linux and macOS, MinGW-w64 gcc (which links the
     # import library ducktape_laya.lib for -lducktape_laya) on Windows when it and pkg-config exist.
     compiler = 'gcc' if target.os == 'win32' else 'cc'
+    skipped = {}
     if target.os == 'win32' and not (shutil.which('pkg-config') and shutil.which(compiler)):
-        print('pkg-config consumer: skipped, pkg-config or MinGW-w64 gcc is not installed on this Windows machine')
+        skipped['pkgconfig_c'] = 'pkg-config or MinGW-w64 gcc is not installed on this Windows machine'
+        print('pkg-config consumer: skipped,', skipped['pkgconfig_c'])
     else:
         # Keep every flag: some pkg-config implementations drop directories they take for system ones.
         pc_env = dict(env, PKG_CONFIG_PATH=str(pc[0].parent), PKG_CONFIG_ALLOW_SYSTEM_CFLAGS='1', PKG_CONFIG_ALLOW_SYSTEM_LIBS='1')
@@ -66,4 +69,6 @@ target_link_libraries(cpp PRIVATE ducktape::laya)
         assert outputs['pkgconfig_c'] == results[0]
 if a.outputs:
     a.outputs.write_text(json.dumps(outputs) + '\n')
+if a.skipped:
+    a.skipped.write_text(json.dumps(skipped) + '\n')
 print('Installed CMake C/C++ and pkg-config C consumers: real-model agreement')

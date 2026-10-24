@@ -143,7 +143,7 @@ class World:
         item = self.targets[platform]
         linux = item['os'] == 'linux'
         tests = ['abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition',
-                 'real-model', 'real-features', 'real-control', 'real-tokenizer']
+                 'real-model', 'real-features', 'real-control', 'real-tokenizer', 'real-decision-head']
         tests += ['real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults'] + (['cpu-guard'] if platform == 'linux-x64' else []) if linux else []
         skipped = {} if linux else {name: 'Linux only' for name in ('real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults', 'cpu-guard')}
         return {'schema_version': 1, 'source_commit': self.commit, 'source_tracked_dirty': False, 'mode': 'real_model',
@@ -198,7 +198,8 @@ class World:
         native = self.directory / 'native'
         report = self.validation('linux-x64')
         for name in self.record.get('additional_models', []):
-            report['additional_model_gates'][read_json(ROOT / name)['id']] = {'original_reference': 'passed', 'upstream_reference': 'passed'}
+            report['additional_model_gates'][read_json(ROOT / name)['id']] = {'original_reference': 'passed', 'upstream_reference': 'passed',
+                                                                               'tokenizer': 'passed', 'decision_head': 'passed'}
         write_json(native / 'report.json', report)
         write_json(native / 'outputs.json', self.outputs('linux-x64'))
         write_json(native / 'original-reference.json', {'summary': {'status': 'passed', 'known_deviations_used': []}, 'cases': {}})

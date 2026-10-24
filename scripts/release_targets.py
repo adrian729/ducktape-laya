@@ -48,7 +48,7 @@ def require_complete_validation(report, name):
 
 # Native tests every target registers; real-faults and real-c-faults are Linux-only (CMakeLists.txt).
 MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
-REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-tokenizer'}
+REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-tokenizer', 'real-decision-head'}
 LINUX_TESTS = {'real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults'}
 # Suites scripts/validate.py leaves out with --bindings or --skip-native-tests (listed under skipped).
 SELECTABLE_SUITES = {'native', 'rust', 'node', 'python', 'java', 'dotnet', 'go', 'bindings', 'installed'}

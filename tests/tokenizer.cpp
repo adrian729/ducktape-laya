@@ -214,21 +214,25 @@ int main(int argc, char **argv) {
                 // match grows with the number of special tokens of the same length. Where
                 // that cost dominates (thousands of one-character user-defined tokens),
                 // these sizes cannot show the quadratic term; such vocabularies are checked
-                // for tokens only.
-                const std::string small_text = repeat(unit, 16 << 10);
+                // for tokens only, and the skipped timing is reported (a "SKIPPED:" line,
+                // which scripts/validate.py records).
+                // The sizes differ 32-fold: linear growth is x32, quadratic x1024. The
+                // unpatched partition took about 31 s for 64 KiB of double spaces (about
+                // 0.1 s at 4 KiB), so its growth here is close to x1000, ten times the x96
+                // limit, while linear growth keeps a threefold margin below it.
+                const std::string small_text = repeat(unit, 4 << 10);
                 double small = seconds_min(vocab, small_text, 1);
                 if (small > 0.25) {
-                    std::fprintf(stderr, "%s: %zu golden cases match; timing not checked (16 KiB takes %.2f s: per-match cost dominates)\n",
-                                 label.c_str(), checked, small);
+                    std::fprintf(stdout, "SKIPPED: %s: tokenization timing not checked (4 KiB takes %.2f s: per-match cost dominates); %zu golden cases match\n",
+                                 label.c_str(), small, checked);
                     continue;
                 }
                 small = std::min(small, seconds_min(vocab, small_text, 2));
                 const double large = seconds_min(vocab, repeat(unit, 128 << 10), 3);
-                std::fprintf(stderr, "%s: %zu golden cases match; %zu partition matches: 16 KiB %.4f s, 128 KiB %.4f s (x%.1f; linear x8, quadratic x64)\n",
+                std::fprintf(stderr, "%s: %zu golden cases match; %zu partition matches: 4 KiB %.4f s, 128 KiB %.4f s (x%.1f; linear x32, quadratic x1024)\n",
                              label.c_str(), checked, matches, small, large, large / std::max(small, 1e-9));
-                // Linear growth is x8; the quadratic partition was x30 and more at these
-                // sizes. The 50 ms floor absorbs timer noise on the fastest vocabularies.
-                if (large > 0.05 && large > 24 * small) {
+                // The 50 ms floor absorbs timer noise on the fastest vocabularies.
+                if (large > 0.05 && large > 96 * small) {
                     std::cerr << label << ": tokenization time grows faster than linearly\n";
                     ++failures;
                 }

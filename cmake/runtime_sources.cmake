@@ -21,11 +21,12 @@ endif()
 
 # Files under the runtime root that the native build reads: llama.cpp's and ggml's
 # build scripts and headers, ggml's core and CPU backend, llama, common and the
-# vendored headers. Other ggml backends are not built; the top of the WebGPU
+# vendored headers, and the BLAS backend (ggml enables it by default on macOS, where it
+# uses Accelerate). Other ggml backends are not built; the top of the WebGPU
 # backend's directory is listed because a runtime patch copies its source (built
 # only in browser WebGPU builds). The first list is searched recursively, the
 # second is not.
-set(DTL_RUNTIME_SOURCE_GLOBS cmake/* ggml/cmake/* ggml/include/* ggml/src/ggml-cpu/* include/* src/* common/* vendor/*)
+set(DTL_RUNTIME_SOURCE_GLOBS cmake/* ggml/cmake/* ggml/include/* ggml/src/ggml-cpu/* ggml/src/ggml-blas/* include/* src/* common/* vendor/*)
 set(DTL_RUNTIME_SOURCE_FLAT_GLOBS CMakeLists.txt ggml/CMakeLists.txt ggml/src/* ggml/src/ggml-webgpu/*)
 
 function(dtl_runtime_manifest out_var root globs flat_globs)

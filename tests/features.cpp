@@ -7,6 +7,28 @@
 #include <vector>
 #include <chrono>
 using json = nlohmann::ordered_json;
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__) || __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define DTL_SANITIZED 1 // Sanitizer runtimes own operator new and keep freed memory in quarantine.
+#endif
+#if defined(__linux__) && !defined(DTL_SANITIZED)
+#include <atomic>
+#include <cstdlib>
+#include <new>
+// Counts every operator new of the process; on Linux the library's calls bind to this
+// definition too (ELF symbol interposition, as tests/faults.cpp relies on).
+#define DTL_COUNTS_ALLOCATIONS 1
+static std::atomic<long> allocations{0};
+void *operator new(std::size_t size) {
+    allocations.fetch_add(1, std::memory_order_relaxed);
+    if (void *p = std::malloc(size ? size : 1)) return p;
+    throw std::bad_alloc();
+}
+void operator delete(void *p) noexcept { std::free(p); }
+void operator delete(void *p, std::size_t) noexcept { std::free(p); }
+#endif
 static void expect(bool value, const char *message) { if (!value) throw std::runtime_error(message); }
 template<class F> static void invalid(F fn, int status = DTL_INVALID_ARGUMENT) {
     try { fn(); } catch (const ducktape::error &e) { expect(e.status == status, e.what()); return; }
@@ -149,6 +171,36 @@ int main(int argc, char **argv) {
             expect(engine.execute(R"({"state":{"n":100000000000000000000000,"m":-9223372036854775809})" + question) ==
                    engine.execute(R"({"state":"{\"n\": 100000000000000000000000, \"m\": -9223372036854775809}")" + question),
                    "big integers are serialized exactly");
+            // Up to the double range (309 digits) such integers are kept; beyond it the JSON
+            // number cannot be represented and the request is rejected with status 1.
+            const std::string within = "1" + std::string(308, '0'), beyond = "1" + std::string(309, '0');
+            expect(engine.execute(R"({"state":{"n":)" + within + ",\"m\":-" + within + "}" + question) ==
+                   engine.execute(R"({"state":"{\"n\": )" + within + ", \\\"m\\\": -" + within + "}\"" + question),
+                   "309-digit integers are serialized exactly");
+            for (const std::string &number : {beyond, "-" + beyond, "1" + std::string(400, '0')})
+                invalid([&] { engine.execute(R"({"state":{"n":)" + number + "}" + question); });
+        }
+        {
+            // Runs of spaces have no length limit (0.2.0 rejected runs over 4,096) and tokenize in
+            // linear time: 128 KiB of spaces in the state takes no longer than twice the same size
+            // of ordinary words (fastest of two calls each; each state is new, so none reuses the
+            // previous call's tokens). Both are truncated to one 64-token window, so the calls'
+            // time is mostly tokenization.
+            const auto timed = [&](const std::string &state) {
+                double best = 1e30;
+                for (const char *nonce : {"A", "B"}) {
+                    const json request = {{"state", std::string("Refund ") + nonce + "." + state + "Thanks."}, {"overflow", "truncate_end"},
+                                          {"max_tokens", 64}, {"questions", {{"refund", requests[0]["questions"]["refund"]}}}};
+                    const auto started = std::chrono::steady_clock::now();
+                    const auto result = json::parse(engine.execute(request.dump()));
+                    best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+                    expect(result["usage"]["state_tokens_dropped"].get<size_t>() > 0, "a long state is truncated");
+                }
+                return best;
+            };
+            const double spaces = timed(std::string(128 << 10, ' ')), words = timed(repeated("refund ", (128 << 10) / 7));
+            std::cerr << "128 KiB of spaces: " << spaces << " s; of words: " << words << " s\n";
+            expect(spaces <= 2 * words, "a long run of spaces tokenizes in about the time of ordinary text");
         }
         json long_option = primitive("Please refund me.");
         long_option["questions"]["department"]["criteria"]["billing"] = repeated("payments ", 60);
@@ -358,7 +410,13 @@ int main(int argc, char **argv) {
             invalid([&] { tiny.execute(sized(70 - base)); });
             invalid([&] { tiny.execute(with(requests[0], "max_tokens", 65).dump()); });
         }
-        if (resident_kib() >= 0) {
+#ifdef DTL_SANITIZED
+        std::cout << "SKIPPED: no-logits resident-set check (sanitizer runtimes keep freed memory in quarantine)\n";
+        if (false) {
+#else
+        if (resident_kib() < 0) std::cout << "SKIPPED: no-logits resident-set check (reads VmRSS; Linux only)\n";
+        else {
+#endif
             // No logits buffer (llama-embeddings-no-logits-buffer.patch): the decision graph has no
             // logits, and llama.cpp used to reserve and zero-fill n_vocab floats per prompt token
             // anyway. A full 256-token prompt would then add at least 50,368 x 256 x 4 bytes (49 MiB;
@@ -404,6 +462,33 @@ int main(int argc, char **argv) {
                 expect(json::parse(engine.execute(alone.dump()))["answers"][id] == together["answers"][id],
                        "a question answers the same alone and among others sharing a structured state");
             }
+#ifdef DTL_COUNTS_ALLOCATIONS
+            // Prepared once, measured: the allocations three more questions add with a structured
+            // state, less those they add with the same state passed as text (which is never
+            // serialized), must stay far below one serialization of that state (estimated as a
+            // one-question request with the structured state less one with the text). A backend
+            // that serialized per question would add three serializations. Every request has a
+            // new state of equal length, so each is tokenized once; windows of 64 tokens keep the
+            // passes short.
+            const auto allocations_of = [&](json state, bool four) {
+                json request = all;
+                request["state"] = std::move(state);
+                request["max_tokens"] = 64;
+                if (!four) request["questions"] = {{"refund", all["questions"]["refund"]}};
+                const auto body = request.dump();
+                const long before = allocations.load();
+                engine.execute(body);
+                return allocations.load() - before;
+            };
+            const auto variant = [&](const char *nonce) { json copy = state; copy["ticket"]["subject"] = std::string("Refund ") + nonce; return copy; };
+            const long one = allocations_of(variant("A"), false), four = allocations_of(variant("B"), true);
+            const long one_text = allocations_of(variant("C").dump(), false), four_text = allocations_of(variant("D").dump(), true);
+            const long serialization = one - one_text, repeated_work = (four - one) - (four_text - one_text);
+            std::cerr << "allocations: one serialization about " << serialization << ", added by three more questions " << repeated_work << "\n";
+            expect(serialization > 1000 && std::labs(repeated_work) * 4 < serialization, "a structured state is prepared once per request");
+#else
+            std::cout << "SKIPPED: allocation count of the shared state (counts operator new; Linux, not sanitized)\n";
+#endif
         }
         checkpoint("structured state shared by questions");
         {
