@@ -319,7 +319,8 @@ if(DUCKTAPE_BUILD_NODE)
   add_library(ducktape_laya_node MODULE bindings/node/addon.cpp)
   target_include_directories(ducktape_laya_node PRIVATE ${NODE_INCLUDE_DIR})
   target_link_libraries(ducktape_laya_node PRIVATE ducktape_laya)
-  target_compile_definitions(ducktape_laya_node PRIVATE NAPI_VERSION=8 NODE_GYP_MODULE_NAME=ducktape_laya)
+  target_compile_definitions(ducktape_laya_node PRIVATE NAPI_VERSION=8 NODE_GYP_MODULE_NAME=ducktape_laya
+    DTL_ADDON_VERSION="${PROJECT_VERSION}")
   set_target_properties(ducktape_laya_node PROPERTIES PREFIX "" SUFFIX ".node" OUTPUT_NAME ducktape_laya
     BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "$<IF:$<BOOL:${APPLE}>,@loader_path;@loader_path/../..,$ORIGIN;$ORIGIN/../..>")
@@ -327,6 +328,10 @@ if(DUCKTAPE_BUILD_NODE)
   install(TARGETS ducktape_laya_node LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/ducktape-laya/node)
   if(APPLE)
     target_link_options(ducktape_laya_node PRIVATE "LINKER:-undefined,dynamic_lookup")
+  elseif(NOT WIN32)
+    # DT_RPATH, not DT_RUNPATH: $ORIGIN is searched before LD_LIBRARY_PATH, so another
+    # libducktape_laya.so.1 on LD_LIBRARY_PATH cannot shadow the one next to the addon.
+    target_link_options(ducktape_laya_node PRIVATE "LINKER:--disable-new-dtags")
   elseif(WIN32)
     # Node-API lives in the host executable. Link the Node distribution's import
     # library (scripts/fetch-node-sdk.py) and delay-load it, so the hook binds the

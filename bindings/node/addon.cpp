@@ -1,5 +1,6 @@
 #include <node_api.h>
 #include "ducktape_laya.h"
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <stdexcept>
@@ -24,8 +25,28 @@ static void check(dtl_status s, char *error) {
     std::unique_ptr<char, decltype(&dtl_free)> owned(error, dtl_free);
     if (s) throw native_error(s, error ? error : "Laya operation failed");
 }
-static void require_abi() {
+#ifndef DTL_ADDON_VERSION
+#error "DTL_ADDON_VERSION (the package version) must be defined"
+#endif
+// The addon and its library come from one build: refuse a library of another ABI or package version
+// (for example one the dynamic loader found elsewhere), with status 7. Checked once; a failure repeats.
+static void require_library() {
+    static std::atomic<bool> checked{false};
+    if (checked.load(std::memory_order_acquire)) return;
     if (dtl_abi_version() != 2) throw native_error(DTL_UNSUPPORTED_PLATFORM, ("Native ducktape-laya ABI " + std::to_string(dtl_abi_version()) + " is not supported (expected 2)").c_str());
+    char *result = nullptr, *error = nullptr;
+    auto status = dtl_info(nullptr, &result, &error);
+    std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
+    check(status, error);
+    // dtl_info writes compact JSON: "package_version":"X.Y.Z".
+    const std::string text(result), key = "\"package_version\":\"";
+    auto start = text.find(key);
+    auto end = start == std::string::npos ? std::string::npos : text.find('"', start + key.size());
+    std::string version = end == std::string::npos ? "unknown" : text.substr(start + key.size(), end - start - key.size());
+    if (version != DTL_ADDON_VERSION)
+        throw native_error(DTL_UNSUPPORTED_PLATFORM, ("The native ducktape-laya library is version " + version + ", but this addon was built with " DTL_ADDON_VERSION
+            "; another copy of the library was loaded instead of the one shipped with the addon").c_str());
+    checked.store(true, std::memory_order_release);
 }
 template<class F> napi_value guarded(napi_env env, F f) {
     try { return f(); }
@@ -43,7 +64,7 @@ template<class F> napi_value guarded(napi_env env, F f) {
 }
 static napi_value open_engine(napi_env env, napi_callback_info info) {
     return guarded(env, [&] {
-        require_abi();
+        require_library();
         size_t argc = 3; napi_value args[3]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
         if (argc != 3) throw std::runtime_error("Expected path/router JSON, config JSON and router flag");
         bool router; ok(napi_get_value_bool(env, args[2], &router));
@@ -112,7 +133,7 @@ static napi_value close_engine(napi_env env, napi_callback_info info) {
 }
 static napi_value info_engine(napi_env env, napi_callback_info info) {
     return guarded(env, [&] {
-        require_abi();
+        require_library();
         size_t argc = 1; napi_value arg; ok(napi_get_cb_info(env, info, &argc, &arg, nullptr, nullptr));
         dtl_engine *engine = nullptr;
         if (argc) {

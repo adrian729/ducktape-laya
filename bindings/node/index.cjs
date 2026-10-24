@@ -11,10 +11,11 @@ class Laya {
   }
   static runtimeInfo(options) {
     const { addonPath } = optionsObject(options);
-    let addon;
-    try { addon = require(resolveAddon(addonPath)); }
-    catch (error) { throw nativeError(error.message, error.status ?? 7); }
-    return JSON.parse(addon.info());
+    checkAddonPath(addonPath);
+    let text;
+    try { text = require(resolveAddon(addonPath)).info(); }
+    catch (error) { throw nativeError(addonLoadMessage(error), error.status ?? 7); }
+    return JSON.parse(text);
   }
   info() { return this.#send('info').then(JSON.parse); }
   static open(modelPath, options) { return Laya.#open(modelPath, options, false); }
@@ -49,6 +50,7 @@ class Laya {
       config.temperatures = temperatures;
     }
     if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw invalid(RangeError, 'maxPending must be 1..1024');
+    checkAddonPath(addonPath);
     let resolved;
     try { resolved = resolveAddon(addonPath); }
     catch (error) { throw nativeError(error.message, error.status ?? 7); }
@@ -84,7 +86,7 @@ class Laya {
         for (const pending of engine.#pending.values()) { pending.cleanup?.(); pending.reject(error); }
         engine.#pending.clear();
       };
-      worker.on('error', fail);
+      worker.on('error', error => fail(exitedError(`Laya worker failed: ${error?.message ?? error}`)));
       worker.on('exit', (code) => fail(exitedError(`Laya worker exited (${code})`)));
     });
     return engine;
@@ -119,7 +121,7 @@ class Laya {
       // Keep cancelled entries counted until the worker acknowledges them: an
       // abort storm must not bypass the bounded queue or race native shutdown.
       try { this.#worker.postMessage({ id, requestId: requestId ?? id, kind, request, observe: !!onEvent, cancellation, deadline }); }
-      catch (error) { cleanup(); this.#pending.delete(id); reject(error); }
+      catch (error) { cleanup(); this.#pending.delete(id); reject(exitedError(`Laya worker unreachable: ${error?.message ?? error}`)); }
     });
   }
   /** Runs one request object (or JSON string) or an array of requests. */
@@ -142,7 +144,10 @@ class Laya {
    * the Node.js process alive until close() is called. Idempotent, and resolves
    * even if the worker has already crashed or exited.
    */
-  close({ cancelPending = false } = {}) {
+  close(options) {
+    let cancelPending;
+    try { ({ cancelPending = false } = optionsObject(options)); }
+    catch (error) { return Promise.reject(error); }
     if (cancelPending) for (const pending of this.#pending.values()) if (pending.kind !== 'close') pending.stop?.(5);
     if (!this.#closePromise) {
       this.#closing = true;
@@ -161,12 +166,18 @@ const optionsObject = options => {
   if (options === null || typeof options !== 'object') throw invalid(TypeError, 'options must be an object');
   return options;
 };
-const closedError = () => Object.assign(new Error('Engine is closing or closed'), { code: 'ERR_LAYA_CLOSED' });
-const queueFullError = () => Object.assign(new Error('Laya queue is full'), { code: 'ERR_LAYA_QUEUE_FULL' });
-const exitedError = message => Object.assign(new Error(message), { code: 'ERR_LAYA_WORKER_EXITED' });
+// Every error this package raises carries a status: lifecycle and queue errors as the other bindings
+// report a closed engine (1, INVALID_ARGUMENT), a failed worker as an inference failure (3).
+const closedError = () => Object.assign(new Error('Engine is closing or closed'), { status: 1, code: 'ERR_LAYA_CLOSED' });
+const queueFullError = () => Object.assign(new Error('Laya queue is full'), { status: 1, code: 'ERR_LAYA_QUEUE_FULL' });
+const exitedError = message => Object.assign(new Error(message), { status: 3, code: 'ERR_LAYA_WORKER_EXITED' });
 // Load and ABI failures (status 7) also carry a stable code.
 const nativeError = (message, status) => Object.assign(new Error(message), { status }, status === 7 ? { code: 'ERR_LAYA_UNSUPPORTED' } : {});
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
+const checkAddonPath = addonPath => {
+  if (addonPath !== undefined && (typeof addonPath !== 'string' || !addonPath || addonPath.includes('\0'))) throw invalid(TypeError, 'addonPath must be a non-empty string');
+};
+const addonLoadMessage = resolveAddon.loadMessage;
 // JSON.stringify escapes lone surrogates instead of failing, which the native
 // side would then silently replace; reject them before serializing.
 const wellFormedJson = (value, what) => {

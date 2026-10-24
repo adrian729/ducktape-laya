@@ -1,9 +1,10 @@
 'use strict';
 const { parentPort, workerData } = require('node:worker_threads');
+const { loadMessage } = require('./resolve-addon.cjs');
 let native, handle;
 try {
   try { native = require(workerData.addonPath); }
-  catch (error) { throw Object.assign(new Error(`Cannot load the native Laya addon: ${error.message}`), { status: 7 }); }
+  catch (error) { throw Object.assign(new Error(loadMessage(error)), { status: 7 }); }
   handle = native.open(workerData.modelPath, workerData.config, workerData.router);
 } catch (error) {
   parentPort.postMessage({ startupError: error.message, status: error.status });

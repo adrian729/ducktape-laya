@@ -77,12 +77,14 @@ with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
                    cwd=app, check=True, capture_output=True)
     addon = app / f'node_modules/ducktape-laya/native/{target.npm}/ducktape_laya.node'
     # The addon finds the library next to itself: a relative run path (Windows looks in the addon's directory).
+    # On Linux it is a DT_RPATH, which the loader searches before LD_LIBRARY_PATH, never a DT_RUNPATH.
     if target.os == 'linux':
         dynamic = subprocess.check_output(['readelf', '-d', str(addon)], text=True)
-        for line in dynamic.splitlines():
-            if 'RPATH' in line or 'RUNPATH' in line:
-                paths = re.search(r'\[(.*?)\]', line).group(1).split(':')
-                assert all(path.startswith('$ORIGIN') for path in paths), paths
+        assert 'RUNPATH' not in dynamic, dynamic
+        lines = [line for line in dynamic.splitlines() if '(RPATH)' in line]
+        assert len(lines) == 1, dynamic
+        paths = re.search(r'\[(.*?)\]', lines[0]).group(1).split(':')
+        assert all(path.startswith('$ORIGIN') for path in paths), paths
     elif target.os == 'darwin':
         paths = macho_info(addon)['rpaths']
         assert paths and all(path.startswith('@loader_path') for path in paths), paths

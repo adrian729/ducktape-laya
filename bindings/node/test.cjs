@@ -161,27 +161,40 @@ test('Status is frozen and validation errors carry status and codes', async () =
     await assert.rejects(engine.execute('\0'), { name: 'TypeError', status: 1 });
     await assert.rejects(engine.execute('{}', { timeoutMs: -1 }), { name: 'RangeError', status: 1 });
     const first = engine.execute('{}').catch(() => {});
-    await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_QUEUE_FULL', message: 'Laya queue is full' });
+    await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_QUEUE_FULL', status: 1, message: 'Laya queue is full' });
     await first;
   } finally { await engine.close(); }
 });
 
-test('close resolves after the worker has died and stays idempotent', async () => {
+// A fresh copy of the binding whose workers are recorded, to observe or end them.
+function withWorkers() {
   const threads = require('node:worker_threads');
   const OriginalWorker = threads.Worker;
   const workers = [];
   threads.Worker = class extends OriginalWorker { constructor(...args) { super(...args); workers.push(this); } };
   const indexPath = require.resolve('./index.cjs');
   delete require.cache[indexPath];
-  let fresh;
-  try { fresh = require('./index.cjs'); } finally { threads.Worker = OriginalWorker; delete require.cache[indexPath]; }
-  const engine = await fresh.Laya.openRouter({ models: { unused: __filename } });
+  try { return { Laya: require('./index.cjs').Laya, workers }; }
+  finally { threads.Worker = OriginalWorker; delete require.cache[indexPath]; }
+}
+// Resolves when the worker has exited; fails after timeoutMs.
+function exited(worker, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    if (worker.threadId === -1) { resolve(); return; }
+    const timer = setTimeout(() => reject(new Error(`worker did not exit within ${timeoutMs} ms`)), timeoutMs);
+    worker.once('exit', () => { clearTimeout(timer); resolve(); });
+  });
+}
+
+test('close resolves after the worker has died and stays idempotent', async () => {
+  const { Laya: FreshLaya, workers } = withWorkers();
+  const engine = await FreshLaya.openRouter({ models: { unused: __filename } });
   await workers[0].terminate();
-  await assert.rejects(engine.info(), { code: 'ERR_LAYA_WORKER_EXITED', message: 'Engine worker has exited' });
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_WORKER_EXITED', status: 3, message: 'Engine worker has exited' });
   const close = engine.close();
   assert.equal(engine.close(), close);
   await close;
-  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED' });
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED', status: 1 });
 });
 
 test('execute is the only call', async () => {
@@ -352,11 +365,12 @@ test('answers report confidence and answer_confidence', { skip: !process.env.LAY
 });
 
 test('calls after close() report ERR_LAYA_CLOSED once the worker has exited', async () => {
-  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  const { Laya: FreshLaya, workers } = withWorkers();
+  const engine = await FreshLaya.openRouter({ models: { unused: __filename } });
   await engine.close();
-  await new Promise(resolve => setTimeout(resolve, 100)); // let the worker exit
-  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED' });
-  await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_CLOSED' });
+  await exited(workers[0]);
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED', status: 1 });
+  await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_CLOSED', status: 1 });
 });
 
 test('addon load failures carry status 7 and ERR_LAYA_UNSUPPORTED', async () => {
@@ -364,6 +378,14 @@ test('addon load failures carry status 7 and ERR_LAYA_UNSUPPORTED', async () => 
   await assert.rejects(Laya.open('x', { addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
   await assert.rejects(Laya.openRouter({ models: { unused: __filename } }, { addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
   assert.throws(() => Laya.runtimeInfo({ addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
+  // An addon that exists but cannot be loaded is reported as found, with the loader's reason.
+  const broken = path.join(require('node:os').tmpdir(), `ducktape-laya-broken-${process.pid}.node`);
+  fs.writeFileSync(broken, 'not an addon');
+  try {
+    const found = /The native Laya addon was found but could not be loaded: .* \(it needs /;
+    assert.throws(() => Laya.runtimeInfo({ addonPath: broken }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED', message: found });
+    await assert.rejects(Laya.open('x', { addonPath: broken }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED', message: found });
+  } finally { fs.rmSync(broken, { force: true }); }
 });
 
 test('musl detection reads the dynamic loaders in the given directories', () => {
@@ -429,11 +451,30 @@ test('on musl the resolver and every entry point report that the glibc addon can
   }
 });
 
+test('runtimeInfo maps an addon that reports the wrong ABI to ERR_LAYA_UNSUPPORTED', () => {
+  // A stand-in addon module whose info() fails like the addon's own library check.
+  const fake = path.join(require('node:os').tmpdir(), `ducktape-laya-fake-${process.pid}.cjs`);
+  fs.writeFileSync(fake, "module.exports = { info() { throw Object.assign(new Error('Native ducktape-laya ABI 3 is not supported (expected 2)'), { status: 7 }); } };");
+  try {
+    assert.throws(() => Laya.runtimeInfo({ addonPath: fake }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED', message: /ABI 3/ });
+  } finally { fs.rmSync(fake, { force: true }); delete require.cache[fake]; }
+});
+
+test('addonPath must be a non-empty string: an argument error, not a load failure', async () => {
+  for (const addonPath of [42, '', 'a\0b', {}]) {
+    assert.throws(() => Laya.runtimeInfo({ addonPath }), { name: 'TypeError', status: 1 });
+    await assert.rejects(Laya.open('x', { addonPath }), { name: 'TypeError', status: 1 });
+  }
+});
+
 test('null or non-object options are argument errors with status 1', async () => {
   await assert.rejects(Laya.open('x', null), { name: 'TypeError', status: 1 });
   await assert.rejects(Laya.openRouter({ models: { unused: __filename } }, null), { name: 'TypeError', status: 1 });
   assert.throws(() => Laya.runtimeInfo(null), { name: 'TypeError', status: 1 });
   const engine = await Laya.openRouter({ models: { unused: __filename } });
-  try { await assert.rejects(engine.execute('{}', null), { name: 'TypeError', status: 1 }); }
-  finally { await engine.close(); }
+  try {
+    await assert.rejects(engine.execute('{}', null), { name: 'TypeError', status: 1 });
+    await assert.rejects(engine.close(null), { name: 'TypeError', status: 1 });
+    await assert.rejects(engine.close(5), { name: 'TypeError', status: 1 });
+  } finally { await engine.close(); }
 });

@@ -93,6 +93,29 @@ def check_dotnet_resolution(out, native, target, directory, env):
     return 'bundled library loaded; current-directory and search-path decoys ignored'
 
 
+def check_node_resolution(app, native, target, directory, env):
+    """On Linux the npm package's addon finds its own libducktape_laya.so.1 through DT_RPATH $ORIGIN, which the
+    loader searches before LD_LIBRARY_PATH (a DT_RUNPATH would be searched after it): a copy of the library on
+    LD_LIBRARY_PATH is not loaded. The decoy is a real copy, so loading it would succeed and show in
+    /proc/self/maps."""
+    addon = app / 'node_modules/ducktape-laya/native' / target.npm / 'ducktape_laya.node'
+    dynamic = subprocess.check_output(['readelf', '-d', str(addon)], text=True)
+    if 'RUNPATH' in dynamic or not re.search(r'\(RPATH\)\s+Library rpath: \[\$ORIGIN', dynamic):
+        raise SystemExit(f'{addon}: expected a DT_RPATH starting with $ORIGIN and no DT_RUNPATH:\n{dynamic}')
+    decoy = directory / 'decoy-node'
+    decoy.mkdir()
+    for name in target.node_libraries:
+        shutil.copy(library_directory(native, target) / target.library, decoy / name)
+    script = ("require('ducktape-laya').Laya.runtimeInfo(); const fs = require('node:fs');"
+              "process.stdout.write([...new Set(fs.readFileSync('/proc/self/maps', 'utf8').split('\\n')"
+              ".map(line => line.slice(line.indexOf('/'))).filter(file => file.includes('/libducktape_laya.so')))].join('\\n'))")
+    files = subprocess.check_output(['node', '-e', script], cwd=app, env=with_library_path(env, decoy, target), text=True).split()
+    expected = [str((addon.parent / target.node_libraries[0]).resolve())]
+    if [str(pathlib.Path(file).resolve()) for file in files] != expected:
+        raise SystemExit(f'With a decoy on LD_LIBRARY_PATH the addon loaded {files}, expected only {expected}')
+    return 'bundled library loaded; LD_LIBRARY_PATH decoy ignored (DT_RPATH $ORIGIN)'
+
+
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('artifacts', type=pathlib.Path)
 p.add_argument('--platform', help='Package platform to test (default: this machine\'s; it must be this machine\'s)')
@@ -125,6 +148,8 @@ with tempfile.TemporaryDirectory(prefix='ducktape-smoke-') as directory:
                                                f"if (!r.includes(require('node:path').join('native', '{target.npm}', 'ducktape_laya.node'))) throw new Error(r); "
                                                "process.stdout.write(String(require('ducktape-laya').Laya.runtimeInfo().abi_version))"],
                                               cwd=app, env=env, text=True)
+    node_resolution = check_node_resolution(app, native, target, directory, env) if target.os == 'linux' else \
+        'skipped: the loaded-library check reads /proc/self/maps and the DT_RPATH (Linux)'
     wheel = artifacts / f'ducktape_laya-{version}-py3-none-{target.wheel}.whl'
     venv = directory / 'venv'
     subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
@@ -200,4 +225,4 @@ System.Console.Write(info.RootElement.GetProperty("abi_version").GetInt32());
 bad = {name: value for name, value in reported.items() if value != str(abi)}
 if bad:
     raise SystemExit(f'Packages report the wrong ABI (expected {abi}): {bad}')
-print(json.dumps({'abi_version': abi, 'platform': target.name, 'packages': sorted(reported), 'nupkg_resolution': resolution}))
+print(json.dumps({'abi_version': abi, 'platform': target.name, 'packages': sorted(reported), 'nupkg_resolution': resolution, 'npm_resolution': node_resolution}))

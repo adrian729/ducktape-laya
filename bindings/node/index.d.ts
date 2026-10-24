@@ -68,6 +68,6 @@ export declare const Status: Readonly<{
 }>;
 /** Shape of errors thrown by this package; `status` is a `Status` value, `code` a stable string. */
 export interface LayaError extends Error {
-  status?: number;
+  status: number;
   code?: 'ERR_LAYA_CLOSED' | 'ERR_LAYA_QUEUE_FULL' | 'ERR_LAYA_WORKER_EXITED' | 'ERR_LAYA_UNSUPPORTED';
 }

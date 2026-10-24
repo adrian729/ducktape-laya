@@ -20,7 +20,7 @@ function resolveAddon(override, { platform: os = process.platform, arch = proces
   if (override || env.DUCKTAPE_LAYA_ADDON) return path.resolve(override || env.DUCKTAPE_LAYA_ADDON);
   const platform = `${os}-${arch}`;
   if (!PLATFORMS.includes(platform)) {
-    throw unsupported(`Unsupported native platform: ${os}/${arch}; this package supports Linux x64 and arm64, macOS arm64 and Windows x64`);
+    throw unsupported(`Unsupported native platform: ${os}/${arch}; packages exist for Linux x64 and arm64 and Windows x64; on other platforms build the addon from source and set addonPath or DUCKTAPE_LAYA_ADDON`);
   }
   if (os === 'linux' && musl()) {
     throw unsupported(`The native Laya addon for ${platform} needs glibc, and this looks like a musl system (for example Alpine). Use a glibc-based image, or set addonPath / DUCKTAPE_LAYA_ADDON to a musl build.`);
@@ -31,5 +31,13 @@ function resolveAddon(override, { platform: os = process.platform, arch = proces
   if (fs.existsSync(packaged)) return packaged;
   throw unsupported(`Native Laya addon for ${platform} is missing. Install a package built for this platform, or set addonPath / DUCKTAPE_LAYA_ADDON for a development build.`);
 }
+// Why an addon that exists may fail to load on each platform.
+const HINTS = { linux: 'it needs glibc 2.38+ and libstdc++ with GLIBCXX_3.4.29', win32: 'it needs the Microsoft Visual C++ Redistributable', darwin: 'it needs macOS 14 or newer' };
+// The message for an addon that resolved but failed to load (require, or the addon's own library check).
+function loadMessage(error, os = process.platform) {
+  if (error?.status !== undefined || error?.code !== 'ERR_DLOPEN_FAILED') return error?.message ?? String(error);
+  return `The native Laya addon was found but could not be loaded: ${error.message} (${HINTS[os] ?? 'it was built for another platform'})`;
+}
 module.exports = resolveAddon;
 module.exports.isMusl = isMusl;
+module.exports.loadMessage = loadMessage;
