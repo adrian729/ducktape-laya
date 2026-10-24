@@ -78,7 +78,8 @@ try:
         commands = [
             ['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
              '-DDUCKTAPE_BUILD_TESTS=OFF', '-DDUCKTAPE_BUILD_NODE=ON', f'-DNODE_INCLUDE_DIR={node_include}',
-             f'-DDUCKTAPE_LLAMA_REVISION={record["runtime"]["commit"]}', '-DGGML_CCACHE=OFF',
+             f'-DDUCKTAPE_LLAMA_REVISION={record["runtime"]["commit"]}',
+             '-DGGML_CCACHE=OFF', '-DCMAKE_C_COMPILER_LAUNCHER=', '-DCMAKE_CXX_COMPILER_LAUNCHER=',
              f'-DCMAKE_C_COMPILER={compilers[a.cc]["path"]}', f'-DCMAKE_CXX_COMPILER={compilers[a.cxx]["path"]}', *a.cmake_arg],
             ['cmake', '--build', str(build), '--parallel', str(a.jobs)],
             ['cmake', '--install', str(build), '--prefix', str(install)]]

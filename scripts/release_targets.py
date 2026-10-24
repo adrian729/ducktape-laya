@@ -37,10 +37,21 @@ def need(condition, message):
         raise Mismatch(message)
 
 
+def require_complete_validation(report, name):
+    """A validate.py report that left suites out, or was compiled through a cache, is not release evidence."""
+    left_out = sorted(SELECTABLE_SUITES & set(report.get('skipped', {})))
+    need(not left_out, f'{name}: left out {", ".join(left_out)} (validate.py --bindings or --skip-native-tests)')
+    # Reports from before validate.py recorded the launcher were built without one.
+    launcher = report.get('compiler_launcher', 'none')
+    need(launcher == 'none', f'{name}: compiled through the compiler launcher {launcher}, not without one')
+
+
 # Native tests every target registers; real-faults and real-c-faults are Linux-only (CMakeLists.txt).
 MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
 REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-tokenizer'}
 LINUX_TESTS = {'real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults'}
+# Suites scripts/validate.py leaves out with --bindings or --skip-native-tests (listed under skipped).
+SELECTABLE_SUITES = {'native', 'rust', 'node', 'python', 'java', 'dotnet', 'go', 'bindings', 'installed'}
 # The run that may produce candidate evidence.
 CI_EVENT, CI_CONCLUSION = 'workflow_dispatch', 'success'
 # The only repository whose runs are candidate evidence (scripts/fetch-ci-evidence.py has the same constant).
@@ -250,6 +261,7 @@ class Context:
         path = self.ci_file(f'{platform}:native')
         report = json.loads(path.read_text())
         self.same_source(report, f'{platform} validation')
+        require_complete_validation(report, f'{platform} validation')
         need(report.get('mode') == 'real_model' and report.get('model', {}).get('sha256') == self.primary['sha256'],
              f'{platform} validation: not a real-model run of the pinned model')
         need(report.get('platform') == platform, f'{platform} validation: ran on {report.get("platform")}')

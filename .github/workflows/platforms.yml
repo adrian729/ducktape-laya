@@ -13,9 +13,42 @@ on:
         default: false
 permissions:
   contents: read
+# As in native.yml: a newer push to the same branch cancels the older push run; runs on main,
+# pull requests and dispatches are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
 jobs:
+  # Documentation-only changes skip the build (scripts/ci-changes.py; native.yml runs the docs checks).
+  changes:
+    name: Changed files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base=
+          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"
+          elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then base="$BEFORE"
+          elif [ "$EVENT" = push ]; then base="$(git merge-base origin/main HEAD || true)"
+          fi
+          python3 scripts/ci-changes.py --event "$EVENT" --base "$base"
+
   macos:
     name: macOS arm64 / ${{ inputs.real_model && 'real model' || 'model free' }}
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -24,11 +57,21 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
       GOTOOLCHAIN: local
+      # ccache checks the compiler by content and has no base_dir (it would change the objects'
+      # bytes; see native.yml).
+      CCACHE_COMPILERCHECK: content
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           submodules: recursive
           persist-credentials: false
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: ${{ runner.os }}-arm64-appleclang-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+          restore-keys: ${{ runner.os }}-arm64-appleclang
+          max-size: 500M
+          install: binary
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.21.0
@@ -66,6 +109,7 @@ jobs:
         run: |
           node_include="$(dirname "$(dirname "$(which node)")")/include/node"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_NODE=ON "-DNODE_INCLUDE_DIR=$node_include" \
+            -DGGML_CCACHE=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             ${LAYA_MODEL:+"-DDUCKTAPE_TEST_MODEL=$LAYA_MODEL" -DDUCKTAPE_BUILD_REFERENCE_PROBE=ON}
           cmake --build build --parallel 3
       - name: Exported symbols

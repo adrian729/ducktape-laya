@@ -28,7 +28,14 @@ if(EMSCRIPTEN)
 else()
   set(DTL_LIBRARY_KIND SHARED)
 endif()
-option(DUCKTAPE_BUILD_TESTS "Build native tests" ON)
+# Tests build by default in a checkout of this project, not when it is added to another
+# (add_subdirectory, FetchContent), where BUILD_TESTING decides if the parent sets it.
+if(DEFINED BUILD_TESTING)
+  set(DTL_BUILD_TESTS_DEFAULT ${BUILD_TESTING})
+else()
+  set(DTL_BUILD_TESTS_DEFAULT ${PROJECT_IS_TOP_LEVEL})
+endif()
+option(DUCKTAPE_BUILD_TESTS "Build native tests" ${DTL_BUILD_TESTS_DEFAULT})
 set(DUCKTAPE_TEST_MODEL "" CACHE FILEPATH "Local Laya GGUF for integration tests")
 set(DUCKTAPE_REAL_TEST_TIMEOUT 600 CACHE STRING "Per-test timeout in seconds for long real-model tests (raise for instrumented builds)")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -80,6 +87,12 @@ endif()
 string(JSON DTL_PATCHES_JSON GET "${DTL_RELEASE_RECORD}" runtime patches)
 # Normalize paths embedded by compiler diagnostics/debug metadata.
 option(DUCKTAPE_REPRODUCIBLE_PATHS "Normalize source/build paths in compiled artifacts" ON)
+# ggml compiles through any ccache or sccache on PATH by default (GGML_CCACHE). A ccache with
+# base_dir hands the compiler relative paths that the maps below do not match, which changes the
+# library's bytes; a compiler cache is opt-in here (CMAKE_<LANG>_COMPILER_LAUNCHER, or GGML_CCACHE=ON).
+if(DUCKTAPE_REPRODUCIBLE_PATHS)
+  set(GGML_CCACHE OFF CACHE BOOL "ggml: use ccache if available (ducktape-laya: off for reproducible paths)")
+endif()
 if(DUCKTAPE_REPRODUCIBLE_PATHS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   # clang-cl takes driver options through /clang: (a bare -f... would read as a file).
   if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
@@ -118,11 +131,13 @@ if(NOT EMSCRIPTEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
 # Upstream Git discovery can find the parent project's repository in an archive.
-# Normalize its generated metadata to the explicit runtime identity instead.
+# Normalize its generated metadata to the explicit runtime identity instead (upstream
+# rewrites the header on every configure; ours keeps its timestamp while unchanged).
+include(cmake/generated_files.cmake)
 set(DTL_GGML_VERSION_HEADER "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp/ggml/src/ggml-version.h")
 file(READ "${DTL_GGML_VERSION_HEADER}" DTL_GGML_VERSION_TEXT)
 string(REGEX REPLACE "#define GGML_COMMIT[ \t]+\"[^\"]*\"" "#define GGML_COMMIT \"${DTL_RUNTIME_COMMIT}\"" DTL_GGML_VERSION_TEXT "${DTL_GGML_VERSION_TEXT}")
-file(WRITE "${DTL_GGML_VERSION_HEADER}" "${DTL_GGML_VERSION_TEXT}")
+dtl_write_generated("${DTL_GGML_VERSION_HEADER}" "${CMAKE_CURRENT_BINARY_DIR}/ggml-version.stage/ggml-version.h" "${DTL_GGML_VERSION_TEXT}")
 include(cmake/runtime_patches.cmake)
 if(NOT EMSCRIPTEN)
   # The runtime sources this build compiles, checked by packaging (cmake/runtime_sources.cmake).

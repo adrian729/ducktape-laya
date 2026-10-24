@@ -291,6 +291,31 @@ def require_uninstrumented_binary(path):
     if instrumented:
         raise ValueError('Instrumented binary cannot be packaged: ' + str(path))
 
+# A source path compiled into a binary (__FILE__ in assertions and log messages), as its strings hold
+# it: a whole printable string, NUL-terminated, with a directory separator, ending in a C or C++ source or header suffix.
+SOURCE_PATH = re.compile(rb'(?<![\x20-\x7e])([\x21-\x7e]*[/\\][\x21-\x7e]*\.(?:c|cc|cpp|cxx|h|hh|hpp|inc))(?=\x00)')
+
+def require_mapped_source_paths(path, root=ROOT):
+    """Reject a binary holding a source path the reproducible-path map did not map.
+
+    With DUCKTAPE_REPRODUCIBLE_PATHS, -ffile-prefix-map maps the source, runtime and build directories
+    to ./, ./third_party/llama.cpp and ./build, so every source path in a release binary starts (after
+    a leading ./, which GCC keeps and Clang drops; Windows separators are \\) with a top-level entry of
+    the checkout or with build. A compiler launcher that rewrites the paths it gives the compiler
+    (ccache's base_dir makes them relative: ../../src/laya.cpp, or runtime-patched/... from the build
+    directory) defeats the map and changes the binary's bytes; so does an absolute or unmapped path."""
+    path = pathlib.Path(path)
+    roots = {entry.name for entry in pathlib.Path(root).iterdir()} | {'build'}
+    def mapped(found):
+        parts = re.split(r'[/\\]', found)
+        if parts[0] == '.': parts = parts[1:]
+        return bool(parts) and parts[0] in roots
+    unmapped = sorted({found for found in (raw.decode('utf-8', 'replace') for raw in SOURCE_PATH.findall(path.read_bytes()))
+                       if not mapped(found)})
+    if unmapped:
+        raise ValueError(f'{path.name} holds source paths outside the reproducible-path map (a compiler cache with base_dir, '
+                         'or an unmapped directory): ' + ', '.join(unmapped[:5]) + (f' and {len(unmapped) - 5} more' if len(unmapped) > 5 else ''))
+
 def pe_info(path):
     """Exports, imported DLLs (direct and delay-loaded) and machine of a PE32+ image."""
     import struct

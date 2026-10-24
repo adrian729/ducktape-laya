@@ -218,6 +218,22 @@ class Targets(unittest.TestCase):
         self.world.edit('evidence-windows-x64/report.json', lambda r: r['ctest_registered'].remove('real-control'))
         self.assertGate('windows-x64', 'native_contracts', 'failed', 'not registered')
 
+    def test_incomplete_or_cached_validation(self):
+        # validate.py --bindings, --skip-native-tests and --compiler-launcher runs are not release evidence.
+        cases = {'binding left out': (lambda r: r['skipped'].update(go='not selected (--bindings)'), 'left out go'),
+                 'parity left out': (lambda r: r['skipped'].update(bindings='every binding must agree'), 'left out bindings'),
+                 'native tests left out': (lambda r: r['skipped'].update(native='not run (--skip-native-tests)'), 'left out native'),
+                 'compiler cache': (lambda r: r.update(compiler_launcher='ccache'), 'compiler launcher ccache')}
+        for label, (change, message) in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                self.world.edit('evidence-linux-arm64/report.json', change)
+                for gate in ('native_contracts', 'abi', 'artifact_integrity'):
+                    self.assertGate('linux-arm64', gate, 'failed', message)
+        self.setUp()
+        self.world.edit('evidence-windows-x64/report.json', lambda r: r.update(compiler_launcher='none'))
+        self.assertGate('windows-x64', 'native_contracts', 'passed')
+
     def test_missing_evidence(self):
         self.world.paths.pop('linux-arm64:stress')
         self.assertGate('linux-arm64', 'short_stress', 'not_run')
@@ -281,6 +297,20 @@ class CheckCandidate(unittest.TestCase):
         world.edit('evidence-linux-x64/report.json', lambda r: r.update(library_sha256=digest(world.library('linux-x64')),
                                                                          addon_sha256=digest(b'other')))
         self.assertIn('CI linux-x64 Node addon differs', self.check(world)['gates']['artifact_integrity']['detail'])
+
+    def test_incomplete_or_cached_validation(self):
+        # The local native report and the CI linux-x64 one must both be complete runs without a compiler cache.
+        world = self.world('incomplete')
+        report = json.loads(world.paths['native'].read_text())
+        world.paths['native'].write_text(json.dumps({**report, 'skipped': {**report.get('skipped', {}), 'native': 'not run (--skip-native-tests)'}}))
+        gates = self.check(world)['gates']
+        for gate in ('native_contracts', 'binding_conformance', 'abi', 'artifact_integrity'):
+            self.assertEqual(gates[gate]['status'], 'failed', gates[gate])
+            self.assertIn('native: left out native', gates[gate]['detail'])
+        world.paths['native'].write_text(json.dumps(report))
+        world.edit('evidence-linux-x64/report.json', lambda r: r.update(compiler_launcher='ccache'))
+        self.assertIn('linux-x64 validation: compiled through the compiler launcher ccache',
+                      self.check(world)['gates']['artifact_integrity']['detail'])
 
     def test_installed_release_packages(self):
         world = self.world('installed')

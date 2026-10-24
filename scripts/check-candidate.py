@@ -31,7 +31,8 @@ import tempfile
 import zipfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from release_support import ROOT, check_qualification, check_record, check_targets, git, read_json, security_review_problems, sha256, source_identity
-from release_targets import Context, Missing, Mismatch, COMPARISON_NOTES, compare_packages, evaluate_targets, need, run_gate
+from release_targets import (Context, Missing, Mismatch, COMPARISON_NOTES, compare_packages, evaluate_targets, need, require_complete_validation,
+                             run_gate)
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('evidence', type=pathlib.Path, help='JSON object: evidence name -> report path (relative to the manifest)')
@@ -100,6 +101,7 @@ def tested_source(report, name):
 def native():
     report = load('native')
     same_source(report, 'native')
+    require_complete_validation(report, 'native')
     need(report.get('mode') == 'real_model' and report.get('model', {}).get('sha256') == manifest_model['sha256'], 'native: not a real-model run of the pinned model')
     return report
 def packages():

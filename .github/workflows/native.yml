@@ -25,8 +25,65 @@ on:
         default: false
 permissions:
   contents: read
+# A newer push to the same branch cancels the older push run (scripts/ci-changes.py compares a
+# branch with main, so the newer run checks everything the older one would have). Runs on main,
+# pull requests and dispatches (candidate runs included) are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
+# Compiler cache (non-candidate build jobs; see docs/RELEASE_CHECKS.md, Continuous integration):
+# ccache checks the compiler by content, and has no base_dir: base_dir would hand the compiler
+# relative paths, which -ffile-prefix-map does not map, and change the objects' bytes.
+env:
+  CCACHE_COMPILERCHECK: content
 jobs:
+  # Documentation-only changes skip the build jobs (scripts/ci-changes.py); a dispatch never does.
+  changes:
+    name: Changed files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      library: ${{ steps.classify.outputs.library }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base=
+          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"
+          elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then base="$BEFORE"
+          elif [ "$EVENT" = push ]; then base="$(git merge-base origin/main HEAD || true)"
+          fi
+          python3 scripts/ci-changes.py --event "$EVENT" --base "$base"
+
+  docs:
+    name: Documentation and policy checks
+    needs: changes
+    if: needs.changes.outputs.docs_only == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Links, qualification policy, result comparison and the CI change rules
+        run: |
+          python3 tests/docs-links.py
+          python3 tests/qualification.py
+          python3 tests/result-comparison.py
+          python3 tests/ci-changes.py
+
   parser-sanitizers:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -39,12 +96,23 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+      - name: Compiler cache
+        if: ${{ !inputs.candidate }}
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: ${{ runner.os }}-x64-clang-sanitizers-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+          restore-keys: ${{ runner.os }}-x64-clang-sanitizers
+          max-size: 500M
+          install: binary
       - name: Build instrumented shared library and model-free contracts
+        env:
+          LAUNCHER: ${{ !inputs.candidate && 'ccache' || '' }}
         run: |
           cmake -S . -B build-sanitized -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
-            '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer'
-          cmake --build build-sanitized --parallel 2
+            '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DGGML_CCACHE=OFF "-DCMAKE_C_COMPILER_LAUNCHER=$LAUNCHER" "-DCMAKE_CXX_COMPILER_LAUNCHER=$LAUNCHER"
+          cmake --build build-sanitized --parallel 4
           ctest --test-dir build-sanitized --output-on-failure
       - name: Mutate request, schema and router inputs
         run: |
@@ -52,27 +120,66 @@ jobs:
             tests/input-fuzz.cpp -Iinclude -Lbuild-sanitized -lducktape_laya -o build-sanitized/input-fuzz
           LD_LIBRARY_PATH="$PWD/build-sanitized" build-sanitized/input-fuzz \
             tests/fixtures/primitive.json tests/fixtures/structured.json tests/fixtures/batch.json
-      - name: Coverage-guided parser and router smoke
-        run: |
-          cmake -S . -B build-sanitized -DDUCKTAPE_BUILD_FUZZERS=ON
-          cmake --build build-sanitized --target laya-input-fuzzer --parallel 2
-          python3 tests/fuzz-corpus.py build-sanitized/corpus
-          build-sanitized/laya-input-fuzzer build-sanitized/corpus -seed=444211238 \
-            -max_total_time=60 -max_len=1048577 -timeout=30 \
-            -artifact_prefix=build-sanitized/fuzzer- -print_final_stats=1 \
-            > build-sanitized/fuzzer-smoke.log 2>&1
-      - name: Retain sanitizer and fuzz evidence
+      - name: Retain sanitizer evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: parser-sanitizers
-          path: |
-            build-sanitized/fuzzer-*
-            build-sanitized/Testing/Temporary/LastTest.log
+          path: build-sanitized/Testing/Temporary/LastTest.log
           if-no-files-found: warn
           retention-days: 14
+
+  # The libFuzzer smoke in its own job and build directory, in parallel with the sanitizer job.
+  parser-fuzzer:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: clang
+      CXX: clang++
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Compiler cache
+        if: ${{ !inputs.candidate }}
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: ${{ runner.os }}-x64-clang-fuzzer-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+          restore-keys: ${{ runner.os }}-x64-clang-fuzzer
+          max-size: 500M
+          install: binary
+      - name: Coverage-guided parser and router smoke
+        env:
+          LAUNCHER: ${{ !inputs.candidate && 'ccache' || '' }}
+        run: |
+          cmake -S . -B build-fuzzer -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDUCKTAPE_BUILD_FUZZERS=ON -DDUCKTAPE_BUILD_TESTS=OFF \
+            '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DGGML_CCACHE=OFF "-DCMAKE_C_COMPILER_LAUNCHER=$LAUNCHER" "-DCMAKE_CXX_COMPILER_LAUNCHER=$LAUNCHER"
+          cmake --build build-fuzzer --target laya-input-fuzzer --parallel 4
+          python3 tests/fuzz-corpus.py build-fuzzer/corpus
+          build-fuzzer/laya-input-fuzzer build-fuzzer/corpus -seed=444211238 \
+            -max_total_time=60 -max_len=1048577 -timeout=30 \
+            -artifact_prefix=build-fuzzer/fuzzer- -print_final_stats=1 \
+            > build-fuzzer/fuzzer-smoke.log 2>&1
+      - name: Retain fuzz evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: parser-fuzzer
+          path: build-fuzzer/fuzzer-*
+          if-no-files-found: warn
+          retention-days: 14
+
   native:
     name: ${{ matrix.compiler }} / Node ${{ matrix.node }} / ${{ matrix.arch }} / ${{ (inputs.real_model || inputs.candidate) && 'real model' || 'model free' }}
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
     strategy:
@@ -105,11 +212,21 @@ jobs:
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
+      # A candidate run builds without a compiler cache (scripts/check-candidate.py requires it).
+      LAUNCHER: ${{ inputs.candidate && 'none' || 'ccache' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           submodules: recursive
           persist-credentials: false
+      - name: Compiler cache
+        if: ${{ !inputs.candidate }}
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: ${{ runner.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-${{ matrix.compiler }}
+          max-size: 500M
+          install: binary
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: ${{ matrix.node }}
@@ -149,10 +266,12 @@ jobs:
         run: npm ci --ignore-scripts --prefix tests/typescript
       - name: Model-free checks
         if: ${{ !(inputs.real_model || inputs.candidate) }}
-        run: python3 scripts/validate.py --packages --output build-ci-report --jobs 2
+        run: python3 scripts/validate.py --packages --output build-ci-report --jobs 4 --compiler-launcher "$LAUNCHER"
       - name: Real-model and installed artifact checks
         if: (inputs.real_model || inputs.candidate)
-        run: python3 scripts/validate.py --model build-model/laya.gguf --packages --upstream-reference --output build-ci-report --jobs 2
+        run: >-
+          python3 scripts/validate.py --model build-model/laya.gguf --packages --upstream-reference --output build-ci-report
+          --jobs 4 --compiler-launcher "$LAUNCHER"
       - name: Record exact outputs of the built library on this runner CPU
         if: (inputs.real_model || inputs.candidate) && matrix.arch == 'x64'
         run: |
@@ -161,11 +280,16 @@ jobs:
             --model build-model/laya.gguf --report build-ci-report/cross-host/record.json
       - name: Short stress run on the validated library (tier-2 target)
         if: inputs.candidate && matrix.platform == 'linux-arm64'
-        run: python3 scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 2
+        run: python3 scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 4
       # On the validated build's runner: another image may link other toolchain libraries.
       - name: Two independent builds of one source snapshot (tier-2 target)
         if: inputs.candidate && matrix.platform == 'linux-arm64'
         run: python3 scripts/check-reproducibility.py --output build-repro --jobs 4 --cc gcc --cxx g++
+      # Model-free and after every other use of the build: reconfiguring the validated build
+      # recompiles nothing, and an edited patched runtime copy is restored and recompiled alone.
+      - name: Reconfigure without recompiling
+        if: matrix.compiler == 'clang'
+        run: python3 tests/reconfigure.py --build build-validation --jobs 4 --edit-copy
       # The gcc builds' packages (the release compiler) are this platform's fragment for
       # scripts/assemble-packages.py, which the assemble job below merges with Windows.
       - name: Retain this platform's packages
@@ -221,6 +345,8 @@ jobs:
 
   windows:
     name: Windows x64 / ${{ (inputs.real_model || inputs.candidate) && 'real model' || 'model free' }}
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-2025
     timeout-minutes: 120
     env:
@@ -229,11 +355,23 @@ jobs:
       # The test and release scripts read UTF-8 files with Python's default encoding.
       PYTHONUTF8: '1'
       GOTOOLCHAIN: local
+      # A candidate run builds without a compiler cache (scripts/check-candidate.py requires it).
+      LAUNCHER: ${{ inputs.candidate && 'none' || 'sccache' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           submodules: recursive
           persist-credentials: false
+      # sccache: clang-cl through Ninja (ccache's MSVC-style support is narrower).
+      - name: Compiler cache
+        if: ${{ !inputs.candidate }}
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          variant: sccache
+          key: ${{ runner.os }}-x64-clang-cl-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+          restore-keys: ${{ runner.os }}-x64-clang-cl
+          max-size: 500M
+          install: binary
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.21.0
@@ -286,14 +424,14 @@ jobs:
           set "MODEL="
           if defined LAYA_MODEL set "MODEL=--model %LAYA_MODEL% --upstream-reference"
           rem Strawberry Perl's patch.exe comes first on PATH and crashes; use the one from Git for Windows.
-          python scripts/validate.py %MODEL% --packages --output build-ci-report --jobs 3 --node-include "%NODE_INCLUDE_DIR%" --node-lib "%NODE_LIB%" --cmake-arg=-GNinja "--cmake-arg=-DCMAKE_C_COMPILER=%CLANG%" "--cmake-arg=-DCMAKE_CXX_COMPILER=%CLANG%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
+          python scripts/validate.py %MODEL% --packages --output build-ci-report --jobs 4 --compiler-launcher %LAUNCHER% --node-include "%NODE_INCLUDE_DIR%" --node-lib "%NODE_LIB%" --cmake-arg=-GNinja "--cmake-arg=-DCMAKE_C_COMPILER=%CLANG%" "--cmake-arg=-DCMAKE_CXX_COMPILER=%CLANG%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
       - name: Short stress run on the validated library (tier-2 target)
         if: inputs.candidate
         shell: cmd
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          python scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 3 || exit /b 1
+          python scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 4 || exit /b 1
       # On the validated build's runner: the DLL links the image's MSVC and SDK libraries, so a
       # build on another image version differs.
       - name: Two independent builds of one source snapshot with clang-cl (tier-2 target)
@@ -303,7 +441,7 @@ jobs:
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
-          python scripts/check-reproducibility.py --output "%RUNNER_TEMP%\repro" --jobs 3 --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
+          python scripts/check-reproducibility.py --output "%RUNNER_TEMP%\repro" --jobs 4 --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
       - name: Retain logs and explicit gate report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -361,11 +499,13 @@ jobs:
           overwrite: true
 
   # Two independent builds of one source snapshot install identical files, on Windows on every
-  # push. (A candidate run does this inside each tier-2 target's validation job instead, on the
-  # validated build's runner; Linux x86-64 is checked on the release host.)
+  # push that changes a library input (scripts/ci-changes.py) and on every dispatch. (A candidate
+  # run does this inside each tier-2 target's validation job instead, on the validated build's
+  # runner; Linux x86-64 is checked on the release host.) Never through a compiler cache.
   reproducibility:
     name: Windows x64 / independent builds
-    if: ${{ !inputs.candidate }}
+    needs: changes
+    if: ${{ !inputs.candidate && needs.changes.outputs.library == 'true' }}
     runs-on: windows-2025
     timeout-minutes: 60
     env:
@@ -390,7 +530,7 @@ jobs:
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
-          python scripts/check-reproducibility.py --output "%RUNNER_TEMP%\repro" --jobs 3 --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
+          python scripts/check-reproducibility.py --output "%RUNNER_TEMP%\repro" --jobs 4 --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
       - name: Retain the report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

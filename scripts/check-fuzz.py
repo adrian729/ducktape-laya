@@ -43,7 +43,9 @@ try:
         raise RuntimeError('Configure a dedicated build with DUCKTAPE_BUILD_FUZZERS=ON first')
     commands = [
         ['cmake', '-S', str(ROOT), '-B', str(build),
-         f'-DDUCKTAPE_LLAMA_SOURCE={ROOT / record["runtime"]["path"]}', '-DDUCKTAPE_LLAMA_REVISION='],
+         f'-DDUCKTAPE_LLAMA_SOURCE={ROOT / record["runtime"]["path"]}', '-DDUCKTAPE_LLAMA_REVISION=',
+         # No compiler cache: ggml's GGML_CCACHE (ON by default) would use any ccache on PATH.
+         '-DGGML_CCACHE=OFF', '-DCMAKE_C_COMPILER_LAUNCHER=', '-DCMAKE_CXX_COMPILER_LAUNCHER='],
         ['cmake', '--build', str(build), '--target', 'laya-input-fuzzer', '--parallel', str(a.jobs)]]
     report['build_commands'] = commands
     with (out / 'build.log').open('w') as log:

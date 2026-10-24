@@ -19,7 +19,8 @@ import re
 import sys
 import tempfile
 from release_support import (ROOT, build_environment, host_target, check_record, sha256, git, binary_info, source_identity, native_build_identity,
-                             require_runtime_identity, require_runtime_sources, require_uninstrumented_binary, pe_info, macho_info)
+                             require_runtime_identity, require_runtime_sources, require_uninstrumented_binary, require_mapped_source_paths,
+                             pe_info, macho_info)
 from artifact_support import write_zip, archive_tree, archive_zip, set_npm_platforms, native_payload
 import java_package
 import python_wheel
@@ -77,6 +78,7 @@ except ValueError as error:
 try:
     for name in [target.library, 'ducktape_laya.node']:
         require_uninstrumented_binary(build / name)
+        require_mapped_source_paths(build / name)
 except ValueError as error:
     p.error(str(error))
 diagnostics = binary_info(build)

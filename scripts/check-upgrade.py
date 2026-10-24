@@ -110,7 +110,9 @@ try:
         build = output / (label + '-build')
         run(label + '-configure', ['cmake', '-S', str(core), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
             f'-DDUCKTAPE_LLAMA_SOURCE={upstream}', f'-DDUCKTAPE_LLAMA_REVISION={revision}', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_TESTS=ON',
-            '-DDUCKTAPE_BUILD_NODE=ON', f'-DNODE_INCLUDE_DIR={node_headers}', f'-DDUCKTAPE_TEST_MODEL={weights}'], core)
+            '-DDUCKTAPE_BUILD_NODE=ON', f'-DNODE_INCLUDE_DIR={node_headers}', f'-DDUCKTAPE_TEST_MODEL={weights}',
+            # No compiler cache: ggml's GGML_CCACHE (ON by default) would use any ccache on PATH.
+            '-DGGML_CCACHE=OFF', '-DCMAKE_C_COMPILER_LAUNCHER=', '-DCMAKE_CXX_COMPILER_LAUNCHER='], core)
         run(label + '-build', ['cmake', '--build', str(build), '--parallel', str(a.jobs)], core)
         env = dict(os.environ, LAYA_MODEL=str(weights), LD_LIBRARY_PATH=str(build),
                    DUCKTAPE_LAYA_LIB_DIR=str(build), DUCKTAPE_LAYA_ADDON=str(build / 'ducktape_laya.node'),
