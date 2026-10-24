@@ -5,7 +5,7 @@ Local [Laya](https://github.com/NandhaKishorM/laya) decisions for Node.js and El
 ## Requirements
 
 - Node.js 20+ (tested on 24 and 26) or Electron (tested with 44). The native addon is prebuilt; no compiler is needed.
-- Linux x86-64 with AVX2, FMA, F16C, BMI2 and SSE4.2 and glibc 2.38+ (Ubuntu 24.04+). The 0.2.0 package carries Linux x86-64 only; from the next release it also carries Linux arm64 (Armv8.2-A with dot product and FP16) and Windows x64 (which needs the Microsoft Visual C++ Redistributable), and picks the addon for the running platform. musl (Alpine) is not supported: loading fails with `ERR_LAYA_UNSUPPORTED`. Full matrix: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md) and the [repository README](https://github.com/adrian729/ducktape-laya#requirements).
+- Linux x86-64 with AVX, AVX2, FMA, F16C, BMI2 and SSE4.2 and glibc 2.38+ (Ubuntu 24.04+). The 0.2.0 package carries Linux x86-64 only; from the next release it also carries Linux arm64 (Armv8.2-A with dot product and FP16) and Windows x64 (which needs the Microsoft Visual C++ Redistributable), and picks the addon for the running platform. musl (Alpine) is not supported: loading fails with `ERR_LAYA_UNSUPPORTED`. Full matrix: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md) and the [repository README](https://github.com/adrian729/ducktape-laya#requirements).
 - A Laya GGUF model, downloaded separately. `python3 node_modules/ducktape-laya/download-model.py resources` downloads the pinned English model into `resources/` and verifies its hash ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
 On another platform, build the addon from a checkout ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md)) and pass `addonPath` or set `DUCKTAPE_LAYA_ADDON`; on Windows keep `ducktape_laya.dll` next to `ducktape_laya.node`.
@@ -62,7 +62,7 @@ Options for both:
 
 | Option | Meaning |
 |---|---|
-| `threads` | 0 (automatic, at most 4) or 1–256 |
+| `threads` | 0 (automatic: at most 4 and at most the CPUs the process may use) or 1–256 |
 | `contextTokens` | Prompt capacity: 32 up to the model's trained length, default 512 |
 | `overflow` | Default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan` |
 | `temperatures` | Calibration overrides keyed like `choice`, `choice.3_5` or `noul.2`; finite and above 0 |
@@ -88,7 +88,7 @@ Cancellation is cooperative; a rejected call returns no partial result. After an
 
 ## Errors and closing
 
-Errors are `Error` objects and all carry `status` (the C ABI status, also exported as `Status`); argument errors carry `status` 1. Queue and lifecycle failures also carry `code`: `ERR_LAYA_QUEUE_FULL` and `ERR_LAYA_CLOSED` (status 1) or `ERR_LAYA_WORKER_EXITED` (status 3). A missing, unloadable or wrong-ABI addon (including a glibc addon on a musl system), or an addon whose library is not the one it was built with, fails with status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`; an addon that exists but cannot be loaded is reported as found, with the loader's reason. After `close()`, every call (including `info()`) rejects with `ERR_LAYA_CLOSED`. A `null` or non-object options argument (including to `close()`) and an `addonPath` that is not a non-empty string are status-1 `TypeError`s. On Linux the addon loads the library next to it even when another `libducktape_laya.so.1` is on `LD_LIBRARY_PATH`. Strings that are not well-formed Unicode are rejected.
+Errors are `Error` objects and all carry `status` (the C ABI status, also exported as `Status`); argument errors carry `status` 1. Queue and lifecycle failures also carry `code`: `ERR_LAYA_QUEUE_FULL` and `ERR_LAYA_CLOSED` (status 1) or `ERR_LAYA_WORKER_EXITED` (status 3). A missing, unloadable or wrong-ABI addon (including a glibc addon on a musl system), or an addon whose library is not the one it was built with, fails with status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`, as does every other status-7 error, such as a CPU without the required features; an addon that exists but cannot be loaded is reported as found, with the loader's reason. After `close()`, every call (including `info()`) rejects with `ERR_LAYA_CLOSED`. A `null` or non-object options argument (including to `close()`) and an `addonPath` that is not a non-empty string are status-1 `TypeError`s. On Linux the addon loads the library next to it even when another `libducktape_laya.so.1` is on `LD_LIBRARY_PATH`. Strings that are not well-formed Unicode are rejected.
 
 `close()` stops admission and drains accepted calls; `close({ cancelPending: true })` cancels them first. Repeated calls return the same promise, and closing succeeds even if the worker already exited.
 

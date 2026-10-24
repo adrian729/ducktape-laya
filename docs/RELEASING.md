@@ -6,7 +6,7 @@ The one release procedure, from version bump to verified registries. A release a
 
 | Package | Channel | 0.1.0 | 0.2.0 |
 | --- | --- | --- | --- |
-| Native archive, SBOMs, inventories, `gates.json`, `SHA256SUMS` | GitHub Releases | Published, attested | Published, attested |
+| Native archive, SBOMs, inventories, `gates.json`, `SHA256SUMS` | GitHub Releases | Published, attested (all but `gates.json` and `SHA256SUMS`) | Published, attested (all but `gates.json` and `SHA256SUMS`) |
 | `ducktape-laya` (Node.js) | npm | Published | Published |
 | `ducktape-laya-browser` | npm | Published | Published |
 | `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Published |
@@ -31,7 +31,7 @@ The npm package, the jar and the NuGet package are one file each and carry every
 ## 1. Prepare the release commit
 
 - Bump the version in `release/compatibility.json` and every binding manifest together; `python3 scripts/check-release.py` (`check_record`) rejects any mismatch, including the Python, Java and .NET versions.
-- Give the `Unreleased` section of [CHANGELOG.md](../CHANGELOG.md) its version and date; it becomes the GitHub release text.
+- Give the `Unreleased` section of [CHANGELOG.md](../CHANGELOG.md) its version and date (`## X.Y.Z (YYYY-MM-DD)`); it becomes the GitHub release text (step 3.3). Point the section's migration link and [COMPATIBILITY.md](COMPATIBILITY.md)'s "Migrating from" section at the new version.
 - Update the user docs that name the current release: the README's status, install table (Go `@vX.Y.Z`, Maven `:X.Y.Z`, the C archive link) and requirements, the "from the next release" wording in the README, [PLATFORMS.md](PLATFORMS.md), [PACKAGING.md](PACKAGING.md#package-artifacts), [PERFORMANCE.md](PERFORMANCE.md#package-sizes) and the package READMEs, and the release table above. `check_record` (run by `check-release.py`, `validate.py`, `package-native.py` and `check-candidate.py`) refuses a `package_version` that these do not name:
   - [PACKAGING.md](PACKAGING.md): `find_package(ducktape_laya X.Y ...)` and "does not satisfy `X.Y`" (the CMake package accepts only its own minor version);
   - [SECURITY.md](../SECURITY.md): "(currently X.Y.Z)";
@@ -40,7 +40,8 @@ The npm package, the jar and the NuGet package are one file each and carry every
   - [API.md](API.md): "what changed since the X.Y.Z release" (its `CHANGELOG.md#unreleased` link needs an `Unreleased` heading, which `tests/docs-links.py` checks);
   - the lines of [QUALIFICATION.md](QUALIFICATION.md) ("passed every gate for their candidates"), [BROWSER.md](BROWSER.md) ("passed the browser release checks") and [ARCHITECTURE.md](ARCHITECTURE.md) ("passed the browser gates") that name the qualified releases.
 
-  Then look for the remaining mentions of the previous version, for example `git grep -nE '0\.2(\.0)?\b' -- '*.md' ':!CHANGELOG.md'` when releasing 0.3.0, and update those that describe the current release.
+  Then look for the remaining mentions of the previous version and of the release being prepared, and update those that describe the current release: `git grep -nE '0\.2(\.0)?\b' -- '*.md' ':!CHANGELOG.md'` and `git grep -niE 'next release|next version|unreleased' -- '*.md' ':!CHANGELOG.md'` when releasing 0.3.0. These include the README's "Unreleased on main" bullet (remove it), the Linux arm64 and Windows x64 "from the next release" wording in the README, the package READMEs, [BUILDING.md](BUILDING.md), [PLATFORMS.md](PLATFORMS.md) and [COMPATIBILITY.md](COMPATIBILITY.md), the Chrome version that "the next release's" browser checks run on ([BROWSER.md](BROWSER.md), [PLATFORMS.md](PLATFORMS.md), [ARCHITECTURE.md](ARCHITECTURE.md), the browser package README), and the estimates in [ROADMAP.md](ROADMAP.md).
+  - Re-read every measured number that names a candidate from the final candidate's evidence: the tier-2 drift (`build-candidate/drift-*.json`; in the changelog, [PLATFORMS.md](PLATFORMS.md#numerical-results-across-platforms), [QUALIFICATION.md](QUALIFICATION.md#release-targets-and-tiers)), the Windows known deviation ([COMPATIBILITY.md](COMPATIBILITY.md#known-deviations)) and the package sizes ([PERFORMANCE.md](PERFORMANCE.md#package-sizes), measured on the assembled packages).
 - Run the model-free checks (`python3 scripts/validate.py --packages --output build-check-model-free`, which includes `tests/docs-links.py`).
 - Land these edits before the long gates start: editing `release/compatibility.json` is a library input change and invalidates reuse of hours-long evidence.
 
@@ -72,7 +73,14 @@ Rerun steps that failed for environmental reasons (machine load, a missing test 
 
    Assembly refuses a `gates.json` that is not `release_ready` or not schema 2, package directories whose inventory is not the one `gates.json` qualified or whose files differ from it, and native packages whose platforms are not the qualified targets. The output is the full asset set: every artifact in the native inventory (each target's archive and wheel, the multi-platform npm tarball, jar, sources and javadoc jars, POM and `.nupkg`, both `.crate` files) and in the browser inventory (the browser npm tarball), the inventories as `native-inventory.json` and `npm-browser-inventory.json`, the SBOMs as `native-sbom.cdx.json` and `npm-browser-sbom.cdx.json`, `gates.json` and `SHA256SUMS`.
 2. Tag `vX.Y.Z` (annotated) at the candidate commit and push the tag.
-3. Create the GitHub release with exactly those files and the changelog section as its text. The attestation step fails on any extra asset.
+3. Render the release text and create the GitHub release with exactly those files. The attestation step fails on any extra asset.
+
+   ```sh
+   python3 scripts/release-notes.py --version X.Y.Z --output build/release-notes.md
+   gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file build/release-notes.md build/release-assets/*
+   ```
+
+   `scripts/release-notes.py` writes an install table naming the version and every target's archive, the platforms by tier, which assets are attested and how to verify them, and then the version's changelog section with its relative links rewritten to `https://github.com/adrian729/ducktape-laya/blob/vX.Y.Z/...`, so they keep pointing at the released docs. It refuses a version other than `release/compatibility.json`'s. `--section Unreleased` previews the text before the release commit (with the record's current version).
 4. Run the `attest-release` workflow from `main` with the tag (`gh workflow run attest-release.yml --ref main -f tag=vX.Y.Z`). It refuses other refs and tags not of the form `vX.Y.Z`, resolves the tag through its tag ref (`scripts/tag-commit.sh`; an annotated tag is dereferenced, a branch of the same name is never used) and checks out that commit's `release/` directory. It runs `scripts/check-release-assets.sh` on the published assets: the tag names the version of the tagged commit's `release/compatibility.json`; every asset (hidden files included) is listed once in `SHA256SUMS` with matching bytes; `gates.json` passes `scripts/release-gates.jq` (release ready, produced by a clean checker for the tagged commit, and exactly the gates of the tagged commit's record and policy, all passed: for schema 2 the record's `required_release_gates` and every release target with its tier and `required_gates`, tier 2 being every `target_gates` entry of the policy, plus the candidate run `ci_run`; schema 1 only for 0.1.0 and 0.2.0); the published inventories are the ones `gates.json` qualified and were packaged from the tagged commit on a clean tree; every artifact they list is published with its hash; the native platforms are exactly the qualified targets. Any asset outside those inventories fails the run. `scripts/check-release-run.py` then requires the native inventory to be byte-identical to the `packages-assembled` inventory of the run `gates.json` names, which must be a successful `workflow_dispatch` of `native.yml` on the tagged commit with every artifact of a candidate run (the zip is checked against GitHub's artifact digest, so run it within the 30 days the artifacts are kept). It then signs a release-qualification attestation for each asset. Check one asset with the `gh attestation verify` command in [SECURITY.md](../SECURITY.md#verify-a-download).
 5. Run the `publish-release` workflow from `main` with the tag (`gh workflow run publish-release.yml --ref main -f tag=vX.Y.Z`; the `npm`, `crates`, `pypi`, `nuget` and `maven` inputs select registries, all on by default). See [the workflow](#the-publish-release-workflow).
 6. Push the Go module tag `bindings/go/vX.Y.Z` at the same commit.

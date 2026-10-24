@@ -99,7 +99,7 @@ pub struct Config {
     temperatures: BTreeMap<String, f64>,
 }
 impl Config {
-    /// 0 selects automatic threading (capped at 4); otherwise 1..=256.
+    /// 0 selects automatic threading (at most 4 and at most the CPUs the process may use); otherwise 1..=256.
     pub fn threads(mut self, threads: u32) -> Self {
         self.threads = Some(threads);
         self

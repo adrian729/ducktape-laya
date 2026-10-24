@@ -177,7 +177,7 @@ class Engine:
     def open(cls, model_path, *, threads=0, context_tokens=None, temperatures=None, overflow=None):
         """Load a local GGUF.
 
-        ``threads`` 0 selects automatically (at most 4). ``context_tokens`` is the
+        ``threads`` 0 selects automatically (at most 4 and at most the CPUs the process may use). ``context_tokens`` is the
         prompt capacity (default 512, at most the model's trained length).
         ``temperatures`` maps calibration keys such as ``"choice"`` or
         ``"noul.2"`` to positive overrides. ``overflow`` is the engine-wide policy for

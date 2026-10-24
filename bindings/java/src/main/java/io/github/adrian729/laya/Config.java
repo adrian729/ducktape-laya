@@ -6,7 +6,7 @@ import java.util.TreeMap;
 /**
  * Immutable open configuration, serialized to the native config JSON. Unset fields are omitted so
  * the library defaults apply; keys are written in a fixed order (threads, context_tokens, overflow,
- * then temperatures sorted by key). {@code threads} is 0 (automatic) to 256, {@code contextTokens} is
+ * then temperatures sorted by key). {@code threads} is 0 (automatic: at most 4 and at most the CPUs the process may use) to 256, {@code contextTokens} is
  * positive (the library enforces its own minimum and the model's trained length, status 1), and
  * each temperature is finite and positive; violations throw {@link IllegalArgumentException}.
  */

@@ -15,7 +15,7 @@ The crate links the native library, which comes from the release archive: [v0.2.
 ```rust
 use ducktape_laya::{status, CallOptions, Config, Engine};
 
-// threads: 0 = automatic (capped at 4), otherwise 1..=256. Unset values keep the defaults.
+// threads: 0 = automatic (at most 4 and at most the CPUs the process may use), otherwise 1..=256. Unset values keep the defaults.
 let config = Config::default().threads(2).context_tokens(1024).overflow("reject").temperature("choice", 1.5);
 let engine = Engine::open("Laya-Q8_0.gguf", &config)?;
 let request = r#"{"state":"Refund me","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;

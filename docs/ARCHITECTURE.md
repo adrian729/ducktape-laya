@@ -66,7 +66,7 @@ Native builds link a private, static llama.cpp into the shared Ducktape library.
 
 Browser builds compile the same core and runtime to wasm32. Each instance owns a module worker, virtual-filesystem GGUF assets and one runtime. WASM CPU execution is single-threaded; the WebGPU build enables GPU offload and JSPI/WASM exceptions. The loader owns explicit asset URLs, downloads and optional hash checks, backend selection, initialization failure cleanup and queueing. It verifies the actual runtime backend before loading models. `auto` may fall back during initialization; inference failures never silently switch backends or recompute a result.
 
-Browser requests still pass through the C ABI and shared planner. Platform code may adapt memory, scheduling, cancellation transport and device-loss handling, but must preserve request/result semantics. Native ISA profiles, WASM and WebGPU are distinct numerical profiles: probability differences can change choices and threshold projections. Browser delivery is experimental: 0.1.0 and 0.2.0 passed the browser gates on Chromium 152 only. Structural/API parity does not promise interchangeable predictions.
+Browser requests still pass through the C ABI and shared planner. Platform code may adapt memory, scheduling, cancellation transport and device-loss handling, but must preserve request/result semantics. Native ISA profiles, WASM and WebGPU are distinct numerical profiles: probability differences can change choices and threshold projections. Browser delivery is experimental: 0.1.0 and 0.2.0 passed the browser gates on Chromium 152 only; the next release's gates run on Chrome 156.0.8078.47. Structural/API parity does not promise interchangeable predictions.
 
 ## Conformance and maintenance
 

@@ -20,7 +20,7 @@ Each release publishes these files on [GitHub Releases](https://github.com/adria
 | `ducktape-laya-sys-VERSION.crate`, `ducktape-laya-VERSION.crate` | Rust source crates; they link the native library from the archive |
 | `native-inventory.json`, `npm-browser-inventory.json`, `*-sbom.cdx.json`, `gates.json`, `SHA256SUMS` | Inventories (every file and every bundled native file with its SHA-256, build and toolchain identity, required glibc symbol versions), CycloneDX SBOMs, the qualification report and checksums |
 
-Every file is attested; [SECURITY.md](../SECURITY.md#verify-a-download) shows how to verify one. The Go module is source only and links the native archive's library. The npm package, jar and NuGet package each carry every platform and pick the running one; on an unsupported platform they fail to load with an error that names the platform.
+Every file except `gates.json` and `SHA256SUMS` is attested, and the attestation records the hash of `gates.json`; [SECURITY.md](../SECURITY.md#verify-a-download) shows how to verify a file. The Go module is source only and links the native archive's library. The npm package, jar and NuGet package each carry every platform and pick the running one; on an unsupported platform they fail to load with an error that names the platform.
 
 ## C and C++
 

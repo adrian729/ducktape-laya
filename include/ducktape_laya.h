@@ -27,7 +27,7 @@ DTL_API uint32_t dtl_abi_version(void);
  * access or implicit downloads. */
 
 /* config_json may be NULL. Keys (unknown keys are rejected):
- *   "threads": 0 (automatic, capped at 4) or 1..256
+ *   "threads": 0 (automatic: at most 4 and at most the CPUs the process may use) or 1..256
  *   "context_tokens": capacity reserved for one prompt, 32 up to the model's
  *     trained length; default 512 (or the trained length if smaller). Values
  *     below 32 fail when the config is parsed; the upper bound is checked when
