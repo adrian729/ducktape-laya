@@ -5,6 +5,8 @@ import pathlib
 from artifact_support import write_zip
 from release_support import ROOT
 
+# The licence of a wheel: the binding (MIT) and the bundled library, which carries Apache-2.0 language data.
+LICENSE_EXPRESSION = 'MIT AND Apache-2.0'
 CLASSIFIERS = {'linux': 'Operating System :: POSIX :: Linux', 'darwin': 'Operating System :: MacOS',
                'win32': 'Operating System :: Microsoft :: Windows'}
 
@@ -31,7 +33,7 @@ def build(out, version, library, epoch, target):
     metadata = [
         'Metadata-Version: 2.4', 'Name: ducktape-laya', f'Version: {version}',
         'Summary: Local Laya GGUF decisions (choice, noul, score) through the ducktape-laya native library',
-        'Project-URL: Source, https://github.com/adrian729/ducktape-laya', 'License-Expression: MIT AND Apache-2.0',
+        'Project-URL: Source, https://github.com/adrian729/ducktape-laya', f'License-Expression: {LICENSE_EXPRESSION}',
         *[f'License-File: {path.relative_to(ROOT).as_posix()}' for path in licenses],
         f'Classifier: {CLASSIFIERS[target.os]}', 'Classifier: Programming Language :: Python :: 3',
         'Requires-Python: >=3.10', 'Description-Content-Type: text/markdown']

@@ -15,11 +15,18 @@ inline void check(dtl_status status, char *message) {
     std::unique_ptr<char, decltype(&dtl_free)> owned(message, dtl_free);
     if (status != DTL_OK) throw error(status, message ? message : "Laya operation failed");
 }
+// The library must implement the ABI this header declares (status 7 otherwise), as every binding checks.
+inline void require_abi() {
+    if (dtl_abi_version() != DTL_ABI_VERSION)
+        throw error(DTL_UNSUPPORTED_PLATFORM, "The ducktape-laya library implements ABI " + std::to_string(dtl_abi_version()) +
+                                                  ", but this header expects ABI " + std::to_string(DTL_ABI_VERSION));
+}
 inline void check_text(const std::string &text, const char *what) {
     if (text.find('\0') != std::string::npos) throw error(DTL_INVALID_ARGUMENT, std::string(what) + " contains a NUL byte");
 }
 // Runtime identity, limits and CPU compatibility, without loading a model.
 inline std::string info() {
+    require_abi();
     char *result = nullptr, *message = nullptr;
     auto status = dtl_info(nullptr, &result, &message);
     std::unique_ptr<char, decltype(&dtl_free)> owned(result, dtl_free);
@@ -47,6 +54,7 @@ public:
     // config_json: empty, or {"threads", "context_tokens", "overflow", "temperatures"};
     // see ducktape_laya.h.
     static engine open(const std::string &model_path, const std::string &config_json = "") {
+        require_abi();
         check_text(model_path, "Path"); check_text(config_json, "Config");
         dtl_engine *raw = nullptr;
         char *message = nullptr;
@@ -56,6 +64,7 @@ public:
     // router_json: {"models": {"id": "path.gguf" | {"path", "config"}}, "max_loaded": 1,
     // "auto": {"english", "default"}}; requests name a route or "model": "auto".
     static engine open_router(const std::string &router_json, const std::string &config_json = "") {
+        require_abi();
         check_text(router_json, "Router config"); check_text(config_json, "Config");
         dtl_engine *raw = nullptr;
         char *message = nullptr;

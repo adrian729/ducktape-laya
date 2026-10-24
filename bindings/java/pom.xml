@@ -7,6 +7,17 @@
   <version>0.2.0</version>
   <name>ducktape-laya</name>
   <description>Java binding for the ducktape-laya local Laya GGUF decision library (FFM API)</description>
+  <!-- As the released POM (scripts/java_package.py); tests/packaging-identity.py checks that the two agree. -->
+  <licenses>
+    <license>
+      <name>MIT</name>
+      <url>https://opensource.org/license/mit</url>
+    </license>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+    </license>
+  </licenses>
   <properties>
     <maven.compiler.release>22</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

@@ -79,6 +79,38 @@ class ArtifactInventoryTests(unittest.TestCase):
                 verify_inventory(base)
 
 
+class DevelopmentMetadataTests(unittest.TestCase):
+    """bindings/python/pyproject.toml and bindings/java/pom.xml (development builds) declare what the released
+    wheel and POM declare: the licence expression, the operating systems and the bundled library files."""
+    def test_pyproject_matches_the_wheel(self):
+        import fnmatch
+        import tomllib
+        import python_wheel
+        from release_support import TARGETS
+        project = tomllib.loads((ROOT / 'bindings/python/pyproject.toml').read_text())
+        self.assertEqual(project['project']['license'], python_wheel.LICENSE_EXPRESSION)
+        systems = {c for c in project['project']['classifiers'] if c.startswith('Operating System ::')}
+        self.assertEqual(systems, set(python_wheel.CLASSIFIERS.values()))
+        patterns = project['tool']['setuptools']['package-data']['ducktape_laya']
+        for target in TARGETS:
+            self.assertTrue(any(fnmatch.fnmatch(f'_native/{target.library}', pattern) for pattern in patterns), target.library)
+
+    def test_pom_matches_the_released_pom(self):
+        import xml.etree.ElementTree as ElementTree
+        import java_package
+        ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+        licences = lambda root: [(l.findtext('m:name', namespaces=ns), l.findtext('m:url', namespaces=ns))
+                                 for l in root.findall('m:licenses/m:license', ns)]
+        released = licences(ElementTree.fromstring(java_package.pom('0.0.0').encode()))
+        self.assertEqual([name for name, _ in released], python_wheel_licences())
+        self.assertEqual(licences(ElementTree.parse(ROOT / 'bindings/java/pom.xml').getroot()), released)
+
+
+def python_wheel_licences():
+    import python_wheel
+    return python_wheel.LICENSE_EXPRESSION.split(' AND ')
+
+
 class BrowserIdentityTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
