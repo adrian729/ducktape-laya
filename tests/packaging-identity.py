@@ -12,7 +12,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from release_support import (LIBRARY, require_uninstrumented_binary, ROOT, browser_build_identity, sha256, source_identity, native_build_identity,
                              require_mapped_source_paths, require_runtime_identity, require_runtime_sources, require_elf_hardening,
-                             require_guard_cf)
+                             require_guard_cf, require_compiled_hardening)
 WINDOWS = sys.platform == 'win32'
 
 from artifact_support import verify_inventory
@@ -58,6 +58,28 @@ class ArtifactInventoryTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(SystemExit, 'full RELRO'):
                             require_elf_hardening(library)
+
+    @unittest.skipIf(WINDOWS or not (shutil.which('cc') or shutil.which('gcc')) or not shutil.which('readelf'), 'needs cc and readelf')
+    def test_compiled_hardening_check(self):
+        """The stack protector's handler and, in a library, fortified calls must be imported."""
+        compiler = shutil.which('cc') or shutil.which('gcc')
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            (base / 'tiny.c').write_text('#include <string.h>\nint tiny(const char *s, unsigned long n) { char b[16]; memcpy(b, s, n); '
+                                         'return b[n / 2]; }\n')
+            for name, flags, hardened in [('both', ['-fstack-protector-all', '-D_FORTIFY_SOURCE=2'], True),
+                                          ('no-protector', ['-fno-stack-protector', '-D_FORTIFY_SOURCE=2'], False),
+                                          ('no-fortify', ['-fstack-protector-all', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0'], False)]:
+                library = base / f'lib{name}.so'
+                subprocess.run([compiler, '-shared', '-fPIC', '-O2', '-U_FORTIFY_SOURCE', *flags, str(base / 'tiny.c'), '-o', str(library)], check=True)
+                with self.subTest(name=name):
+                    if hardened:
+                        require_compiled_hardening(library, library=True)
+                    else:
+                        with self.assertRaisesRegex(SystemExit, 'stack protector|fortified'):
+                            require_compiled_hardening(library, library=True)
+            # An addon needs only the stack protector.
+            require_compiled_hardening(base / 'libno-fortify.so', library=False)
 
     def test_installed_consumers_reject_tampered_or_missing_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:

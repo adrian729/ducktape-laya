@@ -373,6 +373,34 @@ def require_guard_cf(path):
         raise SystemExit(f'{pathlib.Path(path).name} is not linked with Control Flow Guard (GUARD_CF)')
 
 
+# A64 instructions of -mbranch-protection=standard: PACIASP signs the return address, AUTIASP checks it.
+PACIASP, AUTIASP = 0xd503233f, 0xd50323bf
+
+
+def require_compiled_hardening(path, library):
+    """Smoke checks of the compiler hardening (CMakeLists.txt) on a shipped ELF binary: the stack protector's failure
+    handler is imported, a library calls fortified (_FORTIFY_SOURCE) functions, and on arm64 the code signs return
+    addresses (PAC). BTI landing pads are compiled in too, but the binaries are not marked BTI-compatible: Ubuntu
+    24.04's glibc start files crti.o and crtn.o carry no BTI property, so the linker leaves the GNU property note out."""
+    import struct
+    path = pathlib.Path(path)
+    symbols = set(re.findall(r'\b(__\w+_chk(?:_fail)?)\b', subprocess.check_output(['readelf', '--dyn-syms', '--wide', str(path)], text=True)))
+    if '__stack_chk_fail' not in symbols:
+        raise SystemExit(f'{path.name} does not use the stack protector (no __stack_chk_fail)')
+    if library and not symbols - {'__stack_chk_fail'}:
+        raise SystemExit(f'{path.name} calls no fortified function (no __*_chk): built without _FORTIFY_SOURCE?')
+    if re.search(r'Machine:\s+AArch64', subprocess.check_output(['readelf', '-hW', str(path)], text=True)):
+        found = re.search(r'\] \.text\s+PROGBITS\s+[0-9a-f]+ ([0-9a-f]+) ([0-9a-f]+)', subprocess.check_output(['readelf', '-SW', str(path)], text=True))
+        if not found:
+            raise SystemExit(f'{path.name} has no .text section')
+        offset, size = int(found[1], 16), int(found[2], 16) // 4 * 4
+        with path.open('rb') as stream:
+            stream.seek(offset)
+            words = set(struct.unpack(f'<{size // 4}I', stream.read(size)))
+        if PACIASP not in words or AUTIASP not in words:
+            raise SystemExit(f'{path.name} does not sign return addresses (no PACIASP/AUTIASP): built without -mbranch-protection?')
+
+
 def macho_info(path):
     """Linked dylibs, run-path entries and minimum macOS version of a 64-bit Mach-O image."""
     import struct

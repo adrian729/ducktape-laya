@@ -18,8 +18,8 @@
     },
     {
       "name": "product",
-      "displayName": "Product: the configuration scripts/validate.py packages",
-      "description": "Release library and Node addon (pass -DNODE_INCLUDE_DIR=...), no tests, no compiler launcher. scripts/package-native.py packages this build.",
+      "displayName": "Product: the options of the build scripts/validate.py packages",
+      "description": "Release library and Node addon (pass -DNODE_INCLUDE_DIR=...), no tests, no compiler launcher. scripts/package-native.py packages this build. On Windows validate.py also passes -GNinja and the clang-cl compilers.",
       "binaryDir": "${sourceDir}/build-product",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",

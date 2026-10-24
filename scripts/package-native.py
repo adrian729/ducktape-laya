@@ -20,7 +20,7 @@ import sys
 import tempfile
 from release_support import (ROOT, build_environment, host_target, check_record, sha256, git, binary_info, source_identity, native_build_identity,
                              require_runtime_identity, require_runtime_sources, require_uninstrumented_binary, require_mapped_source_paths,
-                             pe_info, macho_info, require_elf_hardening, require_guard_cf)
+                             pe_info, macho_info, require_elf_hardening, require_compiled_hardening, require_guard_cf)
 from artifact_support import write_zip, archive_tree, archive_zip, set_npm_platforms, native_payload
 import java_package
 import python_wheel
@@ -124,7 +124,9 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         if len(library_files) != 1: raise SystemExit(f'Expected one installed library file, found {[x.name for x in library_files]}')
         subprocess.run([sys.executable, str(ROOT / 'scripts/check-abi.py'), str(library_files[0])], check=True, capture_output=True)
         shipped_sha256 = {'ducktape_laya': sha256(library_files[0]), 'ducktape_laya_node': sha256(addon_file)}
-        for path in (library_files[0], addon_file): require_elf_hardening(path)
+        for path in (library_files[0], addon_file):
+            require_elf_hardening(path)
+            require_compiled_hardening(path, library=path == library_files[0])
     elif target.os == 'win32':
         for path in (native.glob('bin/ducktape_laya.dll'), native.glob('lib*/ducktape-laya/node/ducktape_laya.node')):
             for item in path: require_guard_cf(item)
@@ -197,7 +199,8 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         toolchain['required_runtime_symbol_versions'] = requirements
         toolchain['strip'] = {'command': 'strip --strip-unneeded', 'tool': subprocess.check_output(['strip', '--version'], text=True).splitlines()[0],
                               'shipped_sha256': shipped_sha256}
-        toolchain['hardening'] = 'full RELRO (BIND_NOW) verified on the shipped library and addon'
+        toolchain['hardening'] = ('full RELRO (BIND_NOW) and the stack protector verified on the shipped library and addon, _FORTIFY_SOURCE '
+                                  'on the library' + ('; return-address signing (PAC)' if target.name.endswith('arm64') else ''))
     elif target.os == 'darwin':
         info = {name: macho_info(build / name) for name in [target.library, 'ducktape_laya.node']}
         # The wheel tag (macosx_14_0) promises the deployment target the library was linked for.

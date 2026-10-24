@@ -68,7 +68,7 @@ node bindings/node/decide.cjs /path/to/Laya-Q8_0.gguf < examples/request.json
 
 ggml's `GGML_CCACHE` compiles through `ccache` or `sccache` whenever one is on `PATH`; with `DUCKTAPE_REPRODUCIBLE_PATHS` (the default) this project defaults it to `OFF`. To compile through a cache, set `CMAKE_C_COMPILER_LAUNCHER` and `CMAKE_CXX_COMPILER_LAUNCHER` (the `dev` preset does). A cache does not change the compiled bytes as long as it hands the compiler the same arguments: ccache's `base_dir` (`CCACHE_BASEDIR`, or `base_dir` in a ccache configuration file) makes source paths relative, so `-ffile-prefix-map` no longer maps them and `__FILE__` strings in the library change; build with `CCACHE_BASEDIR=` (empty) to override a configured one. `validate.py` and `package-native.py` refuse a library or addon holding a source path outside the mapped directories (`./`, `./third_party/llama.cpp` and `./build`; Clang writes them without the leading `./`), such as `../src/laya.cpp` or an absolute path. The project's scripts set the launcher and `GGML_CCACHE` explicitly.
 
-The GGML ISA options (`GGML_AVX2`, `GGML_FMA`, ...) select the CPU profile and are set explicitly for x86-64; AVX-512 and VNNI variants are refused. The library, ggml and llama.cpp are built with `-fstack-protector-strong`, `_FORTIFY_SOURCE=3` (optimised builds), full RELRO (`-z relro -z now`), `-mbranch-protection=standard` on Linux arm64 and Control Flow Guard (`/guard:cf`) with clang-cl.
+The GGML ISA options (`GGML_AVX2`, `GGML_FMA`, ...) select the CPU profile and are set explicitly for x86-64; AVX-512 and VNNI variants are refused. The library, ggml and llama.cpp are built with `-fstack-protector-strong`, `_FORTIFY_SOURCE=3` (optimised builds), full RELRO (`-z relro -z now`), `-mbranch-protection=standard` on Linux arm64 and Control Flow Guard (`/guard:cf`) with clang-cl. On Linux arm64 that gives return-address signing (PAC); the BTI landing pads are compiled in too, but the shipped binaries are not marked BTI-compatible, so BTI is not enforced: Ubuntu 24.04's glibc start files (`crti.o`, `crtn.o`) carry no BTI property, and the linker marks an output only when every input is marked. `package-native.py` checks the shipped Linux library and addon for full RELRO and the stack protector, the library for fortified calls, and on arm64 both for PAC instructions.
 
 ## Run the tests
 
@@ -95,7 +95,7 @@ The model-free run also checks the Markdown links (`tests/docs-links.py`) and th
 | Preset | Build directory | Configuration |
 |---|---|---|
 | `dev` | `build-dev` | Ninja, Release, native tests, compiled through `ccache` (which must be on `PATH`) |
-| `product` | `build-product` | The configuration `validate.py` packages: Release, library and Node addon, no tests, no compiler cache. Pass `-DNODE_INCLUDE_DIR=...`; on Linux use `CC=gcc CXX=g++` for the release compiler |
+| `product` | `build-product` | The options of the build `validate.py` packages, without the tests it also builds: Release, library and Node addon, no compiler cache. Pass `-DNODE_INCLUDE_DIR=...`; on Linux use `CC=gcc CXX=g++` for the release compiler; on Windows `validate.py` also gets `-GNinja` and the clang-cl compilers through `--cmake-arg` (the `windows` job in `native.yml`), which the preset does not set |
 | `sanitize` | `build-sanitize` | Ninja, Clang AddressSanitizer and UndefinedBehaviorSanitizer at RelWithDebInfo, as `scripts/check-sanitizers.py` builds them, native tests; never packaged |
 
 ```sh
@@ -109,7 +109,7 @@ cmake --preset sanitize -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf && cmake -
 
 ## Build the packages
 
-`scripts/package-native.py` builds every package for the platform it runs on, in one run (`linux-x64`, `linux-arm64`, `macos-arm64` or `windows-x64`): the native archive, the npm package, the Rust crates, the Python wheel, the Maven jar with its sources and javadoc jars and POM, the NuGet package, an SBOM and an inventory. It needs a Release build with the Node addon, `npm`, Cargo with the locked dependencies fetched, a JDK (`javac`, `javadoc`), the .NET SDK, Python 3.11+ and, on Linux, `readelf`. The native tests are not needed (`cmake --preset product -DNODE_INCLUDE_DIR=/path/to/include/node` makes the same build in `build-product`):
+`scripts/package-native.py` builds every package for the platform it runs on, in one run (`linux-x64`, `linux-arm64`, `macos-arm64` or `windows-x64`): the native archive, the npm package, the Rust crates, the Python wheel, the Maven jar with its sources and javadoc jars and POM, the NuGet package, an SBOM and an inventory. It needs a Release build with the Node addon, `npm`, Cargo with the locked dependencies fetched, a JDK (`javac`, `javadoc`), the .NET SDK, Python 3.11+ and, on Linux, `readelf`. The native tests are not needed (`cmake --preset product -DNODE_INCLUDE_DIR=/path/to/include/node` configures the same options in `build-product`; on Windows also pass the generator and compilers below):
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_TESTS=OFF -DDUCKTAPE_BUILD_NODE=ON -DNODE_INCLUDE_DIR=/path/to/include/node
