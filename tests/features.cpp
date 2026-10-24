@@ -386,6 +386,27 @@ int main(int argc, char **argv) {
         invalid([&] { engine.execute(json::array({with(json::parse(sized(1)), "max_tokens", fit), with(json::parse(sized(2)), "max_tokens", fit)}).dump()); });
         checkpoint("open config and per-request settings");
         {
+            // A structured state is serialized once per request and model and shared by its
+            // questions (request_state.hpp; decision-rules checks that it is prepared once): each
+            // question of a multi-question request answers exactly as it does alone.
+            json readings = json::array();
+            for (int i = 0; i < 400; ++i) readings.push_back({{"sensor", "s" + std::to_string(i % 7)}, {"value", i * 0.125 + 1.0 / (i + 3)}, {"ok", i % 5 != 0}});
+            const json state = {{"ticket", {{"subject", "Refund for duplicate charge"}, {"priority", 2}, {"amount", 1e15}}}, {"readings", readings}};
+            const json all = {{"state", state}, {"overflow", "truncate_end"}, {"questions", {
+                {"refund", {{"type", "noul"}, {"instructions", "Does the customer request a refund?"}}},
+                {"urgency", {{"type", "score"}, {"instructions", "How urgent is this?"}, {"criteria", {"low", "moderate", "high"}}}},
+                {"team", {{"type", "choice"}, {"instructions", "Which team handles it?"}, {"criteria", {{"billing", "Payments"}, {"technical", "Bugs"}}}}},
+                {"faulty", {{"type", "noul"}, {"instructions", "Do the readings show a faulty sensor?"}}}}}};
+            const auto together = json::parse(engine.execute(all.dump()));
+            for (const auto &[id, question] : all["questions"].items()) {
+                json alone = all;
+                alone["questions"] = {{id, question}};
+                expect(json::parse(engine.execute(alone.dump()))["answers"][id] == together["answers"][id],
+                       "a question answers the same alone and among others sharing a structured state");
+            }
+        }
+        checkpoint("structured state shared by questions");
+        {
             // Router: the open config applies to every route; a route's own config overrides it key by key.
             std::filesystem::create_hard_link(std::filesystem::canonical(argv[1]), dir / "c.gguf");
             const auto b = (dir / "b.gguf").string(), c = (dir / "c.gguf").string();

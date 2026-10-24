@@ -2,6 +2,7 @@
 // tools/server/server-decision.cpp (MIT). See THIRD_PARTY_NOTICES.md.
 #include "backend.hpp"
 #include "python_json.hpp"
+#include "request_state.hpp"
 #include "decision.hpp"
 #include "errors.hpp"
 #include "execution.hpp"
@@ -35,25 +36,6 @@ std::string meta(llama_model *m, const std::string &key) {
         throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
     value.resize(static_cast<size_t>(n));
     return value;
-}
-void sanitize(json &value, const std::string &marker) {
-    if (value.is_string()) {
-        // One pass: replacing in place would shift the tail once per marker.
-        const auto &s = value.get_ref<const std::string &>();
-        if (s.find(marker) == std::string::npos) return;
-        std::string out;
-        out.reserve(s.size());
-        for (size_t at = 0;;) {
-            const size_t next = s.find(marker, at);
-            out.append(s, at, next == std::string::npos ? std::string::npos : next - at);
-            if (next == std::string::npos) break;
-            out += ' ';
-            at = next + marker.size();
-        }
-        value = std::move(out);
-    } else if (value.is_structured()) {
-        for (auto &child : value) sanitize(child, marker);
-    }
 }
 }
 struct prepared_window {
@@ -206,27 +188,30 @@ struct backend::impl {
         if (n < 0) { out.resize(at); throw failure(DTL_INFERENCE_ERROR, "Tokenization failed"); }
         out.resize(at + static_cast<size_t>(n));
     }
-    void prepare(question &q, const json &state, const execution *control) {
+    void prepare(question &q, request_state &request, const execution *control) {
         if (q.overflow.empty()) q.overflow = "reject";
         require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
         if (q.options.size() == 1) return; // answered without inference; uses no tokens
         q.prepared = std::make_unique<prepared_question>();
         auto &prepared = *q.prepared;
         prepared.column = q.type == "score" ? 1 : q.type == "noul" ? 2 : 0;
-        json input = {{"id",q.id}, {"type",q.type}, {"instructions",q.instructions},
-                      {"state",state}, {"options",q.options}, {"images",json::array()}};
         // Structured values are serialized here, as the original Laya does, so the
         // template takes its string path; null descriptions stay null (no description).
         auto as_text = [](json &value) { if (!value.is_string() && !value.is_null()) value = python_json(value); };
-        as_text(input["state"]);
+        // The state is the same for every question of a request: it is serialized and
+        // sanitized once per request and model, on the first question that needs it.
+        const json &state = request.text(this, marker_text);
+        json input = {{"id",q.id}, {"type",q.type}, {"instructions",q.instructions},
+                      {"state",nullptr}, {"options",q.options}, {"images",json::array()}};
         as_text(input["instructions"]);
         for (auto &option : input["options"]) as_text(option["description"]);
         sanitize(input, marker_text);
         // The state sits between two separators, so its tokens do not depend on the
         // question: it is tokenized on its own, once for all questions sharing it.
-        const bool separate_state = input["state"].is_string();
-        std::string state_text;
-        if (separate_state) { state_text = input["state"].get<std::string>(); input["state"] = ""; }
+        const bool separate_state = state.is_string();
+        static const std::string no_state;
+        const std::string &state_text = separate_state ? state.get_ref<const std::string &>() : no_state;
+        if (separate_state) input["state"] = "";
         // Serialization can expand a structured state (1e15 is written 1000000000000000.0),
         // so the text to tokenize is bounded like the rendered prompt, not only the request.
         require(state_text.size() <= max_request * 2, "Serialized state is too large");
@@ -295,7 +280,7 @@ struct backend::impl {
             std::vector<llama_token> fresh;
             tokenize_into(fresh, state_text, control);
             cached_state_tokens = std::move(fresh);
-            cached_state_text = std::move(state_text);
+            cached_state_text = state_text;
         }
         const std::vector<llama_token> state_tokens = separate_state ? cached_state_tokens
             : std::vector<llama_token>(tokens.begin() + opts_end + 1, tokens.end() - 1);
@@ -413,6 +398,6 @@ json backend::info() const {
             {"trained_context_tokens", impl_->trained},
             {"temperatures", impl_->temperatures}, {"metadata_temperatures", impl_->metadata_temperatures}};
 }
-void backend::prepare(question &q, const json &state, const execution *control) { impl_->prepare(q, state, control); }
+void backend::prepare(question &q, request_state &state, const execution *control) { impl_->prepare(q, state, control); }
 json backend::run(const question &q, const execution *control) { return impl_->run(q, control); }
 } // namespace dtl

@@ -29,7 +29,7 @@ All numbers here were measured, and each says where it comes from. They describe
 
 What drives the cost:
 
-- **One model pass per question.** Questions in a request run one after another, each over the state plus that question, so a request's time is roughly the sum of its questions' times. The state is tokenized once per request. A `choice` with a single option needs no pass.
+- **One model pass per question.** Questions in a request run one after another, each over the state plus that question, so a request's time is roughly the sum of its questions' times. The state is serialized and tokenized once per request. A `choice` with a single option needs no pass.
 - **Prompt length.** A pass over a prompt near 512 tokens takes several times as long as one over a short prompt. Contexts longer than 512 tokens cost more than proportionally; no longer-context measurements are recorded here.
 - **Model.** The multilingual model is the smaller network (mmBERT-base, against ModernBERT-large) and the fastest per question, but its F16 weights take about twice the memory of the Q8_0 models.
 - **Threads.** One call uses up to `threads` CPU threads (0 means automatic: at most 4, and no more than the CPUs the process may use under its affinity mask and cgroup CPU quota). Calls on one engine run one at a time; open several engines for parallel work, each with its own memory.
