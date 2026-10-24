@@ -426,6 +426,14 @@ public final class LayaTest {
         }
     }
 
+    /** Removes the library override and the loader search paths from a child's environment: macOS dyld
+     *  searches DYLD_LIBRARY_PATH for the file name even when a library is loaded by full path, so the
+     *  child would get the build's library instead of the bundled copy. */
+    static void withoutLibraryPaths(ProcessBuilder pb) {
+        for (String name : List.of("DUCKTAPE_LAYA_LIB_DIR", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"))
+            pb.environment().remove(name);
+    }
+
     static String hostPlatform() {
         return Native.platform(System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT),
             System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT));
@@ -452,8 +460,7 @@ public final class LayaTest {
                 String cp = System.getProperty("java.class.path") + java.io.File.pathSeparator + resources;
                 ProcessBuilder pb = new ProcessBuilder(childJava("-Dducktape.laya.tmpdir=" + tmp,
                     "-cp", cp, "io.github.adrian729.laya.LayaTest", broken ? "--bundled-broken-child" : "--bundled-child", platform));
-                pb.environment().remove("DUCKTAPE_LAYA_LIB_DIR");
-                pb.environment().remove("LD_LIBRARY_PATH");
+                withoutLibraryPaths(pb);
                 runChild(pb, broken ? "unloadable bundled child" : "bundled child");
                 if (broken) continue;
                 try (var entries = Files.list(tmp)) {
@@ -483,7 +490,7 @@ public final class LayaTest {
                 ProcessBuilder pb = new ProcessBuilder(childJava("-Dducktape.laya.tmpdir=" + resources.resolve("no-such-dir"),
                     "-cp", System.getProperty("java.class.path") + java.io.File.pathSeparator + resources, "io.github.adrian729.laya.LayaTest",
                     "--bundled-missing-tmpdir-child", platform));
-                pb.environment().remove("DUCKTAPE_LAYA_LIB_DIR");
+                withoutLibraryPaths(pb);
                 runChild(pb, "missing tmpdir child");
             } finally {
                 deleteRecursively(resources);

@@ -382,7 +382,7 @@ test('addon load failures carry status 7 and ERR_LAYA_UNSUPPORTED', async () => 
   const broken = path.join(require('node:os').tmpdir(), `ducktape-laya-broken-${process.pid}.node`);
   fs.writeFileSync(broken, 'not an addon');
   try {
-    const found = /The native Laya addon was found but could not be loaded: .* \(it needs /;
+    const found = /^The native Laya addon was found but could not be loaded: \S.* \(it needs [^)]+\)$/s;
     assert.throws(() => Laya.runtimeInfo({ addonPath: broken }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED', message: found });
     await assert.rejects(Laya.open('x', { addonPath: broken }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED', message: found });
   } finally { fs.rmSync(broken, { force: true }); }

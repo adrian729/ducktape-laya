@@ -36,7 +36,7 @@ const HINTS = { linux: 'it needs glibc 2.38+ and libstdc++ with GLIBCXX_3.4.29',
 // The message for an addon that resolved but failed to load (require, or the addon's own library check).
 function loadMessage(error, os = process.platform) {
   if (error?.status !== undefined || error?.code !== 'ERR_DLOPEN_FAILED') return error?.message ?? String(error);
-  return `The native Laya addon was found but could not be loaded: ${error.message} (${HINTS[os] ?? 'it was built for another platform'})`;
+  return `The native Laya addon was found but could not be loaded: ${error.message.trim()} (${HINTS[os] ?? 'it was built for another platform'})`;
 }
 module.exports = resolveAddon;
 module.exports.isMusl = isMusl;

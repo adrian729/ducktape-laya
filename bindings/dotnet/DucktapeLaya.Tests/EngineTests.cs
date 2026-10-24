@@ -46,7 +46,7 @@ public class EngineTests
             Assert.EndsWith($"({Native.LoadHint()})", error.Message);
             Assert.DoesNotContain("not found", error.Message.Split(": ")[0]);
             Assert.NotNull(error.InnerException);
-            Assert.Contains(error.InnerException!.Message, error.Message);
+            Assert.Contains(error.InnerException!.Message.Trim(), error.Message);
         }
         finally { Directory.Delete(dir, true); }
     }

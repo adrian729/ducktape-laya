@@ -108,7 +108,7 @@ internal static unsafe partial class Native
         try { return NativeLibrary.Load(path); }
         catch (Exception ex) when (ex is DllNotFoundException or BadImageFormatException)
         {
-            throw LoadError($"{what} {path} was found but could not be loaded: {ex.Message}" + (hint is null ? "" : $" ({hint})"), ex);
+            throw LoadError($"{what} {path} was found but could not be loaded: {ex.Message.Trim()}" + (hint is null ? "" : $" ({hint})"), ex);
         }
     }
 
