@@ -11,6 +11,8 @@
 #include "json.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <string_view>
@@ -162,14 +164,19 @@ struct backend::impl {
     std::string cached_state_text;
     std::vector<llama_token> cached_state_tokens;
     void tokenize_into(std::vector<llama_token> &out, std::string_view text) const {
-        int n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), nullptr, 0, false, true);
-        if (n == 0) return;
-        if (n > 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
+        // Each llama_tokenize call does the full work, so tokenize once into a buffer of
+        // text.size() + 2 tokens (common_tokenize's estimate) and only retry with the exact
+        // count when that was too small. Texts are at most 2 MiB, well within int32_t.
         const size_t at = out.size();
-        out.resize(at - n);
-        n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), out.data() + at, -n, false, true);
-        if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-        out.resize(at + n);
+        const auto length = static_cast<int32_t>(text.size());
+        out.resize(at + text.size() + 2);
+        int n = llama_tokenize(vocab, text.data(), length, out.data() + at, static_cast<int32_t>(text.size() + 2), false, true);
+        if (n < 0 && n != std::numeric_limits<int32_t>::min()) {
+            out.resize(at + static_cast<size_t>(-static_cast<int64_t>(n)));
+            n = llama_tokenize(vocab, text.data(), length, out.data() + at, -n, false, true);
+        }
+        if (n < 0) { out.resize(at); throw failure(DTL_INFERENCE_ERROR, "Tokenization failed"); }
+        out.resize(at + static_cast<size_t>(n));
     }
     void prepare(question &q, const json &state) {
         if (q.overflow.empty()) q.overflow = "reject";
