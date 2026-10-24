@@ -124,6 +124,10 @@ file(READ "${DTL_GGML_VERSION_HEADER}" DTL_GGML_VERSION_TEXT)
 string(REGEX REPLACE "#define GGML_COMMIT[ \t]+\"[^\"]*\"" "#define GGML_COMMIT \"${DTL_RUNTIME_COMMIT}\"" DTL_GGML_VERSION_TEXT "${DTL_GGML_VERSION_TEXT}")
 file(WRITE "${DTL_GGML_VERSION_HEADER}" "${DTL_GGML_VERSION_TEXT}")
 include(cmake/runtime_patches.cmake)
+if(NOT EMSCRIPTEN)
+  # The runtime sources this build compiles, checked by packaging (cmake/runtime_sources.cmake).
+  include(cmake/runtime_sources.cmake)
+endif()
 configure_file(cmake/build_config.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/build_config.hpp @ONLY)
 add_library(ducktape_laya ${DTL_LIBRARY_KIND} src/laya.cpp src/backend_llama.cpp src/language.cpp src/platform.cpp
   ${UPSTREAM}/common/json.cpp ${UPSTREAM}/common/unicode.cpp
@@ -161,6 +165,7 @@ set_target_properties(ducktape_laya PROPERTIES EXPORT_NAME laya VERSION ${PROJEC
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 if(NOT EMSCRIPTEN)
   dtl_record_native_build(ducktape_laya)
+  dtl_record_runtime_sources(ducktape_laya)
 endif()
 if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
   target_link_options(ducktape_laya PRIVATE "LINKER:--exclude-libs,ALL"

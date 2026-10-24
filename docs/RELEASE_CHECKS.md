@@ -180,7 +180,7 @@ The consumer runner verifies the artifact inventory and approved model hash, ret
 
 ### SBOM and inventory
 
-Each packager emits a checksum-covered CycloneDX 1.6 component inventory (`sbom.cdx.json`). Native binaries are inspected through the C ABI before packaging, so a stale version/runtime/patch identity is rejected. Browser packages include Emscripten, musl, LLVM runtime and Dawn notices in addition to shared runtime notices. The inventory separates incorporated components from host system libraries, host browser/GPU drivers, excluded model weights and test-only tools. Checksums detect changes; the release's attestation establishes who published the files ([RELEASING.md](RELEASING.md#provenance)).
+Each packager emits a checksum-covered CycloneDX 1.6 component inventory (`sbom.cdx.json`). Native binaries are inspected through the C ABI before packaging, so a stale version/runtime/patch identity is rejected, and the library's runtime source record must match the runtime tree, so a library built from a modified and since restored llama.cpp tree is rejected too ([build records](BUILDING.md#build-records); `tests/packaging-identity.py` simulates the modify, build and restore sequences). Browser packages include Emscripten, musl, LLVM runtime and Dawn notices in addition to shared runtime notices. The inventory separates incorporated components from host system libraries, host browser/GPU drivers, excluded model weights and test-only tools. Checksums detect changes; the release's attestation establishes who published the files ([RELEASING.md](RELEASING.md#provenance)).
 
 ## Reproducible builds
 

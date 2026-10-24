@@ -19,7 +19,7 @@ import re
 import sys
 import tempfile
 from release_support import (ROOT, build_environment, host_target, check_record, sha256, git, binary_info, source_identity, native_build_identity,
-                             require_runtime_identity, require_uninstrumented_binary, pe_info, macho_info)
+                             require_runtime_identity, require_runtime_sources, require_uninstrumented_binary, pe_info, macho_info)
 from artifact_support import write_zip, archive_tree, archive_zip, set_npm_platforms, native_payload
 import java_package
 import python_wheel
@@ -108,6 +108,12 @@ def refuse_non_product_build():
     if problems:
         p.error('Not a product build (' + '; '.join(problems) + '); configure a fresh build directory as scripts/validate.py does')
 refuse_non_product_build()
+# The library must have been linked from the runtime tree as it is now (pinned commit, approved patches,
+# checked by check_record above): a tree modified for the build and restored afterwards is refused.
+try:
+    require_runtime_sources(build, ROOT / record['runtime']['path'], target.library)
+except ValueError as error:
+    p.error(str(error))
 out.mkdir(parents=True, exist_ok=False)
 if not (build / 'ducktape_laya.node').is_file():
     p.error('Build the Node addon before packaging')

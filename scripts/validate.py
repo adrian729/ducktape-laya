@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 from release_support import (EXE, LIBRARY, ROOT, build_environment, check_record, find_manifest, git, host_target, read_json, sha256, verify_model, source_files,
-                             binary_info, require_runtime_identity)
+                             binary_info, require_runtime_identity, require_runtime_sources)
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--model', type=pathlib.Path)
@@ -149,6 +149,7 @@ try:
     report['cmake_cache_sha256'] = sha256(build / 'CMakeCache.txt')
     report['diagnostics'] = binary_info(build)
     require_runtime_identity(report['diagnostics'], record)
+    require_runtime_sources(build, ROOT / record['runtime']['path'])
     cache = (build / 'CMakeCache.txt').read_text().splitlines()
     report['build_options'] = {line.split(':', 1)[0]: line.split('=', 1)[1]
         for line in cache if '=' in line and ':' in line and

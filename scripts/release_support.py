@@ -403,6 +403,48 @@ def native_build_identity(build, target, binary, expected):
         raise ValueError(target + ': binary differs from completed build record; rebuild first')
     return identity
 
+def runtime_sources(runtime, root=ROOT):
+    """The manifest of runtime files a native build compiles (cmake/runtime_sources.cmake), as they are now."""
+    with tempfile.TemporaryDirectory(prefix='ducktape-runtime-sources-') as directory:
+        output = pathlib.Path(directory) / 'runtime-sources.json'
+        subprocess.run(['cmake', f'-DRUNTIME={pathlib.Path(runtime).resolve().as_posix()}', f'-DOUTPUT={output}',
+                        '-P', str(root / 'cmake/runtime_sources.cmake')], check=True, capture_output=True)
+        return read_json(output)['upstream']
+
+def _changed(recorded, current):
+    names = sorted(name for name in recorded.keys() | current.keys() if recorded.get(name) != current.get(name))
+    return ', '.join(names[:8]) + (f' and {len(names) - 8} more' if len(names) > 8 else '')
+
+def require_runtime_sources(build, runtime, binary=LIBRARY, target='ducktape_laya', root=ROOT):
+    """Reject a library linked from runtime sources other than the current tree's.
+
+    The build records the runtime files it compiles when it configures (with the patched copies it
+    made) and each time it links the library (with the library's hash). A library linked while the
+    runtime tree, or a patched copy, was modified keeps that record after the tree is restored, so it
+    cannot be packaged as the pinned runtime; rebuilding from the restored tree replaces it."""
+    build = pathlib.Path(build)
+    linked_path, configured_path = build / (target + '.runtime-sources.json'), build / 'generated/runtime-sources.configure.json'
+    if not linked_path.is_file() or not configured_path.is_file():
+        raise ValueError(target + ': missing runtime source record; rebuild first')
+    linked, configured = read_json(linked_path), read_json(configured_path)
+    if linked.get('binary_name') != (build / binary).resolve().name or linked.get('binary_sha256') != sha256(build / binary):
+        raise ValueError(target + ': library differs from the one its runtime source record describes; rebuild first')
+    current = runtime_sources(runtime, root)
+    if linked.get('upstream') != current:
+        raise ValueError(f'{target}: linked from runtime sources that differ from the current runtime tree '
+                         f'({_changed(linked.get("upstream") or {}, current)}); rebuild from the pinned runtime')
+    if linked.get('patched') != configured.get('patched'):
+        raise ValueError(f'{target}: patched runtime copies changed after configure '
+                         f'({_changed(linked.get("patched") or {}, configured.get("patched") or {})}); reconfigure and rebuild')
+    originals = {name: (configured.get('upstream') or {}).get(name) for name in configured.get('patched') or {}}
+    if originals != {name: current.get(name) for name in originals}:
+        raise ValueError(f'{target}: runtime patched from sources that differ from the current runtime tree '
+                         f'({_changed(originals, {name: current.get(name) for name in originals})}); reconfigure and rebuild')
+    if linked.get('stale'):
+        raise ValueError(f'{target}: linked while runtime files that had changed back with timestamps older than the previous link were '
+                         f'not recompiled ({", ".join(linked["stale"][:8])}); touch them and rebuild, or build in a fresh directory')
+    return {'upstream_files': len(current), 'patched_files': len(originals)}
+
 def browser_build_identity(build, backend, record, toolchain, expected_source):
     """Reject swapped, stale or modified browser assets before packaging."""
     identity = read_json(build / 'laya.build.json')

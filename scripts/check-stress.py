@@ -19,7 +19,8 @@ import platform
 import subprocess
 import sys
 import time
-from release_support import (EXE, LIBRARY, ROOT, binary_info, build_environment, check_record, git, host_target, read_json, require_runtime_identity, sha256,
+from release_support import (EXE, LIBRARY, ROOT, binary_info, build_environment, check_record, git, host_target, read_json, require_runtime_identity,
+                             require_runtime_sources, sha256,
                              source_identity, native_build_identity, verify_model)
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -68,6 +69,7 @@ try:
     report['build_identity'] = native_build_identity(build, 'ducktape_laya', LIBRARY, source_identity())
     report['diagnostics'] = binary_info(build)
     require_runtime_identity(report['diagnostics'], record)
+    require_runtime_sources(build, ROOT / record['runtime']['path'])
     library, binary = build / LIBRARY, build / ('laya-stress' + EXE)
     report['library_sha256'] = sha256(library)
     report['test_sha256'] = sha256(binary)
