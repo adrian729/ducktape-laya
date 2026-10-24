@@ -390,62 +390,104 @@ public final class LayaTest {
         }
     }
 
-    /** Runs this class in a fresh JVM with a broken library selection; the child verifies the errors. */
-    static void loadFailure() throws Exception {
-        String java = ProcessHandle.current().info().command().orElse("java");
-        String cp = System.getProperty("java.class.path");
-        for (boolean viaProperty : new boolean[] {true, false}) {
-            List<String> cmd = new ArrayList<>(List.of(java, "--enable-native-access=ALL-UNNAMED"));
-            if (viaProperty) cmd.add("-Dducktape.laya.library=/nonexistent/libducktape_laya.so");
-            cmd.addAll(List.of("-cp", cp, "io.github.adrian729.laya.LayaTest", "--load-failure"));
-            ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
-            pb.environment().put("DUCKTAPE_LAYA_LIB_DIR", viaProperty ? System.getenv().getOrDefault("DUCKTAPE_LAYA_LIB_DIR", "/x") : "/nonexistent");
-            Process p = pb.start();
-            String out = new String(p.getInputStream().readAllBytes());
-            eq(0, p.waitFor(), "child exit (viaProperty=" + viaProperty + "): " + out);
+    /** Runs a child JVM to completion within two minutes and returns its output (stdout and stderr). */
+    static String runChild(ProcessBuilder pb, String what) throws Exception {
+        Path log = Files.createTempFile("laya-child", ".log");
+        try {
+            Process p = pb.redirectErrorStream(true).redirectOutput(log.toFile()).start();
+            if (!p.waitFor(120, TimeUnit.SECONDS)) {
+                p.destroyForcibly().waitFor();
+                throw new AssertionError(what + ": child did not finish in 120 s: " + Files.readString(log));
+            }
+            String out = Files.readString(log);
+            eq(0, p.exitValue(), what + ": " + out);
+            return out;
+        } finally {
+            Files.deleteIfExists(log);
         }
     }
 
+    static List<String> childJava(String... args) {
+        List<String> cmd = new ArrayList<>(List.of(ProcessHandle.current().info().command().orElse("java"), "--enable-native-access=ALL-UNNAMED"));
+        cmd.addAll(List.of(args));
+        return cmd;
+    }
+
+    /** Runs this class in a fresh JVM with a broken library selection; the child verifies the errors. */
+    static void loadFailure() throws Exception {
+        String cp = System.getProperty("java.class.path");
+        for (boolean viaProperty : new boolean[] {true, false}) {
+            List<String> cmd = childJava();
+            if (viaProperty) cmd.add("-Dducktape.laya.library=/nonexistent/libducktape_laya.so");
+            cmd.addAll(List.of("-cp", cp, "io.github.adrian729.laya.LayaTest", "--load-failure"));
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.environment().put("DUCKTAPE_LAYA_LIB_DIR", viaProperty ? System.getenv().getOrDefault("DUCKTAPE_LAYA_LIB_DIR", "/x") : "/nonexistent");
+            runChild(pb, "load failure (viaProperty=" + viaProperty + ")");
+        }
+    }
+
+    static String hostPlatform() {
+        return Native.platform(System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT),
+            System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT));
+    }
+
     /** A jar-bundled library is loaded from a private extraction directory that is empty again
-     *  right after loading (Linux/macOS), and a shared Windows-style extraction reuses its copy. */
+     *  right after loading (Linux/macOS), and a shared Windows-style extraction reuses its copy.
+     *  A bundled file that cannot be loaded is reported as found but unloadable, not as missing. */
     static void bundledExtraction() throws Exception {
         String libDir = System.getenv("DUCKTAPE_LAYA_LIB_DIR");
-        String platform = Native.platform(System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT),
-            System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT));
+        String platform = hostPlatform();
         if (libDir == null || platform == null || !Files.isRegularFile(Path.of(libDir, Native.LIB))) {
             System.out.println("SKIP bundledExtraction (no library to bundle)");
             return;
         }
         boolean windows = platform.startsWith("windows");
-        Path resources = Files.createTempDirectory("laya-res");
-        Path tmp = Files.createTempDirectory("laya-tmp");
-        try {
-            Path nativeDir = Files.createDirectories(resources.resolve("native").resolve(platform));
-            Files.copy(Path.of(libDir, Native.LIB), nativeDir.resolve(Native.LIB));
-            String java = ProcessHandle.current().info().command().orElse("java");
-            String cp = System.getProperty("java.class.path") + (Path.of("a").getFileSystem().getSeparator().equals("/") ? ":" : ";") + resources;
-            ProcessBuilder pb = new ProcessBuilder(java, "--enable-native-access=ALL-UNNAMED", "-Dducktape.laya.tmpdir=" + tmp,
-                "-cp", cp, "io.github.adrian729.laya.LayaTest", "--bundled-child").redirectErrorStream(true);
-            pb.environment().remove("DUCKTAPE_LAYA_LIB_DIR");
-            pb.environment().remove("LD_LIBRARY_PATH");
-            Process p = pb.start();
-            String out = new String(p.getInputStream().readAllBytes());
-            eq(0, p.waitFor(), "bundled child: " + out);
-            try (var entries = Files.list(tmp)) {
-                List<Path> left = entries.toList();
-                if (windows) {
-                    // One shared copy in tmp/<content hash>/, which only its owner can modify.
-                    eq(1, left.size(), "one shared copy " + left);
-                    Path copy = left.get(0).resolve(Native.LIB);
-                    check(Files.isRegularFile(copy), "shared copy " + copy);
-                    UserPrincipal owner = Files.getOwner(copy);
-                    check(!Native.writableByOthers(left.get(0), owner) && !Native.writableByOthers(copy, owner),
-                        "shared copy writable by others: " + acl(left.get(0)) + " " + acl(copy));
-                } else eq(List.<Path>of(), left, "extraction directory left behind");
+        for (boolean broken : new boolean[] {false, true}) {
+            Path resources = Files.createTempDirectory("laya-res");
+            Path tmp = Files.createTempDirectory("laya-tmp");
+            try {
+                Path nativeDir = Files.createDirectories(resources.resolve("native").resolve(platform));
+                if (broken) Files.write(nativeDir.resolve(Native.LIB), new byte[] {'n', 'o', 't', ' ', 'a', ' ', 'l', 'i', 'b'});
+                else Files.copy(Path.of(libDir, Native.LIB), nativeDir.resolve(Native.LIB));
+                String cp = System.getProperty("java.class.path") + java.io.File.pathSeparator + resources;
+                ProcessBuilder pb = new ProcessBuilder(childJava("-Dducktape.laya.tmpdir=" + tmp,
+                    "-cp", cp, "io.github.adrian729.laya.LayaTest", broken ? "--bundled-broken-child" : "--bundled-child", platform));
+                pb.environment().remove("DUCKTAPE_LAYA_LIB_DIR");
+                pb.environment().remove("LD_LIBRARY_PATH");
+                runChild(pb, broken ? "unloadable bundled child" : "bundled child");
+                if (broken) continue;
+                try (var entries = Files.list(tmp)) {
+                    List<Path> left = entries.toList();
+                    if (windows) {
+                        // One shared copy in tmp/<content hash>-<owner hash>/, which only its owner can modify.
+                        eq(1, left.size(), "one shared copy " + left);
+                        Path copy = left.get(0).resolve(Native.LIB);
+                        check(Files.isRegularFile(copy), "shared copy " + copy);
+                        UserPrincipal owner = Files.getOwner(copy);
+                        eq(Native.sharedName(Files.readAllBytes(copy), owner), left.get(0).getFileName().toString(), "shared directory name");
+                        check(!Native.writableByOthers(left.get(0), owner) && !Native.writableByOthers(copy, owner),
+                            "shared copy writable by others: " + acl(left.get(0)) + " " + acl(copy));
+                    } else eq(List.<Path>of(), left, "extraction directory left behind");
+                }
+            } finally {
+                deleteRecursively(resources);
+                deleteRecursively(tmp);
             }
-        } finally {
-            deleteRecursively(resources);
-            deleteRecursively(tmp);
+        }
+        // An extraction directory that does not exist is an extraction error, not a load error (Linux and
+        // macOS; on Windows the shared base directory is created).
+        if (!windows) {
+            Path resources = Files.createTempDirectory("laya-res");
+            try {
+                Files.copy(Path.of(libDir, Native.LIB), Files.createDirectories(resources.resolve("native").resolve(platform)).resolve(Native.LIB));
+                ProcessBuilder pb = new ProcessBuilder(childJava("-Dducktape.laya.tmpdir=" + resources.resolve("no-such-dir"),
+                    "-cp", System.getProperty("java.class.path") + java.io.File.pathSeparator + resources, "io.github.adrian729.laya.LayaTest",
+                    "--bundled-missing-tmpdir-child", platform));
+                pb.environment().remove("DUCKTAPE_LAYA_LIB_DIR");
+                runChild(pb, "missing tmpdir child");
+            } finally {
+                deleteRecursively(resources);
+            }
         }
         // Shared extraction: one copy per content, reused, and a tampered copy is replaced.
         Path base = Files.createTempDirectory("laya-shared");
@@ -456,26 +498,54 @@ public final class LayaTest {
             Files.write(first, new byte[] {9, 9});
             eq(first, Native.extractShared(base, bytes), "tampered copy replaced");
             check(java.util.Arrays.equals(bytes, Files.readAllBytes(first)), "tampered copy restored");
+            // Entries other than the copy and in-progress .part files are removed; one that cannot be is refused.
+            Path dir = first.getParent();
+            Files.write(dir.resolve("vcruntime140.dll"), bytes);
+            Files.write(dir.resolve("ducktape_laya123.part"), bytes);
+            eq(first, Native.extractShared(base, bytes), "copy used after removing strays");
+            check(!Files.exists(dir.resolve("vcruntime140.dll")), "stray file removed");
+            check(Files.exists(dir.resolve("ducktape_laya123.part")), "in-progress copy kept");
+            Files.write(Files.createDirectories(dir.resolve("nested")).resolve("x"), bytes);
+            Throwable refused = thrown(() -> Native.extractShared(base, bytes));
+            check(refused instanceof java.io.IOException && refused.getMessage().contains("unexpected entry"), "non-empty stray refused: " + refused);
         } finally {
             deleteRecursively(base);
         }
+        // The shared directory name depends on the owner: an elevated administrator's processes (files owned
+        // by the Administrators group) and the same user's ordinary processes use different directories.
+        UserPrincipal user = () -> "HOST\\user", administrators = () -> "BUILTIN\\Administrators";
+        byte[] bytes = {1, 2, 3};
+        check(!Native.sharedName(bytes, user).equals(Native.sharedName(bytes, administrators)), "owner in the shared name");
+        check(Native.sharedName(bytes, user).matches("[0-9a-f]{32}-[0-9a-f]{8}"), "shared name " + Native.sharedName(bytes, user));
+        check(!Native.sharedName(bytes, user).equals(Native.sharedName(new byte[] {1, 2}, user)), "content in the shared name");
     }
 
-    /** The Windows extraction scheme: a shared copy per content under %LOCALAPPDATA%\ducktape-laya or
-     *  -Dducktape.laya.tmpdir, owner-checked, or a fresh owner-only directory. Runs on every platform;
+    /** True when this process runs elevated (Windows high integrity level): icacls /setowner to another
+     *  account needs the restore privilege, which only an elevated administrator holds. */
+    private static boolean elevated() throws Exception {
+        Process p = new ProcessBuilder("whoami", "/groups").redirectErrorStream(true).start();
+        String out = new String(p.getInputStream().readAllBytes());
+        return p.waitFor() == 0 && (out.contains("S-1-16-12288") || out.contains("S-1-16-16384"));
+    }
+
+    /** The Windows extraction scheme: a shared copy per content and owner under %LOCALAPPDATA%\ducktape-laya
+     *  or -Dducktape.laya.tmpdir, owner-checked, or a fresh owner-only directory. Runs on every platform;
      *  the owner and ACL cases need Windows (icacls) and are skipped elsewhere. */
     static void windowsExtraction() throws Exception {
         String libDir = System.getenv("DUCKTAPE_LAYA_LIB_DIR");
         Path built = libDir == null ? null : Path.of(libDir, Native.LIB);
         boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("windows");
         byte[] bytes = built != null && Files.isRegularFile(built) ? Files.readAllBytes(built) : new byte[] {1, 2, 3, 4};
-        String hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes), 0, 16);
         Path root = Files.createTempDirectory("laya-extract");
         try {
+            Path probe = Files.createFile(root.resolve("owner.probe"));
+            UserPrincipal owner = Files.getOwner(probe);
+            Files.delete(probe);
+            String name = Native.sharedName(bytes, owner);
             // Extraction and load: the copy is the bundled bytes and loads as the library.
             if (built != null && Files.isRegularFile(built)) {
                 Path copy = Native.extractShared(root.resolve("load"), bytes);
-                eq(root.resolve("load").resolve(hash).resolve(Native.LIB), copy, "copy location");
+                eq(root.resolve("load").resolve(name).resolve(Native.LIB), copy, "copy location");
                 try (Arena arena = Arena.ofConfined()) {
                     var abi = Linker.nativeLinker().downcallHandle(SymbolLookup.libraryLookup(copy, arena).find("dtl_abi_version").orElseThrow(),
                         FunctionDescriptor.of(ValueLayout.JAVA_INT));
@@ -491,13 +561,13 @@ public final class LayaTest {
             // An existing copy is reused, not rewritten.
             Path base = root.resolve("reuse");
             Path first = Native.extractShared(base, bytes);
+            check(!Native.writableByOthers(first.getParent(), owner), "new shared directory owner-only: " + acl(first.getParent()));
             Files.setLastModifiedTime(first, java.nio.file.attribute.FileTime.fromMillis(86_400_000L));
             eq(first, Native.extractShared(base, bytes), "shared copy reused");
             eq(86_400_000L, Files.getLastModifiedTime(first).toMillis(), "reused copy not rewritten");
             // A directory the user created beforehand is used. On Windows an ACL entry for another account
             // (SYSTEM, as %LOCALAPPDATA% passes on) is replaced by an owner-only ACL.
-            Path existing = Files.createDirectories(root.resolve("existing").resolve(hash));
-            UserPrincipal owner = Files.getOwner(existing);
+            Path existing = Files.createDirectories(root.resolve("existing").resolve(name));
             if (windows) {
                 icacls(existing, "/grant", "*S-1-5-18:(OI)(CI)F");
                 check(Native.writableByOthers(existing, owner), "precondition: SYSTEM can write " + acl(existing));
@@ -507,10 +577,10 @@ public final class LayaTest {
             check(!Native.writableByOthers(existing.resolve(Native.LIB), owner), "copy owner-only: " + acl(existing.resolve(Native.LIB)));
             // -Dducktape.laya.tmpdir takes precedence over %LOCALAPPDATA%.
             Path local = root.resolve("local"), override = root.resolve("override");
-            eq(override.resolve(hash).resolve(Native.LIB), Native.extractWindows(bytes, override.toString(), local.toString(), root),
+            eq(override.resolve(name).resolve(Native.LIB), Native.extractWindows(bytes, override.toString(), local.toString(), root),
                 "tmpdir override");
             check(!Files.exists(local), "LOCALAPPDATA untouched with an override");
-            eq(local.resolve("ducktape-laya").resolve(hash).resolve(Native.LIB), Native.extractWindows(bytes, null, local.toString(), root),
+            eq(local.resolve("ducktape-laya").resolve(name).resolve(Native.LIB), Native.extractWindows(bytes, null, local.toString(), root),
                 "LOCALAPPDATA location");
             // No location: a fresh owner-only directory under java.io.tmpdir, every time.
             Path javaTmp = Files.createDirectories(root.resolve("java-tmp"));
@@ -523,6 +593,23 @@ public final class LayaTest {
                 System.out.println("SKIP windowsExtraction owner and ACL cases (Windows only: icacls)");
                 return;
             }
+            // An inheritable entry for another account (Everyone) on the base directory reaches neither a new
+            // shared directory nor its copy; added after extraction, it propagates to an ordinary sibling
+            // directory but not into the shared one, whose ACL is protected from inheritance.
+            Path inheriting = Files.createDirectories(root.resolve("inherit"));
+            icacls(inheriting, "/grant", "*S-1-1-0:(OI)(CI)F");
+            Path inherited = Native.extractShared(inheriting, bytes);
+            check(!Native.writableByOthers(inherited.getParent(), owner), "inheritable base entry kept out of the directory: " + acl(inherited.getParent()));
+            check(!Native.writableByOthers(inherited, owner), "inheritable base entry kept out of the copy: " + acl(inherited));
+            Path sibling = Files.createDirectories(inheriting.resolve("sibling"));
+            icacls(inheriting, "/remove:g", "*S-1-1-0");
+            java.util.Set<String> before = modifiers(sibling, owner);
+            icacls(inheriting, "/grant", "*S-1-1-0:(OI)(CI)M");
+            java.util.Set<String> after = modifiers(sibling, owner);
+            check(after.containsAll(before) && after.size() > before.size(),
+                "precondition: the new entry propagates to an unprotected sibling: " + before + " then " + after);
+            check(!Native.writableByOthers(inherited.getParent(), owner), "protected directory after propagation: " + acl(inherited.getParent()));
+            check(!Native.writableByOthers(inherited, owner), "copy in the protected directory after propagation: " + acl(inherited));
             // Another account may modify the directory and the copy (Everyone: full control): both are
             // made owner-only again, and the copy, checked after that, is used.
             Path shared = Native.extractShared(root.resolve("acl"), bytes);
@@ -533,6 +620,12 @@ public final class LayaTest {
             eq(shared, Native.extractShared(root.resolve("acl"), bytes), "copy used after securing");
             check(!Native.writableByOthers(shared.getParent(), owner), "directory secured: " + acl(shared.getParent()));
             check(!Native.writableByOthers(shared, owner), "copy secured: " + acl(shared));
+            if (!elevated()) {
+                // Giving a file to another account (icacls /setowner) needs an elevated administrator; GitHub's
+                // Windows runners are elevated, so CI runs these cases.
+                System.out.println("SKIP windowsExtraction foreign-owner cases (not elevated: icacls /setowner to SYSTEM needs the restore privilege)");
+                return;
+            }
             // A copy owned by another account (SYSTEM) in the user's own directory is replaced.
             icacls(shared, "/setowner", "*S-1-5-18");
             check(!Files.getOwner(shared).equals(owner), "precondition: copy owned by " + Files.getOwner(shared));
@@ -540,13 +633,13 @@ public final class LayaTest {
             eq(owner, Files.getOwner(shared), "replaced copy owner");
             // A directory owned by another account (SYSTEM) is refused: an explicit tmpdir fails, and
             // %LOCALAPPDATA% falls back to a fresh owner-only directory.
-            Path foreignDir = Files.createDirectories(root.resolve("foreign-local").resolve("ducktape-laya").resolve(hash));
+            Path foreignDir = Files.createDirectories(root.resolve("foreign-local").resolve("ducktape-laya").resolve(name));
             icacls(foreignDir, "/setowner", "*S-1-5-18");
             check(!Files.getOwner(foreignDir).equals(owner), "precondition: directory owned by " + Files.getOwner(foreignDir));
             Throwable refused = thrown(() -> Native.extractShared(foreignDir.getParent(), bytes));
-            check(refused instanceof java.io.IOException && refused.getMessage().contains("not owned by the current user"), "foreign directory refused: " + refused);
+            check(refused instanceof java.io.IOException && refused.getMessage().contains("not a directory owned by the current user"), "foreign directory refused: " + refused);
             refused = thrown(() -> Native.extractWindows(bytes, foreignDir.getParent().toString(), local.toString(), javaTmp));
-            check(refused instanceof java.io.IOException && refused.getMessage().contains("not owned by the current user"), "explicit tmpdir refused: " + refused);
+            check(refused instanceof java.io.IOException && refused.getMessage().contains("not a directory owned by the current user"), "explicit tmpdir refused: " + refused);
             Path fallback = Native.extractWindows(bytes, null, root.resolve("foreign-local").toString(), javaTmp);
             check(fallback.getParent().getParent().equals(javaTmp), "fallback to a fresh directory: " + fallback);
             check(!Native.writableByOthers(fallback.getParent(), owner), "fallback owner-only: " + acl(fallback.getParent()));
@@ -564,6 +657,17 @@ public final class LayaTest {
         eq(0, p.waitFor(), String.join(" ", command) + ": " + out);
     }
 
+    /** The accounts other than owner that an ACL entry of path lets modify it. */
+    private static java.util.Set<String> modifiers(Path path, UserPrincipal owner) throws java.io.IOException {
+        var view = Files.getFileAttributeView(path, java.nio.file.attribute.AclFileAttributeView.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        java.util.Set<String> names = new java.util.TreeSet<>();
+        for (var entry : view.getAcl())
+            if (entry.type() == java.nio.file.attribute.AclEntryType.ALLOW && !entry.principal().equals(owner)
+                && entry.permissions().contains(java.nio.file.attribute.AclEntryPermission.WRITE_DATA))
+                names.add(entry.principal().getName());
+        return names;
+    }
+
     /** The ACL entries of path, for failure messages (empty where the file system has no ACLs). */
     private static String acl(Path path) throws java.io.IOException {
         var view = Files.getFileAttributeView(path, java.nio.file.attribute.AclFileAttributeView.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
@@ -573,6 +677,24 @@ public final class LayaTest {
     private static void deleteRecursively(Path root) throws java.io.IOException {
         try (var walk = Files.walk(root)) {
             for (Path q : walk.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(q);
+        }
+    }
+
+    /** In the child JVM: the bundled library loads, and on Linux and macOS its extraction directory is
+     *  already gone while the library stays mapped (on Linux /proc/self/maps shows it as deleted). */
+    private static void bundledChild(String platform) throws Exception {
+        check(Laya.runtimeInfo().contains("\"abi_version\":2"), "bundled runtime info");
+        if (platform.startsWith("windows")) return;
+        Path tmp = Path.of(System.getProperty("ducktape.laya.tmpdir"));
+        try (var entries = Files.list(tmp)) {
+            eq(List.<Path>of(), entries.toList(), "extraction directory left behind while loaded");
+        }
+        if (platform.startsWith("linux")) {
+            String prefix = tmp.toRealPath().resolve("ducktape-laya").toString();
+            List<String> mapped = Files.readAllLines(Path.of("/proc/self/maps")).stream()
+                .filter(line -> line.contains(prefix) && line.contains(Native.LIB)).toList();
+            check(!mapped.isEmpty() && mapped.stream().allMatch(line -> line.endsWith("(deleted)")),
+                "library mapped from the deleted extraction directory: " + mapped);
         }
     }
 
@@ -627,9 +749,20 @@ public final class LayaTest {
         }
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("--bundled-child")) {
-            check(Laya.runtimeInfo().contains("\"abi_version\":2"), "bundled runtime info");
+            bundledChild(args[1]);
+            System.exit(0);
+        }
+        if (args.length > 0 && args[0].equals("--bundled-broken-child")) {
+            LayaException e = (LayaException) thrown(Laya::runtimeInfo);
+            check(e != null && e.status() == LayaException.UNSUPPORTED_PLATFORM && e.getMessage().contains("Found the bundled library /native/" + args[1])
+                && e.getMessage().contains("could not be loaded") && e.getMessage().contains(Native.loadHint(args[1])), "unloadable bundled library: " + e);
+            System.exit(0);
+        }
+        if (args.length > 0 && args[0].equals("--bundled-missing-tmpdir-child")) {
+            LayaException e = (LayaException) thrown(Laya::runtimeInfo);
+            check(e != null && e.status() == LayaException.UNSUPPORTED_PLATFORM && e.getMessage().contains("Cannot extract bundled library"), "missing tmpdir: " + e);
             System.exit(0);
         }
         if (args.length > 0 && args[0].equals("--load-failure")) {

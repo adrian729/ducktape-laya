@@ -10,6 +10,8 @@ import java.nio.file.attribute.AclEntryFlag;
 import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -103,6 +105,10 @@ final class Native {
         return LINKER.downcallHandle(symbol, fd);
     }
 
+    /** Released packages; any other platform needs a library built from source. */
+    static final String RELEASED = "packages exist for Linux x86-64 and arm64 and Windows x64; on other platforms build the "
+        + "library from source and set -Dducktape.laya.library or DUCKTAPE_LAYA_LIB_DIR";
+
     private static SymbolLookup load() {
         Arena global = Arena.global();
         String path = System.getProperty("ducktape.laya.library");
@@ -113,28 +119,68 @@ final class Native {
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
         String platform = platform(os, arch);
         if (platform == null)
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM,
-                "ducktape-laya supports Linux x86-64 and arm64, macOS arm64 and Windows x64 (found " + os + "/" + arch + ")");
-        if (platform.startsWith("linux") && isMusl()) throw muslUnsupported();
-        SymbolLookup bundled = loadBundled("/native/" + platform + "/" + LIB, os.contains("windows"), global);
-        if (bundled != null) return bundled;
-        RuntimeException last = null;
-        String versioned = LIB.endsWith(".dylib") ? "libducktape_laya.1.dylib" : LIB.endsWith(".dll") ? LIB : LIB + ".1";
-        for (String name : new String[] {versioned, LIB}) {
-            try {
-                return SymbolLookup.libraryLookup(name, global);
-            } catch (RuntimeException e) {
-                last = e;
-            }
+            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Unsupported platform " + os + "/" + arch + ": ducktape-laya " + RELEASED);
+        if (platform.startsWith("linux") && isMusl()) {
+            // The bundled library needs glibc; only a musl build on the loader path can load.
+            SymbolLookup system = systemLibrary(platform, global);
+            if (system != null) return system;
+            throw muslUnsupported();
         }
-        throw new LayaException(LayaException.UNSUPPORTED_PLATFORM,
-            "Cannot find " + LIB + ": set -Dducktape.laya.library, DUCKTAPE_LAYA_LIB_DIR or the loader path", last);
+        SymbolLookup bundled = loadBundled("/native/" + platform + "/" + LIB, platform, global);
+        if (bundled != null) return bundled;
+        SymbolLookup system = systemLibrary(platform, global);
+        if (system != null) return system;
+        throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "The ducktape-laya jar bundles no library for " + platform
+            + " and " + systemSearch(platform) + "; set -Dducktape.laya.library or DUCKTAPE_LAYA_LIB_DIR");
+    }
+
+    /** Where {@link #systemLibrary} looks, for error messages. */
+    private static String systemSearch(String platform) {
+        if (platform.startsWith("linux")) return "the dynamic loader found no libducktape_laya.so.1 or libducktape_laya.so";
+        if (platform.startsWith("macos")) return "no libducktape_laya.1.dylib or libducktape_laya.dylib is in " + MACOS_LIBRARY_DIRS;
+        return "Windows has no system location for it";
+    }
+
+    /** Library directories searched on macOS, by absolute path: Homebrew's and the CMake install default. */
+    static final List<Path> MACOS_LIBRARY_DIRS = List.of(Path.of("/opt/homebrew/lib"), Path.of("/usr/local/lib"));
+
+    /** An installed library, or null. Linux asks the dynamic loader for the soname, then the plain name
+     *  (LD_LIBRARY_PATH, the loader cache and the system directories; never the current directory).
+     *  macOS loads by absolute path from {@link #MACOS_LIBRARY_DIRS} only, since a bare name would make dyld
+     *  search further. Windows has no such location, and a bare name would search the current directory and
+     *  PATH, so it has no fallback. */
+    private static SymbolLookup systemLibrary(String platform, Arena arena) {
+        String versioned = LIB.endsWith(".dylib") ? "libducktape_laya.1.dylib" : LIB + ".1";
+        if (platform.startsWith("linux")) {
+            for (String name : new String[] {versioned, LIB}) {
+                try {
+                    return SymbolLookup.libraryLookup(name, arena);
+                } catch (RuntimeException e) {
+                    // not on the loader path
+                }
+            }
+        } else if (platform.startsWith("macos")) {
+            for (Path dir : MACOS_LIBRARY_DIRS)
+                for (String name : new String[] {versioned, LIB}) {
+                    Path candidate = dir.resolve(name);
+                    if (Files.isRegularFile(candidate)) return open(candidate, arena);
+                }
+        }
+        return null;
+    }
+
+    /** Why a library file that exists may fail to load on this platform. */
+    static String loadHint(String platform) {
+        if (platform.startsWith("linux")) return "it needs glibc 2.38+ and libstdc++ with GLIBCXX_3.4.29";
+        if (platform.startsWith("windows")) return "it needs the Microsoft Visual C++ Redistributable";
+        return "it needs macOS 14 or newer";
     }
 
     static LayaException muslUnsupported() {
         return new LayaException(LayaException.UNSUPPORTED_PLATFORM,
-            "The bundled ducktape-laya library needs glibc, and this looks like a musl system (for example Alpine); "
-            + "use a glibc-based image or set -Dducktape.laya.library to a musl build");
+            "The bundled ducktape-laya library needs glibc, and this looks like a musl system (for example Alpine), "
+            + "and no musl build of libducktape_laya.so.1 is on the loader path; use a glibc-based image, or set "
+            + "-Dducktape.laya.library or DUCKTAPE_LAYA_LIB_DIR to a musl build");
     }
 
     /** True on a musl system: a musl dynamic loader is present and no glibc one is. */
@@ -172,8 +218,8 @@ final class Native {
 
     /** Extracts the bundled library and loads it. On Linux and macOS the copy is deleted as soon as
      *  it is loaded (unlinking a mapped library is safe), so nothing is left behind even if the JVM
-     *  is killed. */
-    private static SymbolLookup loadBundled(String resource, boolean windows, Arena arena) {
+     *  is killed. A bundled library that is present but cannot be loaded is an error that names it. */
+    private static SymbolLookup loadBundled(String resource, String platform, Arena arena) {
         byte[] bytes;
         try (InputStream in = Native.class.getResourceAsStream(resource)) {
             if (in == null) return null;
@@ -182,18 +228,24 @@ final class Native {
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot read bundled library: " + e.getMessage(), e);
         }
         Path dir = null;
+        Path file;
         try {
-            Path file;
-            if (windows) {
+            if (platform.startsWith("windows")) {
                 file = extractWindows(bytes);
             } else {
                 dir = Files.createTempDirectory(tempBase(), "ducktape-laya");
                 file = dir.resolve(LIB);
                 Files.write(file, bytes);
             }
-            return open(file, arena);
         } catch (IOException e) {
+            if (dir != null) deleteTree(dir);
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot extract bundled library: " + e.getMessage(), e);
+        }
+        try {
+            return SymbolLookup.libraryLookup(file, arena);
+        } catch (RuntimeException e) {
+            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Found the bundled library " + resource
+                + " but it could not be loaded (extracted to " + file + "): " + e.getMessage() + " (" + loadHint(platform) + ")", e);
         } finally {
             if (dir != null) deleteTree(dir);
         }
@@ -241,8 +293,9 @@ final class Native {
                 // Unusable or not ours: fall through to a private directory.
             }
         }
-        Path dir = Files.createTempDirectory(javaTmp, "ducktape-laya");
-        restrictToOwner(dir, Files.getOwner(dir));
+        UserPrincipal user = currentUser(javaTmp);
+        Path dir = Files.createTempDirectory(javaTmp, "ducktape-laya", ownerOnly(javaTmp, user));
+        restrictToOwner(dir, user);
         Path file = dir.resolve(LIB);
         Files.write(file, bytes);
         // Hooks run in reverse registration order: the directory must be registered first.
@@ -251,24 +304,42 @@ final class Native {
         return file;
     }
 
-    /** Shares one copy per content in base/&lt;content hash&gt;/. That directory and the copy must
-     *  belong to the current user, or the call fails. Where the file system has ACLs (Windows), the
-     *  directory and the copy are made owner-only before the copy is checked, so an ACL that lets
-     *  another account write them (for example inherited from a shared base directory) is replaced,
-     *  and a copy that is not the current user's or differs from the bundled bytes is replaced. */
-    static Path extractShared(Path base, byte[] bytes) throws IOException {
-        byte[] digest;
+    /** The name of the shared directory for bytes and user: a hash of the content, then a short hash
+     *  of the owner's name. Processes of one account that create files under different owners (an
+     *  administrator's elevated processes own their files as the Administrators group) each get their
+     *  own directory instead of refusing each other's. */
+    static String sharedName(byte[] bytes, UserPrincipal user) {
         try {
-            digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+            MessageDigest sha = MessageDigest.getInstance("SHA-256");
+            String content = HexFormat.of().formatHex(sha.digest(bytes), 0, 16);
+            String owner = HexFormat.of().formatHex(sha.digest(user.getName().getBytes(java.nio.charset.StandardCharsets.UTF_8)), 0, 4);
+            return content + "-" + owner;
         } catch (NoSuchAlgorithmException e) {
-            throw new IOException(e);
+            throw new IllegalStateException(e);
         }
+    }
+
+    /** Shares one copy per content and owner in base/{@link #sharedName}/. The directory is created
+     *  with an owner-only ACL (owner-only permissions where there are no ACLs); an existing one must
+     *  belong to the current user, or the call fails. Where the file system has ACLs (Windows), the
+     *  directory and the copy are made owner-only and protected from inheriting ACL entries before the
+     *  copy is checked, so an ACL that lets another account write them (for example inherited from a
+     *  shared base directory) is replaced. Then every entry other than the copy and in-progress
+     *  ducktape_laya*.part files is deleted (or the call fails), and a copy that is not the current
+     *  user's or differs from the bundled bytes is replaced. */
+    static Path extractShared(Path base, byte[] bytes) throws IOException {
         Files.createDirectories(base);
         UserPrincipal user = currentUser(base);
-        Path dir = base.resolve(HexFormat.of().formatHex(digest, 0, 16));
-        Files.createDirectories(dir);
-        if (!ownedBy(dir, user)) throw new IOException(dir + " is not owned by the current user");
+        Path dir = base.resolve(sharedName(bytes, user));
+        try {
+            Files.createDirectory(dir, ownerOnly(base, user));
+        } catch (FileAlreadyExistsException e) {
+            // Created earlier (by this user, checked below).
+        }
+        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS) || !ownedBy(dir, user))
+            throw new IOException(dir + " is not a directory owned by the current user");
         secure(dir, user);
+        removeStrays(dir);
         Path file = dir.resolve(LIB);
         if (Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) && ownedBy(file, user)) {
             secure(file, user);
@@ -287,6 +358,26 @@ final class Native {
         if (!ownedBy(file, user)) throw new IOException(file + " is not owned by the current user");
         secure(file, user);
         return file;
+    }
+
+    /** Deletes every entry of the shared directory but the library and in-progress copies, which
+     *  another process of this user may be writing. An entry that cannot be deleted (for example a
+     *  non-empty directory) fails the call. */
+    private static void removeStrays(Path dir) throws IOException {
+        List<Path> strays;
+        try (var entries = Files.list(dir)) {
+            strays = entries.filter(entry -> {
+                String name = entry.getFileName().toString();
+                return !name.equals(LIB) && !(name.startsWith("ducktape_laya") && name.endsWith(".part"));
+            }).toList();
+        }
+        for (Path stray : strays) {
+            try {
+                Files.delete(stray);
+            } catch (IOException e) {
+                throw new IOException(dir + " holds an unexpected entry that could not be removed: " + stray, e);
+            }
+        }
     }
 
     /** The owner of the files this process creates (on Windows the token's default owner, which for
@@ -322,20 +413,79 @@ final class Native {
         return false;
     }
 
-    /** Makes path owner-only if another account could modify it. */
+    /** Makes path owner-only if another account could modify it, and protects a directory's ACL from
+     *  inheritance (Windows), so ACL entries later made inheritable on its parent do not reach it. */
     private static void secure(Path path, UserPrincipal user) throws IOException {
         if (writableByOthers(path, user)) restrictToOwner(path, user);
+        else if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) protectAcl(path);
     }
 
-    /** Replaces the ACL of a file or directory by one that grants only user, the owner (Windows). */
+    /** The ACL entry that grants user everything; on a directory it is inherited by its contents. */
+    private static AclEntry ownerEntry(UserPrincipal user, boolean directory) {
+        AclEntry.Builder entry = AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(user)
+            .setPermissions(EnumSet.allOf(AclEntryPermission.class));
+        if (directory) entry.setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT);
+        return entry.build();
+    }
+
+    /** The attribute that creates a directory owner-only from the start: an ACL granting only user
+     *  where the file system has ACLs (Windows), else POSIX mode 700. */
+    private static FileAttribute<?> ownerOnly(Path base, UserPrincipal user) {
+        if (base.getFileSystem().supportedFileAttributeViews().contains("acl")) {
+            List<AclEntry> acl = List.of(ownerEntry(user, true));
+            return new FileAttribute<List<AclEntry>>() {
+                @Override public String name() { return "acl:acl"; }
+                @Override public List<AclEntry> value() { return acl; }
+            };
+        }
+        return PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"));
+    }
+
+    /** Replaces the ACL of a file or directory by one that grants only user, the owner (Windows), and
+     *  protects a directory's ACL from inheritance. */
     private static void restrictToOwner(Path path, UserPrincipal user) throws IOException {
         AclFileAttributeView view = Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         if (view == null) return;
-        AclEntry.Builder entry = AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(user)
-            .setPermissions(EnumSet.allOf(AclEntryPermission.class));
-        if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
-            entry.setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT);
-        view.setAcl(List.of(entry.build()));
+        boolean directory = Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS);
+        view.setAcl(List.of(ownerEntry(user, directory)));
+        if (directory) protectAcl(path);
+        if (writableByOthers(path, user)) throw new IOException(path + " could not be made owner-only");
+    }
+
+    private static final int SE_FILE_OBJECT = 1, DACL_SECURITY_INFORMATION = 4, PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000;
+
+    /** Marks the DACL of path protected from inheritance (Windows; elsewhere nothing to do). The JDK
+     *  writes an ACL with SetFileSecurity and never sets SE_DACL_PROTECTED, so an ACL entry made
+     *  inheritable on the parent later (by its owner or an administrator) would propagate into the
+     *  directory. GetNamedSecurityInfoW and SetNamedSecurityInfoW (advapi32, a Windows KnownDLL) rewrite
+     *  the same DACL with PROTECTED_DACL_SECURITY_INFORMATION, which drops inherited entries. */
+    static void protectAcl(Path path) throws IOException {
+        if (Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS) == null) return;
+        try (Arena arena = Arena.ofConfined()) {
+            SymbolLookup advapi = SymbolLookup.libraryLookup("advapi32", arena);
+            SymbolLookup kernel = SymbolLookup.libraryLookup("kernel32", arena);
+            MethodHandle get = LINKER.downcallHandle(advapi.find("GetNamedSecurityInfoW").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, PTR, PTR, PTR, PTR, PTR));
+            MethodHandle set = LINKER.downcallHandle(advapi.find("SetNamedSecurityInfoW").orElseThrow(),
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, PTR, PTR, PTR, PTR));
+            MethodHandle localFree = LINKER.downcallHandle(kernel.find("LocalFree").orElseThrow(), FunctionDescriptor.of(PTR, PTR));
+            MemorySegment name = arena.allocateFrom(path.toAbsolutePath().toString(), java.nio.charset.StandardCharsets.UTF_16LE);
+            MemorySegment dacl = arena.allocate(PTR), descriptor = arena.allocate(PTR);
+            int status = (int) get.invokeExact(name, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, MemorySegment.NULL, MemorySegment.NULL,
+                dacl, MemorySegment.NULL, descriptor);
+            if (status != 0) throw new IOException("GetNamedSecurityInfoW(" + path + ") failed: error " + status);
+            try {
+                status = (int) set.invokeExact(name, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                    MemorySegment.NULL, MemorySegment.NULL, dacl.get(PTR, 0), MemorySegment.NULL);
+            } finally {
+                MemorySegment ignored = (MemorySegment) localFree.invokeExact(descriptor.get(PTR, 0));
+            }
+            if (status != 0) throw new IOException("SetNamedSecurityInfoW(" + path + ") failed: error " + status);
+        } catch (IOException | RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new IOException("Cannot protect the ACL of " + path + ": " + t, t);
+        }
     }
 
     private static boolean sameContent(Path file, byte[] bytes) throws IOException {
