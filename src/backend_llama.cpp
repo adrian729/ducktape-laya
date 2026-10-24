@@ -19,6 +19,9 @@
 #include <string_view>
 #include <thread>
 
+// Runtime patch laya-selected-decision-head.patch: the question type whose decision head
+// the next graph built on this thread evaluates, or -1 for all three (library-internal).
+extern "C" void dtl_laya_select_decision_type(int type);
 namespace dtl {
 namespace {
 std::string meta(llama_model *m, const std::string &key) {
@@ -331,6 +334,12 @@ struct backend::impl {
         for (size_t i = 0; i < n; ++i) positions[i] = static_cast<llama_pos>(i);
         llama_batch batch{static_cast<int32_t>(n), tokens.data(), nullptr, positions.data(), seq_counts.data(),
                           seq_ids.data(), outputs.data()};
+        // Evaluate only this question type's head (its scores fill all three columns); the
+        // reserved graph at open evaluated every type, so compute buffers never grow.
+        struct reset_selection {
+            ~reset_selection() { dtl_laya_select_decision_type(-1); }
+        } reset_type;
+        dtl_laya_select_decision_type(column);
         int status = llama_encode(ctx.get(), batch);
         if (control) control->check();
         if (status == -2) throw std::bad_alloc(); // llama_encode: allocation failed

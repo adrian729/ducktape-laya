@@ -1,0 +1,53 @@
+--- a/src/models/modern-bert.cpp
++++ b/src/models/modern-bert.cpp
+@@ -244,6 +244,23 @@
+     ggml_build_forward_expand(gf, cur);
+ }
+ 
++// DTL: the question type whose head the next graph on this thread evaluates (0 choice, 1 score,
++// 2 noul), or -1 for all three. Set by ducktape-laya around llama_encode; not exported.
++static thread_local int dtl_decision_type = -1;
++extern "C" void dtl_laya_select_decision_type(int type);
++extern "C" void dtl_laya_select_decision_type(int type) { dtl_decision_type = type; }
++namespace {
++// DTL: no tensors; a graph is reused only for the selection it was built for.
++class dtl_decision_type_input : public llm_graph_input_i {
++public:
++    explicit dtl_decision_type_input(int selected) : type(selected) {}
++    void set_input(const llama_ubatch *) override {}
++    bool can_reuse(const llm_graph_params &) override { return type == dtl_decision_type; }
++private:
++    const int type;
++};
++}
++
+ // returns one score per question type for each output token, the caller reads them at the option markers
+ ggml_tensor * llama_model_modern_bert::graph::build_decision_head(
+         const llama_model & model,
+@@ -255,8 +272,16 @@
+ 
+     ggml_tensor * scores = nullptr;
+ 
++    // DTL: with a selected type only its head is evaluated, and its scores fill all three
++    // columns, so the output keeps its [3, n] shape; -1 evaluates every type as upstream does
++    const int selected = dtl_decision_type >= 0 && dtl_decision_type < (int) N_DECISION_TYPES ? dtl_decision_type : -1;
++    res->add_input(std::make_unique<dtl_decision_type_input>(selected));
++
+     // the question type is not a graph input, so the head is evaluated for each of them
+     for (uint32_t it = 0; it < N_DECISION_TYPES; ++it) {
++        if (selected >= 0 && (int) it != selected) {
++            continue;
++        }
+         ggml_tensor * type_row = ggml_view_1d(ctx0, model.type_embd, n_embd, it * model.type_embd->nb[1]);
+         ggml_tensor * inpL = ggml_add(ctx0, inp, type_row);
+ 
+@@ -304,6 +329,9 @@
+ 
+         scores = scores ? ggml_concat(ctx0, scores, cur, 0) : cur;
+     }
++    if (selected >= 0) {
++        scores = ggml_concat(ctx0, ggml_concat(ctx0, scores, scores, 0), scores, 0);
++    }
+     cb(scores, "decision_scores", -1);
+ 
+     return scores;
