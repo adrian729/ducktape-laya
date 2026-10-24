@@ -1,0 +1,73 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {"major": 3, "minor": 22, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Development: Ninja, ccache, native tests",
+      "description": "Release build with the native tests, compiled through ccache (must be on PATH; the build preset clears base_dir, which would defeat -ffile-prefix-map). Not for packaging.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+        "GGML_CCACHE": "OFF",
+        "DUCKTAPE_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "product",
+      "displayName": "Product: the configuration scripts/validate.py packages",
+      "description": "Release library and Node addon (pass -DNODE_INCLUDE_DIR=...), no tests, no compiler launcher. scripts/package-native.py packages this build.",
+      "binaryDir": "${sourceDir}/build-product",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER_LAUNCHER": "",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "",
+        "GGML_CCACHE": "OFF",
+        "DUCKTAPE_BUILD_TESTS": "OFF",
+        "DUCKTAPE_BUILD_NODE": "ON",
+        "DUCKTAPE_BUILD_EXAMPLES": "OFF",
+        "DUCKTAPE_BUILD_FUZZERS": "OFF",
+        "DUCKTAPE_BUILD_REFERENCE_PROBE": "OFF"
+      }
+    },
+    {
+      "name": "sanitize",
+      "displayName": "Sanitizers: Clang ASan and UBSan, native tests",
+      "description": "The AddressSanitizer and UndefinedBehaviorSanitizer build of scripts/check-sanitizers.py (Clang, RelWithDebInfo). Never packaged.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-sanitize",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all",
+        "GGML_CCACHE": "OFF",
+        "DUCKTAPE_BUILD_TESTS": "ON",
+        "DUCKTAPE_BUILD_NODE": "OFF",
+        "DUCKTAPE_BUILD_FUZZERS": "OFF",
+        "DUCKTAPE_REAL_TEST_TIMEOUT": "3600"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "dev", "configurePreset": "dev", "environment": {"CCACHE_BASEDIR": ""}},
+    {"name": "product", "configurePreset": "product"},
+    {"name": "sanitize", "configurePreset": "sanitize"}
+  ],
+  "testPresets": [
+    {"name": "dev", "configurePreset": "dev", "output": {"outputOnFailure": true}},
+    {
+      "name": "sanitize",
+      "configurePreset": "sanitize",
+      "output": {"outputOnFailure": true},
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:strict_string_checks=1:halt_on_error=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    }
+  ]
+}

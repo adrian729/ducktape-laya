@@ -86,15 +86,32 @@ python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf --output build-check
 
 The model-free run also checks the Markdown links (`tests/docs-links.py`) and that every example request is valid. What each check covers and the options for release evidence: [RELEASE_CHECKS.md](RELEASE_CHECKS.md).
 
+### CMake presets
+
+`CMakePresets.json` (CMake 3.22+) names three configurations, each in its own build directory:
+
+| Preset | Build directory | Configuration |
+|---|---|---|
+| `dev` | `build-dev` | Ninja, Release, native tests, compiled through `ccache` (which must be on `PATH`) |
+| `product` | `build-product` | The configuration `validate.py` packages: Release, library and Node addon, no tests, no compiler cache. Pass `-DNODE_INCLUDE_DIR=...`; on Linux use `CC=gcc CXX=g++` for the release compiler |
+| `sanitize` | `build-sanitize` | Ninja, Clang AddressSanitizer and UndefinedBehaviorSanitizer at RelWithDebInfo, as `scripts/check-sanitizers.py` builds them, native tests; never packaged |
+
+```sh
+cmake --preset dev && cmake --build --preset dev -j 4 && ctest --preset dev
+cmake --preset sanitize -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf && cmake --build --preset sanitize -j 4 && ctest --preset sanitize
+```
+
 ## Try it
 
 `./demo [c|cpp|rust|js|ts] [model.gguf]` builds one small interactive example and asks three questions; `./demo --help` explains it. The model comes from the argument, `LAYA_MODEL`, or the Hugging Face cache. The ready-made requests and example programs are described in [examples/](../examples/README.md).
 
 ## Build the packages
 
-`scripts/package-native.py` builds every package for the platform it runs on, in one run (`linux-x64`, `linux-arm64`, `macos-arm64` or `windows-x64`): the native archive, the npm package, the Rust crates, the Python wheel, the Maven jar with its sources and javadoc jars and POM, the NuGet package, an SBOM and an inventory. It needs a Release build with the Node addon, `npm`, Cargo with the locked dependencies fetched, a JDK (`javac`, `javadoc`), the .NET SDK, Python 3.11+ and, on Linux, `readelf`:
+`scripts/package-native.py` builds every package for the platform it runs on, in one run (`linux-x64`, `linux-arm64`, `macos-arm64` or `windows-x64`): the native archive, the npm package, the Rust crates, the Python wheel, the Maven jar with its sources and javadoc jars and POM, the NuGet package, an SBOM and an inventory. It needs a Release build with the Node addon, `npm`, Cargo with the locked dependencies fetched, a JDK (`javac`, `javadoc`), the .NET SDK, Python 3.11+ and, on Linux, `readelf`. The native tests are not needed (`cmake --preset product -DNODE_INCLUDE_DIR=/path/to/include/node` makes the same build in `build-product`):
 
 ```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_TESTS=OFF -DDUCKTAPE_BUILD_NODE=ON -DNODE_INCLUDE_DIR=/path/to/include/node
+cmake --build build -j 3
 python3 scripts/package-native.py --build build --output build/packages
 python3 tests/package-smoke.py build/packages                                  # no model needed
 python3 tests/installed-packages.py build/packages /path/to/Laya-Q8_0.gguf      # real inference
