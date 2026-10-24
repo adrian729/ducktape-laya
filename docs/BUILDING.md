@@ -18,10 +18,12 @@ Python 3 runs the optional setup wizard and `scripts/download-model.py`; the mai
 Linux and macOS:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_TESTS=OFF
 cmake --build build -j 3
 cmake --install build --prefix "$PWD/build/staging"
 ```
+
+`-DDUCKTAPE_BUILD_TESTS=OFF` leaves out the native test executables, which a checkout builds by default ([run the tests](#run-the-tests)); the library is the same either way.
 
 The default x86-64 build requires AVX2, FMA, F16C, BMI2 and SSE4.2 at run time and the arm64 build Armv8.2-A with dot product and FP16 ([platforms](PLATFORMS.md#cpu-check-at-open)). The installed prefix holds the headers, the shared library, CMake and pkg-config files, licences, the model manifest and `download-model.py`; [PACKAGING.md](PACKAGING.md) explains how applications link it. To point a binding at the build tree instead, set `DUCKTAPE_LAYA_LIB_DIR` to `build` (each package README has a "From a checkout" section).
 
@@ -29,7 +31,7 @@ Windows x64: open an x64 Native Tools Command Prompt for Visual Studio and build
 
 ```bat
 set "CLANG=%VCINSTALLDIR%Tools\Llvm\x64\bin\clang-cl.exe"
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_TESTS=OFF "-DCMAKE_C_COMPILER=%CLANG%" "-DCMAKE_CXX_COMPILER=%CLANG%" "-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
 cmake --build build -j 3
 ```
 
@@ -52,7 +54,7 @@ node bindings/node/decide.cjs /path/to/Laya-Q8_0.gguf < examples/request.json
 
 | Option | Default | Meaning |
 |---|---|---|
-| `DUCKTAPE_BUILD_TESTS` | `ON` | Native test executables and CTest registration |
+| `DUCKTAPE_BUILD_TESTS` | `ON` in a checkout | Native test executables and CTest registration. `OFF` when the project is added to another one (`add_subdirectory`, `FetchContent`), unless that project sets `BUILD_TESTING`, whose value it then takes |
 | `DUCKTAPE_TEST_MODEL` | empty | A local GGUF; registers the real-model tests (`real-model`, `real-features`, `real-faults`, `cpu-guard` when `qemu-x86_64` is found, ...) |
 | `DUCKTAPE_REAL_TEST_TIMEOUT` | `600` | Per-test timeout in seconds for the long real-model tests; raise it for instrumented builds |
 | `DUCKTAPE_BUILD_EXAMPLES` | `OFF` | Developer examples: `laya-decide`, `laya-decide-cpp` and the demo programs |
@@ -69,7 +71,7 @@ The GGML ISA options (`GGML_AVX2`, `GGML_FMA`, ...) select the CPU profile and a
 ## Run the tests
 
 ```sh
-cmake -S . -B build -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf
+cmake -S . -B build -DDUCKTAPE_BUILD_TESTS=ON -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf
 cmake --build build -j 3
 ctest --test-dir build --output-on-failure
 ```
