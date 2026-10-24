@@ -1,0 +1,22 @@
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -3904,12 +3904,19 @@
+ }
+ 
+ void ggml_cpu_init(void) {
++    // DTL: ggml_init initializes ggml_time on its first call; allocating and freeing a context on
++    // every graph computation is needed only until that happened once. ggml_init takes the
++    // critical section itself, so this stays outside the is_first_call branch below.
++    static atomic_bool dtl_ggml_initialized = false;
++    if (!atomic_load_explicit(&dtl_ggml_initialized, memory_order_acquire)) {
+     // needed to initialize ggml_time
+     {
+         struct ggml_init_params params = { 0, NULL, false };
+         struct ggml_context * ctx = ggml_init(params);
+         ggml_free(ctx);
+     }
++        atomic_store_explicit(&dtl_ggml_initialized, true, memory_order_release);
++    }
+ 
+     ggml_critical_section_start();
+ 

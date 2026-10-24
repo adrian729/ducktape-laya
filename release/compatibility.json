@@ -61,6 +61,11 @@
         "path": "patches/llama.cpp/tokenizer-stop-check.patch",
         "sha256": "9ed6854de45b0adbbf9fc1c54ce4c88b7cfd9b24693f83ab787846167768d6ee",
         "purpose": "Tokenization calls a thread-local stop check the library sets (not exported) in the BPE merge loops and the special-token split and throws when it reports a stop; identical tokens when not stopped, no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/ggml-cpu-init-once.patch",
+        "sha256": "ea6b5578264ee2f8d34ed338e1a0ef6f4ce51dd62268909da4bcbba8bf88b890",
+        "purpose": "ggml_cpu_init allocates and frees a ggml context to initialize ggml's timer only until that happened once, instead of on every graph computation; no arithmetic changes"
       }
     ]
   },
