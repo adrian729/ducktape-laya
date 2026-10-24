@@ -131,6 +131,7 @@ try:
     run('result-comparison', [sys.executable, ROOT / 'tests/result-comparison.py'])
     run('qualification-policy', [sys.executable, ROOT / 'tests/qualification.py'])
     run('docs-links', [sys.executable, ROOT / 'tests/docs-links.py'])
+    run('ci-changes', [sys.executable, ROOT / 'tests/ci-changes.py'])
     # The C probes need a GNU-style driver; on Windows that is clang next to clang-cl (the
     # configure step below names clang-cl, so the layouts are checked before it with the
     # compiler --cmake-arg selects).
