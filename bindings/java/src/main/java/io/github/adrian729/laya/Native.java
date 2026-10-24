@@ -115,10 +115,7 @@ final class Native {
         if (platform == null)
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM,
                 "ducktape-laya supports Linux x86-64 and arm64, macOS arm64 and Windows x64 (found " + os + "/" + arch + ")");
-        if (platform.startsWith("linux") && isMusl())
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM,
-                "The bundled ducktape-laya library needs glibc, and this looks like a musl system (for example Alpine); "
-                + "use a glibc-based image or set -Dducktape.laya.library to a musl build");
+        if (platform.startsWith("linux") && isMusl()) throw muslUnsupported();
         SymbolLookup bundled = loadBundled("/native/" + platform + "/" + LIB, os.contains("windows"), global);
         if (bundled != null) return bundled;
         RuntimeException last = null;
@@ -134,11 +131,22 @@ final class Native {
             "Cannot find " + LIB + ": set -Dducktape.laya.library, DUCKTAPE_LAYA_LIB_DIR or the loader path", last);
     }
 
+    static LayaException muslUnsupported() {
+        return new LayaException(LayaException.UNSUPPORTED_PLATFORM,
+            "The bundled ducktape-laya library needs glibc, and this looks like a musl system (for example Alpine); "
+            + "use a glibc-based image or set -Dducktape.laya.library to a musl build");
+    }
+
     /** True on a musl system: a musl dynamic loader is present and no glibc one is. */
     static boolean isMusl() {
+        return isMusl(Path.of("/lib"), Path.of("/lib64"));
+    }
+
+    /** True when the directories hold a musl dynamic loader and no glibc one (tests pass their own). */
+    static boolean isMusl(Path... dirs) {
         boolean musl = false, glibc = false;
-        for (String d : new String[] {"/lib", "/lib64"}) {
-            try (var names = Files.list(Path.of(d))) {
+        for (Path d : dirs) {
+            try (var names = Files.list(d)) {
                 for (Path q : (Iterable<Path>) names::iterator) {
                     String n = q.getFileName().toString();
                     musl |= n.startsWith("ld-musl-");

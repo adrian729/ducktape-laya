@@ -366,6 +366,69 @@ test('addon load failures carry status 7 and ERR_LAYA_UNSUPPORTED', async () => 
   assert.throws(() => Laya.runtimeInfo({ addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
 });
 
+test('musl detection reads the dynamic loaders in the given directories', () => {
+  const { isMusl } = require('./resolve-addon.cjs');
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'laya-musl-'));
+  try {
+    const dir = (name, ...files) => {
+      const d = path.join(root, name);
+      fs.mkdirSync(d);
+      for (const f of files) fs.writeFileSync(path.join(d, f), '');
+      return d;
+    };
+    const alpine = dir('alpine', 'ld-musl-x86_64.so.1', 'libc.musl-x86_64.so.1');
+    const debian = dir('debian', 'ld-linux-x86-64.so.2');
+    const arm = dir('arm', 'ld-linux-aarch64.so.1');
+    const gcompat = dir('gcompat', 'ld-musl-aarch64.so.1', 'ld-linux-aarch64.so.1');
+    const empty = dir('empty');
+    assert.equal(isMusl([alpine]), true);
+    assert.equal(isMusl([alpine, path.join(root, 'missing')]), true);
+    assert.equal(isMusl([debian]), false);
+    assert.equal(isMusl([arm]), false);
+    // A glibc loader anywhere (Alpine with gcompat, or one in /lib64) means glibc can load.
+    assert.equal(isMusl([gcompat]), false);
+    assert.equal(isMusl([alpine, debian]), false);
+    assert.equal(isMusl([empty, path.join(root, 'missing')]), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('on musl the resolver and every entry point report that the glibc addon cannot load', async () => {
+  const resolveAddon = require('./resolve-addon.cjs');
+  const musl = /needs glibc, and this looks like a musl system/;
+  for (const arch of ['x64', 'arm64']) {
+    assert.throws(() => resolveAddon(undefined, { platform: 'linux', arch, env: {}, musl: () => true }), { status: 7, message: musl });
+  }
+  // glibc: the packaged addon path (missing in a checkout); other systems are never checked for musl.
+  assert.throws(() => resolveAddon(undefined, { platform: 'linux', arch: 'x64', env: {}, musl: () => false }), { status: 7, message: /is missing/ });
+  assert.throws(() => resolveAddon(undefined, { platform: 'darwin', arch: 'arm64', env: {}, musl: () => true }), { status: 7, message: /is missing/ });
+  // An explicit addon (a musl build) is used as given.
+  assert.equal(resolveAddon('/opt/musl/ducktape_laya.node', { platform: 'linux', arch: 'x64', env: {}, musl: () => true }), path.resolve('/opt/musl/ducktape_laya.node'));
+  assert.equal(resolveAddon(undefined, { platform: 'linux', arch: 'x64', env: { DUCKTAPE_LAYA_ADDON: '/opt/musl/a.node' }, musl: () => true }), path.resolve('/opt/musl/a.node'));
+  // Through the public API, in a child process whose resolver sees a musl system.
+  const { execFileSync } = require('node:child_process');
+  const script = `
+    const resolver = require.resolve(${JSON.stringify(path.join(__dirname, 'resolve-addon.cjs'))});
+    const real = require(resolver);
+    require.cache[resolver].exports = Object.assign((o, h) => real(o, { ...h, musl: () => true, platform: 'linux', arch: 'x64' }), real);
+    const { Laya } = require(${JSON.stringify(path.join(__dirname, 'index.cjs'))});
+    const results = [];
+    try { Laya.runtimeInfo(); } catch (e) { results.push([e.status, e.code, e.message]); }
+    Laya.open('model.gguf').catch(e => results.push([e.status, e.code, e.message]))
+      .then(() => Laya.openRouter({ models: { a: 'model.gguf' } })).catch(e => results.push([e.status, e.code, e.message]))
+      .then(() => process.stdout.write(JSON.stringify(results)));`;
+  const env = { ...process.env };
+  delete env.DUCKTAPE_LAYA_ADDON;
+  const results = JSON.parse(execFileSync(process.execPath, ['-e', script], { env, encoding: 'utf8' }));
+  assert.equal(results.length, 3);
+  for (const [status, code, message] of results) {
+    assert.equal(status, 7);
+    assert.equal(code, 'ERR_LAYA_UNSUPPORTED');
+    assert.match(message, musl);
+  }
+});
+
 test('null or non-object options are argument errors with status 1', async () => {
   await assert.rejects(Laya.open('x', null), { name: 'TypeError', status: 1 });
   await assert.rejects(Laya.openRouter({ models: { unused: __filename } }, null), { name: 'TypeError', status: 1 });

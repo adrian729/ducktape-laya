@@ -437,6 +437,30 @@ jobs:
           retention-days: ${{ inputs.candidate && 30 || 14 }}
           overwrite: true
 
+  # musl (Alpine) is not supported: the packages bundle glibc builds. The loaders must say so
+  # instead of failing with a loader error, and npm must refuse the Linux-only npm package.
+  musl:
+    name: Packages on Alpine (musl) report glibc
+    needs: assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packages-assembled
+          path: assembled
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packages-linux-x64
+          path: linux-x64
+      - name: Node on Alpine
+        run: docker run --rm -v "$PWD:/w:ro" node:24.21.0-alpine3.24@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 sh /w/tests/musl-packages.sh node /w/assembled /w/linux-x64
+      - name: Java on Alpine
+        run: docker run --rm -v "$PWD:/w:ro" eclipse-temurin:25.0.4_7-jdk-alpine-3.24@sha256:541729c21f9308a68cebbe5a0627e4cd465dfe8980fc03bac0b2feaee57daafd sh /w/tests/musl-packages.sh java /w/assembled
+
   assembled:
     name: Multi-platform packages on ${{ matrix.platform }} / ${{ (inputs.real_model || inputs.candidate) && 'real model' || 'model free' }}
     needs: assemble

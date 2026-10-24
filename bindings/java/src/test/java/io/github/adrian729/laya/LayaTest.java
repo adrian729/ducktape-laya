@@ -82,6 +82,34 @@ public final class LayaTest {
         eq(null, Native.platform("freebsd", "amd64"), "FreeBSD has no package");
     }
 
+    /** musl detection from the dynamic loaders present, and the error the loader gives on musl. */
+    static void muslDetection() throws Exception {
+        Path root = Files.createTempDirectory("laya-musl");
+        try {
+            Path alpine = Files.createDirectories(root.resolve("alpine")), debian = Files.createDirectories(root.resolve("debian"));
+            Path gcompat = Files.createDirectories(root.resolve("gcompat")), empty = Files.createDirectories(root.resolve("empty"));
+            Files.createFile(alpine.resolve("ld-musl-x86_64.so.1"));
+            Files.createFile(alpine.resolve("libc.musl-x86_64.so.1"));
+            Files.createFile(debian.resolve("ld-linux-x86-64.so.2"));
+            Files.createFile(gcompat.resolve("ld-musl-aarch64.so.1"));
+            Files.createFile(gcompat.resolve("ld-linux-aarch64.so.1"));
+            Path missing = root.resolve("missing");
+            eq(true, Native.isMusl(alpine), "Alpine");
+            eq(true, Native.isMusl(alpine, missing), "Alpine without /lib64");
+            eq(false, Native.isMusl(debian), "glibc");
+            eq(false, Native.isMusl(gcompat), "musl with a glibc loader (gcompat)");
+            eq(false, Native.isMusl(alpine, debian), "a glibc loader in another directory");
+            eq(false, Native.isMusl(empty, missing), "no loader");
+        } finally {
+            deleteRecursively(root);
+        }
+        LayaException e = Native.muslUnsupported();
+        eq(LayaException.UNSUPPORTED_PLATFORM, e.status(), "musl status");
+        check(e.getMessage().contains("needs glibc, and this looks like a musl system"), "musl message " + e.getMessage());
+        // This host is not musl (the suite runs on glibc, macOS and Windows).
+        eq(false, Native.isMusl(), "host detected as musl");
+    }
+
     static void configJson() {
         check(Config.none().toJson() == null, "empty config");
         eq("{\"threads\":0}", Config.none().withThreads(0).toJson(), "threads only");
@@ -608,9 +636,9 @@ public final class LayaTest {
             loadFailureChild();
             System.exit(0);
         }
-        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "packagePlatforms", "configJson", "loadFailure", "bundledExtraction", "windowsExtraction", "pendingCloseFailsFast", "routerAutoValidation"};
+        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "packagePlatforms", "muslDetection", "configJson", "loadFailure", "bundledExtraction", "windowsExtraction", "pendingCloseFailsFast", "routerAutoValidation"};
         Case[] cases = {LayaTest::diagnostics, LayaTest::rejectsBadPath, LayaTest::rejectsNul, LayaTest::rejectsInvalidUnicode,
-            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::packagePlatforms, LayaTest::configJson, LayaTest::loadFailure, LayaTest::bundledExtraction, LayaTest::windowsExtraction,
+            LayaTest::containsObserverFailures, LayaTest::closeIsIdempotent, LayaTest::argumentValidation, LayaTest::packagePlatforms, LayaTest::muslDetection, LayaTest::configJson, LayaTest::loadFailure, LayaTest::bundledExtraction, LayaTest::windowsExtraction,
             LayaTest::pendingCloseFailsFast, LayaTest::routerAutoValidation};
         List<String> failed = new ArrayList<>();
         int ran = 0;
