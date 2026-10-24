@@ -60,7 +60,7 @@ The zip's `bin/ducktape_laya.dll` needs the Microsoft Visual C++ Redistributable
 
 - **Node.js** selects the addon in `native/<platform>-<arch>/` for the running platform, and the addon loads the library next to it: on Linux through a `DT_RPATH` of `$ORIGIN`, which the loader searches before `LD_LIBRARY_PATH`, on Windows from the addon's directory. The addon refuses a library of another package version. From a checkout, pass `addonPath` or set `DUCKTAPE_LAYA_ADDON`.
 - **Python, Java and .NET** load the library bundled in their package; `DUCKTAPE_LAYA_LIB_DIR` (and in Java `-Dducktape.laya.library`) selects a specific library instead and is then authoritative.
-- A library of the same name in the current directory or on `PATH` or `LD_LIBRARY_PATH` does not replace the bundled one; CI checks this for .NET on Linux and Windows and for Node on Linux. Each package README gives the exact search order.
+- A library of the same name in the current directory or on `PATH` or `LD_LIBRARY_PATH` does not replace the bundled one; CI checks this for .NET on Linux and Windows and for Node on Linux. On macOS `DYLD_LIBRARY_PATH` does: dyld searches it by file name even for a library loaded by full path. Each package README gives the exact search order.
 - **Rust and Go** link the native archive's library at build time (`DUCKTAPE_LAYA_LIB_DIR` or pkg-config for Rust, cgo flags or pkg-config for Go), so the program needs it at run time like any C program.
 
 Every binding, and the C++ wrapper, checks that the library implements C ABI 2 and refuses any other. A library that is missing, cannot be loaded or implements another ABI is status 7 in every binding that loads it at run time ([errors](API.md#ownership-admission-and-errors)).

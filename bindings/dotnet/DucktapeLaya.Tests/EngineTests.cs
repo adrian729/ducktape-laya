@@ -38,7 +38,9 @@ public class EngineTests
         Directory.CreateDirectory(dir);
         try
         {
-            var path = Path.Combine(dir, Native.FileName);
+            // Not the library's file name: macOS dyld would find a library of that name on DYLD_LIBRARY_PATH
+            // (which the macOS CI job sets) instead of loading this file.
+            var path = Path.Combine(dir, "broken-" + Native.FileName);
             File.WriteAllBytes(path, "not a library"u8.ToArray());
             var error = Assert.Throws<LayaException>(() => Native.LoadFile(path, "The bundled library", Native.LoadHint()));
             Assert.Equal(7, error.Status);
