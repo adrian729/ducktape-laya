@@ -58,7 +58,8 @@ for pair in native:native-inventory.json:native-sbom.cdx.json browser:npm-browse
   [ -f "$inventory" ] || fail "$inventory missing"
   jq -e --arg label "$label" --arg sum "$(sha256sum "$inventory" | cut -d' ' -f1)" '.inventories_sha256[$label] == $sum' gates.json > /dev/null ||
     fail "$inventory is not the inventory gates.json qualified"
-  jq -e --arg commit "$commit" '.packaging_source_commit == $commit' "$inventory" > /dev/null || fail "$inventory was not packaged from $commit"
+  jq -e --arg commit "$commit" '.packaging_source_commit == $commit and .packaging_source_tracked_dirty == false' "$inventory" > /dev/null ||
+    fail "$inventory was not packaged from $commit on a clean tree"
   allowed="$allowed $inventory"
   while read -r sum name; do
     [ "$name" = sbom.cdx.json ] && name=$sbom

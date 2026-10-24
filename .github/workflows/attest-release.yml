@@ -45,7 +45,9 @@ jobs:
           set -euo pipefail
           [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Not a release tag: $TAG"; exit 1; }
           # Through the tag ref (annotated tags dereferenced), never a branch of the same name.
-          echo "commit=$(checks/scripts/tag-commit.sh "$GITHUB_REPOSITORY" "$TAG")" >> "$GITHUB_OUTPUT"
+          commit=$(checks/scripts/tag-commit.sh "$GITHUB_REPOSITORY" "$TAG")
+          [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "$TAG resolved to no commit"; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
       # The tagged commit's own release record and policy decide which gates and targets gates.json must have.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:

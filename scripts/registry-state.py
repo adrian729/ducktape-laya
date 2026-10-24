@@ -161,7 +161,8 @@ def main(argv=None):
     p.add_argument('--wait', type=int, default=0)
     p.add_argument('--poll', type=int, default=30, help=argparse.SUPPRESS)
     p.add_argument('--responses', help=argparse.SUPPRESS)
-    a = p.parse_args(argv)
+    # The files may come before or after options (older argparse ends nargs='*' at the first option).
+    a = p.parse_intermixed_args(argv)
     if a.registry == 'maven':
         if not a.group or not a.files or a.file:
             p.error('maven takes --group and the files')

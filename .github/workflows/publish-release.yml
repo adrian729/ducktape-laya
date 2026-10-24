@@ -74,7 +74,9 @@ jobs:
           set -euo pipefail
           [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Not a release tag: $TAG"; exit 1; }
           # Through the tag ref (annotated tags dereferenced), never a branch of the same name.
-          echo "commit=$(scripts/tag-commit.sh "$GITHUB_REPOSITORY" "$TAG")" >> "$GITHUB_OUTPUT"
+          commit=$(scripts/tag-commit.sh "$GITHUB_REPOSITORY" "$TAG")
+          [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "$TAG resolved to no commit"; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - name: Check out the tagged commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -163,6 +165,10 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - name: Check the tagged commit
+        env:
+          COMMIT: ${{ needs.reproduce.outputs.commit }}
+        run: '[[ $COMMIT =~ ^[0-9a-f]{40}$ ]]'
       - name: Check out the tagged commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -308,7 +314,7 @@ jobs:
             --skip-duplicate 2>&1 | tee push.log
           # The version can exist without being listed yet (an earlier attempt's push still in validation):
           # then wait until NuGet serves it and compare it like any published version.
-          if grep -qiE 'already exists|conflict|409' push.log; then
+          if grep -qiE 'already exists|already contains|409 \(Conflict' push.log; then
             python3 -I scripts/registry-state.py nuget --name DucktapeLaya --version "${TAG#v}" --file "dist/DucktapeLaya.${TAG#v}.nupkg" --wait 3600
           fi
 

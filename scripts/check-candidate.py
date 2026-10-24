@@ -394,7 +394,8 @@ result = {'schema_version': 2, 'candidate_commit': commit, 'checker_commit': git
 for gate, check in GATES.items():
     result['gates'][gate] = run_gate(check)
 result['targets'] = evaluate_targets(ctx, result['gates'])
-result['release_ready'] = (all(g['status'] == 'passed' for g in result['gates'].values()) and
+# A dirty checker's verdict is not release evidence (scripts/release-gates.jq refuses it too).
+result['release_ready'] = (not result['checker_tree_dirty'] and all(g['status'] == 'passed' for g in result['gates'].values()) and
                            all(g['status'] == 'passed' for t in result['targets'].values() for g in t['gates'].values()))
 # The package inventories this report qualified; attest-release.yml checks the
 # published native-inventory.json (the CI-assembled release packages) and
