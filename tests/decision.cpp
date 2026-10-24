@@ -4,6 +4,9 @@
 #include "python_json.hpp"
 #include "threads.hpp"
 #include "request_state.hpp"
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 using dtl::json;
@@ -133,6 +136,30 @@ int main() {
         expect(dtl::cgroup_v2_path("0::/") == "/", "root cgroup");
         for (const char *none : {"", "12:cpu,cpuacct:/docker/abc\n", "0::\n", "10::/x\n"})
             expect(dtl::cgroup_v2_path(none).empty(), "no cgroup v2 path");
+        {
+            // The smallest quota of the group and its ancestors, in a fake cgroup v2 mount.
+            namespace fs = std::filesystem;
+            const auto mount = fs::temp_directory_path() /
+                ("laya-cgroup-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            struct cleanup { fs::path dir; ~cleanup() { std::error_code ec; fs::remove_all(dir, ec); } } guard{mount};
+            fs::create_directories(mount / "a/b/c");
+            auto write = [&](const char *group, const char *text) { std::ofstream(mount / group / "cpu.max") << text; };
+            const auto root = mount.generic_string();
+            expect(dtl::cgroup_tree_quota_cpus(root, "/a/b/c") == 0, "no cpu.max anywhere");
+            write("a", "max 100000\n");
+            write("a/b", "350000 100000\n");
+            expect(dtl::cgroup_tree_quota_cpus(root, "/a/b/c") == 4, "a parent's quota limits the group");
+            write(".", "200000 100000\n");
+            expect(dtl::cgroup_tree_quota_cpus(root, "/a/b/c") == 2, "the mount's top group (a cgroup namespace) limits the group");
+            write("a/b/c", "100000 100000\n");
+            expect(dtl::cgroup_tree_quota_cpus(root, "/a/b/c") == 1 && dtl::cgroup_tree_quota_cpus(root, "/a/b") == 2 &&
+                   dtl::cgroup_tree_quota_cpus(root, "/a") == 2 && dtl::cgroup_tree_quota_cpus(root, "/") == 2,
+                   "the smallest quota of the group and its ancestors");
+            write(".", "garbage\n");
+            expect(dtl::cgroup_tree_quota_cpus(root, "/a/b") == 4 && dtl::cgroup_tree_quota_cpus(root, "/a") == 0 &&
+                   dtl::cgroup_tree_quota_cpus(root, "/a/x/y") == 0 && dtl::cgroup_tree_quota_cpus(root, "") == 0 &&
+                   dtl::cgroup_tree_quota_cpus(root + "/missing", "/a/b/c") == 0, "unreadable or missing files are no limit");
+        }
         expect(dtl::automatic_threads(0, 0, 0) == 1 && dtl::automatic_threads(0, 0, 8) == 4 &&
                dtl::automatic_threads(0, 0, 2) == 2 && dtl::automatic_threads(1, 0, 8) == 1 &&
                dtl::automatic_threads(16, 3, 16) == 3 && dtl::automatic_threads(2, 3, 16) == 2 &&
