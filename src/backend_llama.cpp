@@ -6,6 +6,7 @@
 #include "errors.hpp"
 #include "execution.hpp"
 #include "platform.hpp"
+#include "threads.hpp"
 #include "llama.h"
 #include "jinja/parser.h"
 #include "json.h"
@@ -149,7 +150,7 @@ struct backend::impl {
         auto cp = llama_context_default_params();
         cp.n_ctx = cp.n_batch = cp.n_ubatch = static_cast<uint32_t>(capacity); cp.n_seq_max = 1;
         const uint32_t threads = config.threads;
-        cp.n_threads = cp.n_threads_batch = threads ? threads : std::max(1u, std::min(4u, std::thread::hardware_concurrency()));
+        cp.n_threads = cp.n_threads_batch = threads ? threads : default_threads();
         cp.embeddings = true; cp.pooling_type = LLAMA_POOLING_TYPE_NONE;
         cp.attention_type = LLAMA_ATTENTION_TYPE_NON_CAUSAL;
 #ifdef DTL_BROWSER_WEBGPU

@@ -28,7 +28,7 @@ Out of scope: text or chat generation, an HTTP or inference server, model traini
 | Language detection for `"model": "auto"` | `src/language.cpp` |
 | Request bounds, open config, schema planning/projection, batch order, routing/cache and passive events | `src/laya.cpp` |
 | Cooperative stop state, deadlines and cancellable lock waits | `src/execution.hpp` |
-| Runtime diagnostics and native CPU compatibility checks | `src/platform.cpp` |
+| Runtime diagnostics, native CPU compatibility checks and the automatic thread count (CPU affinity, cgroup CPU quota) | `src/platform.cpp`, `src/threads.hpp` |
 | Ownership, type conversion, error translation and platform scheduling | Thin language bindings |
 | Source/artifact identity, packaging and dependency upgrade checks | CMake and maintainer scripts; no runtime dependency on Python |
 

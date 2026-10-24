@@ -2,6 +2,7 @@
 // documented tie rule (first option or level) for choices, scores and integer values.
 #include "decision.hpp"
 #include "python_json.hpp"
+#include "threads.hpp"
 #include <iostream>
 #include <stdexcept>
 using dtl::json;
@@ -99,6 +100,25 @@ int main() {
         expect(dtl::ordinal_index(json{{"0", 0.4}, {"1", 0.4}, {"2", 0.2}}) == 0, "integer tie chooses the first level");
         expect(dtl::ordinal_index(json{{"0", 0.2}, {"1", 0.4}, {"2", 0.4}}) == 1, "integer tie chooses the first of the tied levels");
         expect(dtl::ordinal_index(json{{"0", 0.1}, {"1", 0.2}, {"2", 0.7}}) == 2, "integer maximum");
+        // Automatic thread count: min(4, affinity CPUs, cgroup v2 quota rounded up, hardware threads); 0 = unknown.
+        expect(dtl::cgroup_quota_cpus("max 100000\n") == 0 && dtl::cgroup_quota_cpus("max 100000") == 0, "cpu.max without a limit");
+        expect(dtl::cgroup_quota_cpus("100000 100000\n") == 1 && dtl::cgroup_quota_cpus("150000 100000") == 2 &&
+               dtl::cgroup_quota_cpus("50000 100000") == 1 && dtl::cgroup_quota_cpus("800000 100000\n") == 8 &&
+               dtl::cgroup_quota_cpus("1000 1000000") == 1, "cpu.max quota rounds up");
+        for (const char *bad : {"", "\n", "100000", "x 100000", "100000 x", "100000 0", "0 100000", "-1 100000", " 100000",
+                                "100000  100000", "99999999999999999999 1"})
+            expect(dtl::cgroup_quota_cpus(bad) == 0, bad);
+        expect(dtl::cgroup_v2_path("0::/user.slice/user-1000.slice/session-2.scope\n") == "/user.slice/user-1000.slice/session-2.scope",
+               "cgroup v2 path");
+        expect(dtl::cgroup_v2_path("12:cpu,cpuacct:/docker/abc\n1:name=systemd:/x\n0::/docker/abc\n") == "/docker/abc", "hybrid hierarchy");
+        expect(dtl::cgroup_v2_path("0::/") == "/", "root cgroup");
+        for (const char *none : {"", "12:cpu,cpuacct:/docker/abc\n", "0::\n", "10::/x\n"})
+            expect(dtl::cgroup_v2_path(none).empty(), "no cgroup v2 path");
+        expect(dtl::automatic_threads(0, 0, 0) == 1 && dtl::automatic_threads(0, 0, 8) == 4 &&
+               dtl::automatic_threads(0, 0, 2) == 2 && dtl::automatic_threads(1, 0, 8) == 1 &&
+               dtl::automatic_threads(16, 3, 16) == 3 && dtl::automatic_threads(2, 3, 16) == 2 &&
+               dtl::automatic_threads(8, 0, 0) == 1 && dtl::automatic_threads(0, 1, 0) == 1 &&
+               dtl::automatic_threads(3, 0, 8) == 3 && dtl::automatic_threads(0, 2, 8) == 2, "automatic thread count");
         std::cout << "decision rule tests passed\n";
         return 0;
     } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }

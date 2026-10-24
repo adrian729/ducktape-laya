@@ -70,7 +70,7 @@ Opening takes an optional JSON config; each binding exposes the same keys as nat
 
 | Key | Meaning |
 |---|---|
-| `threads` | 0 (automatic, at most 4) or 1–256 CPU threads |
+| `threads` | 0 (automatic: at most 4 and at most the usable CPUs, see [admission](#ownership-admission-and-errors)) or 1–256 CPU threads |
 | `context_tokens` | The longest prompt the engine reserves memory for: 32 up to the model's trained length. Default 512 (or the trained length if smaller). Compute follows each prompt's real length; only memory grows with this value. The model files allow 8,192, but the original Laya runs the English checkpoint at 512 and the multilingual and typed-decisions checkpoints at 1,024, so longer prompts are untested for accuracy |
 | `overflow` | Default policy for prompts over their limit; see [Long input](#long-input) |
 | `temperatures` | Calibration overrides, keyed like the model's metadata: a type (`choice`, `score`, `noul`) or a type and option-count bucket (`choice.2`, `choice.3_5`, `choice.6_10`, `choice.11`, `score.3_5`, `noul.2`, ...). Values must be greater than 0 and finite as a 32-bit float (`1e-50` and `1e39` are rejected) |
@@ -239,7 +239,7 @@ Node calls accept `{ signal, timeoutMs }`. Their deadline starts at enqueue and 
 
 ## Ownership, admission and errors
 
-Native `threads` is 0 (automatic, capped at 4) or an integer in 1..256. Node's `maxPending` defaults to 16 and accepts 1..1024; each accepted call or entire batch occupies one slot. Work is FIFO and excess work is rejected. `close()` stops admission and drains accepted calls. Worker failure rejects pending work; callers must open a new instance. Browser admission follows the same bounds, with platform-specific controls and initialization rules in [BROWSER.md](BROWSER.md).
+Native `threads` is 0 (automatic) or an integer in 1..256. Automatic uses at most 4 threads, and no more than the CPUs the process may run on: the hardware threads, the CPU affinity mask (Linux, Windows) and the CPU quota of the process's own cgroup v2 group (`cpu.max`, rounded up; Linux), at least 1. ggml's workers wait by spinning, so more threads than usable CPUs is slower. An explicit count is used as given. Node's `maxPending` defaults to 16 and accepts 1..1024; each accepted call or entire batch occupies one slot. Work is FIFO and excess work is rejected. `close()` stops admission and drains accepted calls. Worker failure rejects pending work; callers must open a new instance. Browser admission follows the same bounds, with platform-specific controls and initialization rules in [BROWSER.md](BROWSER.md).
 
 C inputs are borrowed UTF-8 NUL-terminated strings. Initialize call options with `dtl_default_call_options()`; a `struct_size` other than this ABI's `sizeof(dtl_call_options)` or a nonzero `reserved` field is rejected with status 1. Output pointers are reset on entry. Successful result buffers and any non-null error buffers belong to the caller and must be released by `dtl_free`. An error message may be absent on allocation failure. Null close/free is allowed; closing a non-null handle invalidates it and must not race any active call.
 

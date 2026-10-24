@@ -1,6 +1,21 @@
 #include "platform.hpp"
 #include "errors.hpp"
 #include "build_config.hpp"
+#include "threads.hpp"
+#include <thread>
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include <sched.h>
+#include <fstream>
+#include <iterator>
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 #if defined(__aarch64__) && defined(__linux__)
 #include <asm/hwcap.h>
 #include <sys/auxv.h>
@@ -96,6 +111,30 @@ std::vector<feature> required_features() {
 #endif
     return out;
 }
+}
+unsigned default_threads() {
+    unsigned affinity = 0, quota = 0;
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+    // CPUs in this thread's affinity mask (inherited from the process unless the host changed
+    // it; glibc's hardware_concurrency counts online CPUs instead). A mask over 1024 CPUs is
+    // not read and leaves the limit unknown.
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) == 0) affinity = static_cast<unsigned>(CPU_COUNT(&set));
+    // The CPU quota of the process's own cgroup v2 group; missing files mean no known limit.
+    std::ifstream groups("/proc/self/cgroup");
+    const std::string path = groups ? cgroup_v2_path(std::string(std::istreambuf_iterator<char>(groups), {})) : std::string();
+    if (!path.empty()) {
+        std::ifstream cpu_max("/sys/fs/cgroup" + path + "/cpu.max");
+        std::string line;
+        if (cpu_max && std::getline(cpu_max, line)) quota = cgroup_quota_cpus(line);
+    }
+#elif defined(_WIN32)
+    DWORD_PTR process_mask = 0, system_mask = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask))
+        for (; process_mask; process_mask &= process_mask - 1) ++affinity;
+#endif
+    return automatic_threads(affinity, quota, std::thread::hardware_concurrency());
 }
 void ensure_cpu_supported() {
     for (const auto &feature : required_features()) {
