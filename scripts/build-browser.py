@@ -29,7 +29,9 @@ subprocess.run([str(em / 'emcmake'), 'cmake', '-S', str(ROOT), '-B', str(a.build
     '-DDUCKTAPE_WASM_OPTIMIZATION=1', '-DEMSCRIPTEN_SYSTEM_PROCESSOR=wasm32', '-DGGML_WEBGPU=' + ('ON' if a.backend == 'webgpu' else 'OFF'),
     '-DGGML_WEBGPU_DEBUG=' + ('ON' if a.trace_gpu else 'OFF'),
     '-DDUCKTAPE_BUILD_REFERENCE_PROBE=' + ('ON' if a.reference else 'OFF'),
-    f'-DDUCKTAPE_WASM_MAXIMUM_MEMORY={a.maximum_memory}'], check=True, cwd=build)
+    f'-DDUCKTAPE_WASM_MAXIMUM_MEMORY={a.maximum_memory}',
+    # No compiler cache: ggml's GGML_CCACHE (ON by default) would use any ccache on PATH.
+    '-DGGML_CCACHE=OFF', '-DCMAKE_C_COMPILER_LAUNCHER=', '-DCMAKE_CXX_COMPILER_LAUNCHER='], check=True, cwd=build)
 subprocess.run(['cmake', '--build', str(build), '--target', 'ducktape_laya_wasm', '--parallel', str(a.jobs)], check=True, cwd=build)
 if a.reference:
     subprocess.run(['cmake', '--build', str(build), '--target', 'laya-reference', '--parallel', str(a.jobs)], check=True, cwd=build)

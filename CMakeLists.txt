@@ -87,6 +87,12 @@ endif()
 string(JSON DTL_PATCHES_JSON GET "${DTL_RELEASE_RECORD}" runtime patches)
 # Normalize paths embedded by compiler diagnostics/debug metadata.
 option(DUCKTAPE_REPRODUCIBLE_PATHS "Normalize source/build paths in compiled artifacts" ON)
+# ggml compiles through any ccache or sccache on PATH by default (GGML_CCACHE). A ccache with
+# base_dir hands the compiler relative paths that the maps below do not match, which changes the
+# library's bytes; a compiler cache is opt-in here (CMAKE_<LANG>_COMPILER_LAUNCHER, or GGML_CCACHE=ON).
+if(DUCKTAPE_REPRODUCIBLE_PATHS)
+  set(GGML_CCACHE OFF CACHE BOOL "ggml: use ccache if available (ducktape-laya: off for reproducible paths)")
+endif()
 if(DUCKTAPE_REPRODUCIBLE_PATHS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   # clang-cl takes driver options through /clang: (a bare -f... would read as a file).
   if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")

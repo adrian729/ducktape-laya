@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 from release_support import (EXE, LIBRARY, ROOT, build_environment, check_record, find_manifest, git, host_target, read_json, sha256, verify_model, source_files,
-                             binary_info, require_runtime_identity, require_runtime_sources)
+                             binary_info, require_mapped_source_paths, require_runtime_identity, require_runtime_sources)
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--model', type=pathlib.Path)
@@ -34,8 +34,25 @@ p.add_argument('--packages', action='store_true', help='Build the packages and l
 p.add_argument('--upstream-reference', action='store_true', help='Build an isolated test-only upstream processor and compare every real-model fixture request')
 p.add_argument('--reproducibility', action='store_true', help='Also compile two independent source snapshots')
 p.add_argument('--extra-model', type=pathlib.Path, action='append', default=[], help='GGUF of an additional pinned model (release/compatibility.json additional_models) to qualify against the original Laya and upstream; repeatable')
+BINDINGS = ['rust', 'node', 'python', 'java', 'dotnet', 'go']
+p.add_argument('--bindings', default=','.join(BINDINGS), help='Comma-separated binding suites to run (default: all of '
+               + ','.join(BINDINGS) + '). Leaving any out also leaves out the cross-binding checks (tests/parity.py and the '
+               'installed packages): their gates stay not_run and the report lists everything left out under skipped, '
+               'so it is not release evidence')
+p.add_argument('--skip-native-tests', action='store_true', help='Do not run ctest (registration is still checked); the '
+               'native_contracts gate stays not_run and the report lists it under skipped, so it is not release evidence')
+# ggml's GGML_CCACHE (ON by default) silently compiles through any ccache or sccache on PATH; the
+# configuration is always explicit here. Release evidence is built without a launcher.
+p.add_argument('--compiler-launcher', choices=['none', 'ccache', 'sccache'], default='none',
+               help='Compile through this cache (CMAKE_<LANG>_COMPILER_LAUNCHER; default none, as release evidence is built). '
+               'Recorded in the report; check-candidate.py accepts only none')
 a = p.parse_args()
 if a.jobs < 1: p.error('--jobs must be positive')
+selected_bindings = [name for name in dict.fromkeys(a.bindings.split(',')) if name]
+if not selected_bindings or set(selected_bindings) - set(BINDINGS):
+    p.error('--bindings takes a comma-separated subset of ' + ','.join(BINDINGS))
+all_bindings = set(selected_bindings) == set(BINDINGS)
+if a.compiler_launcher != 'none' and not shutil.which(a.compiler_launcher): p.error(f'{a.compiler_launcher} is not on PATH')
 if a.upstream_reference and not a.model: p.error('--upstream-reference requires --model')
 record = check_record()
 model = a.model.resolve() if a.model else None
@@ -69,11 +86,14 @@ report = {'schema_version': 1, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'runtime': record['runtime'], 'model': manifest if model else None,
           'additional_models': [m for _, m in extra_models], 'additional_model_gates': {},
           'mode': 'real_model' if model else 'model_free', 'release_ready': False, 'platform': PLATFORM, 'skipped': {},
+          'selection': {'bindings': [name for name in BINDINGS if name in selected_bindings], 'native_tests': not a.skip_native_tests},
+          'compiler_launcher': a.compiler_launcher,
           'build_environment': build_environment(),
           'node_version': subprocess.check_output(['node', '--version'], text=True).strip(),
           'toolchains': {name: (subprocess.run(command, capture_output=True, text=True).stdout or '').strip().splitlines()[:1]
                          if shutil.which(command[0]) else []
-                         for name, command in {'rustc': ['rustc', '--version'], 'go': ['go', 'version'],
+                         for name, command in {'rustc': ['rustc', '--version'], **({a.compiler_launcher: [a.compiler_launcher, '--version']}
+                                               if a.compiler_launcher != 'none' else {}), 'go': ['go', 'version'],
                                                'java': ['java', '--version'], 'dotnet': ['dotnet', '--version'],
                                                'python': [sys.executable, '--version']}.items()},
           'source_files_sha256': source_files(),
@@ -141,19 +161,25 @@ try:
         f'-DDUCKTAPE_LLAMA_SOURCE={(ROOT / record["runtime"]["path"]).as_posix()}', '-DDUCKTAPE_LLAMA_REVISION=',
         '-DDUCKTAPE_BUILD_FUZZERS=OFF', '-DDUCKTAPE_BUILD_TESTS=ON', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_NODE=ON',
         '-DDUCKTAPE_BUILD_REFERENCE_PROBE=' + ('ON' if a.upstream_reference else 'OFF'),
+        *(f'-DCMAKE_{lang}_COMPILER_LAUNCHER={"" if a.compiler_launcher == "none" else a.compiler_launcher}' for lang in ('C', 'CXX')),
+        '-DGGML_CCACHE=' + ('OFF' if a.compiler_launcher == 'none' else 'ON'),
         f'-DNODE_INCLUDE_DIR={headers.as_posix()}', f'-DDUCKTAPE_TEST_MODEL={model.as_posix() if model else ""}',
         *([f'-DNODE_LIB={a.node_lib.resolve().as_posix()}'] if a.node_lib else []), *a.cmake_arg])
-    run('build', ['cmake', '--build', build, '--parallel', a.jobs])
+    # An empty CCACHE_BASEDIR overrides a base_dir in the user's ccache configuration, which would hand the
+    # compiler relative paths that -ffile-prefix-map does not map (require_mapped_source_paths below).
+    run('build', ['cmake', '--build', build, '--parallel', a.jobs], extra_env={'CCACHE_BASEDIR': ''})
     report['library_sha256'] = sha256(build / LIBRARY)
     report['addon_sha256'] = sha256(build / 'ducktape_laya.node')
     report['cmake_cache_sha256'] = sha256(build / 'CMakeCache.txt')
     report['diagnostics'] = binary_info(build)
     require_runtime_identity(report['diagnostics'], record)
     require_runtime_sources(build, ROOT / record['runtime']['path'])
+    for binary in (LIBRARY, 'ducktape_laya.node'): require_mapped_source_paths(build / binary)
     cache = (build / 'CMakeCache.txt').read_text().splitlines()
     report['build_options'] = {line.split(':', 1)[0]: line.split('=', 1)[1]
         for line in cache if '=' in line and ':' in line and
-        line.startswith(('CMAKE_C_COMPILER:', 'CMAKE_CXX_COMPILER:', 'CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS', 'CMAKE_BUILD_TYPE:', 'GGML_'))}
+        line.startswith(('CMAKE_C_COMPILER:', 'CMAKE_CXX_COMPILER:', 'CMAKE_C_COMPILER_LAUNCHER:', 'CMAKE_CXX_COMPILER_LAUNCHER:',
+                         'CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS', 'CMAKE_BUILD_TYPE:', 'GGML_'))}
     # Assert model-dependent tests were registered; an empty green suite is not evidence.
     registered = json.loads(subprocess.check_output(['ctest', '--test-dir', build, '--show-only=json-v1'], env=env))
     report['ctest_registered'] = sorted(test['name'] for test in registered['tests'])
@@ -173,13 +199,16 @@ try:
         report['skipped']['cpu-guard'] = 'QEMU user-mode CPU emulation runs on Linux only'
     if not required <= set(report['ctest_registered']):
         raise RuntimeError('Required native tests are missing: ' + ', '.join(sorted(required - set(report['ctest_registered']))))
-    run('native', ['ctest', '--test-dir', build, '--output-on-failure'], 'native_contracts' if model else None)
+    if a.skip_native_tests: skip('native', 'not run (--skip-native-tests)')
+    else: run('native', ['ctest', '--test-dir', build, '--output-on-failure'], 'native_contracts' if model else None)
     if WINDOWS: skip('examples-smoke', 'compiles the examples with a POSIX driver')
     else: run('examples-smoke', [sys.executable, ROOT / 'tests/examples-smoke.py', '--build-dir', build])
-    run('rust', ['cargo', 'test', '--locked', '--offline', '--manifest-path', ROOT / 'bindings/rust/Cargo.toml'])
-    run('node', ['node', '--test', ROOT / 'bindings/node/test.cjs'])
-    run('python', [sys.executable, '-m', 'unittest', 'discover', '-s', ROOT / 'bindings/python/tests'])
-    if WINDOWS:
+    for name in BINDINGS:
+        if name not in selected_bindings: skip(name, 'not selected (--bindings)')
+    if 'rust' in selected_bindings: run('rust', ['cargo', 'test', '--locked', '--offline', '--manifest-path', ROOT / 'bindings/rust/Cargo.toml'])
+    if 'node' in selected_bindings: run('node', ['node', '--test', ROOT / 'bindings/node/test.cjs'])
+    if 'python' in selected_bindings: run('python', [sys.executable, '-m', 'unittest', 'discover', '-s', ROOT / 'bindings/python/tests'])
+    if 'java' in selected_bindings and WINDOWS:
         # bindings/java/build.sh's commands with Windows classpath separators (bash may be WSL's).
         java = ROOT / 'bindings/java'
         lint = '-Xlint:all,-restricted,-serial,-missing-explicit-ctor,-module'
@@ -190,12 +219,14 @@ try:
         run('java-test-compile', ['javac', '--release', '22', lint, '-cp', classes, '-d', tests, *sources('test')])
         run('java', ['java', '--enable-native-access=ALL-UNNAMED', '-cp', os.pathsep.join(map(str, (classes, tests))),
                      'io.github.adrian729.laya.LayaTest'])
-    else:
+    elif 'java' in selected_bindings:
         run('java', ['bash', ROOT / 'bindings/java/build.sh'])
-    run('dotnet', ['dotnet', 'test', ROOT / 'bindings/dotnet/DucktapeLaya.slnx', '-m:1'])
-    run('go', ['go', '-C', ROOT / 'bindings/go', 'test', '-count=1', './...'])
+    if 'dotnet' in selected_bindings: run('dotnet', ['dotnet', 'test', ROOT / 'bindings/dotnet/DucktapeLaya.slnx', '-m:1'])
+    if 'go' in selected_bindings: run('go', ['go', '-C', ROOT / 'bindings/go', 'test', '-count=1', './...'])
     run('abi', [sys.executable, ROOT / 'scripts/check-abi.py', build / LIBRARY], 'abi')
-    if model:
+    if model and not all_bindings:
+        skip('bindings', 'every binding must agree; not run with --bindings ' + ','.join(selected_bindings))
+    elif model:
         run('bindings', [sys.executable, ROOT / 'tests/parity.py', model, '--build-dir', build,
                          '--report', out / 'outputs.json'], 'binding_conformance')
     if model:
@@ -226,7 +257,9 @@ try:
         # The multi-platform assembly of this one platform must load the same way.
         run('package-assembly-real', [sys.executable, ROOT / 'scripts/assemble-packages.py', '--output', out / 'assembled', out / 'packages'])
         run('assembled-smoke', [sys.executable, ROOT / 'tests/package-smoke.py', out / 'assembled'])
-        if model:
+        if model and not all_bindings:
+            skip('installed', 'loads the packages in every language; not run with --bindings ' + ','.join(selected_bindings))
+        elif model:
             run('installed', [sys.executable, ROOT / 'tests/installed-packages.py', out / 'packages', model], 'installed_packages')
     if a.reproducibility:
         run('reproducibility', [sys.executable, ROOT / 'scripts/check-reproducibility.py', '--output', out / 'reproducibility',

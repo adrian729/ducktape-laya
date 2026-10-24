@@ -79,7 +79,7 @@ Rerun steps that failed for environmental reasons (machine load, a missing test 
 Stop and report instead of publishing when:
 
 - a gate fails for a reason that is not clearly environmental;
-- the CI Linux x86-64 library or Node addon differs from the release host's (not environmental: a toolchain or Node header difference on one side);
+- the CI Linux x86-64 library or Node addon differs from the release host's (not environmental: a toolchain or Node header difference on one side, or a build through a compiler cache whose `base_dir` made the source paths relative; the release scripts build without a cache and refuse binaries with unmapped source paths);
 - the candidate run is not on the candidate commit, or its artifacts have expired (that needs a new candidate run);
 - anything would need a decision the maintainer has not made.
 

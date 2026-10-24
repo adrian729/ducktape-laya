@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from release_support import (LIBRARY, require_uninstrumented_binary, ROOT, browser_build_identity, sha256, source_identity, native_build_identity,
-                             require_runtime_identity, require_runtime_sources)
+                             require_mapped_source_paths, require_runtime_identity, require_runtime_sources)
 WINDOWS = sys.platform == 'win32'
 
 from artifact_support import verify_inventory
@@ -126,6 +126,49 @@ class InstrumentationTests(unittest.TestCase):
                         require_uninstrumented_binary(library)
                 else:
                     require_uninstrumented_binary(library)
+
+
+class SourcePathTests(unittest.TestCase):
+    """Release binaries hold only source paths the reproducible-path map made (./...). A compiler cache
+    with base_dir hands the compiler relative paths (../../src/laya.cpp) that the map does not match."""
+    def binary(self, directory, strings):
+        path = pathlib.Path(directory) / 'binary'
+        path.write_bytes(b'\x7fELF\x01' + b''.join(text + b'\x00' for text in strings))
+        return path
+
+    def test_mapped_paths_and_messages_are_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            # GCC keeps the map's leading ./, Clang drops it, clang-cl writes Windows separators.
+            require_mapped_source_paths(self.binary(directory, [b'./build/runtime-patched/ggml/src/ggml.c', b'./src/laya.cpp',
+                b'./third_party/llama.cpp/ggml/src/ggml-cpu/../../quants.h', b'.\\src\\platform.cpp',
+                b'build/runtime-patched/ggml/src/ggml.c', b'third_party/llama.cpp/src/llama.cpp',
+                b'build\\runtime-patched\\ggml\\src\\ggml-alloc.c', b'src\\laya.cpp',
+                b'see tools/mtmd/clip.cpp for details', b'GGML_ASSERT(%s) failed', b'version 1.2.h']))
+
+    def test_unmapped_paths_are_refused(self):
+        for path in (b'../../../../src/laya.cpp', b'./../src/laya.cpp', b'..\\src\\laya.cpp', b'runtime-patched/ggml/src/ggml.c',
+                     b'/home/user/ducktape-laya/src/laya.cpp', b'D:\\a\\ducktape-laya\\src\\laya.cpp', b'\\\\server\\src\\laya.cpp'):
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(ValueError, 'outside the reproducible-path map'):
+                    require_mapped_source_paths(self.binary(directory, [b'./src/laya.cpp', path]))
+
+    @unittest.skipUnless(shutil.which('cc') and not WINDOWS, 'compiles with a GNU-style cc')
+    def test_relative_compiler_paths_defeat_the_map(self):
+        # What ccache's base_dir does: the same source, given to the compiler by a relative path.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            (root / 'src').mkdir()
+            (root / 'build').mkdir()
+            (root / 'src/where.c').write_text('const char *where(void) { return __FILE__; }\n')
+            for source, accepted in ((root / 'src/where.c', True), (pathlib.Path('../src/where.c'), False)):
+                with self.subTest(source=str(source)):
+                    subprocess.run(['cc', '-O2', f'-ffile-prefix-map={root}=.', '-c', str(source), '-o', 'where.o'],
+                                   cwd=root / 'build', check=True, capture_output=True)
+                    if accepted:
+                        require_mapped_source_paths(root / 'build/where.o')
+                    else:
+                        with self.assertRaisesRegex(ValueError, r'\.\./src/where\.c'):
+                            require_mapped_source_paths(root / 'build/where.o')
 
 
 class NativeIdentityTests(unittest.TestCase):

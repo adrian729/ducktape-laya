@@ -66,6 +66,8 @@ node bindings/node/decide.cjs /path/to/Laya-Q8_0.gguf < examples/request.json
 | `DUCKTAPE_WASM_OPTIMIZATION` | `2` | Emscripten builds only: link optimization `0`, `1`, `2`, `3`, `s` or `z`. `scripts/build-browser.py` sets `1`, the only value browser packaging accepts |
 | `DUCKTAPE_WASM_MAXIMUM_MEMORY` | `4294967296` | Emscripten builds only: WebAssembly memory ceiling in bytes, a 64 KiB multiple from 64 MiB to 4 GiB. Lower values are for memory-pressure tests; packaging accepts only 4 GiB |
 
+ggml's `GGML_CCACHE` compiles through `ccache` or `sccache` whenever one is on `PATH`; with `DUCKTAPE_REPRODUCIBLE_PATHS` (the default) this project defaults it to `OFF`. To compile through a cache, set `CMAKE_C_COMPILER_LAUNCHER` and `CMAKE_CXX_COMPILER_LAUNCHER` (the `dev` preset does). A cache does not change the compiled bytes as long as it hands the compiler the same arguments: ccache's `base_dir` (`CCACHE_BASEDIR`, or `base_dir` in a ccache configuration file) makes source paths relative, so `-ffile-prefix-map` no longer maps them and `__FILE__` strings in the library change; build with `CCACHE_BASEDIR=` (empty) to override a configured one. `validate.py` and `package-native.py` refuse a library or addon holding a source path outside the mapped directories (`./`, `./third_party/llama.cpp` and `./build`; Clang writes them without the leading `./`), such as `../src/laya.cpp` or an absolute path. The project's scripts set the launcher and `GGML_CCACHE` explicitly.
+
 The GGML ISA options (`GGML_AVX2`, `GGML_FMA`, ...) select the CPU profile and are set explicitly for x86-64; AVX-512 and VNNI variants are refused. The library, ggml and llama.cpp are built with `-fstack-protector-strong`, `_FORTIFY_SOURCE=3` (optimised builds), full RELRO (`-z relro -z now`), `-mbranch-protection=standard` on Linux arm64 and Control Flow Guard (`/guard:cf`) with clang-cl.
 
 ## Run the tests
@@ -84,7 +86,7 @@ python3 scripts/validate.py --output build-check-model-free
 python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf --output build-check
 ```
 
-The model-free run also checks the Markdown links (`tests/docs-links.py`) and that every example request is valid. What each check covers and the options for release evidence: [RELEASE_CHECKS.md](RELEASE_CHECKS.md).
+The model-free run also checks the Markdown links (`tests/docs-links.py`) and that every example request is valid. For a faster loop while working on one binding or on the bindings only, `--bindings rust,node` runs only the listed binding suites (and leaves out the cross-binding checks) and `--skip-native-tests` leaves out `ctest`; `--compiler-launcher ccache` compiles through ccache. Such a report lists what it left out under `skipped` and is never release evidence. What each check covers and the options for release evidence: [RELEASE_CHECKS.md](RELEASE_CHECKS.md).
 
 ### CMake presets
 

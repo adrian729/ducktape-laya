@@ -65,6 +65,8 @@ try:
             '-DDUCKTAPE_BUILD_TESTS=ON', '-DDUCKTAPE_BUILD_NODE=OFF', '-DDUCKTAPE_BUILD_FUZZERS=OFF',
             f'-DDUCKTAPE_TEST_MODEL={model}',
             f'-DDUCKTAPE_REAL_TEST_TIMEOUT={TEST_TIMEOUT}',
+            # No compiler cache: ggml's GGML_CCACHE (ON by default) would use any ccache on PATH.
+            '-DGGML_CCACHE=OFF', '-DCMAKE_C_COMPILER_LAUNCHER=', '-DCMAKE_CXX_COMPILER_LAUNCHER=',
             f'-DCMAKE_C_FLAGS={SANITIZERS[name]["flags"]}', f'-DCMAKE_CXX_FLAGS={SANITIZERS[name]["flags"]}'], env)
         run(f'{name}-build', ['cmake', '--build', build, '--parallel', str(a.jobs)], env)
         run(f'{name}-build-stress', ['cmake', '--build', build, '--target', 'laya-stress', '--parallel', str(a.jobs)], env)
