@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -53,6 +54,10 @@ if not selected_bindings or set(selected_bindings) - set(BINDINGS):
     p.error('--bindings takes a comma-separated subset of ' + ','.join(BINDINGS))
 all_bindings = set(selected_bindings) == set(BINDINGS)
 if a.compiler_launcher != 'none' and not shutil.which(a.compiler_launcher): p.error(f'{a.compiler_launcher} is not on PATH')
+# The compiler cache is --compiler-launcher's alone: a --cmake-arg cannot set it (the configure step also passes
+# its own values last, and the report's build_options record what the cache holds).
+overrides = [arg for arg in a.cmake_arg if re.search(r'CMAKE_\w*COMPILER_LAUNCHER|GGML_CCACHE|^-C', arg)]
+if overrides: p.error('--cmake-arg cannot set the compiler launcher (use --compiler-launcher): ' + ' '.join(overrides))
 if a.upstream_reference and not a.model: p.error('--upstream-reference requires --model')
 record = check_record()
 model = a.model.resolve() if a.model else None
@@ -175,10 +180,11 @@ try:
         f'-DDUCKTAPE_LLAMA_SOURCE={(ROOT / record["runtime"]["path"]).as_posix()}', '-DDUCKTAPE_LLAMA_REVISION=',
         '-DDUCKTAPE_BUILD_FUZZERS=OFF', '-DDUCKTAPE_BUILD_TESTS=ON', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_NODE=ON',
         '-DDUCKTAPE_BUILD_REFERENCE_PROBE=' + ('ON' if a.upstream_reference else 'OFF'),
-        *(f'-DCMAKE_{lang}_COMPILER_LAUNCHER={"" if a.compiler_launcher == "none" else a.compiler_launcher}' for lang in ('C', 'CXX')),
-        '-DGGML_CCACHE=' + ('OFF' if a.compiler_launcher == 'none' else 'ON'),
         f'-DNODE_INCLUDE_DIR={headers.as_posix()}', f'-DDUCKTAPE_TEST_MODEL={model.as_posix() if model else ""}',
-        *([f'-DNODE_LIB={a.node_lib.resolve().as_posix()}'] if a.node_lib else []), *a.cmake_arg])
+        *([f'-DNODE_LIB={a.node_lib.resolve().as_posix()}'] if a.node_lib else []), *a.cmake_arg,
+        # Last, so that nothing before overrides them (the last -D of a name wins).
+        *(f'-DCMAKE_{lang}_COMPILER_LAUNCHER={"" if a.compiler_launcher == "none" else a.compiler_launcher}' for lang in ('C', 'CXX')),
+        '-DGGML_CCACHE=' + ('OFF' if a.compiler_launcher == 'none' else 'ON')])
     # An empty CCACHE_BASEDIR overrides a base_dir in the user's ccache configuration, which would hand the
     # compiler relative paths that -ffile-prefix-map does not map (require_mapped_source_paths below).
     run('build', ['cmake', '--build', build, '--parallel', a.jobs], extra_env={'CCACHE_BASEDIR': ''})
@@ -194,6 +200,10 @@ try:
         for line in cache if '=' in line and ':' in line and
         line.startswith(('CMAKE_C_COMPILER:', 'CMAKE_CXX_COMPILER:', 'CMAKE_C_COMPILER_LAUNCHER:', 'CMAKE_CXX_COMPILER_LAUNCHER:',
                          'CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS', 'CMAKE_BUILD_TYPE:', 'GGML_'))}
+    launcher = '' if a.compiler_launcher == 'none' else a.compiler_launcher
+    expected = {'CMAKE_C_COMPILER_LAUNCHER': launcher, 'CMAKE_CXX_COMPILER_LAUNCHER': launcher, 'GGML_CCACHE': 'ON' if launcher else 'OFF'}
+    if any(report['build_options'].get(key) != value for key, value in expected.items()):
+        raise RuntimeError(f'The build directory is configured with {({k: report["build_options"].get(k) for k in expected})}, not {expected}')
     # Assert model-dependent tests were registered; an empty green suite is not evidence.
     registered = json.loads(subprocess.check_output(['ctest', '--test-dir', build, '--show-only=json-v1'], env=env))
     report['ctest_registered'] = sorted(test['name'] for test in registered['tests'])

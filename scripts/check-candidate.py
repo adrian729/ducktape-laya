@@ -75,11 +75,15 @@ BINDING_CODE = ['bindings/*.cjs', 'bindings/*.mjs', 'bindings/*.cpp', 'bindings/
 # Helpers every runner imports.
 COMMON_HARNESS = ['scripts/release_support.py', 'scripts/artifact_support.py', 'tests/reference_requests.py']
 HARNESS = {
-    'security_review': BINDING_CODE + ['scripts/*', '.github/*'],
+    # Package manifests too: they declare dependencies and install scripts.
+    'security_review': BINDING_CODE + ['bindings/*.json', 'scripts/*', '.github/*'],
     'stress': ['tests/stress.cpp', 'scripts/check-stress.py'],
     'soak': ['tests/stress.cpp', 'scripts/check-stress.py'],
-    'fuzz': ['tests/input-libfuzzer.cpp', 'tests/fuzz-corpus.py', 'scripts/check-fuzz.py'],
-    'sanitizers': NATIVE_TESTS + ['scripts/check-sanitizers.py', 'bindings/rust/*.rs', 'bindings/rust/*.toml', 'bindings/rust/*.lock'],
+    # tests/fuzz-corpus.py seeds the corpus from the fixtures.
+    'fuzz': ['tests/input-libfuzzer.cpp', 'tests/fuzz-corpus.py', 'scripts/check-fuzz.py', 'tests/fixtures/*'],
+    # The native tests read the routing cases of the original reference.
+    'sanitizers': NATIVE_TESTS + ['scripts/check-sanitizers.py', 'bindings/rust/*.rs', 'bindings/rust/*.toml', 'bindings/rust/*.lock',
+                                  'tests/original-reference/routing/*'],
     'performance': ['tests/benchmark.py', 'scripts/performance-budgets.py', 'tests/fixtures/*'],
     'upgrade': NATIVE_TESTS + ['scripts/check-upgrade.py', 'scripts/compare_results.py', 'tests/parity.py'] + BINDING_CODE,
     'model_upgrade': NATIVE_TESTS + ['scripts/check-upgrade.py', 'scripts/compare_results.py', 'tests/parity.py'] + BINDING_CODE,
@@ -173,6 +177,8 @@ def sanitizers():
     fuzz = load('fuzz')
     tested_source(fuzz, 'fuzz')
     need(fuzz['status'] == 'passed' and fuzz['qualification_budget_met'], 'fuzz: failed or below the qualification budget')
+    # The budget of the candidate's own policy, not the one the (possibly reused) run was measured against.
+    need(fuzz.get('requested_seconds', 0) >= policy['budgets']['fuzz_seconds_per_target'], 'fuzz: shorter than the candidate\'s fuzz budget')
 
 def stress():
     library = native()['library_sha256']
@@ -180,6 +186,8 @@ def stress():
         report = load(name)
         tested_source(report, name)
         need(report['status'] == 'passed' and report['kind'] == kind and report['qualification_budget_met'], f'{name}: failed or below budget')
+        budget = policy['budgets']['routine_stress_seconds' if name == 'stress' else 'candidate_soak_seconds']
+        need(report.get('requested_seconds', 0) >= budget, f'{name}: shorter than the candidate\'s {budget} s budget')
         need(report['library_sha256'] == library, f'{name}: library is not the candidate library')
         need(report['model_sha256'] == manifest_model['sha256'], f'{name}: model differs')
 
@@ -205,6 +213,7 @@ def linux_matrix():
         if not path.is_file(): raise Missing(f'native matrix report {item} missing')
         report = json.loads(path.read_text())
         same_source(report, f'native matrix {item}')
+        require_complete_validation(report, f'native matrix {item}')
         need(all(report['gates'][g]['status'] == 'passed' for g in ('native_contracts', 'binding_conformance', 'installed_packages')),
              f'native matrix {item}: required gates did not pass')
         family, version = report['diagnostics']['compiler'].split()
@@ -284,9 +293,11 @@ def reproducibility():
     report = load('reproducibility')
     same_source(report, 'reproducibility')
     need(report['status'] == 'passed' and not report['differences'], 'reproducibility: builds differ')
-    library = native()['library_sha256']
+    validated = native()
     for label, files in report['builds'].items():
-        need(any(entry.get('sha256') == library for entry in files.values()), f'reproducibility: {label} build is not the candidate library')
+        for kind in ('library', 'addon'):
+            need(any(entry.get('sha256') == validated[f'{kind}_sha256'] for entry in files.values()),
+                 f'reproducibility: {label} build does not contain the candidate {kind}')
 
 def artifact_integrity():
     report, _, inventory = packages()
@@ -367,10 +378,17 @@ GATES = {'native_contracts': native_gate('native_contracts'), 'binding_conforman
          'license_inventory': license_inventory, 'reproducibility': reproducibility, 'cross_profile_drift': cross_profile_drift,
          'artifact_integrity': artifact_integrity, 'performance': performance, 'security_review': security_review,
          'upgrade_rollback': upgrade_rollback}
+def checker_tree_dirty():
+    """Tracked changes anywhere, or any untracked file under scripts/ (ignored ones included, bytecode caches
+    excepted): the checker imports its modules from there before anything else."""
+    untracked = [name for name in git(ROOT, 'ls-files', '--others', '--', 'scripts').splitlines() if '__pycache__/' not in name]
+    return bool(git(ROOT, 'diff', 'HEAD', '--name-only') or untracked)
+
 if set(GATES) != set(record['required_release_gates']):
     raise SystemExit('Gate checker does not match release/compatibility.json required gates')
 result = {'schema_version': 2, 'candidate_commit': commit, 'checker_commit': git(ROOT, 'rev-parse', 'HEAD'),
-          'checker_tree_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')), 'source_identity_sha256': source,
+          'checker_tree_dirty': checker_tree_dirty(),
+          'source_identity_sha256': source,
           'model_sha256': manifest_model['sha256'], 'evidence': {k: pathlib.PurePath(os.path.relpath(v, base)).as_posix() for k, v in paths.items()}, 'gates': {}}
 # Release-level (tier-1) gates, then every target's.
 for gate, check in GATES.items():
@@ -384,6 +402,13 @@ result['release_ready'] = (all(g['status'] == 'passed' for g in result['gates'].
 result['inventories_sha256'] = {}
 for label, path in (('native', paths.get('release_packages')), ('browser', paths.get('browser_package'))):
     if path and path.is_file(): result['inventories_sha256'][label] = sha256(path)
+# The CI candidate run the release packages come from; attest-release.yml requires the published
+# native-inventory.json to be its packages-assembled inventory.
+try:
+    run = ctx.ci_run()
+    result['ci_run'] = {key: run.get(key) for key in ('repository', 'workflow_path', 'run_id', 'run_attempt', 'head_sha', 'html_url')}
+except (Missing, Mismatch, ValueError, OSError):
+    pass
 result['reused_evidence'] = reused
 result['package_comparison'] = COMPARISON_NOTES
 result['publication_gates'] = {gate: 'not_run' for gate in policy['publication_gates']}

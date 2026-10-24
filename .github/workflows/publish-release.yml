@@ -5,8 +5,15 @@ name: publish-release
 # and NuGet packages carry every release target's native library. Every job downloads its files from the
 # release and checks them against SHA256SUMS, the qualified gates.json and the
 # attest-release attestation (scripts/verify-release-assets.sh) before uploading.
-# crates.io accepts only `cargo publish`, which packages the crates again, so that
-# job repackages them from the tag and requires byte-identical .crate files first.
+# crates.io accepts only `cargo publish`, which packages the crates again, so the
+# `reproduce` job, which every publish job waits for, first repackages them from the
+# tag and requires byte-identical .crate files: a crate that does not reproduce stops
+# the whole publication before any upload.
+#
+# A run can be retried: each job asks its registry what it already holds for the
+# version (scripts/registry-state.py, scripts/pypi-missing-wheels.py), skips a package
+# that is there with the same contents, fails on one that is there with other contents,
+# and uploads the rest (docs/RELEASING.md, the publish-release workflow).
 #
 # npm, PyPI, NuGet and crates.io use trusted publishing (GitHub OIDC); no token is
 # stored. Maven Central has no OIDC publishing and requires PGP signatures, so its
@@ -43,8 +50,63 @@ permissions:
   contents: read
 
 jobs:
+  # The tag's crates must reproduce byte for byte before anything is uploaded anywhere.
+  reproduce:
+    # Only the workflow as merged on main may publish; a branch cannot bring its own (the `release`
+    # environment admits deployments from main only).
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: read
+    outputs:
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Resolve the tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Not a release tag: $TAG"; exit 1; }
+          # Through the tag ref (annotated tags dereferenced), never a branch of the same name.
+          echo "commit=$(scripts/tag-commit.sh "$GITHUB_REPOSITORY" "$TAG")" >> "$GITHUB_OUTPUT"
+      - name: Check out the tagged commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ steps.tag.outputs.commit }}
+          path: tagged
+          persist-credentials: false
+      - name: Download and verify the qualified crates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: scripts/verify-release-assets.sh "$TAG" qualified "ducktape-laya-sys-${TAG#v}.crate" "ducktape-laya-${TAG#v}.crate"
+      - name: Install pinned Rust toolchain
+        working-directory: tagged
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
+      - name: Repackage from the tag and compare
+        working-directory: tagged
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # As scripts/package-native.py packages them; the .crate records the tag commit.
+          for name in ducktape-laya-sys ducktape-laya; do
+            cargo package --manifest-path bindings/rust/Cargo.toml -p "$name" --locked --no-verify \
+              --config "patch.crates-io.ducktape-laya-sys.path=\"$PWD/bindings/rust/ducktape-laya-sys\""
+            cmp "bindings/rust/target/package/$name-${TAG#v}.crate" "../qualified/$name-${TAG#v}.crate"
+            echo "$name-${TAG#v}.crate is byte-identical to the qualified file"
+          done
+
   npm:
-    # Only the workflow as merged on main may publish; a branch cannot bring its own.
+    needs: reproduce
     if: github.ref == 'refs/heads/main' && inputs.npm
     runs-on: ubuntu-24.04
     environment:
@@ -76,8 +138,10 @@ jobs:
           node -e 'const [a, b, c] = process.argv[1].split(".").map(Number); process.exit(a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1))) ? 0 : 1)' "$(npm --version)" ||
             { echo "npm $(npm --version) is too old for trusted publishing"; exit 1; }
           for name in ducktape-laya ducktape-laya-browser; do
-            if [ "$(npm view "$name@${TAG#v}" version 2> /dev/null)" = "${TAG#v}" ]; then
-              echo "$name@${TAG#v} is already published"
+            # absent, or published with this tarball's integrity (a retry); other bytes fail here.
+            state=$(python3 -I scripts/registry-state.py npm --name "$name" --version "${TAG#v}" --file "dist/$name-${TAG#v}.tgz")
+            if [ "$state" = published ]; then
+              echo "$name@${TAG#v} is already published with these bytes"
             else
               # "./": a bare "dir/file.tgz" is read as a GitHub owner/repository spec.
               npm publish "./dist/$name-${TAG#v}.tgz" --access public
@@ -85,6 +149,7 @@ jobs:
           done
 
   crates:
+    needs: reproduce
     if: github.ref == 'refs/heads/main' && inputs.crates
     runs-on: ubuntu-24.04
     environment:
@@ -98,20 +163,17 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Check out the tag
+      - name: Check out the tagged commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.reproduce.outputs.commit }}
           path: tagged
           persist-credentials: false
       - name: Download and verify the qualified crates
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          scripts/verify-release-assets.sh "$TAG" qualified "ducktape-laya-sys-${TAG#v}.crate" "ducktape-laya-${TAG#v}.crate"
-          [ "$(git -C tagged rev-parse HEAD)" = "$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)" ]
+        run: scripts/verify-release-assets.sh "$TAG" qualified "ducktape-laya-sys-${TAG#v}.crate" "ducktape-laya-${TAG#v}.crate"
       - name: Install pinned Rust toolchain
         working-directory: tagged
         run: |
@@ -123,12 +185,11 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          # As scripts/package-native.py packages them; the .crate records the tag commit.
+          # The reproduce job compared them already; cargo publish below uploads this packaging.
           for name in ducktape-laya-sys ducktape-laya; do
             cargo package --manifest-path bindings/rust/Cargo.toml -p "$name" --locked --no-verify \
               --config "patch.crates-io.ducktape-laya-sys.path=\"$PWD/bindings/rust/ducktape-laya-sys\""
             cmp "bindings/rust/target/package/$name-${TAG#v}.crate" "../qualified/$name-${TAG#v}.crate"
-            echo "$name-${TAG#v}.crate is byte-identical to the qualified file"
           done
       - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: auth
@@ -140,8 +201,10 @@ jobs:
         run: |
           set -euo pipefail
           for name in ducktape-laya-sys ducktape-laya; do
-            if curl -sf -A "ducktape-laya release (github.com/$GITHUB_REPOSITORY)" "https://crates.io/api/v1/crates/$name/${TAG#v}" > /dev/null; then
-              echo "$name ${TAG#v} is already published"
+            # absent, or published with this .crate's sha256 as its checksum (a retry); another checksum fails here.
+            state=$(python3 -I ../scripts/registry-state.py crates --name "$name" --version "${TAG#v}" --file "../qualified/$name-${TAG#v}.crate")
+            if [ "$state" = published ]; then
+              echo "$name ${TAG#v} is already published with these bytes"
             else
               # The package was compared above; linking needs the native library, which the
               # qualification's installed-package checks already exercised.
@@ -151,6 +214,7 @@ jobs:
           done
 
   pypi:
+    needs: reproduce
     if: github.ref == 'refs/heads/main' && inputs.pypi
     runs-on: ubuntu-24.04
     environment:
@@ -197,6 +261,7 @@ jobs:
           packages-dir: dist/
 
   nuget:
+    needs: reproduce
     if: github.ref == 'refs/heads/main' && inputs.nuget
     runs-on: ubuntu-24.04
     environment:
@@ -215,21 +280,40 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: scripts/verify-release-assets.sh "$TAG" dist "DucktapeLaya.${TAG#v}.nupkg"
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      # nuget.org adds a repository signature, so the published file has another hash: a version it
+      # already lists is compared entry by entry, apart from that signature.
+      - name: Compare with NuGet
+        id: state
+        env:
+          TAG: ${{ inputs.tag }}
+        run: python3 -I scripts/registry-state.py nuget --name DucktapeLaya --version "${TAG#v}" --file "dist/DucktapeLaya.${TAG#v}.nupkg"
+      - if: steps.state.outputs.state == 'absent'
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.402'
       # Exchanges this job's OIDC token for a NuGet API key valid for one hour.
-      - uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+      - if: steps.state.outputs.state == 'absent'
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         id: login
         with:
           user: ${{ vars.NUGET_USER }}
       - name: Push
+        if: steps.state.outputs.state == 'absent'
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
           TAG: ${{ inputs.tag }}
-        run: dotnet nuget push "dist/DucktapeLaya.${TAG#v}.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+        run: |
+          set -euo pipefail
+          dotnet nuget push "dist/DucktapeLaya.${TAG#v}.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate 2>&1 | tee push.log
+          # The version can exist without being listed yet (an earlier attempt's push still in validation):
+          # then wait until NuGet serves it and compare it like any published version.
+          if grep -qiE 'already exists|conflict|409' push.log; then
+            python3 -I scripts/registry-state.py nuget --name DucktapeLaya --version "${TAG#v}" --file "dist/DucktapeLaya.${TAG#v}.nupkg" --wait 3600
+          fi
 
   maven:
+    needs: reproduce
     if: github.ref == 'refs/heads/main' && inputs.maven
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -251,7 +335,18 @@ jobs:
           v=${TAG#v}
           scripts/verify-release-assets.sh "$TAG" dist "ducktape-laya-$v.jar" "ducktape-laya-$v-sources.jar" \
             "ducktape-laya-$v-javadoc.jar" "ducktape-laya-$v.pom"
+      # A version that repo1 serves with these exact files is skipped (a retry); one with other or
+      # missing files fails. The Central Portal itself refuses a version that exists.
+      - name: Compare with Maven Central
+        id: state
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          v=${TAG#v}
+          python3 -I scripts/registry-state.py maven --group io.github.adrian729 --name ducktape-laya --version "$v" \
+            "dist/ducktape-laya-$v.jar" "dist/ducktape-laya-$v-sources.jar" "dist/ducktape-laya-$v-javadoc.jar" "dist/ducktape-laya-$v.pom"
       - name: Sign and bundle
+        if: steps.state.outputs.state == 'absent'
         env:
           TAG: ${{ inputs.tag }}
           MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
@@ -279,6 +374,7 @@ jobs:
           zip -qr -X ../central-bundle.zip io
           rm -rf "$GNUPGHOME"
       - name: Upload to the Central Portal and wait for publication
+        if: steps.state.outputs.state == 'absent'
         env:
           TAG: ${{ inputs.tag }}
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}

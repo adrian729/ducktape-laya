@@ -12,8 +12,14 @@ that is not the short budget, reproduced builds without the library, an
 undocumented or over-cap deviation, a changed decision, installed checks of
 other packages, unregistered tests. Missing evidence is not_run. The end-to-end
 part runs check-candidate.py on evidence bound to HEAD: the tier-2 targets pass,
-gates.json has schema 2, and a CI linux-x64 library or addon that differs from
-the locally validated one fails the tier-1 artifact_integrity gate."""
+gates.json has schema 2 and names the candidate run, and a CI linux-x64 library
+or addon that differs from the locally validated one fails the tier-1
+artifact_integrity gate. Reproduced builds must hold the validated addon too;
+reports configured with a compiler cache (build_options) are refused, the native
+matrix's included; evidence reused from an ancestor fails when one of its gate's
+own inputs changed since (fixtures for fuzz, routing references for sanitizers,
+package manifests for the security review), and stress, soak and fuzz must meet
+the candidate's budgets; an untracked module under scripts/ makes the checker dirty."""
 import json
 import os
 import pathlib
@@ -168,6 +174,17 @@ class Targets(unittest.TestCase):
         self.world.edit('reproducibility-linux-arm64/report.json', lambda r: r.update(target_platform='windows-x64'))
         self.assertGate('linux-arm64', 'reproducibility', 'failed', 'ran on windows-x64')
 
+    def test_reproduced_addon(self):
+        # Every reproduced build must hold the validated Node addon too, not only the library.
+        def other_addon(report):
+            for files in report['builds'].values():
+                files['lib/ducktape-laya/node/ducktape_laya.node'] = {'sha256': 'f' * 64, 'mode': 420}
+        self.world.edit('reproducibility-windows-x64/report.json', other_addon)
+        self.assertGate('windows-x64', 'reproducibility', 'failed', 'does not contain the validated addon')
+        self.world.edit('reproducibility-linux-arm64/report.json',
+                        lambda r: r['builds']['second'].pop('lib/ducktape-laya/node/ducktape_laya.node'))
+        self.assertGate('linux-arm64', 'reproducibility', 'failed', 'reproduced second build does not contain the validated addon')
+
     def test_reproduced_in_another_environment(self):
         self.world.edit('evidence-windows-x64/report.json', lambda r: r.update(build_environment={'ImageVersion': '20261007.264'}))
         self.world.edit('reproducibility-windows-x64/report.json', lambda r: r.update(build_environment={'ImageVersion': '20261021.278'}))
@@ -223,7 +240,11 @@ class Targets(unittest.TestCase):
         cases = {'binding left out': (lambda r: r['skipped'].update(go='not selected (--bindings)'), 'left out go'),
                  'parity left out': (lambda r: r['skipped'].update(bindings='every binding must agree'), 'left out bindings'),
                  'native tests left out': (lambda r: r['skipped'].update(native='not run (--skip-native-tests)'), 'left out native'),
-                 'compiler cache': (lambda r: r.update(compiler_launcher='ccache'), 'compiler launcher ccache')}
+                 'compiler cache': (lambda r: r.update(compiler_launcher='ccache'), 'compiler launcher ccache'),
+                 # What the build directory was configured with, whatever validate.py was asked for.
+                 'configured launcher': (lambda r: r['build_options'].update(CMAKE_CXX_COMPILER_LAUNCHER='ccache'), 'configured with a compiler cache'),
+                 'ggml cache': (lambda r: r['build_options'].update(GGML_CCACHE='ON'), 'configured with a compiler cache'),
+                 'no build options': (lambda r: r.pop('build_options'), 'no build_options recorded')}
         for label, (change, message) in cases.items():
             with self.subTest(label):
                 self.setUp()
@@ -291,6 +312,9 @@ class CheckCandidate(unittest.TestCase):
         self.assertEqual(gates['gates']['stress']['status'], 'not_run')
         self.assertFalse(gates['release_ready'])
         self.assertEqual(gates['inventories_sha256']['native'], sha256(world.release / 'inventory.json'))
+        # The candidate run the release packages came from (attest-release checks the published inventory against it).
+        self.assertEqual({k: gates['ci_run'][k] for k in ('repository', 'run_id', 'head_sha')}, {'repository': 'adrian729/ducktape-laya', 'run_id': 7,
+                                                                                                  'head_sha': self.commit})
         # The local packages' addon or the CI linux-x64 build differing from this host's fails tier 1.
         world.edit('evidence-linux-x64/report.json', lambda r: r.update(library_sha256=digest(b'other')))
         self.assertIn('CI linux-x64 library differs', self.check(world)['gates']['artifact_integrity']['detail'])
@@ -323,13 +347,115 @@ class CheckCandidate(unittest.TestCase):
         """A dangling commit: HEAD with release/compatibility.json changed (no branch, index or work tree is touched)."""
         record = json.loads(git(ROOT, 'show', f'{self.commit}:release/compatibility.json'))
         change(record)
+        return self.candidate_with_files({'release/compatibility.json': json.dumps(record, indent=2) + '\n'})
+
+    def candidate_with_files(self, files):
+        """A dangling commit: HEAD with FILES ({path: text}) written (no branch, index or work tree is touched)."""
         env = {**os.environ, 'GIT_INDEX_FILE': str(pathlib.Path(self.temp.name) / f'index-{len(os.listdir(self.temp.name))}'),
                'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.invalid', 'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.invalid'}
         run = lambda *args, **kw: subprocess.run(['git', '-C', str(ROOT), *args], env=env, check=True, capture_output=True, text=True, **kw).stdout.strip()
         run('read-tree', self.commit)
-        blob = run('hash-object', '-w', '--stdin', input=json.dumps(record, indent=2) + '\n')
-        run('update-index', '--cacheinfo', f'100644,{blob},release/compatibility.json')
+        for path, text in files.items():
+            blob = run('hash-object', '-w', '--stdin', input=text)
+            run('update-index', '--add', '--cacheinfo', f'100644,{blob},{path}')
         return run('commit-tree', run('write-tree'), '-p', self.commit, '-m', 'test candidate')
+
+    def check_commit(self, world, commit):
+        manifest = world.evidence_manifest(world.directory / 'evidence.json')
+        report = world.directory / 'gates-commit.json'
+        subprocess.run([sys.executable, str(ROOT / 'scripts/check-candidate.py'), str(manifest), '--candidate', commit,
+                        '--report', str(report)], capture_output=True, text=True)
+        return json.loads(report.read_text())
+
+    def evidence(self, world, name, value):
+        path = world.directory / f'{name}.json'
+        path.write_text(json.dumps(value))
+        world.paths[name] = path
+
+    def test_reuse_inputs(self):
+        """Evidence from an ancestor is reused only when none of the gate's own inputs changed since."""
+        world = self.world('reuse')
+        record = world.record
+        reports = {
+            'sanitizers': {'status': 'passed', 'sanitizers': {'address': {'status': 'passed'}}, 'model_sha256': world.model},
+            'fuzz': {'status': 'passed', 'qualification_budget_met': True, 'requested_seconds': world.policy['budgets']['fuzz_seconds_per_target']},
+            'security_review': {'runtime_commit': record['runtime']['commit'], 'runtime_patches': [p['sha256'] for p in record['runtime']['patches']],
+                                'release_blocking_code_issues': [], 'model_licence': 'Apache-2.0, reviewed'}}
+        package = json.loads((ROOT / 'bindings/node/package.json').read_text())
+        cases = {'fuzz seeds': ('tests/fixtures/zz-reuse-test.json', '{}\n', 'fuzz', 'sanitizers', 'fuzz: inputs changed'),
+                 'routing references': ('tests/original-reference/routing/zz-reuse-test.json', '{}\n', 'sanitizers', 'sanitizers', 'sanitizers: inputs changed'),
+                 'npm manifest': ('bindings/node/package.json', json.dumps({**package, 'scripts': {'install': 'node evil.js'}}, indent=2) + '\n',
+                                  'security_review', 'security_review', 'security_review: inputs changed')}
+        for label, (path, text, reused, gate, message) in cases.items():
+            with self.subTest(label):
+                candidate = self.candidate_with_files({path: text})
+                for name, value in reports.items():
+                    # The reused report comes from HEAD (an ancestor), the others from the candidate itself.
+                    self.evidence(world, name, {**value, 'source_commit': self.commit if name == reused else candidate, 'source_tracked_dirty': False})
+                result = self.check_commit(world, candidate)['gates'][gate]
+                self.assertEqual(result['status'], 'failed', result)
+                self.assertIn(message, result['detail'])
+                self.assertIn(path, result['detail'])
+                # The same evidence from the candidate itself passes that step.
+                self.evidence(world, reused, {**reports[reused], 'source_commit': candidate, 'source_tracked_dirty': False})
+                self.assertNotIn('inputs changed', self.check_commit(world, candidate)['gates'][gate].get('detail', ''))
+
+    def test_budgets_are_the_candidates(self):
+        world = self.world('budgets')
+        library = json.loads(world.paths['native'].read_text())['library_sha256']
+        budgets = world.policy['budgets']
+        for name, kind, seconds in (('stress', 'routine_stress', budgets['routine_stress_seconds']), ('soak', 'candidate_soak', budgets['candidate_soak_seconds'])):
+            self.evidence(world, name, {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'kind': kind,
+                                        'qualification_budget_met': True, 'requested_seconds': seconds, 'library_sha256': library, 'model_sha256': world.model})
+        self.assertEqual(self.check(world)['gates']['stress'], {'status': 'passed'})
+        # A report that says it met its budget, measured against a shorter one than the candidate's.
+        value = json.loads(world.paths['soak'].read_text())
+        world.paths['soak'].write_text(json.dumps({**value, 'requested_seconds': budgets['candidate_soak_seconds'] - 1}))
+        self.assertIn('soak: shorter than', self.check(world)['gates']['stress']['detail'])
+        self.evidence(world, 'sanitizers', {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'sanitizers': {},
+                                            'model_sha256': world.model})
+        self.evidence(world, 'fuzz', {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'qualification_budget_met': True,
+                                      'requested_seconds': budgets['fuzz_seconds_per_target'] // 4})
+        self.assertIn("fuzz: shorter than the candidate's fuzz budget", self.check(world)['gates']['sanitizers']['detail'])
+
+    def test_native_matrix_reports_are_complete(self):
+        world = self.world('matrix')
+        report = json.loads(world.paths['native'].read_text())
+        matrix = world.directory / 'matrix'
+        matrix.mkdir()
+        (matrix / 'cached.json').write_text(json.dumps({**report, 'compiler_launcher': 'ccache'}))
+        (matrix / 'list.json').write_text(json.dumps(['cached.json']))
+        world.paths['native_matrix'] = matrix / 'list.json'
+        self.assertIn('native matrix cached.json: compiled through the compiler launcher ccache', self.check(world)['gates']['linux_matrix']['detail'])
+        (matrix / 'cached.json').write_text(json.dumps({**report, 'build_options': {**report['build_options'], 'GGML_CCACHE': 'ON'}}))
+        self.assertIn('native matrix cached.json: configured with a compiler cache', self.check(world)['gates']['linux_matrix']['detail'])
+
+    def test_reproduced_addon(self):
+        world = self.world('reproduced')
+        report = json.loads(world.paths['native'].read_text())
+        builds = {label: {'lib/libducktape_laya.so.0': {'sha256': report['library_sha256']}} for label in ('first', 'second')}
+        self.evidence(world, 'reproducibility', {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'differences': [],
+                                                 'builds': builds})
+        self.assertIn('reproducibility: first build does not contain the candidate addon', self.check(world)['gates']['reproducibility']['detail'])
+        for files in builds.values():
+            files['lib/ducktape-laya/node/ducktape_laya.node'] = {'sha256': report['addon_sha256']}
+        self.evidence(world, 'reproducibility', {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'differences': [],
+                                                 'builds': builds})
+        self.assertEqual(self.check(world)['gates']['reproducibility'], {'status': 'passed'})
+
+    def test_untracked_checker_module_is_dirty(self):
+        world = self.world('dirty')
+        probe = ROOT / 'scripts' / 'zz_untracked_probe.py'
+        self.assertFalse(probe.exists())
+        try:
+            probe.write_text('# an untracked module next to the checker\n')
+            self.assertTrue(self.check(world)['checker_tree_dirty'])
+        finally:
+            probe.unlink()
+        clean = not git(ROOT, 'diff', 'HEAD', '--name-only') and not [n for n in git(ROOT, 'ls-files', '--others', '--', 'scripts').splitlines()
+                                                                       if '__pycache__/' not in n]
+        if clean:
+            self.assertFalse(self.check(world)['checker_tree_dirty'])
 
     def test_candidate_record_is_validated(self):
         world = self.world('record')

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from release_support import ROOT, read_json, check_qualification, check_targets, security_review_problems
+from release_support import ROOT, read_json, check_qualification, check_targets, security_review_problems, versioned_doc_problems
 
 
 class Qualification(unittest.TestCase):
@@ -107,6 +107,9 @@ class Targets(unittest.TestCase):
             'tier-1 duplicate gate': lambda r: self.target(r, 'linux-x64')['required_gates'].append('abi'),
             'unknown tier-2 gate': lambda r: self.target(r, 'windows-x64')['required_gates'].append('unknown'),
             'empty tier-2 gates': lambda r: self.target(r, 'windows-x64').update(required_gates=[]),
+            # Tier 2 is every target gate: a target cannot drop the ones it would fail.
+            'tier-2 subset': lambda r: self.target(r, 'windows-x64').update(required_gates=['abi']),
+            'tier-2 gate dropped': lambda r: self.target(r, 'linux-arm64')['required_gates'].remove('reproducibility'),
             'duplicate platform': lambda r: r['targets'].append(copy.deepcopy(self.target(r, 'linux-arm64'))),
             'unknown platform': lambda r: self.target(r, 'linux-arm64').update(platform='freebsd-x64'),
             'not a release platform': lambda r: self.target(r, 'linux-arm64').update(platform='macos-arm64'),
@@ -134,6 +137,34 @@ class Targets(unittest.TestCase):
         del policy['platforms']['targets']['windows-x64']
         with patch('release_support.read_json', return_value=policy), self.assertRaises(ValueError):
             check_targets(self.record)
+
+
+class VersionedDocs(unittest.TestCase):
+    """The docs that name the current release must name the record's package_version (check_record)."""
+
+    def setUp(self):
+        self.record = read_json(ROOT / 'release/compatibility.json')
+
+    def test_current_docs_name_the_current_release(self):
+        self.assertEqual(versioned_doc_problems(self.record), [])
+
+    def test_a_version_bump_needs_the_docs(self):
+        # The release commit bumps package_version; every version-coupled statement must follow it.
+        major, minor, _ = map(int, self.record['package_version'].split('.'))
+        problems = '\n'.join(versioned_doc_problems({**self.record, 'package_version': f'{major}.{minor + 1}.0'}))
+        for name in ('docs/PACKAGING.md: find_package', 'SECURITY.md', 'README.md: current release', 'README.md: Go install line',
+                     'README.md: Maven coordinates', 'README.md: native archive', 'bindings/go/README.md: install line',
+                     'bindings/java/README.md: install line', 'bindings/rust/ducktape-laya/README.md: release link', 'docs/API.md',
+                     'docs/PERFORMANCE.md', 'docs/COMPATIBILITY.md: no Versions row', 'docs/QUALIFICATION.md', 'docs/BROWSER.md',
+                     'docs/ARCHITECTURE.md'):
+            self.assertIn(name, problems)
+        # A patch release keeps the CMake minor version but not the rest.
+        problems = '\n'.join(versioned_doc_problems({**self.record, 'package_version': f'{major}.{minor}.9'}))
+        self.assertNotIn('find_package', problems)
+        self.assertIn('SECURITY.md', problems)
+        # A new ABI needs its row and migration notes.
+        problems = '\n'.join(versioned_doc_problems({**self.record, 'abi_version': self.record['abi_version'] + 1}))
+        self.assertIn('no Versions row', problems)
 
 
 if __name__ == '__main__':

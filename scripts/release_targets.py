@@ -44,6 +44,13 @@ def require_complete_validation(report, name):
     # Reports from before validate.py recorded the launcher were built without one.
     launcher = report.get('compiler_launcher', 'none')
     need(launcher == 'none', f'{name}: compiled through the compiler launcher {launcher}, not without one')
+    # What the build directory was configured with, not only what validate.py was asked for
+    # (a --cmake-arg or a reused cache could set a launcher, or ggml's own GGML_CCACHE).
+    options = report.get('build_options')
+    need(isinstance(options, dict), f'{name}: no build_options recorded')
+    configured = {key: options.get(key) for key in ('CMAKE_C_COMPILER_LAUNCHER', 'CMAKE_CXX_COMPILER_LAUNCHER', 'GGML_CCACHE')}
+    need(configured == {'CMAKE_C_COMPILER_LAUNCHER': '', 'CMAKE_CXX_COMPILER_LAUNCHER': '', 'GGML_CCACHE': 'OFF'},
+         f'{name}: configured with a compiler cache ({configured}), not without one')
 
 
 # Native tests every target registers; real-faults and real-c-faults are Linux-only (CMakeLists.txt).
@@ -369,8 +376,9 @@ def target_gates(ctx, platform):
         builds = report.get('builds', {})
         need(len(builds) == 2, f'{platform}: reproducibility needs two builds')
         for label, files in builds.items():
-            need(any(entry.get('sha256') == native['library_sha256'] for entry in files.values()),
-                 f'{platform}: reproduced {label} build does not contain the validated library')
+            for kind in ('library', 'addon'):
+                need(any(entry.get('sha256') == native[f'{kind}_sha256'] for entry in files.values()),
+                     f'{platform}: reproduced {label} build does not contain the validated {kind}')
 
     def short_stress():
         _, native = ctx.target_native(platform)

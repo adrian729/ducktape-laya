@@ -156,7 +156,8 @@ class World:
                 'gates': {gate: {'status': 'passed' if gate in ('native_contracts', 'binding_conformance', 'upstream_reference',
                                                               'original_reference', 'abi', 'installed_packages') else 'not_run'}
                           for gate in self.record['required_release_gates']},
-                'ctest_registered': sorted(tests), 'skipped': skipped, 'additional_model_gates': {},
+                'ctest_registered': sorted(tests), 'skipped': skipped, 'additional_model_gates': {}, 'compiler_launcher': 'none',
+                'build_options': {'CMAKE_BUILD_TYPE': 'Release', 'CMAKE_C_COMPILER_LAUNCHER': '', 'CMAKE_CXX_COMPILER_LAUNCHER': '', 'GGML_CCACHE': 'OFF'},
                 'runs': {name: {'exit_code': 0} for name in ('packaging-identities', 'browser-backend-identities', 'package', 'package-smoke')}}
 
     def reports(self, platform):
@@ -190,7 +191,8 @@ class World:
             'post_run_identity_verified': True})
         write_json(self.ci / f'reproducibility-{platform}' / 'report.json', {
             'schema_version': 1, 'status': 'passed', 'source_commit': self.commit, 'source_tracked_dirty': False, 'differences': [],
-            'target_platform': platform, 'builds': {label: {f'lib/{target(platform).library}': {'sha256': library, 'mode': 420}}
+            'target_platform': platform, 'builds': {label: {f'lib/{target(platform).library}': {'sha256': library, 'mode': 420},
+                                                            'lib/ducktape-laya/node/ducktape_laya.node': {'sha256': digest(self.addon(platform)), 'mode': 420}}
                                                     for label in ('first', 'second')}})
 
     def local(self):

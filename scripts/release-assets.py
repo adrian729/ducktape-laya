@@ -44,6 +44,8 @@ if a.command == 'assemble':
         raise SystemExit('gates.json is not release ready')
     if gates.get('schema_version') != 2 or not gates.get('targets'):
         raise SystemExit('gates.json does not qualify release targets (schema 2); rerun scripts/check-candidate.py')
+    if not isinstance((gates.get('ci_run') or {}).get('run_id'), int):
+        raise SystemExit('gates.json names no CI candidate run (ci_run); rerun scripts/check-candidate.py')
     inventories = {}
     for prefix, directory in (('native', a.packages), ('npm-browser', a.browser_package)):
         inventory = json.loads((directory / 'inventory.json').read_text())

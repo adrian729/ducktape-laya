@@ -1,27 +1,33 @@
 name: attest-release
 
 # Signs a statement, through GitHub's Sigstore attestations, that a published
-# release's assets are the ones its gates.json qualified. It builds nothing: the
-# predicate records the release, tag commit, qualification report and the tier of
-# each release target, not build provenance. The packages are built on
-# GitHub-hosted runners in the release candidate run and qualified on the release
-# host, which requires its own Linux x86-64 build to be byte-identical to CI's
-# (docs/RELEASE_CHECKS.md).
+# release's assets passed the checks below. It builds nothing: the predicate
+# records the release, tag commit, qualification report and the tier of each
+# release target, not build provenance. The packages are built on GitHub-hosted
+# runners in the release candidate run and qualified on the release host, which
+# requires its own Linux x86-64 build to be byte-identical to CI's
+# (docs/RELEASE_CHECKS.md). What the attestation does and does not prove:
+# docs/RELEASING.md#provenance.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to attest
+        description: Release tag to attest (vX.Y.Z)
         required: true
 
 permissions:
   contents: read
+  # The candidate run's packages-assembled artifact (scripts/check-release-run.py).
+  actions: read
   id-token: write
   attestations: write
 
 jobs:
   attest:
-    # Only the workflow as merged on main may sign; a branch cannot bring its own.
+    # A run from another ref signs with that ref in its certificate, which verifiers reject: they pin
+    # attest-release.yml@refs/heads/main exactly (scripts/verify-release-assets.sh, SECURITY.md). A branch
+    # can bring its own copy of this workflow, so this condition is not the protection; it only stops such
+    # a run early.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
@@ -30,21 +36,43 @@ jobs:
         with:
           path: checks
           persist-credentials: false
-      - name: Download and check release assets
+      - name: Resolve the tag
+        id: tag
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Not a release tag: $TAG"; exit 1; }
+          # Through the tag ref (annotated tags dereferenced), never a branch of the same name.
+          echo "commit=$(checks/scripts/tag-commit.sh "$GITHUB_REPOSITORY" "$TAG")" >> "$GITHUB_OUTPUT"
+      # The tagged commit's own release record and policy decide which gates and targets gates.json must have.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ steps.tag.outputs.commit }}
+          path: tagged
+          sparse-checkout: release
+          persist-credentials: false
+      - name: Download and check release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          [ "$(git -C tagged rev-parse HEAD)" = "$COMMIT" ]
           gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D assets
-          commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
-          # Every asset listed once in SHA256SUMS with matching bytes; gates.json qualifies the
-          # tagged commit (every gate of every release target passed, clean checker); the
-          # inventories are the qualified ones, packaged from that commit, every artifact they
-          # list published with its hash, the native platforms exactly the qualified targets;
-          # nothing else.
-          checks/scripts/check-release-assets.sh assets "$commit"
-          jq -n --arg tag "$TAG" --arg commit "$commit" --arg gates "$(sha256sum assets/gates.json | cut -d' ' -f1)" \
+          # The tag names the record's package version; every asset is listed once in SHA256SUMS with
+          # matching bytes; gates.json qualifies the tagged commit with exactly the gates and targets of
+          # its release record and policy, all passed, by a clean checker; the inventories are the
+          # qualified ones, packaged from that commit, every artifact they list published with its hash,
+          # the native platforms exactly the qualified targets; nothing else.
+          checks/scripts/check-release-assets.sh assets "$COMMIT" "$TAG" tagged/release
+          # The native inventory is the packages-assembled inventory of the successful candidate run of
+          # the tagged commit that gates.json names (artifact digest checked).
+          python3 -I checks/scripts/check-release-run.py --gates assets/gates.json --inventory assets/native-inventory.json \
+            --commit "$COMMIT" --record tagged/release/compatibility.json
+          jq -n --arg tag "$TAG" --arg commit "$COMMIT" --arg gates "$(sha256sum assets/gates.json | cut -d' ' -f1)" \
             --arg repo "$GITHUB_REPOSITORY" --argjson targets "$(jq -c '(.targets // {}) | map_values(.tier)' assets/gates.json)" \
             '{release: $tag, repository: $repo, source_commit: $commit, gates_sha256: $gates, release_ready: true, targets: $targets}' > predicate.json
           grep -v ' gates.json$' assets/SHA256SUMS > subjects.txt

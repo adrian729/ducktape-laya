@@ -144,7 +144,53 @@ def check_record(root=ROOT):
             raise ValueError(f'Model performance budgets not declared: {name}')
         if len(model['sha256']) != 64 or len(model['source']['revision']) != 40:
             raise ValueError(f'Model must identify immutable artifact: {name}')
+    problems = versioned_doc_problems(record, root)
+    if problems:
+        raise ValueError('Documentation names another release than ' + version + ' (update it in the release commit): ' + '; '.join(problems))
     return record
+
+def versioned_doc_problems(record, root=ROOT):
+    """Version-coupled statements in the docs that do not name the record's package_version.
+
+    These name the current release, so the release commit that bumps package_version must update
+    them with it (docs/RELEASING.md, step 1); between releases they still name the last one."""
+    version, abi = record['package_version'], record['abi_version']
+    minor = '.'.join(version.split('.')[:2])
+    text = lambda name: (root / name).read_text()
+    problems = []
+    def require(name, pattern, expected, what):
+        found = re.findall(pattern, text(name))
+        if not found or any(value != expected for value in found):
+            problems.append(f'{name}: {what} {sorted(set(found)) or "missing"}, expected {expected}')
+    # The CMake package accepts only its own minor version (SameMinorVersion).
+    require('docs/PACKAGING.md', r'find_package\(ducktape_laya ([0-9.]+)', minor, 'find_package version')
+    require('docs/PACKAGING.md', r'does not satisfy `([0-9.]+)`', minor, 'minor version')
+    require('SECURITY.md', r'\(currently ([0-9.]+)\)', version, 'supported release')
+    require('README.md', r'\*\*Current release: ([0-9.]+)\*\*', version, 'current release')
+    require('README.md', r'bindings/go@v([0-9.]+)', version, 'Go install line')
+    require('README.md', r'io\.github\.adrian729:ducktape-laya:([0-9.]+)', version, 'Maven coordinates')
+    require('README.md', r'`ducktape-laya-([0-9.]+)-linux-x64\.tar\.gz`', version, 'native archive')
+    require('bindings/go/README.md', r'(?m)^go get github\.com/adrian729/ducktape-laya/bindings/go@v([0-9.]+)$', version, 'install line')
+    require('bindings/java/README.md', r'(?m)^io\.github\.adrian729:ducktape-laya:([0-9.]+)$', version, 'install line')
+    for name in ('README.md', 'bindings/go/README.md', 'bindings/rust/ducktape-laya/README.md', 'docs/PERFORMANCE.md'):
+        require(name, r'releases/tag/v([0-9.]+)', version, 'release link')
+    require('docs/PERFORMANCE.md', r'The ([0-9.]+) release files', version, 'package sizes of')
+    require('docs/API.md', r'what changed since the ([0-9.]+) release', version, 'last release')
+    # Every release has a row in the version table, with its ABI and Linux library name; a release
+    # that changes the ABI comes with migration notes (docs/COMPATIBILITY.md, Versions).
+    rows = re.findall(r'(?m)^\| ([0-9]+\.[0-9]+\.[0-9]+) \| ([0-9]+) \| `libducktape_laya\.so\.([0-9]+)` \|', text('docs/COMPATIBILITY.md'))
+    if (version, str(abi), str(abi - 1)) not in rows:
+        problems.append(f'docs/COMPATIBILITY.md: no Versions row for {version} with ABI {abi} and libducktape_laya.so.{abi - 1}')
+    for (_, before, _), (after, now, _) in zip(rows, rows[1:]):
+        if before != now and not re.search(rf'(?m)^## Migrating from \S+ \(ABI {before}\) to {re.escape(after)} \(ABI {now}\)$', text('docs/COMPATIBILITY.md')):
+            problems.append(f'docs/COMPATIBILITY.md: no "Migrating from ... (ABI {before}) to {after} (ABI {now})" section')
+    # Statements of which releases passed qualification: the line must name this one too.
+    for name, phrase in (('docs/QUALIFICATION.md', 'passed every gate for their candidates'),
+                         ('docs/BROWSER.md', 'passed the browser release checks'), ('docs/ARCHITECTURE.md', 'passed the browser gates')):
+        lines = [line for line in text(name).splitlines() if phrase in line]
+        if not lines or not all(re.search(rf'(?<![0-9.]){re.escape(version)}(?![0-9])', line) for line in lines):
+            problems.append(f'{name}: the statement "{phrase}" does not name {version}')
+    return problems
 
 # Release targets a record may name (release_support.TARGETS names that are qualified releases).
 RELEASE_PLATFORMS = ('linux-x64', 'linux-arm64', 'windows-x64')
@@ -177,8 +223,10 @@ def check_targets(record, root=ROOT):
             raise ValueError(f'{name}: required gates must be a non-empty list without duplicates')
         if tier == 1 and set(gates) != set(record['required_release_gates']):
             raise ValueError(f'{name}: tier-1 gates differ from required_release_gates')
-        if tier == 2 and not set(gates) <= set(policy['target_gates']):
-            raise ValueError(f'{name}: unknown tier-2 gates {sorted(set(gates) - set(policy["target_gates"]))}')
+        # Tier 2 is every target gate: a record cannot drop one for one target.
+        if tier == 2 and set(gates) != set(policy['target_gates']):
+            raise ValueError(f'{name}: tier-2 gates differ from target_gates (unknown {sorted(set(gates) - set(policy["target_gates"]))}, '
+                             f'missing {sorted(set(policy["target_gates"]) - set(gates))})')
         listed = item.get('models')
         if not isinstance(listed, list) or record['models'][0] not in listed or not set(listed) <= models:
             raise ValueError(f'{name}: models must include the primary model and only pinned models')
