@@ -147,7 +147,7 @@ struct backend::impl {
         cp.offload_kqv = false; cp.op_offload = false;
 #endif
         ctx.reset(llama_init_from_model(model.get(), cp));
-        if (!ctx) throw failure(DTL_MODEL_ERROR, "Could not create CPU inference context");
+        if (!ctx) throw failure(DTL_MODEL_ERROR, "Could not create the inference context");
     }
     // The last state tokenized, reused while consecutive questions share it.
     std::string cached_state_text;
