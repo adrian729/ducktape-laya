@@ -59,7 +59,7 @@ The zip's `bin/ducktape_laya.dll` needs the Microsoft Visual C++ Redistributable
 ## Bindings that load the library at run time
 
 - **Node.js** selects the addon in `native/<platform>-<arch>/` for the running platform. From a checkout, pass `addonPath` or set `DUCKTAPE_LAYA_ADDON`.
-- **Python, Java and .NET** load the library bundled in their package; `DUCKTAPE_LAYA_LIB_DIR` (and in Java `-Dducktape.laya.library`) selects a specific library instead and is then authoritative. Each package README gives the exact search order.
+- **Python, Java and .NET** load the library bundled in their package; `DUCKTAPE_LAYA_LIB_DIR` (and in Java `-Dducktape.laya.library`) selects a specific library instead and is then authoritative. A library of the same name in the current directory or on `PATH` or `LD_LIBRARY_PATH` does not replace the bundled one (tested for .NET on Linux and Windows). Each package README gives the exact search order.
 - **Rust and Go** link the native archive's library at build time (`DUCKTAPE_LAYA_LIB_DIR` or pkg-config for Rust, cgo flags or pkg-config for Go), so the program needs it at run time like any C program.
 
 Every binding checks that the library implements C ABI 2 and refuses any other.

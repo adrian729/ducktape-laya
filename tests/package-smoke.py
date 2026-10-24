@@ -38,6 +38,55 @@ def manifest_attributes(data):
         if not match: raise SystemExit(f'MANIFEST.MF: not a manifest line: {line[:80]!r}')
         attributes[match[1]] = match[2]
     return attributes
+def check_dotnet_resolution(out, native, target, directory, env):
+    """The NuGet package loads the library it bundles (runtimes/<rid>/native/), never a copy of the
+    same name in the current directory or on the search path (PATH on Windows, LD_LIBRARY_PATH on
+    Linux). Without the bundled copy, Windows searches only the assembly and system directories, so
+    those decoys are still not loaded; on Linux the system fallback is the dynamic loader's search
+    (LD_LIBRARY_PATH, never the current directory). The decoys are real copies of the library, so
+    loading one would succeed and show in the process's mapped files."""
+    names = [target.library] if target.os == 'win32' else [target.library, target.node_libraries[0]]
+    source = library_directory(native, target) / target.library
+    decoys = {}
+    for place in ('cwd', 'search-path'):
+        decoys[place] = directory / f'decoy-{place}'
+        decoys[place].mkdir()
+        for name in names:
+            shutil.copy(source, decoys[place] / name)
+    search = with_library_path(env, decoys['search-path'], target)
+
+    def loaded(app, run_env):
+        result = subprocess.run([tool('dotnet'), str(app / 'Probe.dll'), '--loaded-from'], cwd=decoys['cwd'], env=run_env,
+                                capture_output=True, text=True)
+        return result, [pathlib.Path(line).resolve() for line in result.stdout.splitlines() if line]
+
+    bundled = (out / 'runtimes' / target.nuget / 'native' / target.library).resolve()
+    if not bundled.is_file(): raise SystemExit(f'NuGet consumer output lacks {bundled}')
+    result, files = loaded(out, search)
+    if result.returncode or files != [bundled]:
+        raise SystemExit(f'NuGet package with decoys in the current directory and on the search path loaded {files}, '
+                         f'expected only {bundled}: {result.stdout}{result.stderr}')
+    # The same application without the bundled library (and without its deps.json, which lists it).
+    bare = directory / 'dotnet-unbundled'
+    shutil.copytree(out, bare, ignore=shutil.ignore_patterns('runtimes', 'Probe.deps.json', target.library))
+    result, files = loaded(bare, search if target.os == 'win32' else env)
+    if result.returncode == 0 or files or f'{target.library} was not found' not in result.stderr:
+        raise SystemExit(f'NuGet package without its bundled library loaded {files} (exit {result.returncode}); expected '
+                         f'"{target.library} was not found" with decoys only in the current directory'
+                         f'{" and on PATH" if target.os == "win32" else ""}: {result.stdout}{result.stderr}')
+    # Control: the probe sees a decoy when one is loaded (selected explicitly with DUCKTAPE_LAYA_LIB_DIR).
+    result, files = loaded(bare, dict(env, DUCKTAPE_LAYA_LIB_DIR=str(decoys['cwd'])))
+    if result.returncode or files != [(decoys['cwd'] / target.library).resolve()]:
+        raise SystemExit(f'DUCKTAPE_LAYA_LIB_DIR={decoys["cwd"]} loaded {files}: {result.stdout}{result.stderr}')
+    if target.os == 'linux':
+        result, files = loaded(bare, search)
+        expected = decoys['search-path'].resolve()
+        if result.returncode or len(files) != 1 or files[0].parent != expected:
+            raise SystemExit(f'NuGet system fallback loaded {files}, expected one library from LD_LIBRARY_PATH ({expected}): '
+                             f'{result.stdout}{result.stderr}')
+    return 'bundled library loaded; current-directory and search-path decoys ignored'
+
+
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('artifacts', type=pathlib.Path)
 p.add_argument('--platform', help='Package platform to test (default: this machine\'s; it must be this machine\'s)')
@@ -101,9 +150,30 @@ with tempfile.TemporaryDirectory(prefix='ducktape-smoke-') as directory:
     # The NuGet package, restored from a local feed holding only the candidate package.
     dotnet = directory / 'dotnet'
     dotnet.mkdir()
-    (dotnet / 'Program.cs').write_text('using System.Text.Json;\n'
-                                       'var info = JsonDocument.Parse(Ducktape.Laya.LayaEngine.RuntimeInfo());\n'
-                                       'System.Console.Write(info.RootElement.GetProperty("abi_version").GetInt32());\n')
+    # With --loaded-from the probe prints the file of every ducktape_laya library mapped into the process.
+    (dotnet / 'Program.cs').write_text('''using System.Text.Json;
+var info = JsonDocument.Parse(Ducktape.Laya.LayaEngine.RuntimeInfo());
+if (args.Length > 0 && args[0] == "--loaded-from")
+{
+    var loaded = new List<string>();
+    if (OperatingSystem.IsLinux())
+    {
+        foreach (var line in File.ReadLines("/proc/self/maps"))
+        {
+            var start = line.IndexOf('/');
+            if (start >= 0 && Path.GetFileName(line[start..]).StartsWith("libducktape_laya.so") && !loaded.Contains(line[start..])) loaded.Add(line[start..]);
+        }
+    }
+    else
+    {
+        foreach (System.Diagnostics.ProcessModule module in System.Diagnostics.Process.GetCurrentProcess().Modules)
+            if (string.Equals(module.ModuleName, "ducktape_laya.dll", StringComparison.OrdinalIgnoreCase)) loaded.Add(module.FileName);
+    }
+    Console.Write(string.Join("\\n", loaded));
+    return;
+}
+System.Console.Write(info.RootElement.GetProperty("abi_version").GetInt32());
+''')
     (dotnet / 'Probe.csproj').write_text(f'''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
   <ItemGroup><PackageReference Include="DucktapeLaya" Version="{version}" /></ItemGroup>
@@ -117,7 +187,11 @@ with tempfile.TemporaryDirectory(prefix='ducktape-smoke-') as directory:
     subprocess.run([tool('dotnet'), 'build', '-c', 'Release', '-o', str(dotnet / 'out'), '-m:1'], cwd=dotnet, env=dotnet_env,
                    check=True, capture_output=True)
     reported['nupkg'] = subprocess.check_output([tool('dotnet'), str(dotnet / 'out/Probe.dll')], cwd=directory, env=dotnet_env, text=True)
+    if target.os in ('linux', 'win32'):
+        resolution = check_dotnet_resolution(dotnet / 'out', native, target, directory, dotnet_env)
+    else:
+        resolution = 'skipped: the loaded-library check reads /proc/self/maps (Linux) or the process modules (Windows)'
 bad = {name: value for name, value in reported.items() if value != str(abi)}
 if bad:
     raise SystemExit(f'Packages report the wrong ABI (expected {abi}): {bad}')
-print(json.dumps({'abi_version': abi, 'platform': target.name, 'packages': sorted(reported)}))
+print(json.dumps({'abi_version': abi, 'platform': target.name, 'packages': sorted(reported), 'nupkg_resolution': resolution}))
