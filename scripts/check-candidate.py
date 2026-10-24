@@ -231,7 +231,7 @@ def browser_gate(backend):
             for name in ('laya.mjs', 'laya.wasm'):
                 need(report['asset_hashes'][f'{backend}/{name}'] == package['assets'][f'{backend}/{name}'], f'{page}: {backend} assets are not the candidate package')
             gates = report['backends'][backend]
-            required = ['execution', 'reference', 'controls', 'assets', 'upstream_numeric'] + (['device_loss'] if backend == 'webgpu' else [])
+            required = ['execution', 'reference', 'controls', 'assets', 'upstream_numeric'] + (['device_loss', 'gpu_memory'] if backend == 'webgpu' else [])
             for name in required:
                 need(gates.get(name, {}).get('status') == 'passed', f'{page}: {backend}/{name} {gates.get(name, {}).get("status", "missing")}')
     return check

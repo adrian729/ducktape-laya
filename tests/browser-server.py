@@ -49,6 +49,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def translate_path(self, path):
         path = urllib.parse.unquote(urllib.parse.urlsplit(path).path)
         if path == '/lost-worker.mjs': return str(root / 'tests/lost-worker.mjs')
+        if path == '/gpu-memory-worker.mjs': return str(root / 'tests/gpu-memory-worker.mjs')
         if path == '/reference-worker.mjs': return str(root / 'tests/reference-worker.mjs')
         if path == '/reference-requests.json': return references.name
         if path == '/': return str(root / 'tests/browser.html')

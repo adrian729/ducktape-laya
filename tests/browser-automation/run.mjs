@@ -98,11 +98,11 @@ try {
       const stages = [['execution', 'start', 'state'],
         ...(!args['skip-reference'] ? [['reference', 'startReference', 'reference']] : []),
         ...(!args['skip-controls'] ? [['controls', 'startControls', 'controls'], ['assets', 'startAssets', 'assets'],
-          ...(backend === 'webgpu' ? [['device_loss', 'startDeviceLoss', 'loss']] : [])] : []),
+          ...(backend === 'webgpu' ? [['device_loss', 'startDeviceLoss', 'loss'], ['gpu_memory', 'startGpuMemory', 'gpuMemory']] : [])] : []),
         ...(backend === 'wasm' && args['constrained-wasm'] ? [['memory', 'startMemory', 'memory']] : [])];
       gates.reference = { status: 'not_run' };
       gates.controls = gates.assets = { status: 'not_run' };
-      if (backend === 'webgpu') gates.device_loss = { status: 'not_run' };
+      if (backend === 'webgpu') gates.device_loss = gates.gpu_memory = { status: 'not_run' };
       if (backend === 'wasm') gates.memory = { status: 'not_run' };
       for (const [name, method, state] of stages) {
         console.log(`${backend}/${name}: running`);

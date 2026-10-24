@@ -103,6 +103,58 @@ window.startDeviceLoss = async () => {
   } catch (error) { window.loss = { status: 'failed', error: error.stack }; }
   finally { globalThis.Worker = OriginalWorker; if (engine) await engine.close().catch(() => {}); }
 };
+// WebGPU buffers the device cannot create (injected by /gpu-memory-worker.mjs) fail the
+// operation with a native status instead of ending the worker: opening rejects with
+// status 2; a router request that loads a model rejects with status 2 and the same
+// engine, worker and GPU device keep answering unchanged.
+window.startGpuMemory = async () => {
+  window.gpuMemory = { status: 'running', checks: [] };
+  const OriginalWorker = globalThis.Worker;
+  let worker, failure;
+  const options = { backend: 'webgpu', webgpuModuleUrl: '/webgpu/laya.mjs', workerUrl: '/gpu-memory-worker.mjs', initializationTimeoutMs: 240000,
+    onDiagnostic: text => { if (text.startsWith('test: failed buffer')) failure = text; } };
+  const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
+  const expectFailure = async (name, promise) => {
+    try { await promise; throw new Error('Unexpected success: ' + name); }
+    catch (error) {
+      if (error.message.startsWith('Unexpected success')) throw error;
+      if (!failure) throw new Error(`${name}: no buffer failure was injected (${error.message})`);
+      if (error.status !== 2 || error.code) throw new Error(`${name}: expected status 2, got ${error.status} ${error.code ?? ''}: ${error.message}`);
+      window.gpuMemory.checks.push({ case: name, injected: failure, status: error.status, error: error.message });
+      failure = undefined;
+    }
+  };
+  let router;
+  try {
+    // The arming message precedes initialization in the worker's queue.
+    for (const [name, label, skip] of [['model weights', 'tensor_buf', 0], ['inference buffers', 'tensor_buf', 1],
+      ['backend state', 'ggml_webgpu_param_arena', 0]]) {
+      globalThis.Worker = class extends OriginalWorker {
+        constructor(...args) { super(...args); this.postMessage({ kind: 'cancel', id: -1, testFailBuffer: { label, skip } }); }
+      };
+      try { await expectFailure('open: ' + name, Laya.open({ ...options, modelUrl: '/model.gguf' })); }
+      finally { globalThis.Worker = OriginalWorker; }
+    }
+    globalThis.Worker = class extends OriginalWorker { constructor(...args) { super(...args); worker = this; } };
+    try { router = await Laya.openRouter({ a: { url: '/model.gguf' }, b: { url: '/model.gguf', contextTokens: 256 } }, { ...options, maxLoaded: 1 }); }
+    finally { globalThis.Worker = OriginalWorker; }
+    const expected = JSON.stringify((await router.execute({ ...request, model: 'a' })).answers);
+    worker.postMessage({ kind: 'cancel', id: -1, testFailBuffer: { label: 'tensor_buf', skip: 0 } });
+    await expectFailure('router request loading a model', router.execute({ ...request, model: 'b' }));
+    const again = JSON.stringify((await router.execute({ ...request, model: 'a' })).answers);
+    if (again !== expected) throw new Error(`Answers changed after a failed allocation: ${again} != ${expected}`);
+    await router.execute({ ...request, model: 'b' });
+    window.gpuMemory.checks.push({ case: 'same router keeps answering after the failure', answers: JSON.parse(again) });
+    await router.close(); router = undefined;
+    const engine = await Laya.open({ ...options, workerUrl: undefined, onDiagnostic: undefined, modelUrl: '/model.gguf' });
+    const answers = JSON.stringify((await engine.execute(request)).answers);
+    await engine.close();
+    if (answers !== expected) throw new Error(`Answers differ in a new engine: ${answers} != ${expected}`);
+    window.gpuMemory.checks.push({ case: 'new engine after the failures' });
+    window.gpuMemory.status = 'passed';
+  } catch (error) { window.gpuMemory.status = 'failed'; window.gpuMemory.error = error.stack; }
+  finally { globalThis.Worker = OriginalWorker; if (router) await router.close().catch(() => {}); }
+};
 window.startAssets = async () => {
   window.assets = { status: 'running', checks: [] };
   try {

@@ -50,6 +50,8 @@ Native routing validation/cache limits remain authoritative. `maxModelBytes` lim
 
 This is a wasm32 build with a 4 GiB heap ceiling: the loaded weights and inference buffers of every loaded model must fit in it. Inference memory grows with `contextTokens` ([memory measurements](PERFORMANCE.md) are for native builds), so a large `contextTokens`, especially with several loaded models, can exceed the heap. When the browser cannot grow the heap, large allocations (weights, inference buffers) fail with a native status; a failed small ggml allocation aborts the WebAssembly runtime, which rejects the pending work with status 3 and closes that engine. Other engines and the page are unaffected, and the host can open a new engine.
 
+With WebGPU, a model's weights and inference buffers are GPU buffers. A buffer the GPU cannot create fails opening the engine with status 2, and a router request that loads a model with status 2; the router stays usable. Other WebGPU errors, device loss, a GPU wait longer than 30 s, and a failure to create the few-kilobyte buffer that reads results back during a request end that worker's WebAssembly instance instead (status 3, engine closed).
+
 ## Execution and failure semantics
 
 The default backend is single-threaded WASM in a worker; it requires neither SharedArrayBuffer nor cross-origin isolation. WebGPU requires a usable adapter, the model's device limits/operations, and the JSPI/WASM-exceptions capabilities of the pinned runtime. `auto` tries WebGPU initialization then WASM. An inference failure does not silently retry against another backend or change probabilities. GPU device loss/runtime abort fails pending work and terminates that engine's worker; the host can explicitly reopen a WASM engine.
