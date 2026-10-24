@@ -22,6 +22,9 @@
 // Runtime patch laya-selected-decision-head.patch: the question type whose decision head
 // the next graph built on this thread evaluates, or -1 for all three (library-internal).
 extern "C" void dtl_laya_select_decision_type(int type);
+// Runtime patch tokenizer-stop-check.patch: a stop check llama_tokenize calls periodically on
+// this thread; when it returns true, tokenization throws std::runtime_error (library-internal).
+extern "C" void dtl_llama_tokenize_set_stop(bool (*stop)(void *), void *data);
 namespace dtl {
 namespace {
 std::string meta(llama_model *m, const std::string &key) {
@@ -167,22 +170,43 @@ struct backend::impl {
     // The last state tokenized, reused while consecutive questions share it.
     std::string cached_state_text;
     std::vector<llama_token> cached_state_tokens;
-    void tokenize_into(std::vector<llama_token> &out, std::string_view text) const {
+    void tokenize_into(std::vector<llama_token> &out, std::string_view text, const execution *control) const {
+        // Cancellation and deadlines stop the BPE merges and the special-token split; the
+        // regex pre-split and symbol setup of a word are not checked.
+        struct stop_hook {
+            explicit stop_hook(const execution *control) {
+                if (control && control->enabled())
+                    dtl_llama_tokenize_set_stop([](void *p) { return static_cast<const execution *>(p)->stopped(); },
+                                                const_cast<execution *>(control));
+            }
+            ~stop_hook() { dtl_llama_tokenize_set_stop(nullptr, nullptr); }
+        } hook{control};
+        try {
+            tokenize_once(out, text);
+        } catch (const std::runtime_error &) {
+            if (control) control->check(); // the latched cancellation or deadline, if it stopped
+            throw;
+        }
+    }
+    void tokenize_once(std::vector<llama_token> &out, std::string_view text) const {
         // Each llama_tokenize call does the full work, so tokenize once into a buffer of
         // text.size() + 2 tokens (common_tokenize's estimate) and only retry with the exact
         // count when that was too small. Texts are at most 2 MiB, well within int32_t.
         const size_t at = out.size();
         const auto length = static_cast<int32_t>(text.size());
         out.resize(at + text.size() + 2);
-        int n = llama_tokenize(vocab, text.data(), length, out.data() + at, static_cast<int32_t>(text.size() + 2), false, true);
-        if (n < 0 && n != std::numeric_limits<int32_t>::min()) {
-            out.resize(at + static_cast<size_t>(-static_cast<int64_t>(n)));
-            n = llama_tokenize(vocab, text.data(), length, out.data() + at, -n, false, true);
-        }
+        int n;
+        try {
+            n = llama_tokenize(vocab, text.data(), length, out.data() + at, static_cast<int32_t>(text.size() + 2), false, true);
+            if (n < 0 && n != std::numeric_limits<int32_t>::min()) {
+                out.resize(at + static_cast<size_t>(-static_cast<int64_t>(n)));
+                n = llama_tokenize(vocab, text.data(), length, out.data() + at, -n, false, true);
+            }
+        } catch (...) { out.resize(at); throw; }
         if (n < 0) { out.resize(at); throw failure(DTL_INFERENCE_ERROR, "Tokenization failed"); }
         out.resize(at + static_cast<size_t>(n));
     }
-    void prepare(question &q, const json &state) {
+    void prepare(question &q, const json &state, const execution *control) {
         if (q.overflow.empty()) q.overflow = "reject";
         require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
         if (q.options.size() == 1) return; // answered without inference; uses no tokens
@@ -217,7 +241,7 @@ struct backend::impl {
         // would drop whitespace ending an option. After sanitizing, the mask text
         // appears only where the template put it.
         std::vector<llama_token> tokens;
-        auto append = [&](std::string_view text) { tokenize_into(tokens, text); };
+        auto append = [&](std::string_view text) { tokenize_into(tokens, text, control); };
         for (size_t at = 0;;) {
             const size_t next = rendered.find(marker_text, at);
             append(std::string_view(rendered).substr(at, next == std::string::npos ? std::string::npos : next - at));
@@ -269,7 +293,7 @@ struct backend::impl {
         if (separate_state && state_text != cached_state_text) {
             // Replace the cache only once tokenization succeeded.
             std::vector<llama_token> fresh;
-            tokenize_into(fresh, state_text);
+            tokenize_into(fresh, state_text, control);
             cached_state_tokens = std::move(fresh);
             cached_state_text = std::move(state_text);
         }
@@ -389,6 +413,6 @@ json backend::info() const {
             {"trained_context_tokens", impl_->trained},
             {"temperatures", impl_->temperatures}, {"metadata_temperatures", impl_->metadata_temperatures}};
 }
-void backend::prepare(question &q, const json &state) { impl_->prepare(q, state); }
+void backend::prepare(question &q, const json &state, const execution *control) { impl_->prepare(q, state, control); }
 json backend::run(const question &q, const execution *control) { return impl_->run(q, control); }
 } // namespace dtl

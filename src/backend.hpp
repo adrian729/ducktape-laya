@@ -50,7 +50,8 @@ public:
     backend(const char *path, const engine_config &config);
     ~backend();
     json info() const;
-    void prepare(question &q, const json &state);
+    // control stops a long tokenization (cancellation, deadline); nullptr: not stoppable.
+    void prepare(question &q, const json &state, const execution *control = nullptr);
     json run(const question &q, const execution *control = nullptr);
 private:
     struct impl;

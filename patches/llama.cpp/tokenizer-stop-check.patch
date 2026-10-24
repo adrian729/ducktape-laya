@@ -1,0 +1,74 @@
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -22,6 +22,28 @@
+ #include <set>
+ #include <unordered_map>
+ 
++// DTL: a stop check the caller may set around llama_tokenize on its thread. Long tokenization
++// calls it periodically and stops by throwing std::runtime_error, which llama_tokenize
++// propagates; no tokenizer state outlives the call.
++static thread_local bool (*dtl_tokenize_stop)(void *) = nullptr;
++static thread_local void * dtl_tokenize_stop_data = nullptr;
++extern "C" void dtl_llama_tokenize_set_stop(bool (*stop)(void *), void * data);
++extern "C" void dtl_llama_tokenize_set_stop(bool (*stop)(void *), void * data) {
++    dtl_tokenize_stop = stop;
++    dtl_tokenize_stop_data = data;
++}
++static void dtl_tokenize_check_now() {
++    if (dtl_tokenize_stop && dtl_tokenize_stop(dtl_tokenize_stop_data)) {
++        throw std::runtime_error("tokenization stopped");
++    }
++}
++// checks once every 1024 calls
++static inline void dtl_tokenize_check(uint32_t & counter) {
++    if (dtl_tokenize_stop && (++counter & 1023) == 0) {
++        dtl_tokenize_check_now();
++    }
++}
++
+ //
+ // helpers
+ //
+@@ -658,7 +680,9 @@
+             word_collection = std::move(words);
+         }
+ 
++        uint32_t dtl_counter = 0;
+         for (const auto & word : word_collection) {
++            dtl_tokenize_check(dtl_counter);
+             work_queue = llm_bigram_bpe::queue();
+             symbols.clear();
+ 
+@@ -690,11 +714,13 @@
+                 symbols.emplace_back(sym);
+             }
+             for (int i = 1; i < (int) symbols.size(); ++i) {
++                dtl_tokenize_check(dtl_counter);
+                 add_new_bigram(i - 1, i);
+             }
+ 
+             // build token(s)
+             while (!work_queue.empty()) {
++                dtl_tokenize_check(dtl_counter);
+                 auto bigram = work_queue.pop_move();
+ 
+                 auto & left_symbol = symbols[bigram.left];
+@@ -3383,8 +3409,10 @@
+ // #define PRETOKENIZERDEBUG
+ 
+ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const {
++    uint32_t dtl_counter = 0;
+     // for each special token
+     for (const llama_token special_id : cache_special_tokens) {
++        dtl_tokenize_check_now(); // DTL: each pass scans the whole text
+         const auto & data = vocab.get_token_data(special_id);
+         const auto & text = data.text;
+ 
+@@ -3413,6 +3441,7 @@
+ 
+                 // loop over the text
+                 while (true) {
++                    dtl_tokenize_check(dtl_counter); // DTL: once per 1024 matches
+                     // find the first occurrence of a given special token in this fragment
+                     //  passing offset argument only limit the "search area" but match coordinates
+                     //  are still relative to the source full raw_text
