@@ -58,6 +58,7 @@ Linux arm64 and Windows x64 become release platforms (tier 2) next to Linux x86-
 - **Exceptions through the C API of llama.cpp:** a stopped tokenization, and an allocation failure in tokenization or in a forward pass, threw a C++ exception through `llama_tokenize` or `llama_encode`, which is undefined behaviour in the Windows build (clang-cl `/EHsc`). Both now return a status instead (runtime patches `tokenizer-stop-check.patch` and `llama-encode-no-throw.patch`); the results are unchanged.
 - **A cancellation callback that called into the library** while a call was tokenizing removed that call's stop check; the previous check is now restored.
 - **Cached state tokens could pair with another state's text:** when copying a new state's text into the per-engine cache failed (out of memory), the cache kept the old text with the new tokens, and a later call with the old state answered over the wrong tokens with status 0. Text and tokens are now replaced together, and the cache keeps the tokens at their exact size instead of a buffer with room for one token per byte.
+- **Big integers in a score legend** keep all their digits, as the request gave them (0.2.0 wrote them as floats, and the large-integer change above as `{"bytes":[...],"subtype":...}`).
 
 ### Platforms
 

@@ -148,6 +148,45 @@ void python_json(const Json &value, std::string &out) {
     default: out += "null";  // discarded never comes from parsed requests
     }
 }
+// Results are nlohmann's compact JSON, except that a big integer (from a request value a result
+// echoes: a score question's legend) is written as the JSON number the request gave, with all its
+// digits, instead of nlohmann's {"bytes":[...],"subtype":...} form of a binary value.
+template <class Json>
+void result_json(const Json &value, std::string &out) {
+    switch (value.type()) {
+    case nlohmann::json::value_t::array: {
+        out += '[';
+        bool first = true;
+        for (const auto &item : value) { if (!first) out += ','; first = false; result_json(item, out); }
+        out += ']';
+        break;
+    }
+    case nlohmann::json::value_t::object: {
+        out += '{';
+        bool first = true;
+        for (auto it = value.begin(); it != value.end(); ++it) {
+            if (!first) out += ',';
+            first = false;
+            out += Json(it.key()).dump();
+            out += ':';
+            result_json(it.value(), out);
+        }
+        out += '}';
+        break;
+    }
+    case nlohmann::json::value_t::binary:
+        if (is_big_integer(value)) { out += big_integer_text(value); break; }
+        out += value.dump();
+        break;
+    default: out += value.dump();
+    }
+}
+template <class Json>
+std::string result_json(const Json &value) {
+    std::string out;
+    result_json(value, out);
+    return out;
+}
 template <class Json>
 std::string python_json(const Json &value) {
     std::string out;

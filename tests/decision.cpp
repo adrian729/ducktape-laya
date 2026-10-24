@@ -55,6 +55,24 @@ int main() {
                "python_json keeps 300-digit integers exact");
         expect(dtl::is_big_integer(parse_kept(huge)) && !dtl::is_big_integer(parse_kept("1e23")) &&
                parse_kept("18446744073709551615").is_number_unsigned(), "only overflowing integer literals are kept as text");
+        // Results echo a big integer (in a score legend, also nested in a structured description)
+        // as the digits the request gave; otherwise they are nlohmann's compact dump.
+        {
+            json levels = json::array();
+            levels.push_back({{"key", "0"}, {"description", parse_kept(huge)}});
+            levels.push_back({{"key", "1"}, {"description", parse_kept(R"({"x":[-123456789012345678901234567890,1.5,"t\u00e9"]})")}});
+            levels.push_back({{"key", "2"}, {"description", "plain"}});
+            const auto answer = dtl::answer_from_scores("score", levels, {0, 1, 2}, 1);
+            const auto text = dtl::result_json(json::array({answer}));
+            expect(text.find("\"legend\":{\"0\":" + huge + ",\"1\":{\"x\":[-123456789012345678901234567890,1.5,\"t\u00e9\"]},\"2\":\"plain\"}") !=
+                   std::string::npos, "a legend echoes big integers with their digits");
+            expect(json::parse(text)[0]["legend"]["0"].is_number() && json::parse(text)[0]["score"] == answer["score"],
+                   "a result with big integers is valid JSON");
+            const auto plain = dtl::answer_from_scores("score", options({"0", "1", "2"}), {2, 0, 2}, 1);
+            expect(dtl::result_json(mixed) == mixed.dump() && dtl::result_json(plain) == plain.dump() &&
+                   dtl::result_json(json::array({plain, json::object(), json::array()})) == json::array({plain, json::object(), json::array()}).dump(),
+                   "results without big integers are nlohmann's dump");
+        }
         const std::map<std::string, float> temperatures{{"choice.2", 2}, {"choice.3_5", 3}, {"choice.6_10", 6},
             {"choice.11", 11}, {"score", 4}, {"score.3_5", 5}, {"noul.2", 7}};
         expect(dtl::temperature_for("choice", 2, temperatures) == 2 && dtl::temperature_for("choice", 3, temperatures) == 3 &&
