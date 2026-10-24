@@ -2,20 +2,30 @@
 // tools/server/server-decision.cpp (MIT). See THIRD_PARTY_NOTICES.md.
 #include "backend.hpp"
 #include "python_json.hpp"
+#include "request_state.hpp"
 #include "decision.hpp"
 #include "errors.hpp"
 #include "execution.hpp"
 #include "platform.hpp"
+#include "threads.hpp"
 #include "llama.h"
 #include "jinja/parser.h"
 #include "json.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <string_view>
 #include <thread>
 
+// Runtime patch laya-selected-decision-head.patch: the question type whose decision head
+// the next graph built on this thread evaluates, or -1 for all three (library-internal).
+extern "C" void dtl_laya_select_decision_type(int type);
+// Runtime patch tokenizer-stop-check.patch: a stop check llama_tokenize calls periodically on
+// this thread; when it returns true, tokenization throws std::runtime_error (library-internal).
+extern "C" void dtl_llama_tokenize_set_stop(bool (*stop)(void *), void *data);
 namespace dtl {
 namespace {
 std::string meta(llama_model *m, const std::string &key) {
@@ -26,25 +36,6 @@ std::string meta(llama_model *m, const std::string &key) {
         throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
     value.resize(static_cast<size_t>(n));
     return value;
-}
-void sanitize(json &value, const std::string &marker) {
-    if (value.is_string()) {
-        // One pass: replacing in place would shift the tail once per marker.
-        const auto &s = value.get_ref<const std::string &>();
-        if (s.find(marker) == std::string::npos) return;
-        std::string out;
-        out.reserve(s.size());
-        for (size_t at = 0;;) {
-            const size_t next = s.find(marker, at);
-            out.append(s, at, next == std::string::npos ? std::string::npos : next - at);
-            if (next == std::string::npos) break;
-            out += ' ';
-            at = next + marker.size();
-        }
-        value = std::move(out);
-    } else if (value.is_structured()) {
-        for (auto &child : value) sanitize(child, marker);
-    }
 }
 }
 struct prepared_window {
@@ -147,7 +138,7 @@ struct backend::impl {
         auto cp = llama_context_default_params();
         cp.n_ctx = cp.n_batch = cp.n_ubatch = static_cast<uint32_t>(capacity); cp.n_seq_max = 1;
         const uint32_t threads = config.threads;
-        cp.n_threads = cp.n_threads_batch = threads ? threads : std::max(1u, std::min(4u, std::thread::hardware_concurrency()));
+        cp.n_threads = cp.n_threads_batch = threads ? threads : default_threads();
         cp.embeddings = true; cp.pooling_type = LLAMA_POOLING_TYPE_NONE;
         cp.attention_type = LLAMA_ATTENTION_TYPE_NON_CAUSAL;
 #ifdef DTL_BROWSER_WEBGPU
@@ -161,37 +152,66 @@ struct backend::impl {
     // The last state tokenized, reused while consecutive questions share it.
     std::string cached_state_text;
     std::vector<llama_token> cached_state_tokens;
-    void tokenize_into(std::vector<llama_token> &out, std::string_view text) const {
-        int n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), nullptr, 0, false, true);
-        if (n == 0) return;
-        if (n > 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-        const size_t at = out.size();
-        out.resize(at - n);
-        n = llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()), out.data() + at, -n, false, true);
-        if (n < 0) throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
-        out.resize(at + n);
+    void tokenize_into(std::vector<llama_token> &out, std::string_view text, const execution *control) const {
+        // Cancellation and deadlines stop the BPE merges and the special-token split; the
+        // regex pre-split and symbol setup of a word are not checked.
+        struct stop_hook {
+            explicit stop_hook(const execution *control) {
+                if (control && control->enabled())
+                    dtl_llama_tokenize_set_stop([](void *p) { return static_cast<const execution *>(p)->stopped(); },
+                                                const_cast<execution *>(control));
+            }
+            ~stop_hook() { dtl_llama_tokenize_set_stop(nullptr, nullptr); }
+        } hook{control};
+        try {
+            tokenize_once(out, text);
+        } catch (const std::runtime_error &) {
+            if (control) control->check(); // the latched cancellation or deadline, if it stopped
+            throw;
+        }
     }
-    void prepare(question &q, const json &state) {
+    void tokenize_once(std::vector<llama_token> &out, std::string_view text) const {
+        // Each llama_tokenize call does the full work, so tokenize once into a buffer of
+        // text.size() + 2 tokens (common_tokenize's estimate) and only retry with the exact
+        // count when that was too small. Texts are at most 2 MiB, well within int32_t.
+        const size_t at = out.size();
+        const auto length = static_cast<int32_t>(text.size());
+        out.resize(at + text.size() + 2);
+        int n;
+        try {
+            n = llama_tokenize(vocab, text.data(), length, out.data() + at, static_cast<int32_t>(text.size() + 2), false, true);
+            if (n < 0 && n != std::numeric_limits<int32_t>::min()) {
+                out.resize(at + static_cast<size_t>(-static_cast<int64_t>(n)));
+                n = llama_tokenize(vocab, text.data(), length, out.data() + at, -n, false, true);
+            }
+        } catch (...) { out.resize(at); throw; }
+        if (n < 0) { out.resize(at); throw failure(DTL_INFERENCE_ERROR, "Tokenization failed"); }
+        out.resize(at + static_cast<size_t>(n));
+    }
+    void prepare(question &q, request_state &request, const execution *control) {
         if (q.overflow.empty()) q.overflow = "reject";
         require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
         if (q.options.size() == 1) return; // answered without inference; uses no tokens
         q.prepared = std::make_unique<prepared_question>();
         auto &prepared = *q.prepared;
         prepared.column = q.type == "score" ? 1 : q.type == "noul" ? 2 : 0;
-        json input = {{"id",q.id}, {"type",q.type}, {"instructions",q.instructions},
-                      {"state",state}, {"options",q.options}, {"images",json::array()}};
         // Structured values are serialized here, as the original Laya does, so the
         // template takes its string path; null descriptions stay null (no description).
         auto as_text = [](json &value) { if (!value.is_string() && !value.is_null()) value = python_json(value); };
-        as_text(input["state"]);
+        // The state is the same for every question of a request: it is serialized and
+        // sanitized once per request and model, on the first question that needs it.
+        const json &state = request.text(this, marker_text);
+        json input = {{"id",q.id}, {"type",q.type}, {"instructions",q.instructions},
+                      {"state",nullptr}, {"options",q.options}, {"images",json::array()}};
         as_text(input["instructions"]);
         for (auto &option : input["options"]) as_text(option["description"]);
         sanitize(input, marker_text);
         // The state sits between two separators, so its tokens do not depend on the
         // question: it is tokenized on its own, once for all questions sharing it.
-        const bool separate_state = input["state"].is_string();
-        std::string state_text;
-        if (separate_state) { state_text = input["state"].get<std::string>(); input["state"] = ""; }
+        const bool separate_state = state.is_string();
+        static const std::string no_state;
+        const std::string &state_text = separate_state ? state.get_ref<const std::string &>() : no_state;
+        if (separate_state) input["state"] = "";
         // Serialization can expand a structured state (1e15 is written 1000000000000000.0),
         // so the text to tokenize is bounded like the rendered prompt, not only the request.
         require(state_text.size() <= max_request * 2, "Serialized state is too large");
@@ -206,7 +226,7 @@ struct backend::impl {
         // would drop whitespace ending an option. After sanitizing, the mask text
         // appears only where the template put it.
         std::vector<llama_token> tokens;
-        auto append = [&](std::string_view text) { tokenize_into(tokens, text); };
+        auto append = [&](std::string_view text) { tokenize_into(tokens, text, control); };
         for (size_t at = 0;;) {
             const size_t next = rendered.find(marker_text, at);
             append(std::string_view(rendered).substr(at, next == std::string::npos ? std::string::npos : next - at));
@@ -258,9 +278,9 @@ struct backend::impl {
         if (separate_state && state_text != cached_state_text) {
             // Replace the cache only once tokenization succeeded.
             std::vector<llama_token> fresh;
-            tokenize_into(fresh, state_text);
+            tokenize_into(fresh, state_text, control);
             cached_state_tokens = std::move(fresh);
-            cached_state_text = std::move(state_text);
+            cached_state_text = state_text;
         }
         const std::vector<llama_token> state_tokens = separate_state ? cached_state_tokens
             : std::vector<llama_token>(tokens.begin() + opts_end + 1, tokens.end() - 1);
@@ -323,6 +343,12 @@ struct backend::impl {
         for (size_t i = 0; i < n; ++i) positions[i] = static_cast<llama_pos>(i);
         llama_batch batch{static_cast<int32_t>(n), tokens.data(), nullptr, positions.data(), seq_counts.data(),
                           seq_ids.data(), outputs.data()};
+        // Evaluate only this question type's head (its scores fill all three columns); the
+        // reserved graph at open evaluated every type, so compute buffers never grow.
+        struct reset_selection {
+            ~reset_selection() { dtl_laya_select_decision_type(-1); }
+        } reset_type;
+        dtl_laya_select_decision_type(column);
         int status = llama_encode(ctx.get(), batch);
         if (control) control->check();
         if (status == -2) throw std::bad_alloc(); // llama_encode: allocation failed
@@ -372,6 +398,6 @@ json backend::info() const {
             {"trained_context_tokens", impl_->trained},
             {"temperatures", impl_->temperatures}, {"metadata_temperatures", impl_->metadata_temperatures}};
 }
-void backend::prepare(question &q, const json &state) { impl_->prepare(q, state); }
+void backend::prepare(question &q, request_state &state, const execution *control) { impl_->prepare(q, state, control); }
 json backend::run(const question &q, const execution *control) { return impl_->run(q, control); }
 } // namespace dtl

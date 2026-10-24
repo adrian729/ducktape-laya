@@ -25,10 +25,11 @@ Out of scope: text or chat generation, an HTTP or inference server, model traini
 | Prompt inputs, tokenization between markers, overflow handling (truncation, scan windows), marker positions, output columns and stored-temperature bounds | `src/backend_llama.cpp` |
 | Calibrated probabilities, confidence fields, tie rule and single-option answers (model-independent arithmetic) | `src/decision.hpp` |
 | Serializing structured values as the original Laya does (Python `json.dumps`) | `src/python_json.hpp` |
+| A request's state as its prompts carry it, prepared once per request and model | `src/request_state.hpp` |
 | Language detection for `"model": "auto"` | `src/language.cpp` |
 | Request bounds, open config, schema planning/projection, batch order, routing/cache and passive events | `src/laya.cpp` |
 | Cooperative stop state, deadlines and cancellable lock waits | `src/execution.hpp` |
-| Runtime diagnostics and native CPU compatibility checks | `src/platform.cpp` |
+| Runtime diagnostics, native CPU compatibility checks and the automatic thread count (CPU affinity, cgroup CPU quota) | `src/platform.cpp`, `src/threads.hpp` |
 | Ownership, type conversion, error translation and platform scheduling | Thin language bindings |
 | Source/artifact identity, packaging and dependency upgrade checks | CMake and maintainer scripts; no runtime dependency on Python |
 

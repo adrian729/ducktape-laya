@@ -1,7 +1,9 @@
 #include "ducktape_laya.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -127,5 +129,59 @@ int main(int argc, char **argv) {
     try { engine.execute(request, options); CHECK(false); }
     catch (const ducktape::error &e) { CHECK(e.status == DTL_CANCELLED); }
     CHECK(engine.execute(request) == baseline);
+    {
+        // Tokenization honours deadlines and cancellation (tokenizer-stop-check.patch). A 1 MiB state
+        // under "reject" is tokenized in full and then rejected with status 1 before any inference,
+        // so that call times tokenization alone (the faster of two calls). Each call uses a different
+        // state, so none reuses the tokens cached from the previous one. A deadline and a cancellation
+        // at a tenth of that time must end the call with their own status within half of it (before
+        // the patch, such calls ran tokenization to the end and returned status 1). The margin covers
+        // the request parsing and the unchecked regex pre-split, which run before the first check
+        // (together about an eighth of the full time on a busy desktop).
+        // Long pseudo-random words: most of their tokenization is merging, which is checked; the
+        // regex pre-split, which is not, takes a larger share of ordinary text (about a quarter).
+        auto large = [](const char *first) {
+            std::string text = first;
+            uint32_t seed = 12345;
+            while (text.size() < 1040000) {
+                text += ' ';
+                for (int i = 0; i < 160; ++i) { seed = seed * 1103515245u + 12345u; text += char('a' + (seed >> 16) % 26); }
+            }
+            const std::string body = R"({"state":")" + text + R"(","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
+            return body;
+        };
+        using clock = std::chrono::steady_clock;
+        auto timed_status = [&](const std::string &body, const ducktape::call_options &call, clock::duration &elapsed) {
+            const auto started = clock::now();
+            dtl_status status = DTL_OK;
+            try { engine.execute(body, call); } catch (const ducktape::error &e) { status = e.status; }
+            elapsed = clock::now() - started;
+            return status;
+        };
+        const auto full_body = large("Full."), again_body = large("Again."), deadline_body = large("Deadline."), cancel_body = large("Cancel.");
+        CHECK(full_body.size() <= 1048576 && again_body.size() <= 1048576 && deadline_body.size() <= 1048576 && cancel_body.size() <= 1048576);
+        clock::duration full{}, again{}, stopped{};
+        CHECK(timed_status(full_body, {}, full) == DTL_INVALID_ARGUMENT);
+        CHECK(timed_status(again_body, {}, again) == DTL_INVALID_ARGUMENT);
+        full = std::min(full, again);
+        const auto tenth = std::max<long long>(1, std::chrono::duration_cast<std::chrono::milliseconds>(full).count() / 10);
+        ducktape::call_options deadline;
+        deadline.timeout_ms = static_cast<uint32_t>(tenth);
+        CHECK(timed_status(deadline_body, deadline, stopped) == DTL_DEADLINE_EXCEEDED);
+        std::cerr << "1 MiB tokenization " << std::chrono::duration<double>(full).count() << " s; stopped by a " << tenth
+                  << " ms deadline after " << std::chrono::duration<double>(stopped).count() << " s\n";
+        CHECK(stopped * 2 < full);
+        std::atomic<bool> stop{false};
+        ducktape::call_options cancellable;
+        cancellable.should_cancel = [](void *p) -> uint32_t { return static_cast<std::atomic<bool> *>(p)->load() ? 1 : 0; };
+        cancellable.cancel_user_data = &stop;
+        std::thread canceller([&] { std::this_thread::sleep_for(std::chrono::milliseconds(tenth)); stop = true; });
+        const auto cancel_status = timed_status(cancel_body, cancellable, stopped);
+        canceller.join();
+        std::cerr << "cancelled after " << tenth << " ms, returned after " << std::chrono::duration<double>(stopped).count() << " s\n";
+        CHECK(cancel_status == DTL_CANCELLED);
+        CHECK(stopped * 2 < full);
+        CHECK(engine.execute(request) == baseline);
+    }
     std::cout << "Cancellation, deadline, latch and post-abort recovery passed\n";
 }

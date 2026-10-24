@@ -2,6 +2,8 @@
 // documented tie rule (first option or level) for choices, scores and integer values.
 #include "decision.hpp"
 #include "python_json.hpp"
+#include "threads.hpp"
+#include "request_state.hpp"
 #include <iostream>
 #include <stdexcept>
 using dtl::json;
@@ -99,6 +101,43 @@ int main() {
         expect(dtl::ordinal_index(json{{"0", 0.4}, {"1", 0.4}, {"2", 0.2}}) == 0, "integer tie chooses the first level");
         expect(dtl::ordinal_index(json{{"0", 0.2}, {"1", 0.4}, {"2", 0.4}}) == 1, "integer tie chooses the first of the tied levels");
         expect(dtl::ordinal_index(json{{"0", 0.1}, {"1", 0.2}, {"2", 0.7}}) == 2, "integer maximum");
+        // Automatic thread count: min(4, affinity CPUs, cgroup v2 quota rounded up, hardware threads); 0 = unknown.
+        expect(dtl::cgroup_quota_cpus("max 100000\n") == 0 && dtl::cgroup_quota_cpus("max 100000") == 0, "cpu.max without a limit");
+        expect(dtl::cgroup_quota_cpus("100000 100000\n") == 1 && dtl::cgroup_quota_cpus("150000 100000") == 2 &&
+               dtl::cgroup_quota_cpus("50000 100000") == 1 && dtl::cgroup_quota_cpus("800000 100000\n") == 8 &&
+               dtl::cgroup_quota_cpus("1000 1000000") == 1, "cpu.max quota rounds up");
+        for (const char *bad : {"", "\n", "100000", "x 100000", "100000 x", "100000 0", "0 100000", "-1 100000", " 100000",
+                                "100000  100000", "99999999999999999999 1"})
+            expect(dtl::cgroup_quota_cpus(bad) == 0, bad);
+        expect(dtl::cgroup_v2_path("0::/user.slice/user-1000.slice/session-2.scope\n") == "/user.slice/user-1000.slice/session-2.scope",
+               "cgroup v2 path");
+        expect(dtl::cgroup_v2_path("12:cpu,cpuacct:/docker/abc\n1:name=systemd:/x\n0::/docker/abc\n") == "/docker/abc", "hybrid hierarchy");
+        expect(dtl::cgroup_v2_path("0::/") == "/", "root cgroup");
+        for (const char *none : {"", "12:cpu,cpuacct:/docker/abc\n", "0::\n", "10::/x\n"})
+            expect(dtl::cgroup_v2_path(none).empty(), "no cgroup v2 path");
+        expect(dtl::automatic_threads(0, 0, 0) == 1 && dtl::automatic_threads(0, 0, 8) == 4 &&
+               dtl::automatic_threads(0, 0, 2) == 2 && dtl::automatic_threads(1, 0, 8) == 1 &&
+               dtl::automatic_threads(16, 3, 16) == 3 && dtl::automatic_threads(2, 3, 16) == 2 &&
+               dtl::automatic_threads(8, 0, 0) == 1 && dtl::automatic_threads(0, 1, 0) == 1 &&
+               dtl::automatic_threads(3, 0, 8) == 3 && dtl::automatic_threads(0, 2, 8) == 2, "automatic thread count");
+        // A request's state is prepared (serialized, marker replaced) once per request and backend.
+        {
+            json state = json::parse(R"({"note":"see [MASK] here","n":1e15,"list":[1,2.5,true,null]})");
+            dtl::request_state request(state);
+            int backend_a = 0, backend_b = 0;
+            const json &first = request.text(&backend_a, "[MASK]");
+            expect(first.get<std::string>() == "{\"note\": \"see   here\", \"n\": 1000000000000000.0, \"list\": [1, 2.5, true, null]}",
+                   "state serialized as the original Laya does, marker replaced by a space");
+            state["note"] = "changed";
+            const json &again = request.text(&backend_a, "[MASK]");
+            expect(&again == &first && again.get<std::string>().find("see") != std::string::npos && request.serializations == 1,
+                   "later questions reuse the prepared state without serializing it again");
+            expect(request.text(&backend_b, "<mask>").get<std::string>().find("changed") != std::string::npos && request.serializations == 2,
+                   "another backend prepares the state for its own marker");
+            json text = "plain [MASK] text", none = nullptr;
+            dtl::request_state plain(text), missing(none);
+            expect(plain.text(&backend_a, "[MASK]") == "plain   text" && missing.text(&backend_a, "[MASK]").is_null(), "string and null states");
+        }
         std::cout << "decision rule tests passed\n";
         return 0;
     } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }

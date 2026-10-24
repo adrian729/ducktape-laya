@@ -6,6 +6,7 @@
 #include "language.hpp"
 #include "platform.hpp"
 #include "python_json.hpp"
+#include "request_state.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -304,9 +305,9 @@ struct model_engine {
     explicit model_engine(const char *path, const dtl::engine_config &config) : runtime(path, config) {}
     // default_overflow applies to questions whose request names no policy; it comes from
     // the engine's or the route's config, so routes sharing a loaded model keep their own.
-    void prepare(question &q, const json &state, const std::string &default_overflow) {
+    void prepare(question &q, dtl::request_state &state, const std::string &default_overflow, const dtl::execution &control) {
         if (q.overflow.empty()) q.overflow = default_overflow;
-        runtime.prepare(q, state);
+        runtime.prepare(q, state, &control);
     }
 };
 json evaluate(model_engine &engine, planned &p, const dtl::execution &control) {
@@ -529,10 +530,13 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
             auto &single = *engine->single;
             auto lock = control.lock(single.mutex);
             size_t windows = 0;
-            for (auto &p : work) for (auto &q : p.questions) {
-                control.check();
-                single.prepare(q, p.body["state"], engine->overflow);
-                count_windows(windows, q);
+            for (auto &p : work) {
+                dtl::request_state state(p.body["state"]);
+                for (auto &q : p.questions) {
+                    control.check();
+                    single.prepare(q, state, engine->overflow, control);
+                    count_windows(windows, q);
+                }
             }
             for (auto &p : work) results.push_back(evaluate(single, p, control));
         } else {
@@ -569,9 +573,10 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
                 control.check();
                 const auto &route = router.routes.at(id);
                 auto &model = router.load(route);
+                dtl::request_state state(p.body["state"]);
                 for (auto &q : p.questions) {
                     control.check();
-                    model.prepare(q, p.body["state"], route.config.overflow);
+                    model.prepare(q, state, route.config.overflow, control);
                     count_windows(windows, q);
                 }
                 auto answer = evaluate(model, p, control); answer["model"] = id;

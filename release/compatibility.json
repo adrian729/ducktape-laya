@@ -46,6 +46,26 @@
         "path": "patches/llama.cpp/ggml-thread-creation-failure.patch",
         "sha256": "359191030385d646d9c3128e81936c30c3300f781e26b17362050091d9a0ff0c",
         "purpose": "A failed CPU worker thread creation joins the threads already started and reports GGML_STATUS_ALLOC_FAILED instead of aborting the process; no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/llama-embeddings-no-logits-buffer.patch",
+        "sha256": "2c6461f97f09c2c47a7d6870e68043754b99ed42ad0116a607ef09eeea18ba8f",
+        "purpose": "An embeddings context whose graph has no logits tensor reserves no n_vocab x outputs logits buffer (backport of upstream ed019cd8b without its header change); no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/laya-selected-decision-head.patch",
+        "sha256": "df72d42f0539243c78dc2b6348f4d52f4fd6fcf0eeff016b045c6ec7d50846a2",
+        "purpose": "The ModernBERT decision graph evaluates only the head of a question type the library selects (thread-local, not exported) and repeats its scores in all three columns; bit-identical scores, default evaluates every type as upstream"
+      },
+      {
+        "path": "patches/llama.cpp/tokenizer-stop-check.patch",
+        "sha256": "9ed6854de45b0adbbf9fc1c54ce4c88b7cfd9b24693f83ab787846167768d6ee",
+        "purpose": "Tokenization calls a thread-local stop check the library sets (not exported) in the BPE merge loops and the special-token split and throws when it reports a stop; identical tokens when not stopped, no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/ggml-cpu-init-once.patch",
+        "sha256": "ea6b5578264ee2f8d34ed338e1a0ef6f4ce51dd62268909da4bcbba8bf88b890",
+        "purpose": "ggml_cpu_init allocates and frees a ggml context to initialize ggml's timer only until that happened once, instead of on every graph computation; no arithmetic changes"
       }
     ]
   },

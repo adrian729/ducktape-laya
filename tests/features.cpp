@@ -12,6 +12,15 @@ template<class F> static void invalid(F fn, int status = DTL_INVALID_ARGUMENT) {
     try { fn(); } catch (const ducktape::error &e) { expect(e.status == status, e.what()); return; }
     throw std::runtime_error("Expected rejection");
 }
+// Resident set in KiB (Linux), or -1.
+static long resident_kib() {
+#ifdef __linux__
+    std::ifstream status("/proc/self/status");
+    std::string name;
+    while (status >> name) { if (name == "VmRSS:") { long value = -1; status >> value; return value; } std::getline(status, name); }
+#endif
+    return -1;
+}
 static json primitive(const std::string &state) {
     return {{"state",state}, {"questions", {
         {"department", {{"type","choice"},{"instructions","Which department should handle this?"},
@@ -349,6 +358,20 @@ int main(int argc, char **argv) {
             invalid([&] { tiny.execute(sized(70 - base)); });
             invalid([&] { tiny.execute(with(requests[0], "max_tokens", 65).dump()); });
         }
+        if (resident_kib() >= 0) {
+            // No logits buffer (llama-embeddings-no-logits-buffer.patch): the decision graph has no
+            // logits, and llama.cpp used to reserve and zero-fill n_vocab floats per prompt token
+            // anyway. A full 256-token prompt would then add at least 50,368 x 256 x 4 bytes (49 MiB;
+            // 50,368 is the smallest Laya vocabulary) to the resident set; without it the growth
+            // measured about 9 MiB. The first call's growth must stay under half that buffer.
+            auto window = ducktape::engine::open(argv[1], R"({"threads":2,"context_tokens":256})");
+            window.execute(sized(1));
+            const long before = resident_kib();
+            expect(json::parse(window.execute(sized(256 - base)))["usage"]["input_tokens"] == 256, "full 256-token prompt");
+            const long growth = resident_kib() - before;
+            std::cerr << "resident set growth for a full 256-token prompt: " << growth << " KiB\n";
+            expect(growth < 50368L * 256 * 4 / 1024 / 2, "no logits buffer is reserved for the decision graph");
+        }
         // Per-request max_tokens: a prompt over it is rejected; it never changes results; it cannot
         // exceed the engine's context_tokens.
         const size_t fit = json::parse(engine.execute(sized(1)))["usage"]["input_tokens"].get<size_t>();
@@ -362,6 +385,27 @@ int main(int argc, char **argv) {
                "max_tokens is per request in a batch");
         invalid([&] { engine.execute(json::array({with(json::parse(sized(1)), "max_tokens", fit), with(json::parse(sized(2)), "max_tokens", fit)}).dump()); });
         checkpoint("open config and per-request settings");
+        {
+            // A structured state is serialized once per request and model and shared by its
+            // questions (request_state.hpp; decision-rules checks that it is prepared once): each
+            // question of a multi-question request answers exactly as it does alone.
+            json readings = json::array();
+            for (int i = 0; i < 400; ++i) readings.push_back({{"sensor", "s" + std::to_string(i % 7)}, {"value", i * 0.125 + 1.0 / (i + 3)}, {"ok", i % 5 != 0}});
+            const json state = {{"ticket", {{"subject", "Refund for duplicate charge"}, {"priority", 2}, {"amount", 1e15}}}, {"readings", readings}};
+            const json all = {{"state", state}, {"overflow", "truncate_end"}, {"questions", {
+                {"refund", {{"type", "noul"}, {"instructions", "Does the customer request a refund?"}}},
+                {"urgency", {{"type", "score"}, {"instructions", "How urgent is this?"}, {"criteria", {"low", "moderate", "high"}}}},
+                {"team", {{"type", "choice"}, {"instructions", "Which team handles it?"}, {"criteria", {{"billing", "Payments"}, {"technical", "Bugs"}}}}},
+                {"faulty", {{"type", "noul"}, {"instructions", "Do the readings show a faulty sensor?"}}}}}};
+            const auto together = json::parse(engine.execute(all.dump()));
+            for (const auto &[id, question] : all["questions"].items()) {
+                json alone = all;
+                alone["questions"] = {{id, question}};
+                expect(json::parse(engine.execute(alone.dump()))["answers"][id] == together["answers"][id],
+                       "a question answers the same alone and among others sharing a structured state");
+            }
+        }
+        checkpoint("structured state shared by questions");
         {
             // Router: the open config applies to every route; a route's own config overrides it key by key.
             std::filesystem::create_hard_link(std::filesystem::canonical(argv[1]), dir / "c.gguf");

@@ -29,13 +29,15 @@ All numbers here were measured, and each says where it comes from. They describe
 
 What drives the cost:
 
-- **One model pass per question.** Questions in a request run one after another, each over the state plus that question, so a request's time is roughly the sum of its questions' times. The state is tokenized once per request. A `choice` with a single option needs no pass.
+- **One model pass per question.** Questions in a request run one after another, each over the state plus that question, so a request's time is roughly the sum of its questions' times. The state is serialized and tokenized once per request. A `choice` with a single option needs no pass.
 - **Prompt length.** A pass over a prompt near 512 tokens takes several times as long as one over a short prompt. Contexts longer than 512 tokens cost more than proportionally; no longer-context measurements are recorded here.
 - **Model.** The multilingual model is the smaller network (mmBERT-base, against ModernBERT-large) and the fastest per question, but its F16 weights take about twice the memory of the Q8_0 models.
-- **Threads.** One call uses up to `threads` CPU threads (0 means automatic, at most 4). Calls on one engine run one at a time; open several engines for parallel work, each with its own memory.
+- **Threads.** One call uses up to `threads` CPU threads (0 means automatic: at most 4, and no more than the CPUs the process may use under its affinity mask and cgroup CPU quota). Calls on one engine run one at a time; open several engines for parallel work, each with its own memory.
 - **Memory.** `context_tokens` sets how much memory an engine reserves; a router holds up to `max_loaded` models at once.
 
-Tokenizing very long input is linear in its length: on a busy 8-core x86-64 desktop, 1 MiB of state took about 4 s for ordinary text and up to about 11 s for the slowest input measured (long words without spaces). Tokenization cannot be interrupted by a deadline ([API guide](API.md#cancellation-and-deadlines)).
+The memory rows above, and the second machine's below, were measured before an unused logits buffer was removed (runtime patch `llama-embeddings-no-logits-buffer.patch`). llama.cpp reserved `n_vocab` floats per prompt token that the decision graph never reads, about 98 MiB per 512 prompt tokens with the English and typed-decisions models and about 500 MiB with the multilingual one, so memory after a long request is now lower by up to that much: the audit measured 479 MiB less on the multilingual near-limit request on a busy desktop. The latency rows likewise predate evaluating only the asked question type's decision head (runtime patch `laya-selected-decision-head.patch`; before it, every pass evaluated all three types' heads), which the audit measured at about 12% less time per pass with the English and typed-decisions models and 21 to 25% less with the multilingual one on a busy desktop. The table has not been re-measured on an idle machine; the budgets in `release/budgets/` remain upper bounds.
+
+Tokenizing very long input is linear in its length: on a busy 8-core x86-64 desktop, 1 MiB of state took about 4 s for ordinary text and up to about 11 s for the slowest input measured (long words without spaces). Those times were measured while every piece of text was still tokenized twice, once to count its tokens and once to store them, each pass doing the full work; it is now tokenized once. The times have not been re-measured since. Deadlines and cancellation stop tokenization except its regular-expression pre-split and each word's symbol setup ([API guide](API.md#cancellation-and-deadlines)).
 
 ## A second machine: Intel MacBook Pro
 

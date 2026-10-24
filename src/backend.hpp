@@ -43,6 +43,7 @@ private:
     std::unique_ptr<prepared_question> prepared;
     friend class backend;
 };
+struct request_state; // request_state.hpp
 // Calls are serialized by the shared engine/router. All prepared inputs are
 // consumed by the same backend that prepared them, before that backend closes.
 class backend {
@@ -50,7 +51,8 @@ public:
     backend(const char *path, const engine_config &config);
     ~backend();
     json info() const;
-    void prepare(question &q, const json &state);
+    // control stops a long tokenization (cancellation, deadline); nullptr: not stoppable.
+    void prepare(question &q, request_state &state, const execution *control = nullptr);
     json run(const question &q, const execution *control = nullptr);
 private:
     struct impl;
