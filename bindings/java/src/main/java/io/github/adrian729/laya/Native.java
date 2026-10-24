@@ -5,11 +5,21 @@ import java.io.InputStream;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.nio.file.*;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryFlag;
+import java.nio.file.attribute.AclEntryPermission;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.UserPrincipal;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /** Locates libducktape_laya and binds its C ABI. */
 final class Native {
@@ -204,20 +214,27 @@ final class Native {
      *  users cannot write to. Without such a location the library goes into a fresh, owner-only
      *  directory under java.io.tmpdir (never a predictable name in a shared directory). */
     private static Path extractWindows(byte[] bytes) throws IOException {
-        String prop = System.getProperty("ducktape.laya.tmpdir");
-        String local = System.getenv("LOCALAPPDATA");
-        Path base = prop != null && !prop.isEmpty() ? Path.of(prop)
-            : local != null && !local.isEmpty() ? Path.of(local, "ducktape-laya") : null;
+        return extractWindows(bytes, System.getProperty("ducktape.laya.tmpdir"), System.getenv("LOCALAPPDATA"),
+            Path.of(System.getProperty("java.io.tmpdir")));
+    }
+
+    /** {@link #extractWindows(byte[])} with its inputs: the ducktape.laya.tmpdir property, the
+     *  LOCALAPPDATA variable and java.io.tmpdir. An explicit tmpdir that cannot be used safely is an
+     *  error; an unusable %LOCALAPPDATA% location falls back to a fresh owner-only directory. */
+    static Path extractWindows(byte[] bytes, String tmpdir, String localAppData, Path javaTmp) throws IOException {
+        boolean explicit = tmpdir != null && !tmpdir.isEmpty();
+        Path base = explicit ? Path.of(tmpdir)
+            : localAppData != null && !localAppData.isEmpty() ? Path.of(localAppData, "ducktape-laya") : null;
         if (base != null) {
             try {
                 return extractShared(base, bytes);
             } catch (IOException e) {
-                if (prop != null && !prop.isEmpty()) throw e;
+                if (explicit) throw e;
                 // Unusable or not ours: fall through to a private directory.
             }
         }
-        Path dir = Files.createTempDirectory(Path.of(System.getProperty("java.io.tmpdir")), "ducktape-laya");
-        restrictToOwner(dir);
+        Path dir = Files.createTempDirectory(javaTmp, "ducktape-laya");
+        restrictToOwner(dir, Files.getOwner(dir));
         Path file = dir.resolve(LIB);
         Files.write(file, bytes);
         // Hooks run in reverse registration order: the directory must be registered first.
@@ -226,7 +243,11 @@ final class Native {
         return file;
     }
 
-    /** Shares one copy per content under base, which must belong to the current user. */
+    /** Shares one copy per content in base/&lt;content hash&gt;/. That directory and the copy must
+     *  belong to the current user, or the call fails. Where the file system has ACLs (Windows), the
+     *  directory and the copy are made owner-only before the copy is checked, so an ACL that lets
+     *  another account write them (for example inherited from a shared base directory) is replaced,
+     *  and a copy that is not the current user's or differs from the bundled bytes is replaced. */
     static Path extractShared(Path base, byte[] bytes) throws IOException {
         byte[] digest;
         try {
@@ -235,51 +256,78 @@ final class Native {
             throw new IOException(e);
         }
         Files.createDirectories(base);
+        UserPrincipal user = currentUser(base);
         Path dir = base.resolve(HexFormat.of().formatHex(digest, 0, 16));
         Files.createDirectories(dir);
-        requireOwn(base, dir);
+        if (!ownedBy(dir, user)) throw new IOException(dir + " is not owned by the current user");
+        secure(dir, user);
         Path file = dir.resolve(LIB);
-        if (sameContent(file, bytes)) {
-            requireOwn(base, file);
-            return file;
+        if (Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) && ownedBy(file, user)) {
+            secure(file, user);
+            if (sameContent(file, bytes)) return file;
         }
         Path part = Files.createTempFile(dir, "ducktape_laya", ".part");
         try {
             Files.write(part, bytes);
             Files.move(part, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
-            // Another process may have put the same copy in place and loaded it first.
-            if (!sameContent(file, bytes)) throw e;
+            // Another process of this user may have put the same copy in place and loaded it first.
+            if (!(ownedBy(file, user) && sameContent(file, bytes))) throw e;
         } finally {
             Files.deleteIfExists(part);
         }
-        requireOwn(base, file);
+        if (!ownedBy(file, user)) throw new IOException(file + " is not owned by the current user");
+        secure(file, user);
         return file;
     }
 
-    /** Refuses a path whose owner differs from the owner of the files this process creates. */
-    private static void requireOwn(Path base, Path path) throws IOException {
-        Path probe = Files.createTempFile(base, "owner", ".probe");
+    /** The owner of the files this process creates (on Windows the token's default owner, which for
+     *  an elevated administrator may be the Administrators group), read from a probe file in dir. */
+    private static UserPrincipal currentUser(Path dir) throws IOException {
+        Path probe = Files.createTempFile(dir, "owner", ".probe");
         try {
-            if (!Files.getOwner(path, LinkOption.NOFOLLOW_LINKS).equals(Files.getOwner(probe)))
-                throw new IOException(path + " is not owned by the current user");
+            return Files.getOwner(probe);
         } finally {
             Files.deleteIfExists(probe);
         }
     }
 
-    /** Replaces the ACL of a directory by one that grants only its owner (Windows). */
-    private static void restrictToOwner(Path dir) throws IOException {
-        java.nio.file.attribute.AclFileAttributeView view =
-            Files.getFileAttributeView(dir, java.nio.file.attribute.AclFileAttributeView.class);
+    private static boolean ownedBy(Path path, UserPrincipal user) throws IOException {
+        return Files.getOwner(path, LinkOption.NOFOLLOW_LINKS).equals(user);
+    }
+
+    /** Permissions that let an account change a file or directory, its contents or its ACL. */
+    private static final Set<AclEntryPermission> MODIFY = EnumSet.of(AclEntryPermission.WRITE_DATA,
+        AclEntryPermission.APPEND_DATA, AclEntryPermission.WRITE_NAMED_ATTRS, AclEntryPermission.WRITE_ATTRIBUTES,
+        AclEntryPermission.DELETE, AclEntryPermission.DELETE_CHILD, AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER);
+
+    /** True when an ACL entry that applies to path lets an account other than user modify it
+     *  (false where the file system has no ACLs). */
+    static boolean writableByOthers(Path path, UserPrincipal user) throws IOException {
+        AclFileAttributeView view = Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (view == null) return false;
+        for (AclEntry entry : view.getAcl()) {
+            if (entry.type() == AclEntryType.ALLOW && !entry.flags().contains(AclEntryFlag.INHERIT_ONLY)
+                && !entry.principal().equals(user) && !Collections.disjoint(entry.permissions(), MODIFY))
+                return true;
+        }
+        return false;
+    }
+
+    /** Makes path owner-only if another account could modify it. */
+    private static void secure(Path path, UserPrincipal user) throws IOException {
+        if (writableByOthers(path, user)) restrictToOwner(path, user);
+    }
+
+    /** Replaces the ACL of a file or directory by one that grants only user, the owner (Windows). */
+    private static void restrictToOwner(Path path, UserPrincipal user) throws IOException {
+        AclFileAttributeView view = Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         if (view == null) return;
-        java.nio.file.attribute.AclEntry entry = java.nio.file.attribute.AclEntry.newBuilder()
-            .setType(java.nio.file.attribute.AclEntryType.ALLOW)
-            .setPrincipal(view.getOwner())
-            .setPermissions(java.util.EnumSet.allOf(java.nio.file.attribute.AclEntryPermission.class))
-            .setFlags(java.nio.file.attribute.AclEntryFlag.FILE_INHERIT, java.nio.file.attribute.AclEntryFlag.DIRECTORY_INHERIT)
-            .build();
-        view.setAcl(java.util.List.of(entry));
+        AclEntry.Builder entry = AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(user)
+            .setPermissions(EnumSet.allOf(AclEntryPermission.class));
+        if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
+            entry.setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT);
+        view.setAcl(List.of(entry.build()));
     }
 
     private static boolean sameContent(Path file, byte[] bytes) throws IOException {

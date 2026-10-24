@@ -28,6 +28,8 @@ The core bounds the temperatures stored in a model to [0.5, 5], as the original 
 
 `tests/examples-smoke.py` (run by the validator on non-Windows hosts, model-free) checks that every `examples/*.json` and `examples/presets/*.json` request passes the library's request validation (through a router engine, which validates before it loads a model) and that `examples/decide.c` and `decide.cpp` compile and fail cleanly without a model.
 
+The binding suites also test how each package finds its library. On Windows the Java suite (`windowsExtraction`) extracts and loads the bundled DLL, reuses an existing copy, honours `-Dducktape.laya.tmpdir` and falls back to a fresh owner-only directory; with `icacls` it lets Everyone write the shared directory and copy (the loader must make them owner-only again), makes SYSTEM own the copy (it must be rewritten) and the directory (it must be refused). Elsewhere the owner and ACL cases are skipped.
+
 With `--model`, the runner requires the `cpu-guard` test to be registered, which needs `qemu-x86_64` (and `python3`) on `PATH` when CMake configures; without QEMU a real-model run fails. It also runs `tests/download-model.py` and records the Rust, Go, Java, .NET and Python versions it found under `toolchains`.
 
 ## Continuous integration
