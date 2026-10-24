@@ -1,74 +1,107 @@
 --- a/src/llama-vocab.cpp
 +++ b/src/llama-vocab.cpp
-@@ -22,6 +22,28 @@
+@@ -22,6 +22,42 @@
  #include <set>
  #include <unordered_map>
  
-+// DTL: a stop check the caller may set around llama_tokenize on its thread. Long tokenization
-+// calls it periodically and stops by throwing std::runtime_error, which llama_tokenize
-+// propagates; no tokenizer state outlives the call.
++// DTL: a stop check the caller may set around llama_tokenize on its thread. Tokenization
++// counts its work (words, bigram insertions, merges, special-token passes and matches, and
++// the text the special-token search scans) in one counter per thread, which setting a check
++// resets, and calls the check once per 1024 units. When it reports a stop, tokenization throws
++// dtl_tokenize_stopped, which llama_vocab::tokenize turns into a return value before the C API
++// (llama_tokenize returns DTL_LLAMA_TOKENIZE_STOPPED); no tokenizer state outlives the call.
++struct dtl_tokenize_stopped {};
 +static thread_local bool (*dtl_tokenize_stop)(void *) = nullptr;
 +static thread_local void * dtl_tokenize_stop_data = nullptr;
-+extern "C" void dtl_llama_tokenize_set_stop(bool (*stop)(void *), void * data);
-+extern "C" void dtl_llama_tokenize_set_stop(bool (*stop)(void *), void * data) {
-+    dtl_tokenize_stop = stop;
-+    dtl_tokenize_stop_data = data;
++static thread_local uint32_t dtl_tokenize_work = 0;
++// Swaps this thread's check with *stop/*data (null: none), so the caller can restore the
++// previous one, and resets the work counter.
++extern "C" void dtl_llama_tokenize_swap_stop(bool (**stop)(void *), void ** data);
++extern "C" void dtl_llama_tokenize_swap_stop(bool (**stop)(void *), void ** data) {
++    std::swap(dtl_tokenize_stop, *stop);
++    std::swap(dtl_tokenize_stop_data, *data);
++    dtl_tokenize_work = 0;
 +}
-+static void dtl_tokenize_check_now() {
-+    if (dtl_tokenize_stop && dtl_tokenize_stop(dtl_tokenize_stop_data)) {
-+        throw std::runtime_error("tokenization stopped");
-+    }
-+}
-+// checks once every 1024 calls
-+static inline void dtl_tokenize_check(uint32_t & counter) {
-+    if (dtl_tokenize_stop && (++counter & 1023) == 0) {
-+        dtl_tokenize_check_now();
++// llama_tokenize results that are not -n_tokens: a stop, a failed allocation and any other
++// exception (the most negative -n_tokens is INT32_MIN + 5; INT32_MIN reports an overflow).
++#define DTL_LLAMA_TOKENIZE_STOPPED   (std::numeric_limits<int32_t>::min() + 1)
++#define DTL_LLAMA_TOKENIZE_NO_MEMORY (std::numeric_limits<int32_t>::min() + 2)
++#define DTL_LLAMA_TOKENIZE_FAILED    (std::numeric_limits<int32_t>::min() + 3)
++// counts units of work; checks once every 1024
++static inline void dtl_tokenize_check(size_t units = 1) {
++    if (dtl_tokenize_stop) {
++        dtl_tokenize_work += units > 1024 ? 1024 : static_cast<uint32_t>(units);
++        if (dtl_tokenize_work >= 1024) {
++            dtl_tokenize_work = 0;
++            if (dtl_tokenize_stop(dtl_tokenize_stop_data)) {
++                throw dtl_tokenize_stopped();
++            }
++        }
 +    }
 +}
 +
  //
  // helpers
  //
-@@ -658,7 +680,9 @@
-             word_collection = std::move(words);
+@@ -659,6 +695,7 @@
          }
  
-+        uint32_t dtl_counter = 0;
          for (const auto & word : word_collection) {
-+            dtl_tokenize_check(dtl_counter);
++            dtl_tokenize_check();
              work_queue = llm_bigram_bpe::queue();
              symbols.clear();
  
-@@ -690,11 +714,13 @@
+@@ -690,11 +727,13 @@
                  symbols.emplace_back(sym);
              }
              for (int i = 1; i < (int) symbols.size(); ++i) {
-+                dtl_tokenize_check(dtl_counter);
++                dtl_tokenize_check();
                  add_new_bigram(i - 1, i);
              }
  
              // build token(s)
              while (!work_queue.empty()) {
-+                dtl_tokenize_check(dtl_counter);
++                dtl_tokenize_check();
                  auto bigram = work_queue.pop_move();
  
                  auto & left_symbol = symbols[bigram.left];
-@@ -3383,8 +3409,10 @@
- // #define PRETOKENIZERDEBUG
- 
+@@ -3385,6 +3424,7 @@
  void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const {
-+    uint32_t dtl_counter = 0;
      // for each special token
      for (const llama_token special_id : cache_special_tokens) {
-+        dtl_tokenize_check_now(); // DTL: each pass scans the whole text
++        dtl_tokenize_check(); // DTL: one unit per pass
          const auto & data = vocab.get_token_data(special_id);
          const auto & text = data.text;
  
-@@ -3413,6 +3441,7 @@
- 
-                 // loop over the text
-                 while (true) {
-+                    dtl_tokenize_check(dtl_counter); // DTL: once per 1024 matches
-                     // find the first occurrence of a given special token in this fragment
-                     //  passing offset argument only limit the "search area" but match coordinates
+@@ -3418,6 +3458,8 @@
                      //  are still relative to the source full raw_text
+                     //  string_view begins at pos 0 for the same reason
+                     auto match = std::string_view(raw_text.data(), raw_text_base_offset + raw_text_base_length).find(text, raw_text_base_offset);
++                    // DTL: one unit per match or fragment, and one per KiB the search scanned
++                    dtl_tokenize_check(1 + ((match == std::string::npos ? raw_text_base_length : match - raw_text_base_offset) >> 10));
+ 
+                     // no occurrences found, stop processing this fragment for a given special token
+                     if (match == std::string::npos) break;
+@@ -4371,8 +4413,20 @@
+                      int32_t   n_tokens_max,
+                         bool   add_special,
+                         bool   parse_special) const {
+-    auto res = tokenize(std::string(text, text_len), add_special, parse_special);
+-    if (res.size() >= static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++    // DTL: no exception crosses the C API (llama_tokenize): a stop, a failed allocation and any
++    // other exception return the DTL_LLAMA_TOKENIZE_* values
++    std::vector<llama_token> res;
++    try {
++        res = tokenize(std::string(text, text_len), add_special, parse_special);
++    } catch (const dtl_tokenize_stopped &) {
++        return DTL_LLAMA_TOKENIZE_STOPPED;
++    } catch (const std::bad_alloc &) {
++        return DTL_LLAMA_TOKENIZE_NO_MEMORY;
++    } catch (...) {
++        return DTL_LLAMA_TOKENIZE_FAILED;
++    }
++    // DTL: counts that would collide with the DTL_LLAMA_TOKENIZE_* values overflow too
++    if (res.size() >= static_cast<size_t>(std::numeric_limits<int32_t>::max() - 3)) {
+         LLAMA_LOG_ERROR("%s: tokenization result size %zu exceeds int32_t limit\n", __func__, res.size());
+         return std::numeric_limits<int32_t>::min();
+     }
