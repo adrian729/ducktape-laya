@@ -45,10 +45,10 @@ window.startControls = async (backend = 'webgpu') => {
   try {
     const abort = new AbortController(); abort.abort();
     try { await Laya.open({ ...options, signal: abort.signal }); throw new Error('Accepted aborted init'); }
-    catch (error) { if (error.name !== 'AbortError') throw error; }
+    catch (error) { if (error.status !== 5) throw error; }
     check('aborted initialization');
     try { await Laya.open({ ...options, maxModelBytes: 1 }); throw new Error('Ignored byte budget'); }
-    catch (error) { if (!error.message.includes('maxModelBytes')) throw error; }
+    catch (error) { if (error.status !== 1 || !error.message.includes('maxModelBytes')) throw error; }
     check('asset budget');
     engine = await Laya.open({ ...options, maxPending: 1 });
     const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };

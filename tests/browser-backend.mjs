@@ -47,7 +47,9 @@ for (const [requested, actual] of [['wasm', 'webgpu'], ['webgpu', 'wasm-cpu']]) 
 for (const [requested, actual] of [['wasm', 'wasm-cpu'], ['webgpu', 'webgpu']]) {
   test(`accept matching ${requested} runtime`, async () => {
     const { error, fetched } = await open(requested, actual);
-    assert.equal(error.message, 'model-fetch-reached');
+    assert.match(error.message, /^Model fetch failed: model-fetch-reached$/);
+    assert.equal(error.status, 2);
+    assert.equal(error.final, true, 'a model fetch failure is not retried with another backend');
     assert.equal(fetched, true);
   });
 }
@@ -72,7 +74,7 @@ test('worker passes ABI 2 open config and the wasm32 call-options layout', async
   };
   const context = vm.createContext({
     onmessage: undefined, URL, performance, postMessage: message => posted.push(message),
-    fetch: async () => ({ ok: true, body: { getReader: () => { let done = false; return { read: async () => done ? { done: true } : (done = true, { done: false, value: new Uint8Array(4) }), cancel: async () => {} }; } } }),
+    fetch: async () => ({ ok: true, headers: { get: () => null }, body: { getReader: () => { let done = false; return { read: async () => done ? { done: true } : (done = true, { done: false, value: new Uint8Array(4) }), cancel: async () => {} }; } } }),
   });
   const module = new vm.SyntheticModule(['default'], function() { this.setExport('default', async () => runtime); }, { context });
   await module.link(() => {}); await module.evaluate();
@@ -110,7 +112,7 @@ test('worker serializes per-route router config', async () => {
     async ccall(name, type, types, args) { calls.push({ name, args: [...args] }); if (name === 'dtl_open_router') heap[args[2] >>> 2] = 1000; return 0; },
   };
   const context = vm.createContext({ onmessage: undefined, URL, performance, postMessage() {},
-    fetch: async () => ({ ok: true, body: { getReader: () => { let done = false; return { read: async () => done ? { done: true } : (done = true, { done: false, value: new Uint8Array(4) }), cancel: async () => {} }; } } }) });
+    fetch: async () => ({ ok: true, headers: { get: () => null }, body: { getReader: () => { let done = false; return { read: async () => done ? { done: true } : (done = true, { done: false, value: new Uint8Array(4) }), cancel: async () => {} }; } } }) });
   const module = new vm.SyntheticModule(['default'], function() { this.setExport('default', async () => runtime); }, { context });
   await module.link(() => {}); await module.evaluate();
   const worker = new vm.SourceTextModule(workerSource + '\nexport { init };', { context, importModuleDynamically: async () => module });

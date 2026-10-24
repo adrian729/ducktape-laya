@@ -86,7 +86,7 @@ test('page deadline is wall-clock so the worker realm can measure it', async () 
   await call;
 });
 
-async function workerHarness(abi = 2) {
+async function workerHarness(abi = 2, { create, fetch: fetchAsset } = {}) {
   let top = 64;
   const calls = [], strings = new Map(), heap = new Uint32Array(4096);
   const runtime = {
@@ -94,21 +94,26 @@ async function workerHarness(abi = 2) {
     lengthBytesUTF8: text => Buffer.byteLength(text), stringToUTF8: (text, pointer) => { strings.set(pointer, text); },
     _malloc: size => { const pointer = top; top += (size + 7) & ~7; return pointer; }, _free() {}, _dtl_free() {},
     UTF8ToString: () => JSON.stringify({ backend: 'wasm-cpu' }), addFunction: () => 11, removeFunction() {},
-    FS: { writeFile() {}, unlink() {} },
+    FS: { files: new Map(), writeFile(path, bytes) { this.files.set(path, bytes); }, unlink() {} },
     async ccall(name, type, types, args) {
       calls.push({ name, args: [...args], words: name === 'dtl_execute' ? [...heap.slice(args[2] >>> 2, (args[2] >>> 2) + 10)] : undefined });
       if (name === 'dtl_open' || name === 'dtl_open_router') heap[args[2] >>> 2] = 1000;
       return 0;
     },
   };
-  const context = vm.createContext({ onmessage: undefined, URL, performance, postMessage() {},
-    fetch: async () => ({ ok: true, body: { getReader: () => { let done = false; return { read: async () => done ? { done: true } : (done = true, { done: false, value: new Uint8Array(4) }), cancel: async () => {} }; } } }) });
-  const module = new vm.SyntheticModule(['default'], function() { this.setExport('default', async () => runtime); }, { context });
+  const context = vm.createContext({ onmessage: undefined, URL, performance, postMessage() {}, crypto,
+    fetch: fetchAsset ?? (async () => ({ ok: true, headers: { get: () => null }, body: { getReader: () => { let done = false; return { read: async () => done ? { done: true } : (done = true, { done: false, value: new Uint8Array(4) }), cancel: async () => {} }; } } })) });
+  const module = new vm.SyntheticModule(['default'], function() { this.setExport('default', create ?? (async () => runtime)); }, { context });
   await module.link(() => {}); await module.evaluate();
   const worker = new vm.SourceTextModule(workerSource + '\nexport { init, call };', { context, importModuleDynamically: async () => module });
   await worker.link(() => {}); await worker.evaluate();
-  return { calls, namespace: worker.namespace };
+  return { calls, runtime, namespace: worker.namespace };
 }
+// A fetch response whose body arrives in the given chunks, with an optional Content-Length.
+const response = (chunks, length, status = 200) => async () => ({ ok: status === 200, status,
+  headers: { get: name => name === 'content-length' && length !== undefined ? String(length) : null },
+  body: { getReader: () => { let next = 0; return { read: async () => next < chunks.length ? { done: false, value: chunks[next++] } : { done: true }, cancel: async () => {} }; } } });
+const wasm = { backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, modelUrl: 'https://example.test/m.gguf' };
 
 test('worker forwards the auto routes into the router config', async () => {
   const { calls, namespace } = await workerHarness();
@@ -141,4 +146,39 @@ test('the page maps status 7 worker errors to ERR_LAYA_UNSUPPORTED', async () =>
   await new Promise(resolve => setTimeout(resolve, 0));
   workers[0].onmessage({ data: { id: workers[0].sent.id, error: 'Incompatible Laya WASM ABI', status: 7 } });
   await assert.rejects(opening, { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
+});
+
+test('model assets are read into one buffer whatever Content-Length says', async () => {
+  const chunks = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])];
+  for (const length of [5, undefined, 3, 9]) {
+    const { runtime, namespace } = await workerHarness(2, { fetch: response(chunks, length) });
+    await namespace.init(wasm);
+    assert.deepEqual([...runtime.FS.files.get('/model-0.gguf')], [1, 2, 3, 4, 5], `Content-Length ${length}`);
+  }
+});
+
+test('model asset failures carry their status and are final for backend auto', async () => {
+  const cases = [
+    [response([], undefined, 404), 2, /HTTP 404/],
+    [async () => { throw new TypeError('network down'); }, 2, /Model fetch failed: network down/],
+    [response([new Uint8Array(1000), new Uint8Array(100)], 1100), 1, /exceed maxModelBytes/],
+    [response([new Uint8Array(4)], 4), 2, /SHA-256 mismatch/],
+  ];
+  for (const [fetchAsset, status, message] of cases) {
+    const { namespace } = await workerHarness(2, { fetch: fetchAsset });
+    await assert.rejects(namespace.init({ ...wasm, sha256: 'a'.repeat(64) }), error => error.status === status && message.test(error.message) && error.final === true);
+  }
+});
+
+test('WebAssembly memory exhaustion at instantiation is status 4, other instantiation failures status 7', async () => {
+  const cases = [
+    [new RangeError('WebAssembly.Memory(): could not allocate memory'), 4],
+    [new WebAssembly.RuntimeError('Aborted(RangeError: WebAssembly.instantiate(): Out of memory: Cannot allocate Wasm memory for new instance)'), 4],
+    [new TypeError('Failed to fetch dynamically imported module'), 7],
+    [new WebAssembly.CompileError('WebAssembly.instantiate(): expected magic word'), 7],
+  ];
+  for (const [error, status] of cases) {
+    const { namespace } = await workerHarness(2, { create: async () => { throw error; } });
+    await assert.rejects(namespace.init(wasm), e => e.status === status && e.message.includes(error.message) && !e.final);
+  }
 });

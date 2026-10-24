@@ -42,7 +42,7 @@ try {
 | Option | Meaning |
 |---|---|
 | `modelUrl`, `sha256` | `open` only: the model URL and its optional SHA-256 |
-| `backend` | `wasm` (default, single-threaded CPU), `webgpu`, or `auto` (WebGPU, then WASM if initialization fails) |
+| `backend` | `wasm` (default, single-threaded CPU), `webgpu`, or `auto` (WebGPU, then WASM if WebGPU initialization fails; a model asset failure is not retried) |
 | `contextTokens` | Prompt capacity: 32 up to the model's trained length, default 512 |
 | `overflow` | Default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan` |
 | `temperatures` | Calibration overrides keyed like `choice`, `choice.3_5` or `noul.2`; finite and above 0 |
@@ -51,7 +51,7 @@ try {
 | `maxLoaded` | Router only: models kept loaded, 1–4, default 1 |
 | `auto` | Router only: `{ english, default }` routes for `model: 'auto'` |
 | `initializationTimeoutMs` | 1–86400000, default 120000 per backend attempt; expiry rejects with `status` 6 |
-| `signal` | Aborts initialization |
+| `signal` | Aborts initialization (status 5) |
 | `onDiagnostic` | Receives low-level runtime text, otherwise suppressed |
 | `moduleUrl`, `wasmUrl`, `webgpuModuleUrl`, `webgpuWasmUrl`, `workerUrl` | Override asset locations |
 
@@ -65,7 +65,7 @@ Router requests name a route in `model`, or send `model: 'auto'` (with an option
 
 ## Errors and closing
 
-Native failures carry `status` (exported as `Status`); argument errors carry `status` 1; queue and lifecycle failures carry `code` (`ERR_LAYA_QUEUE_FULL`, `ERR_LAYA_CLOSED`, `ERR_LAYA_WORKER_EXITED`); a runtime that cannot be loaded or has the wrong ABI fails with status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`. Strings that are not well-formed Unicode are rejected. A GPU device loss or a runtime abort fails pending work and closes that engine; open a new one.
+Every error carries `status` (exported as `Status`). Argument errors, including `null` or non-object options to `open`, `openRouter`, `execute` and `close`, carry `status` 1; queue and lifecycle failures also carry `code`: `ERR_LAYA_QUEUE_FULL` and `ERR_LAYA_CLOSED` (status 1), `ERR_LAYA_WORKER_EXITED` (status 3). A model asset that cannot be fetched or fails its `sha256` rejects with status 2, assets over `maxModelBytes` with status 1, and an aborted `signal` with status 5; with `backend: 'auto'` these are not retried with WASM, while a WebGPU failure is. A runtime that cannot be loaded or has the wrong ABI fails with status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`, unless the browser could not reserve its WebAssembly memory, which is status 4. Strings that are not well-formed Unicode are rejected. A GPU device loss or a runtime abort fails pending work and closes that engine; open a new one.
 
 `close()` drains accepted calls and terminates the worker; `close({ cancelPending: true })` cancels them first. Repeated calls return the same promise.
 

@@ -3,26 +3,41 @@ const CALL_OPTIONS_SIZE = 40;
 let observer = 0, cancellation = 0, active, closing = false;
 const jobs = new Map();
 const fail = (message, status) => Object.assign(new Error(message), { status });
+// A model asset failure (fetch: status 2, hash: 2, size: 1) is the same with any backend: the page does
+// not retry it with another one.
+const assetError = (message, status) => Object.assign(fail(message, status), { final: true });
 async function asset(url, limit, expectedHash) {
-  const response = await fetch(url);
-  if (!response.ok || !response.body) throw new Error(`Model fetch failed: HTTP ${response.status}`);
-  const reader = response.body.getReader(), chunks = [];
-  let size = 0;
+  let response;
+  try { response = await fetch(url); }
+  catch (error) { throw assetError(`Model fetch failed: ${error?.message ?? error}`, 2); }
+  if (!response.ok || !response.body) throw assetError(`Model fetch failed: HTTP ${response.status}`, 2);
+  // A Content-Length within the budget sizes the buffer up front, so the model is held once rather than as
+  // chunks plus their concatenation. The body may still differ from it (a compressed response reports its
+  // compressed length); then the buffer grows or is trimmed.
+  const declared = Number(response.headers.get('content-length') ?? NaN);
+  let bytes = new Uint8Array(Number.isSafeInteger(declared) && declared > 0 ? Math.min(declared, limit) : 0), size = 0;
+  const reader = response.body.getReader();
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (size + value.byteLength > limit) throw assetError('Model assets exceed maxModelBytes', 1);
+      if (size + value.byteLength > bytes.length) {
+        const grown = new Uint8Array(Math.min(limit, Math.max(size + value.byteLength, bytes.length * 2, 1 << 20)));
+        grown.set(bytes.subarray(0, size));
+        bytes = grown;
+      }
+      bytes.set(value, size);
       size += value.byteLength;
-      if (size > limit) throw new Error('Model assets exceed maxModelBytes');
-      chunks.push(value);
     }
-  } catch (error) { await reader.cancel().catch(() => {}); throw error; }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error?.final ? error : assetError(`Model fetch failed: ${error?.message ?? error}`, 2);
+  }
+  bytes = bytes.subarray(0, size);
   if (expectedHash) {
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), v => v.toString(16).padStart(2, '0')).join('');
-    if (hash !== expectedHash.toLowerCase()) throw new Error('Model SHA-256 mismatch');
+    if (hash !== expectedHash.toLowerCase()) throw assetError('Model SHA-256 mismatch', 2);
   }
   return bytes;
 }
@@ -60,6 +75,14 @@ async function call(name, request, job) {
     } finally { runtime._dtl_free(result); runtime._dtl_free(message); }
   } finally { active = undefined; if (control) runtime._free(control); if (text) runtime._free(text); runtime._free(out); runtime._free(error); }
 }
+// The browser could not reserve the WebAssembly memory (status 4, OUT_OF_MEMORY); any other failure to load
+// or instantiate the runtime is status 7. Browsers report the former as a RangeError such as "could not
+// allocate memory" (Chromium) or "out of memory" (Firefox, Safari), possibly inside Emscripten's abort text.
+function instantiationError(error) {
+  const message = String(error?.message ?? error);
+  if (/out of memory|(could not|cannot|failed to) allocate/i.test(message)) return fail(`Not enough memory for the Laya WASM runtime: ${message}`, 4);
+  return fail(`Cannot load the Laya WASM runtime: ${message}`, 7);
+}
 async function init(options) {
   if (options.backend === 'webgpu') {
     if (!navigator.gpu || !await navigator.gpu.requestAdapter()) throw fail('WebGPU adapter unavailable', 7);
@@ -71,11 +94,14 @@ async function init(options) {
       return device;
     };
   }
+  // An abort while the runtime instantiates rejects create(); only a later abort ends a running engine.
+  let instantiating = true;
   try {
   const create = (await import(options.moduleUrl)).default;
-  runtime = await create({ onAbort: () => { if (!closing) postMessage({ fatal: 'Laya WASM runtime aborted' }); }, locateFile: name => name.endsWith('.wasm') ? options.wasmUrl : new URL(name, options.moduleUrl).href,
+  runtime = await create({ onAbort: () => { if (!closing && !instantiating) postMessage({ fatal: 'Laya WASM runtime aborted' }); }, locateFile: name => name.endsWith('.wasm') ? options.wasmUrl : new URL(name, options.moduleUrl).href,
     print: options.diagnostics ? text => postMessage({ diagnostic: String(text) }) : () => {}, printErr: options.diagnostics ? text => postMessage({ diagnostic: String(text) }) : () => {} });
-  } catch (error) { throw fail(`Cannot load the Laya WASM runtime: ${error?.message ?? error}`, 7); }
+  } catch (error) { throw instantiationError(error); }
+  finally { instantiating = false; }
   if (runtime._dtl_abi_version() !== 2) throw fail('Incompatible Laya WASM ABI', 7);
   const diagnostics = JSON.parse(await call('dtl_info', null, {}));
   const expectedBackend = options.backend === 'webgpu' ? 'webgpu' : 'wasm-cpu';
@@ -153,7 +179,10 @@ onmessage = ({ data }) => {
         postMessage({ id, result: null }); self.close(); return;
       }
       postMessage({ id, result: await call(kind === 'info' ? 'dtl_info' : 'dtl_execute', request, data) });
-    } catch (error) { postMessage({ id, error: error.message, status: error.status }); }
+    } catch (error) {
+      // Every error carries a status: unexpected ones fail model loading (2) during init, otherwise inference (3).
+      postMessage({ id, error: error?.message ?? String(error), status: error?.status ?? (kind === 'init' ? 2 : 3), final: error?.final === true });
+    }
     finally { jobs.delete(id); }
   });
 };

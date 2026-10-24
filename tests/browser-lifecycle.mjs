@@ -32,7 +32,7 @@ test('abort during option normalization rejects and terminates the worker', asyn
   const controller = new AbortController();
   await assert.rejects(Laya.open({ signal: controller.signal, backend: 'auto',
     get modelUrl() { controller.abort(); return 'model.gguf'; },
-  }), { name: 'AbortError' });
+  }), { status: 5, message: 'Initialization cancelled' });
   assert.equal(workers.length, 1, 'aborted auto initialization must not fall back');
   assert.ok(workers.every(worker => worker.terminated));
 });
@@ -40,7 +40,7 @@ test('abort during option normalization rejects and terminates the worker', asyn
 test('abort after ready delivery but before open resumes cannot return a dead engine', async () => {
   const controller = new AbortController();
   const { Laya, workers } = await harness(() => controller.abort());
-  await assert.rejects(Laya.open({ modelUrl: 'model.gguf', signal: controller.signal }), { name: 'AbortError' });
+  await assert.rejects(Laya.open({ modelUrl: 'model.gguf', signal: controller.signal }), { status: 5, message: 'Initialization cancelled' });
   assert.ok(workers.every(worker => worker.terminated));
 });
 
@@ -88,12 +88,12 @@ test('close after worker failure resolves, is idempotent and terminates; errors 
   assert.equal(Status.INVALID_ARGUMENT, 1); assert.ok(Object.isFrozen(Status));
   const engine = await Laya.open({ modelUrl: 'model.gguf' });
   workers[0].onerror({ message: 'boom' });
-  await assert.rejects(engine.info(), { code: 'ERR_LAYA_WORKER_EXITED' });
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_WORKER_EXITED', status: 3 });
   const close = engine.close();
   assert.equal(engine.close(), close);
   await close;
   assert.ok(workers[0].terminated);
-  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED' });
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED', status: 1 });
 });
 
 test('validation errors carry status 1 and queue-full carries a code', async () => {
@@ -102,7 +102,45 @@ test('validation errors carry status 1 and queue-full carries a code', async () 
   const engine = await Laya.open({ modelUrl: 'model.gguf', maxPending: 1 });
   await assert.rejects(engine.execute('\0'), { name: 'TypeError', status: 1 });
   await assert.rejects(engine.execute('{}', { timeoutMs: -1 }), { name: 'RangeError', status: 1 });
+  const first = engine.execute('{}');
+  await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_QUEUE_FULL', status: 1 });
+  await first;
   await engine.close();
+});
+
+test('null or non-object options are argument errors with status 1', async () => {
+  const { Laya, workers } = await harness();
+  await assert.rejects(Laya.open(null), { name: 'TypeError', status: 1 });
+  await assert.rejects(Laya.open(5), { name: 'TypeError', status: 1 });
+  await assert.rejects(Laya.openRouter({ a: { url: 'a.gguf' } }, null), { name: 'TypeError', status: 1 });
+  assert.equal(workers.length, 0);
+  const engine = await Laya.open({ modelUrl: 'model.gguf' });
+  await assert.rejects(engine.execute('{}', null), { name: 'TypeError', status: 1 });
+  await assert.rejects(engine.close(null), { name: 'TypeError', status: 1 });
+  await assert.rejects(engine.close('now'), { name: 'TypeError', status: 1 });
+  await engine.close();
+  await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_CLOSED', status: 1 });
+});
+
+test('backend auto retries with WASM only after a failure that is not a model asset failure', async () => {
+  for (const [final, attempts] of [[true, 1], [false, 2]]) {
+    const workers = [];
+    const context = vm.createContext({ URL, TextEncoder, DOMException, performance, setTimeout, clearTimeout,
+      location: { href: 'https://example.test/' },
+      Worker: class {
+        constructor() { workers.push(this); }
+        postMessage(message) {
+          if (message.kind === 'init') queueMicrotask(() => this.onmessage({ data: { id: message.id, error: 'Model fetch failed: HTTP 404', status: 2, final } }));
+        }
+        terminate() { this.terminated = true; }
+      },
+    });
+    const module = new vm.SourceTextModule(source, { context, initializeImportMeta(meta) { meta.url = 'https://example.test/index.mjs'; } });
+    await module.link(() => {}); await module.evaluate();
+    await assert.rejects(module.namespace.Laya.open({ modelUrl: 'model.gguf', backend: 'auto' }), { status: 2, message: /HTTP 404/ });
+    assert.equal(workers.length, attempts, `final=${final}`);
+    assert.ok(workers.every(worker => worker.terminated));
+  }
 });
 
 test('execute is the only call and new open/call options are validated', async () => {

@@ -2,11 +2,24 @@ const internal = Symbol('Laya');
 const overflows = ['reject', 'truncate_end', 'truncate_start', 'scan'];
 const bytes = text => new TextEncoder().encode(text).byteLength;
 const absolute = url => new URL(url, globalThis.location?.href).href;
-const queueFullError = () => Object.assign(new Error('Laya queue is full'), { code: 'ERR_LAYA_QUEUE_FULL' });
-const exitedError = (message, status) => Object.assign(new Error(message), { code: 'ERR_LAYA_WORKER_EXITED', ...(status === undefined ? {} : { status }) });
+// Every error this package raises carries a status: lifecycle and queue errors as the other bindings
+// report a closed engine (1, INVALID_ARGUMENT), a failed worker as an inference failure (3).
+const queueFullError = () => Object.assign(new Error('Laya queue is full'), { status: 1, code: 'ERR_LAYA_QUEUE_FULL' });
+const exitedError = message => Object.assign(new Error(message), { status: 3, code: 'ERR_LAYA_WORKER_EXITED' });
+// Cancelled initialization, like a cancelled request: status 5.
+const abortedError = () => Object.assign(new Error('Initialization cancelled'), { status: 5 });
+// Failures a WebGPU attempt shares with WASM (fetching, hashing or sizing a model asset): backend 'auto'
+// does not retry them with WASM.
+const final = new WeakSet();
 // Load and ABI failures (status 7) also carry a stable code.
 const nativeError = (message, status) => Object.assign(new Error(message), { status }, status === 7 ? { code: 'ERR_LAYA_UNSUPPORTED' } : {});
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
+// Options default to {}; null or a non-object is an argument error with status 1.
+const optionsObject = options => {
+  if (options === undefined) return {};
+  if (options === null || typeof options !== 'object') throw invalid(TypeError, 'options must be an object');
+  return options;
+};
 // JSON.stringify escapes lone surrogates instead of failing, which the native
 // side would then silently replace; reject them before serializing.
 const wellFormedJson = (value, what) => {
@@ -22,7 +35,7 @@ const wellFormedJson = (value, what) => {
   }
 };
 export const Status = Object.freeze({ OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
-const closedError = () => Object.assign(new Error('Laya is closing or closed'), { code: 'ERR_LAYA_CLOSED' });
+const closedError = () => Object.assign(new Error('Laya is closing or closed'), { status: 1, code: 'ERR_LAYA_CLOSED' });
 export class Laya {
   #worker; #pending = new Map(); #next = 0; #closing = false; #dead = false; #failed = false; #limit; #close; #diagnostic;
   capabilities;
@@ -30,14 +43,18 @@ export class Laya {
     if (token !== internal) throw new TypeError('Use Laya.open() or Laya.openRouter()');
     this.#worker = worker; this.#limit = limit; this.#diagnostic = diagnostic;
     worker.onmessage = ({ data }) => {
-      if (data.fatal) { this.#fail(exitedError(data.fatal, 3)); return; }
+      if (data.fatal) { this.#fail(exitedError(data.fatal)); return; }
       if (data.diagnostic) { try { Promise.resolve(this.#diagnostic?.(data.diagnostic)).catch(() => {}); } catch {} return; }
       const pending = this.#pending.get(data.id);
       if (!pending) return;
       if (data.event) { try { Promise.resolve(pending.onEvent?.(data.event)).catch(() => {}); } catch {} return; }
       this.#pending.delete(data.id);
       pending.cleanup?.();
-      if (data.error) pending.reject(nativeError(data.error, data.status));
+      if (data.error) {
+        const error = nativeError(data.error, data.status);
+        if (data.final) final.add(error);
+        pending.reject(error);
+      }
       else pending.resolve(data.result);
     };
     worker.onerror = event => this.#fail(exitedError(event.message || 'Laya worker failed'));
@@ -48,9 +65,9 @@ export class Laya {
     for (const entry of this.#pending.values()) { entry.cleanup?.(); entry.reject(error); }
     this.#pending.clear(); this.#worker.terminate();
   }
-  static open(options) { return Laya.#open(options); }
-  static openRouter(models, options) { return Laya.#open({ ...options, models }); }
-  static async #open(options = {}) {
+  static async open(options) { return Laya.#open(optionsObject(options)); }
+  static async openRouter(models, options) { return Laya.#open({ ...optionsObject(options), models }); }
+  static async #open(options) {
     const { maxPending = 16, maxModelBytes = 1073741824, initializationTimeoutMs = 120000, signal, backend = 'wasm', onDiagnostic } = options;
     if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw invalid(RangeError, 'maxPending must be 1..1024');
     if (!Number.isSafeInteger(maxModelBytes) || maxModelBytes < 1) throw invalid(RangeError, 'maxModelBytes must be positive');
@@ -63,7 +80,7 @@ export class Laya {
     if (!['wasm','webgpu','auto'].includes(backend)) throw invalid(TypeError, 'Invalid backend');
     if (onDiagnostic !== undefined && typeof onDiagnostic !== 'function') throw invalid(TypeError, 'onDiagnostic must be a function');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
-    if (signal?.aborted) throw new DOMException('Initialization aborted', 'AbortError');
+    if (signal?.aborted) throw abortedError();
     wellFormedJson([options.models, options.modelUrl, options.temperatures, options.auto], 'config');
     const models = options.models && Object.fromEntries(Object.entries(options.models).map(([id, model]) => {
       if (!model || typeof model.url !== 'string' || !model.url) throw invalid(TypeError, 'Each model requires a URL');
@@ -82,22 +99,22 @@ export class Laya {
       if (!moduleUrl) throw invalid(TypeError, `Missing ${selected} module URL`);
       const worker = new Worker(options.workerUrl || new URL('./worker.mjs', import.meta.url), { type: 'module' });
       const engine = new Laya(internal, worker, maxPending, onDiagnostic);
-      const abort = () => engine.#fail(new DOMException('Initialization aborted', 'AbortError'));
+      const abort = () => engine.#fail(abortedError());
       // status 6 (DEADLINE_EXCEEDED), like request deadlines; browser errors otherwise use codes only for lifecycle failures.
       const timer = setTimeout(() => engine.#fail(Object.assign(new Error('Laya initialization timed out'), { status: 6 })), initializationTimeoutMs);
       try {
         signal?.addEventListener('abort', abort, { once: true });
         // Option getters/URL coercion can run caller code before registration.
         // AbortSignal does not replay an abort that already happened.
-        if (signal?.aborted) throw new DOMException('Initialization aborted', 'AbortError');
+        if (signal?.aborted) throw abortedError();
         engine.capabilities = await engine.#send('init', undefined, undefined, { ...options, signal: undefined, onDiagnostic: undefined, diagnostics: !!onDiagnostic,
           models, modelUrl: models ? undefined : absolute(options.modelUrl), maxModelBytes, backend: selected,
           moduleUrl: absolute(moduleUrl), wasmUrl: absolute(selected === 'webgpu' ? (options.webgpuWasmUrl || new URL('laya.wasm', absolute(moduleUrl))) : (options.wasmUrl || new URL('laya.wasm', absolute(moduleUrl)))) });
-        if (signal?.aborted) throw new DOMException('Initialization aborted', 'AbortError');
+        if (signal?.aborted) throw abortedError();
         return engine;
       } catch (error) {
         engine.#fail(error); last = error;
-        if (signal?.aborted) throw error;
+        if (signal?.aborted || final.has(error)) throw error;
       } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
     }
     throw last;
@@ -128,10 +145,15 @@ export class Laya {
       if (timeoutMs) timer = setTimeout(() => stop(6), timeoutMs);
       signal?.addEventListener('abort', abort, { once: true });
       try { this.#worker.postMessage({ id, requestId, kind, request, observe: !!onEvent, options, flag, deadline }); }
-      catch (error) { this.#pending.delete(id); cleanup(); reject(error); }
+      catch (error) {
+        this.#pending.delete(id); cleanup();
+        // Only init sends options; a value the worker cannot receive (a function, for example) is an argument error.
+        reject(kind === 'init' ? invalid(TypeError, `options cannot be sent to the worker: ${error?.message ?? error}`) : exitedError(`Laya worker unreachable: ${error?.message ?? error}`));
+      }
     });
   }
-  async execute(request, { onEvent, signal, timeoutMs = 0, requestId } = {}) {
+  async execute(request, options) {
+    const { onEvent, signal, timeoutMs = 0, requestId } = optionsObject(options);
     if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw invalid(RangeError, 'timeoutMs must be 0..86400000');
     if (requestId !== undefined && (!Number.isSafeInteger(requestId) || requestId < 0)) throw invalid(RangeError, 'requestId must be a non-negative safe integer');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
@@ -150,7 +172,10 @@ export class Laya {
    * worker holds the model memory until close() runs. Idempotent, and resolves
    * even if the worker has already failed (crash, WebGPU device loss, abort).
    */
-  close({ cancelPending = false } = {}) {
+  close(options) {
+    let cancelPending;
+    try { ({ cancelPending = false } = optionsObject(options)); }
+    catch (error) { return Promise.reject(error); }
     if (cancelPending) for (const entry of this.#pending.values()) if (entry.kind !== 'close') entry.stop(5);
     if (!this.#close) { this.#closing = true; this.#close = (this.#failed ? Promise.resolve() : this.#send('close')).catch(error => { if (!this.#failed) throw error; }).finally(() => { this.#dead = true; this.#worker.terminate(); }); }
     return this.#close;
