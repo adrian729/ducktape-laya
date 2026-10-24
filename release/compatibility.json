@@ -69,7 +69,7 @@
       },
       {
         "path": "patches/llama.cpp/ggml-webgpu-allocation-failure.patch",
-        "sha256": "647b654b7aa8d562706d1c33a66f1d601e272a6ce29c5b8d6261216e795a6cf0",
+        "sha256": "09bfe76344e3ab6de4cc1c05e05174cfa0d54703c8236a20277bdf58a7ed600d",
         "purpose": "WebGPU buffer and backend creation capture device errors in error scopes and fail the allocation (NULL buffer or backend) instead of aborting through the uncaptured-error callback; WebGPU builds only; no arithmetic changes"
       },
       {

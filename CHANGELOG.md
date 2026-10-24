@@ -60,6 +60,7 @@ Linux arm64 and Windows x64 become release platforms (tier 2) next to Linux x86-
 - **Cached state tokens could pair with another state's text:** when copying a new state's text into the per-engine cache failed (out of memory), the cache kept the old text with the new tokens, and a later call with the old state answered over the wrong tokens with status 0. Text and tokens are now replaced together, and the cache keeps the tokens at their exact size instead of a buffer with room for one token per byte.
 - **Big integers in a score legend** keep all their digits, as the request gave them (0.2.0 wrote them as floats, and the large-integer change above as `{"bytes":[...],"subtype":...}`).
 - **Automatic thread count:** the CPU quota of the cgroup's ancestors (the smallest `cpu.max` up to the root) now limits it too, not only the process's own group.
+- **WebGPU error scopes** stay balanced when a buffer or backend allocation exits by an exception, so later device errors are not swallowed (runtime patch `ggml-webgpu-allocation-failure.patch`).
 
 ### Platforms
 

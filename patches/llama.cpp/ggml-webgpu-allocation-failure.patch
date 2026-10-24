@@ -1,6 +1,6 @@
 --- a/ggml/src/ggml-webgpu/ggml-webgpu.cpp
 +++ b/ggml/src/ggml-webgpu/ggml-webgpu.cpp
-@@ -507,6 +507,46 @@
+@@ -507,6 +507,74 @@
      }
  }
  
@@ -25,9 +25,12 @@
 +                wgpu::CallbackMode::AllowSpontaneous,
 +                [&callback_status, &error_type, &callback_message](
 +                    wgpu::PopErrorScopeStatus status, wgpu::ErrorType type, wgpu::StringView message) {
-+                    callback_status  = status;
-+                    error_type       = type;
-+                    callback_message = std::string(message);
++                    callback_status = status;
++                    error_type      = type;
++                    try {
++                        callback_message = std::string(message);
++                    } catch (...) {
++                    }
 +                }),
 +            WEBGPU_RUNTIME_WAIT_TIMEOUT_NS);
 +
@@ -44,44 +47,69 @@
 +    return ok;
 +}
 +
++// DTL: pushes the scopes when constructed and pops them in pop() or, when the code in between
++// exits by an exception, in the destructor, so scopes left pushed never capture later errors.
++struct ggml_webgpu_error_scope_guard {
++    webgpu_global_context ctx;
++    bool                  popped = false;
++
++    explicit ggml_webgpu_error_scope_guard(const webgpu_global_context & global_ctx) : ctx(global_ctx) {
++        ggml_webgpu_push_error_scopes(ctx->device);
++    }
++
++    bool pop(const char * what) {
++        popped = true;
++        return ggml_webgpu_pop_error_scopes(ctx, what);
++    }
++
++    ~ggml_webgpu_error_scope_guard() {
++        if (!popped) {
++            try {
++                ggml_webgpu_pop_error_scopes(ctx, "interrupted allocation");
++            } catch (...) {
++            }
++        }
++    }
++};
++
  // TODO: these next two functions may want tuning across different platforms and workloads,
  static uint32_t ggml_backend_webgpu_get_max_inflight_batches() {
      return UINT32_MAX;
-@@ -3957,9 +3997,14 @@
+@@ -3957,9 +4025,14 @@
  
      ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
      wgpu::Buffer                         buf;
 +    // DTL: a buffer the device cannot create (out of memory) makes the allocation fail
-+    ggml_webgpu_push_error_scopes(ctx->webgpu_global_ctx->device);
++    ggml_webgpu_error_scope_guard scopes(ctx->webgpu_global_ctx);
      ggml_webgpu_create_buffer(ctx->webgpu_global_ctx->device, buf, ROUNDUP_POW2(size, WEBGPU_STORAGE_BUF_BINDING_MULT),
                                wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst,
                                buf_name.c_str());
-+    if (!ggml_webgpu_pop_error_scopes(ctx->webgpu_global_ctx, buf_name.c_str())) {
++    if (!scopes.pop(buf_name.c_str())) {
 +        return NULL;
 +    }
  
      ggml_backend_webgpu_buffer_context * buf_ctx =
          new ggml_backend_webgpu_buffer_context(buf, buf_name, ctx->webgpu_global_ctx);
-@@ -4309,6 +4354,8 @@
+@@ -4309,6 +4382,8 @@
      ggml_backend_webgpu_device_context * dev_ctx    = (ggml_backend_webgpu_device_context *) dev->context;
      webgpu_context                       webgpu_ctx = std::make_shared<webgpu_context_struct>();
      webgpu_ctx->global_ctx                          = dev_ctx->webgpu_global_ctx;
 +    // DTL: report buffers the device cannot create instead of aborting
-+    ggml_webgpu_push_error_scopes(webgpu_ctx->global_ctx->device);
++    ggml_webgpu_error_scope_guard scopes(webgpu_ctx->global_ctx);
      webgpu_ctx->shader_lib = std::make_unique<ggml_webgpu_shader_lib>(dev_ctx->webgpu_global_ctx->device);
      webgpu_ctx->param_arena.init(
          webgpu_ctx->global_ctx->device, WEBGPU_PARAMS_BUF_SIZE_BYTES,
-@@ -4344,6 +4391,9 @@
+@@ -4344,6 +4419,9 @@
                                WEBGPU_DEBUG_BUF_ELEMS * sizeof(uint32_t),
                                wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc, "debug_dev_buf");
  #endif
-+    if (!ggml_webgpu_pop_error_scopes(webgpu_ctx->global_ctx, "backend initialization")) {
++    if (!scopes.pop("backend initialization")) {
 +        return nullptr;
 +    }
      return webgpu_ctx;
  }
  
-@@ -4357,6 +4407,10 @@
+@@ -4357,6 +4435,10 @@
      auto * backend_ctx      = new ggml_backend_webgpu_context();
      backend_ctx->name       = GGML_WEBGPU_NAME + std::string(": ") + dev_ctx->device_name;
      backend_ctx->webgpu_ctx = initialize_webgpu_context(dev);
