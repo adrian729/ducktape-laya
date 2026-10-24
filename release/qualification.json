@@ -36,7 +36,7 @@
     "browser": {
       "os": "linux-x86_64",
       "browser_versions": [
-        "chrome-152.0.7977.64"
+        "chrome-156.0.8078.47"
       ],
       "backends": [
         "wasm",
