@@ -35,6 +35,8 @@ What drives the cost:
 - **Threads.** One call uses up to `threads` CPU threads (0 means automatic, at most 4). Calls on one engine run one at a time; open several engines for parallel work, each with its own memory.
 - **Memory.** `context_tokens` sets how much memory an engine reserves; a router holds up to `max_loaded` models at once.
 
+The memory rows above, and the second machine's below, were measured before an unused logits buffer was removed (runtime patch `llama-embeddings-no-logits-buffer.patch`). llama.cpp reserved `n_vocab` floats per prompt token that the decision graph never reads, about 98 MiB per 512 prompt tokens with the English and typed-decisions models and about 500 MiB with the multilingual one, so memory after a long request is now lower by up to that much: the audit measured 479 MiB less on the multilingual near-limit request on a busy desktop. The table has not been re-measured on an idle machine; the budgets in `release/budgets/` remain upper bounds.
+
 Tokenizing very long input is linear in its length: on a busy 8-core x86-64 desktop, 1 MiB of state took about 4 s for ordinary text and up to about 11 s for the slowest input measured (long words without spaces). Tokenization cannot be interrupted by a deadline ([API guide](API.md#cancellation-and-deadlines)).
 
 ## A second machine: Intel MacBook Pro

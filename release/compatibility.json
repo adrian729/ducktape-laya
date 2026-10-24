@@ -46,6 +46,11 @@
         "path": "patches/llama.cpp/ggml-thread-creation-failure.patch",
         "sha256": "359191030385d646d9c3128e81936c30c3300f781e26b17362050091d9a0ff0c",
         "purpose": "A failed CPU worker thread creation joins the threads already started and reports GGML_STATUS_ALLOC_FAILED instead of aborting the process; no arithmetic changes"
+      },
+      {
+        "path": "patches/llama.cpp/llama-embeddings-no-logits-buffer.patch",
+        "sha256": "2c6461f97f09c2c47a7d6870e68043754b99ed42ad0116a607ef09eeea18ba8f",
+        "purpose": "An embeddings context whose graph has no logits tensor reserves no n_vocab x outputs logits buffer (backport of upstream ed019cd8b without its header change); no arithmetic changes"
       }
     ]
   },

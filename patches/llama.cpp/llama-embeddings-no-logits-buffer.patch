@@ -1,0 +1,13 @@
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2140,7 +2140,9 @@
+     const auto n_embd     = hparams.n_embd;
+     const auto n_embd_out = hparams.n_embd_out();
+ 
+-    bool has_logits     = true;
++    // DTL: backport of ed019cd8b without its header change: an embeddings context whose reserved
++    // graph has no logits tensor does not need an n_vocab x n_outputs logits buffer
++    bool has_logits     = !cparams.embeddings || !gf_res_reserve || gf_res_reserve->get_logits() != nullptr;
+     bool has_embd       = cparams.embeddings;
+     bool has_embd_nextn = cparams.embeddings_nextn;
+ 
