@@ -553,12 +553,24 @@ jobs:
         if: contains(format(',{0},', env.DTL_TOOLS), ',go,')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          # On Windows setup-go keeps the files under D:\hostedtoolcache and links them from the tool
-          # cache on C:; both are cached, or the restored link dangles and setup-go fails (EEXIST).
-          path: |
-            ${{ runner.tool_cache }}/go/1.27.2
-            ${{ runner.os == 'Windows' && 'D:/hostedtoolcache/windows/go/1.27.2' || format('{0}/go/1.27.2', runner.tool_cache) }}
-          key: go-toolcache-v2-1.27.2-${{ runner.os }}-${{ runner.arch }}
+          # On Windows setup-go keeps Go under D:\hostedtoolcache and links it (x64, x64.complete)
+          # from the tool cache on C:. Git's tar cannot restore that junction, so only the D: files
+          # are cached and the next step links them.
+          path: ${{ runner.os == 'Windows' && 'D:/hostedtoolcache/windows/go/1.27.2' || format('{0}/go/1.27.2', runner.tool_cache) }}
+          key: go-toolcache-v3-1.27.2-${{ runner.os }}-${{ runner.arch }}
+      - &go-toolcache-link
+        name: Link the cached Go into the Windows tool cache
+        if: runner.os == 'Windows' && contains(format(',{0},', env.DTL_TOOLS), ',go,')
+        shell: pwsh
+        run: |
+          $d = 'D:\hostedtoolcache\windows\go\1.27.2\x64'
+          $c = Join-Path $env:RUNNER_TOOL_CACHE 'go\1.27.2\x64'
+          if ((Test-Path "$d\bin\go.exe") -and (Test-Path "$d.complete") -and -not (Test-Path $c)) {
+            New-Item -ItemType Directory -Force (Split-Path $c) | Out-Null
+            New-Item -ItemType Junction -Path $c -Target $d | Out-Null
+            Copy-Item "$d.complete" "$c.complete"
+            Write-Output "linked $c -> $d"
+          }
       - &go
         if: contains(format(',{0},', env.DTL_TOOLS), ',go,')
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -609,6 +621,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *node-sdk
@@ -651,6 +664,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - &packages-push
@@ -699,6 +713,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *packages-push
@@ -733,6 +748,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *node-sdk
@@ -809,6 +825,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *rust-cache
       - name: Install pinned Rust toolchain and fetch the consumer's locked dependencies
@@ -1268,6 +1285,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *typescript
@@ -1344,6 +1362,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *typescript
@@ -1384,6 +1403,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *typescript
@@ -1423,6 +1443,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *typescript
@@ -1463,6 +1484,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *model-key
@@ -1522,6 +1544,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *model-key
@@ -1556,6 +1579,7 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *node-sdk
@@ -1953,11 +1977,15 @@ jobs:
       - *nuget-cache
       - *dotnet
       - *go-toolcache
+      - *go-toolcache-link
       - *go
       - *go-cache
       - *model-key
       - *model-restore
       - *model-fetch
+      # check-upgrade.py runs every registered real-model test, the emulated-CPU guard included.
+      - name: QEMU user mode for the emulated-CPU guard test
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user
       - name: Runtime commit to rehearse
         run: |
           git -C third_party/llama.cpp cat-file -e "$RUNTIME^{commit}" 2>/dev/null \
