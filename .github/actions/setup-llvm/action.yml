@@ -1,0 +1,100 @@
+name: Set up LLVM 22.1.8
+description: >-
+  The pinned Clang for every Linux x86-64 clang job: LLVM 22.1.8, the version
+  release/qualification.json lists for the native matrix, from the official release
+  asset LLVM-22.1.8-Linux-X64.tar.xz of llvmorg-22.1.8. The archive is checked
+  against its sha256 before anything is extracted, and only a fixed member list is
+  extracted (the clang driver and its links, llvm-ar, llvm-ranlib, llvm-nm,
+  llvm-symbolizer and lib/clang/22 with the compiler-rt sanitizer and libFuzzer
+  runtimes). The extracted tree is cached under llvm-22.1.8-linux-x64-df0e1ecf,
+  put first on PATH, and CC and CXX name its clang and clang++. Fails unless clang
+  reports 22.1.8 and ldd finds every library of the extracted programs.
+inputs:
+  save:
+    description: Save the extracted tree to the cache after a miss (the warm-cache jobs pass true)
+    default: 'false'
+outputs:
+  prefix:
+    description: The LLVM installation directory
+    value: ${{ steps.prefix.outputs.prefix }}
+runs:
+  using: composite
+  steps:
+    - name: LLVM directory
+      id: prefix
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS-$RUNNER_ARCH" != Linux-X64 ]; then
+          echo "setup-llvm: the pinned LLVM is the Linux x86-64 release asset, not $RUNNER_OS-$RUNNER_ARCH" >&2
+          exit 1
+        fi
+        # A fixed absolute path: CMakeCache.txt of a build records the compiler path, and the
+        # shard jobs that restore a build tarball run on another runner.
+        echo "prefix=$RUNNER_TOOL_CACHE/llvm-22.1.8-linux-x64" >> "$GITHUB_OUTPUT"
+    - name: Restore the extracted LLVM 22.1.8
+      id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.prefix.outputs.prefix }}
+        key: llvm-22.1.8-linux-x64-df0e1ecf
+    - name: Download, check and extract LLVM 22.1.8
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PREFIX: ${{ steps.prefix.outputs.prefix }}
+      run: |
+        set -euo pipefail
+        url=https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz
+        # GitHub's recorded digest of the asset (1,938,859,476 bytes, published 2026-06-16).
+        sum=df0e1ecf16caf3489a272a5eea4eec9b0d82878f6477fa309504f918a0006384
+        download=$(mktemp -d "$RUNNER_TEMP/llvm-download.XXXXXX")
+        curl -fsSL --retry 3 -o "$download/llvm.tar.xz" "$url"
+        echo "$sum  $download/llvm.tar.xz" | sha256sum -c -
+        # The member list, written from the pinned archive and fixed with its digest. The
+        # programs link only system libraries (libz, libstdc++, libgcc_s, libc, libm), no LLVM
+        # or Clang shared library; clang's default linker is the system ld and its default C++
+        # library the system libstdc++.
+        top=LLVM-22.1.8-Linux-X64
+        rm -rf "$PREFIX"
+        mkdir -p "$PREFIX"
+        tar -xJf "$download/llvm.tar.xz" -C "$PREFIX" --strip-components=1 \
+          "$top/bin/clang-22" "$top/bin/clang" "$top/bin/clang++" \
+          "$top/bin/llvm-ar" "$top/bin/llvm-ranlib" "$top/bin/llvm-nm" "$top/bin/llvm-symbolizer" \
+          "$top/lib/clang/22"
+        rm -rf "$download"
+    - name: Save the extracted LLVM 22.1.8
+      if: steps.cache.outputs.cache-hit != 'true' && inputs.save == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.prefix.outputs.prefix }}
+        key: llvm-22.1.8-linux-x64-df0e1ecf
+    - name: Put LLVM 22.1.8 first on PATH and check it
+      shell: bash
+      env:
+        PREFIX: ${{ steps.prefix.outputs.prefix }}
+      run: |
+        set -euo pipefail
+        version=$("$PREFIX/bin/clang" --version | head -n 1)
+        echo "$version"
+        case "$version" in
+          'clang version 22.1.8 '*) ;;
+          *) echo "setup-llvm: $PREFIX/bin/clang is not LLVM 22.1.8" >&2; exit 1 ;;
+        esac
+        for program in clang-22 llvm-ar llvm-nm llvm-symbolizer; do
+          if ldd "$PREFIX/bin/$program" | grep -q 'not found'; then
+            ldd "$PREFIX/bin/$program" >&2
+            echo "setup-llvm: $program lacks a shared library" >&2
+            exit 1
+          fi
+        done
+        for runtime in asan tsan ubsan_standalone fuzzer fuzzer_no_main; do
+          test -f "$PREFIX/lib/clang/22/lib/x86_64-unknown-linux-gnu/libclang_rt.$runtime.a" \
+            || { echo "setup-llvm: libclang_rt.$runtime.a is missing" >&2; exit 1; }
+        done
+        echo "$PREFIX/bin" >> "$GITHUB_PATH"
+        {
+          echo "CC=$PREFIX/bin/clang"
+          echo "CXX=$PREFIX/bin/clang++"
+          echo "ASAN_SYMBOLIZER_PATH=$PREFIX/bin/llvm-symbolizer"
+        } >> "$GITHUB_ENV"
