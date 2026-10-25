@@ -2333,7 +2333,10 @@ jobs:
               entry = next(e for e in json.loads((build / 'compile_commands.json').read_text())
                            if e['file'].replace('\\', '/').endswith('ggml-cpu/ggml-cpu.c'))
               # The driver's -### prints the cc1 command it would run; the optimization level is what cc1 gets.
-              driver = subprocess.run(entry['command'] + ' -###', cwd=entry['directory'], capture_output=True, text=True)
+              # CMake ends a clang-cl command with `-- SOURCE`, after which every argument is an input.
+              command = entry['command']
+              command = command.replace(' -- ', ' -### -- ', 1) if ' -- ' in command else command + ' -###'
+              driver = subprocess.run(command, cwd=entry['directory'], capture_output=True, text=True)
               cc1 = [line for line in driver.stderr.splitlines() if '"-cc1"' in line]
               if driver.returncode or not cc1:
                   sys.exit(f'{variant}: no cc1 command from the driver:\n{driver.stderr}')
