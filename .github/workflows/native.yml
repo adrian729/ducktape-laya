@@ -1213,7 +1213,11 @@ jobs:
       DTL_CACHE_SAVE: 'true'
     steps:
       - *checkout
-      - *llvm
+      # On a miss (a new branch, or after eviction) the build saves the extracted LLVM, so this run's
+      # clang shards restore it instead of each downloading the 1.9 GB archive (about 145 s per job).
+      - uses: ./.github/actions/setup-llvm
+        with:
+          save: 'true'
       - *ninja
       - *compiler-cache
       - *setup-node
@@ -2113,7 +2117,7 @@ jobs:
       DTL_CACHE_SAVE: 'true'
     steps:
       - *checkout
-      # The one job that saves the extracted LLVM toolchain.
+      # Saves the extracted LLVM toolchain on a miss, as build-linux-x64-clang does.
       - uses: ./.github/actions/setup-llvm
         with:
           save: 'true'
