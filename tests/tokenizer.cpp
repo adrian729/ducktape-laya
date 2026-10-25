@@ -221,7 +221,10 @@ int main(int argc, char **argv) {
                 // 0.1 s at 4 KiB), so its growth here is close to x1000, ten times the x96
                 // limit, while linear growth keeps a threefold margin below it.
                 const std::string small_text = repeat(unit, 4 << 10);
+                // The fastest of several runs: machine load only makes a run slower, so a vocabulary is reported
+                // as skipped only when even its fastest run is over the limit. A skip fails the release gates.
                 double small = seconds_min(vocab, small_text, 1);
+                for (int retry = 0; retry < 4 && small > 0.25; ++retry) small = std::min(small, seconds_min(vocab, small_text, 1));
                 if (small > 0.25) {
                     std::fprintf(stdout, "SKIPPED: %s: tokenization timing not checked (4 KiB takes %.2f s: per-match cost dominates); %zu golden cases match\n",
                                  label.c_str(), small, checked);
