@@ -131,9 +131,25 @@ def reusable(report_path, gate, candidate, rules):
 # ------------------------------------------------------------------------------------------------
 class Step:
     def __init__(self, name, phase, command=None, *, cpus='all', env=None, outputs=(), evidence=None, action=None, background=False,
-                 capture=None):
+                 capture=None, judge=None):
         self.name, self.phase, self.command, self.cpus, self.env = name, phase, command, cpus, env or {}
         self.outputs, self.evidence, self.action, self.background, self.capture = list(outputs), evidence or {}, action, background, capture
+        # judge(exit status) -> passed; by default a step passes when its command exits 0.
+        self.judge = judge or (lambda code: code == 0)
+
+
+def model_upgrade_completed(report_path):
+    """check-upgrade.py exits 1 whenever the candidate model's results differ from the baseline's, which a model
+    upgrade expects (the drift needs reference evaluation). The step passes, as check-candidate.py's model_upgrade
+    rule does, when the candidate checks completed: no failure, the native, binding and ABI gates passed and the
+    comparison ran."""
+    try:
+        report = json.loads(pathlib.Path(report_path).read_text())
+    except (OSError, ValueError):
+        return False
+    return ('failure' not in report and
+            all(report.get('gates', {}).get(gate, {}).get('status') == 'passed' for gate in ('native_contracts', 'binding_conformance', 'abi')) and
+            report.get('comparison', {}).get('status') in ('passed', 'failed'))
 
 
 def model_ids(record):
@@ -199,7 +215,8 @@ def plan(a, record, policy, out, ci, reused):
         steps.append(Step('model-upgrade', '3b', [PY, 'scripts/check-upgrade.py', '--runtime', record['runtime']['commit'], '--model', model,
                                                   '--candidate-model', a.upgrade_model, '--candidate-manifest', a.upgrade_manifest,
                                                   '--compiler-launcher', 'ccache', '--output', out / 'model-upgrade'],
-                          cpus='other', outputs=[out / 'model-upgrade'], evidence={'model_upgrade': rel(out / 'model-upgrade/report.json')}))
+                          cpus='other', outputs=[out / 'model-upgrade'], evidence={'model_upgrade': rel(out / 'model-upgrade/report.json')},
+                          judge=lambda code: model_upgrade_completed(out / 'model-upgrade/report.json')))
     emsdk = a.emsdk or '<EMSDK>'
     for backend in ('wasm', 'webgpu'):
         steps.append(Step(f'browser-build-{backend}', '3c', [PY, 'scripts/build-browser.py', '--emsdk', emsdk, '--backend', backend,
@@ -423,14 +440,16 @@ def run(steps, cpus, out, evidence, evidence_path, keys=None):
         log.close()
         if stdout is not log:
             stdout.close()
-        print(f'qualify-host: {step.name} {"FAILED" if code else "passed"} ({time.monotonic() - started:.0f} s)', flush=True)
-        if code:
+        passed = step.judge(code)
+        print(f'qualify-host: {step.name} {"passed" if passed else "FAILED"} ({time.monotonic() - started:.0f} s)', flush=True)
+        if not passed:
             failed.append(step.name)
     for step, process, log, stdout in background:
         code = process.wait()
         log.close()
-        print(f'qualify-host: {step.name} {"FAILED" if code else "passed"} ({time.monotonic() - started:.0f} s)', flush=True)
-        if code:
+        passed = step.judge(code)
+        print(f'qualify-host: {step.name} {"passed" if passed else "FAILED"} ({time.monotonic() - started:.0f} s)', flush=True)
+        if not passed:
             failed.append(step.name)
     for step in steps:
         if step.phase != 4:

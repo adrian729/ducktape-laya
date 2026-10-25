@@ -309,5 +309,28 @@ class RunEvidence(unittest.TestCase):
             self.assertEqual(json.loads((out / 'evidence.json').read_text()), evidence)
 
 
+    def test_model_upgrade_passes_on_expected_model_drift(self):
+        # check-upgrade.py exits 1 when the candidate model's results differ; the step judges the report instead.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            report = out / 'model-upgrade/report.json'
+            report.parent.mkdir()
+            gates = {g: {'status': 'passed'} for g in ('native_contracts', 'binding_conformance', 'abi')}
+            judge = lambda code: qualify.model_upgrade_completed(report)
+            cases = [({'gates': gates, 'comparison': {'status': 'failed'}}, 0),
+                     ({'gates': gates, 'comparison': {'status': 'passed'}}, 0),
+                     ({'gates': gates, 'comparison': {'status': 'failed'}, 'failure': 'Public export mismatch'}, 1),
+                     ({'gates': dict(gates, abi={'status': 'not_run'}), 'comparison': {'status': 'failed'}}, 1)]
+            for content, expected in cases:
+                report.write_text(json.dumps(content))
+                steps = [qualify.Step('model-upgrade', '3b', ['false'], cpus='other', judge=judge,
+                                      evidence={'model_upgrade': 'model-upgrade/report.json'})]
+                with contextlib.redirect_stdout(io.StringIO()):
+                    code = qualify.run(steps, {'other': '0', 'soak': '0', 'all': None}, out, {}, out / 'evidence.json', {})
+                self.assertEqual(code, expected, content)
+            report.unlink()
+            self.assertFalse(qualify.model_upgrade_completed(report))
+
+
 if __name__ == '__main__':
     unittest.main()
