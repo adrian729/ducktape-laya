@@ -119,7 +119,7 @@ def check(root=None):
     problems, count = [], 0
     for stable in STABLE:
         check_target(ROOT / 'README.md', f'{REPO}/blob/main/{stable}', problems, f'STABLE {stable}')
-    sources = markdown_files() if root is None else sorted(root.rglob('*.md'))
+    sources = markdown_files() if root is None else sorted(ROOT.rglob('*.md'))
     for source in sources:
         for number, line in enumerate(strip_code(source.read_text(encoding='utf-8')), 1):
             where = f'{source.relative_to(ROOT)}:{number}'
@@ -135,7 +135,7 @@ def self_test():
     saved, failures = ROOT, []
     try:
         with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
+            root = pathlib.Path(directory).resolve()  # Windows: the long form of an 8.3 temp path
             (root / 'docs').mkdir()
             (root / 'include').mkdir()
             (root / 'include/ducktape_laya.h').write_text('')
