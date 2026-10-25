@@ -1,5 +1,5 @@
 #pragma once
-#include <nlohmann/json.hpp>
+#include "json_io.hpp"
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -150,39 +150,38 @@ void python_json(const Json &value, std::string &out) {
 }
 // Results are nlohmann's compact JSON, except that a big integer (from a request value a result
 // echoes: a score question's legend) is written as the JSON number the request gave, with all its
-// digits, instead of nlohmann's {"bytes":[...],"subtype":...} form of a binary value.
-template <class Json>
-void result_json(const Json &value, std::string &out) {
+// digits, instead of nlohmann's {"bytes":[...],"subtype":...} form of a binary value. The dumps go
+// through json_io.cpp, which holds the serializer.
+inline void result_json(const json &value, std::string &out) {
     switch (value.type()) {
-    case nlohmann::json::value_t::array: {
+    case json::value_t::array: {
         out += '[';
         bool first = true;
         for (const auto &item : value) { if (!first) out += ','; first = false; result_json(item, out); }
         out += ']';
         break;
     }
-    case nlohmann::json::value_t::object: {
+    case json::value_t::object: {
         out += '{';
         bool first = true;
         for (auto it = value.begin(); it != value.end(); ++it) {
             if (!first) out += ',';
             first = false;
-            out += Json(it.key()).dump();
+            out += dump_json(json(it.key()));
             out += ':';
             result_json(it.value(), out);
         }
         out += '}';
         break;
     }
-    case nlohmann::json::value_t::binary:
+    case json::value_t::binary:
         if (is_big_integer(value)) { out += big_integer_text(value); break; }
-        out += value.dump();
+        out += dump_json(value);
         break;
-    default: out += value.dump();
+    default: out += dump_json(value);
     }
 }
-template <class Json>
-std::string result_json(const Json &value) {
+inline std::string result_json(const json &value) {
     std::string out;
     result_json(value, out);
     return out;

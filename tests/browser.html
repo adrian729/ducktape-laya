@@ -2,15 +2,51 @@
 <script type="module">
 import { Laya } from '/browser/index.mjs';
 window.state = { status: 'ready' };
+const MODEL_SHA256 = 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2';
+const sha256 = async text => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))),
+  x => x.toString(16).padStart(2, '0')).join('');
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Opens an engine whose worker replies the page also sees: `replies` holds every reply that settles a
+// call ({id, result} with the result string exactly as the worker returned it, or {id, error, status}),
+// in arrival order. The listener is added before the binding's own handler, so a reply is recorded
+// before the call's promise settles.
+const openObserved = async options => {
+  const OriginalWorker = globalThis.Worker, replies = [];
+  globalThis.Worker = class extends OriginalWorker {
+    constructor(...args) {
+      super(...args);
+      this.addEventListener('message', ({ data }) => {
+        if (data && data.id !== undefined && !data.event && ('result' in data || 'error' in data)) replies.push({ ...data, received_ms: performance.now() });
+      });
+    }
+  };
+  try {
+    const pending = Laya.open(options);
+    globalThis.Worker = OriginalWorker;
+    return { engine: await pending, replies };
+  } finally { globalThis.Worker = OriginalWorker; }
+};
+// Executes one request and returns the parsed result and the worker's result string for it.
+const executeObserved = async (observed, request, options) => {
+  const before = observed.replies.length;
+  const result = await observed.engine.execute(request, options);
+  const reply = observed.replies.slice(before).find(r => typeof r.result === 'string');
+  if (!reply) throw new Error('No worker result string recorded');
+  if (JSON.stringify(JSON.parse(reply.result)) !== JSON.stringify(result)) throw new Error('Recorded worker result differs from the returned result');
+  return { result, text: reply.result };
+};
 window.start = async (backend = 'wasm', fixtures = ['batch', 'primitive', 'structured']) => {
+  // fixture_sha256: per fixture, the SHA-256 of the result string the worker returned (before the
+  // binding parses it); the isolated page's isolated_execution stage must reproduce primitive.json's.
   window.state = { status: 'running', backend, results: {}, timings_ms: {}, events: [], ticks: 0, gpuGraphs: 0,
-    model_sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2', fixture_hashes: {} };
+    model_sha256: MODEL_SHA256, fixture_hashes: {}, fixture_sha256: {} };
   const timer = setInterval(() => window.state.ticks++, 20);
   let engine;
   try {
-    engine = await Laya.open({ backend, modelUrl: '/model.gguf', moduleUrl: '/wasm/laya.mjs', webgpuModuleUrl: '/webgpu/laya.mjs',
+    const observed = await openObserved({ backend, modelUrl: '/model.gguf', moduleUrl: '/wasm/laya.mjs', webgpuModuleUrl: '/webgpu/laya.mjs',
       onDiagnostic: text => { if (text.includes('ggml_backend_webgpu_graph_compute')) window.state.gpuGraphs++; },
-      sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2', initializationTimeoutMs: 240000 });
+      sha256: MODEL_SHA256, initializationTimeoutMs: 240000 });
+    engine = observed.engine;
     window.state.capabilities = engine.capabilities;
     window.state.info = await engine.info();
     if (window.state.info.numerical_profile.id !== (backend === 'wasm' ? 'wasm-cpu' : 'webgpu') ||
@@ -18,11 +54,12 @@ window.start = async (backend = 'wasm', fixtures = ['batch', 'primitive', 'struc
     if (window.state.info.model.decision_type !== 'laya') throw new Error('Missing model diagnostics');
     for (const name of fixtures) {
       const request = await (await fetch(`/fixtures/${name}.json`)).text();
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(request));
-      window.state.fixture_hashes[name + '.json'] = Array.from(new Uint8Array(digest), x => x.toString(16).padStart(2, '0')).join('');
+      window.state.fixture_hashes[name + '.json'] = await sha256(request);
       const began = performance.now();
-      window.state.results[name + '.json'] = await engine.execute(request, { onEvent: event => window.state.events.push(event) });
+      const { result, text } = await executeObserved(observed, request, { onEvent: event => window.state.events.push(event) });
       window.state.timings_ms[name + '.json'] = performance.now() - began;
+      window.state.results[name + '.json'] = result;
+      window.state.fixture_sha256[name + '.json'] = await sha256(text);
     }
     try { await engine.execute('{}'); throw new Error('Invalid request accepted'); }
     catch (error) { if (error.status !== 1) throw error; }
@@ -219,5 +256,85 @@ window.startMemory = async () => {
     window.memory.checks.push({ case: 'recovery with the product build' });
     window.memory.status = 'passed';
   } catch (error) { window.memory.status = 'failed'; window.memory.error = error.stack; }
+};
+// Isolated page: primitive.json once, for the byte comparison with the non-isolated page's execution
+// stage (result_sha256 against its fixture_sha256['primitive.json'], compared by the checker).
+window.startIsolatedExecution = async (backend = 'wasm') => {
+  window.isolatedExecution = { status: 'running', backend, fixture: 'primitive.json' };
+  let engine;
+  try {
+    if (!globalThis.crossOriginIsolated) throw new Error('The page is not cross-origin isolated');
+    const observed = await openObserved({ backend, modelUrl: '/model.gguf', moduleUrl: '/wasm/laya.mjs', webgpuModuleUrl: '/webgpu/laya.mjs',
+      sha256: MODEL_SHA256, initializationTimeoutMs: 240000 });
+    engine = observed.engine;
+    window.isolatedExecution.capabilities = engine.capabilities;
+    const request = await (await fetch('/fixtures/primitive.json')).text();
+    window.isolatedExecution.fixture_hash = await sha256(request);
+    const began = performance.now();
+    const { result, text } = await executeObserved(observed, request);
+    window.isolatedExecution.timing_ms = performance.now() - began;
+    window.isolatedExecution.result = result;
+    window.isolatedExecution.result_sha256 = await sha256(text);
+    window.isolatedExecution.status = 'passed';
+  } catch (error) { window.isolatedExecution.status = 'failed'; window.isolatedExecution.error = error.stack; }
+  finally { if (engine) await engine.close().catch(() => {}); }
+};
+// Isolated page, WASM: cancel a request while the native call runs, through the SharedArrayBuffer flag
+// (the worker is busy inside the call, so its message queue cannot deliver a cancellation). The long
+// request is the coverage.json batch (eight requests, minutes on WASM): it is still running when the
+// cancellation is set, 2 s after its start event. The worker must end the call with status 5 within
+// the bound, and the same engine's next request must return primitive.json's result unchanged
+// (expected: the isolated_execution stage's result_sha256, passed by run.mjs).
+window.startRunningCancellation = async (backend = 'wasm', fixtures, context = {}) => {
+  const boundMs = 10000, delayMs = 2000;
+  window.runningCancellation = { status: 'running', backend, request: 'coverage.json', delay_ms: delayMs, bound_ms: boundMs };
+  const record = window.runningCancellation;
+  let engine;
+  try {
+    if (backend !== 'wasm') throw new Error('Running cancellation is offered on WASM only');
+    if (!/^[0-9a-f]{64}$/.test(context.expected_result_sha256 ?? '')) throw new Error('No isolated_execution result to compare with');
+    record.expected_result_sha256 = context.expected_result_sha256;
+    const observed = await openObserved({ backend, modelUrl: '/model.gguf', moduleUrl: '/wasm/laya.mjs', sha256: MODEL_SHA256,
+      initializationTimeoutMs: 240000 });
+    engine = observed.engine;
+    record.capabilities = engine.capabilities;
+    if (engine.capabilities.runningCancellation !== true) throw new Error('The engine does not offer running cancellation');
+    const long = await (await fetch('/fixtures/coverage.json')).text();
+    const primitive = await (await fetch('/fixtures/primitive.json')).text();
+    const abort = new AbortController();
+    let started;
+    const startedPromise = new Promise(resolve => { started = resolve; });
+    const before = observed.replies.length;
+    const running = engine.execute(long, { signal: abort.signal, onEvent: event => { if (event.event === 'start') started(); } });
+    running.catch(() => {}); // settled below
+    const ended = running.then(() => { throw new Error('The long request ended before it was cancelled'); },
+      error => { throw new Error(`The long request failed before it was cancelled: ${error.message}`); });
+    ended.catch(() => {}); // only the race below reports it
+    await Promise.race([startedPromise, ended]);
+    await sleep(delayMs);
+    if (observed.replies.length !== before) throw new Error('The long request ended before it was cancelled');
+    const cancelledAt = performance.now();
+    abort.abort();
+    try { await running; throw new Error('Cancelled request resolved'); }
+    catch (error) { if (error.status !== 5) throw error; record.page_status = error.status; }
+    // The worker's own reply for the cancelled call: the native status, not the page's early rejection.
+    let reply;
+    while (!(reply = observed.replies.slice(before).find(r => 'error' in r || 'result' in r))) {
+      if (performance.now() - cancelledAt > boundMs) throw new Error(`The native call did not stop within ${boundMs} ms`);
+      await sleep(10);
+    }
+    record.cancel_ms = reply.received_ms - cancelledAt;
+    record.cancel_status = reply.status ?? null;
+    record.cancel_error = reply.error ?? null;
+    if ('result' in reply) throw new Error('The cancelled request completed');
+    if (reply.status !== 5) throw new Error(`Cancelled call ended with status ${reply.status}: ${reply.error}`);
+    if (record.cancel_ms > boundMs) throw new Error(`The native call stopped after ${record.cancel_ms} ms (bound ${boundMs} ms)`);
+    const { result, text } = await executeObserved(observed, primitive);
+    record.next_result = result;
+    record.next_result_sha256 = await sha256(text);
+    if (record.next_result_sha256 !== record.expected_result_sha256) throw new Error('The next request returned a different primitive.json result');
+    record.status = 'passed';
+  } catch (error) { record.status = 'failed'; record.error = error.stack; }
+  finally { if (engine) await engine.close().catch(() => {}); }
 };
 </script>

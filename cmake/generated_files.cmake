@@ -52,3 +52,15 @@ function(dtl_write_generated path stage text)
     message(FATAL_ERROR "dtl_write_generated: ${path} does not have the generated content")
   endif()
 endfunction()
+
+# Write <text> to <path> only when its content differs, so an unchanged configure output
+# keeps its timestamp.
+function(dtl_write_if_changed path text)
+  set(current "")
+  if(EXISTS "${path}")
+    file(READ "${path}" current)
+  endif()
+  if(NOT current STREQUAL text)
+    file(WRITE "${path}" "${text}")
+  endif()
+endfunction()

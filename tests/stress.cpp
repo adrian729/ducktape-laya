@@ -1,11 +1,13 @@
 // Sustained public-ABI lifecycle/concurrency check; no model downloads.
 #include "ducktape_laya.hpp"
+#include "stress_rule.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -107,8 +109,36 @@ static bool settled(long fds, long threads) { return descriptor_count() == fds &
 static void stable_baseline() {}
 #endif
 static const std::string request = R"({"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
+// laya-stress MODEL [ROUNDS]                            ROUNDS rounds (default 40, 10..10000)
+// laya-stress MODEL --seconds N [--min-rounds M]        at least N seconds and M rounds (default 10)
+// laya-stress --check-series RESULT_JSON                 both late-growth rules on a result's series
+// The result line (stdout) is written on success and on every failure after the first completed
+// round (status "failed", the message in "failure"), so a failed soak keeps its series.
+static int check_series(const char *path) {
+    std::ifstream file(path, std::ios::binary);
+    std::stringstream text;
+    text << file.rdbuf();
+    std::vector<long> series;
+    if (!file || !stress_rule::read_series(text.str(), series)) {
+        std::cerr << "No result line with closed_rss_kib_by_round in " << path << '\n';
+        return 2;
+    }
+    const auto growth = stress_rule::evaluate(series);
+    const auto failure = stress_rule::violation(growth);
+    std::cout << "{\"rounds\":" << series.size() << ",\"status\":\"" << (failure.empty() ? "passed" : "failed")
+              << "\",\"failure\":" << (failure.empty() ? std::string("null") : stress_rule::json_string(failure))
+              << ",\"late_growth\":" << stress_rule::late_growth_json(growth) << "}\n";
+    return failure.empty() ? 0 : 1;
+}
 int main(int argc, char **argv) {
-    if (argc < 2 || argc > 4) return 2;
+    if (argc == 3 && std::string(argv[1]) == "--check-series") return check_series(argv[2]);
+    if (argc < 2 || argc > 6) return 2;
+    stress_rule::result report;
+    report.memory_metric = memory_metric;
+    report.thread_metric = thread_metric;
+    auto &closed_rss = report.closed_rss_kib_by_round;
+    const auto start = std::chrono::steady_clock::now();
+    auto elapsed_seconds = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(); };
     try {
         int rounds = 40, seconds = 0;
         const auto number = [](const char *text) {
@@ -117,14 +147,24 @@ int main(int argc, char **argv) {
             if (text[end] != '\0') throw std::runtime_error("Invalid numeric argument");
             return value;
         };
-        if (argc == 4) {
-            if (std::string(argv[2]) != "--seconds") return 2;
-            seconds = number(argv[3]); rounds = 10;
-            if (seconds < 1 || seconds > 86400) return 2;
-        } else if (argc == 3) rounds = number(argv[2]);
-        if (rounds < 10 || rounds > 10000) return 2;
-        const auto start = std::chrono::steady_clock::now();
-        auto elapsed_seconds = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(); };
+        if (argc == 3) {
+            rounds = number(argv[2]);
+            if (rounds < 10 || rounds > 10000) return 2;
+        } else if (argc > 3) {
+            int min_rounds = 10;
+            bool have_seconds = false, have_min_rounds = false;
+            for (int i = 2; i < argc; i += 2) {
+                const std::string flag = argv[i];
+                if (i + 1 >= argc) return 2;
+                if (flag == "--seconds" && !have_seconds) { seconds = number(argv[i + 1]); have_seconds = true; }
+                else if (flag == "--min-rounds" && !have_min_rounds) { min_rounds = number(argv[i + 1]); have_min_rounds = true; }
+                else return 2;
+            }
+            if (!have_seconds || seconds < 1 || seconds > 86400 || min_rounds < 10 || min_rounds > 1000000) return 2;
+            rounds = min_rounds;
+        }
+        report.requested_seconds = seconds;
+        report.min_rounds = rounds;
         const std::string settings = R"({"threads":2})";
         std::string expected;
         // The should_cancel poll that falls in the middle of the request's forward pass (see
@@ -174,9 +214,9 @@ int main(int argc, char **argv) {
         stable_baseline();
         const auto baseline_rss = rss_kib(), baseline_fds = descriptor_count(), baseline_threads = thread_count();
         if (baseline_rss < 0 || baseline_fds < 0 || baseline_threads < 0) throw std::runtime_error("Could not measure baseline resources");
+        report.baseline_rss_kib = baseline_rss;
         unsigned completed = 0;
         long maximum_closed_rss = baseline_rss;
-        std::vector<long> closed_rss;
         double last_progress = 0;
         for (; completed < unsigned(rounds) || elapsed_seconds() < seconds; ++completed) {
           {
@@ -232,6 +272,8 @@ int main(int argc, char **argv) {
                                        "), threads " + std::to_string(thread_count()) + " (" + std::to_string(baseline_threads) + ")");
           maximum_closed_rss = std::max(maximum_closed_rss, current_rss);
           closed_rss.push_back(current_rss);
+          report.rounds = completed + 1;
+          report.max_closed_rss_kib = maximum_closed_rss;
           if (elapsed_seconds() - last_progress >= 60) {
               last_progress = elapsed_seconds();
               std::cerr << "{\"completed_rounds\":" << completed + 1 << ",\"elapsed_seconds\":" << last_progress
@@ -249,33 +291,44 @@ int main(int argc, char **argv) {
             for (auto &thread : callers) thread.join();
         }
         if (failures) throw std::runtime_error("Concurrent result mismatch");
-        // Slow leaks can hide inside the per-close allowance. After warm-up (first
-        // quarter), the last quarter's median closed RSS must not exceed the second
-        // quarter's by more than 32 MiB; medians absorb allocator arena swings.
-        const auto median = [&](size_t begin, size_t end) {
-            std::vector<long> part(closed_rss.begin() + begin, closed_rss.begin() + end);
-            std::nth_element(part.begin(), part.begin() + part.size() / 2, part.end());
-            return part[part.size() / 2];
-        };
-        const size_t quarter = closed_rss.size() / 4;
-        const long warm_median = quarter ? median(quarter, 2 * quarter) : baseline_rss;
-        const long late_median = quarter ? median(closed_rss.size() - quarter, closed_rss.size()) : baseline_rss;
-        if (closed_rss.size() >= 40 && late_median > warm_median + 32 * 1024)
-            throw std::runtime_error("Sustained post-warmup closed RSS growth exceeded 32 MiB");
+        // Slow leaks can hide inside the per-close allowance. After warm-up (first quarter),
+        // the last quarter's median closed RSS must not exceed the second quarter's by more than
+        // 32 MiB (from 40 rounds); from 1,000 rounds also the soak rule (stress_rule.hpp).
+        // Medians absorb allocator arena swings.
+        const auto growth = stress_rule::evaluate(closed_rss);
+        const long warm_median = growth.warm_median_kib.value_or(baseline_rss);
+        const long late_median = growth.late_median_kib.value_or(baseline_rss);
+        report.warm_median_closed_rss_kib = warm_median;
+        report.late_median_closed_rss_kib = late_median;
+        if (const auto broken = stress_rule::violation(growth); !broken.empty()) throw std::runtime_error(broken);
         settled(baseline_fds, baseline_threads);
         const auto final_rss = rss_kib(), final_fds = descriptor_count(), final_threads = thread_count();
-        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        report.final_rss_kib = final_rss;
+        report.fds = final_fds;
+        report.threads = final_threads;
         // Allocators can retain arenas: this is a bounded-growth regression gate,
         // not proof that every byte was returned to the OS. Sanitizers are separate.
         if (final_fds != baseline_fds || final_threads != baseline_threads || final_rss > baseline_rss + 128 * 1024)
             throw std::runtime_error("Resource growth exceeded predeclared limits (FD/thread exact, RSS +128MiB)");
-        std::cout << "{\"rounds\":" << completed << ",\"requested_seconds\":" << seconds
-                  << ",\"inference_threads\":2,\"max_closed_rss_kib\":" << maximum_closed_rss
-                  << ",\"concurrent_calls\":12,\"baseline_rss_kib\":" << baseline_rss
-                  << ",\"warm_median_closed_rss_kib\":" << warm_median << ",\"late_median_closed_rss_kib\":" << late_median
-                  << ",\"final_rss_kib\":" << final_rss << ",\"peak_rss_kib\":" << peak_kib()
-                  << ",\"fds\":" << final_fds << ",\"threads\":" << final_threads << ",\"elapsed_seconds\":" << elapsed
-                  << ",\"memory_metric\":\"" << memory_metric << "\",\"thread_metric\":\"" << thread_metric
-                  << "\",\"settle_waits\":" << settle_waits << "}\n";
-    } catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
+        report.peak_rss_kib = peak_kib();
+        report.elapsed_seconds = elapsed_seconds();
+        report.settle_waits = settle_waits;
+        std::cout << stress_rule::result_line(report);
+    } catch (const std::exception &error) {
+        std::cerr << error.what() << '\n';
+        if (!closed_rss.empty()) {
+            // After the first completed round a failure still reports the series so far.
+            report.failure = error.what();
+            if (!report.warm_median_closed_rss_kib) {
+                const auto growth = stress_rule::evaluate(closed_rss);
+                report.warm_median_closed_rss_kib = growth.warm_median_kib.value_or(*report.baseline_rss_kib);
+                report.late_median_closed_rss_kib = growth.late_median_kib.value_or(*report.baseline_rss_kib);
+            }
+            report.peak_rss_kib = peak_kib();
+            report.elapsed_seconds = elapsed_seconds();
+            report.settle_waits = settle_waits;
+            std::cout << stress_rule::result_line(report);
+        }
+        return 1;
+    }
 }

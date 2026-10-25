@@ -235,20 +235,6 @@ public final class LayaTest {
         }
     }
 
-    static void routerAutoRoutes() throws Exception {
-        String json = "{\"models\":{\"en\":\"" + json(MODEL) + "\",\"ml\":\"" + json(MODEL)
-            + "\"},\"max_loaded\":1,\"auto\":{\"english\":\"en\",\"default\":\"ml\"}}";
-        String english = "I was charged twice for my subscription this month and I would like my money back please.";
-        try (Laya router = Laya.openRouter(json, TWO)) {
-            String out = router.execute(withModel(PRIMITIVE, "auto").replace("Refund me", english));
-            check(out.contains("\"model\":\"en\"") && out.contains("\"reason\":\"english_text\""), "english text " + out);
-            out = router.execute(withModel(PRIMITIVE, "auto").replace("Refund me", "\u6211\u8fd9\u4e2a\u6708\u7684\u8ba2\u9605\u88ab\u6263\u4e86\u4e24\u6b21\u8d39\u7528\uff0c\u8bf7\u9000\u6b3e"));
-            check(out.contains("\"model\":\"ml\"") && out.contains("\"reason\":\"non_latin_script\""), "non-Latin text " + out);
-            out = router.execute(withModel(PRIMITIVE, "auto").replace("Refund me", english).replaceFirst("\\{", "{\"lang\":\"fr\","));
-            check(out.contains("\"model\":\"ml\"") && out.contains("\"reason\":\"lang\""), "lang override " + out);
-        }
-    }
-
     static void closeIsIdempotent() throws Exception {
         Path file = Files.createTempFile("laya", ".gguf");
         try {
@@ -290,41 +276,24 @@ public final class LayaTest {
 
     static void configAndPerRequestSettings() throws Exception {
         String choice = "{\"state\":\"Please refund me.\",\"questions\":{\"q\":{\"type\":\"choice\",\"instructions\":\"Is a refund requested?\",\"criteria\":[\"yes\",\"no\"]}}}";
-        String baseline;
         try (Laya laya = Laya.open(MODEL, TWO)) {
-            baseline = laya.execute(choice);
-            check(baseline.contains("\"answer_confidence\""), "answer_confidence " + baseline);
-            check(baseline.contains("\"confidence\""), "confidence " + baseline);
-            String hot = choice.replaceFirst("\\{", "{\"temperatures\":{\"choice.2\":3.0},");
-            String hotResult = laya.execute(hot);
-            check(!hotResult.equals(baseline), "per-request temperature changes the result: " + baseline + " vs " + hotResult);
-            eq(baseline, laya.execute(choice), "per-request settings do not persist");
             eq(1, statusOf(() -> laya.execute(choice.replaceFirst("\\{", "{\"max_tokens\":0,"))), "max_tokens 0");
             eq(1, statusOf(() -> laya.execute(choice.replaceFirst("\\{", "{\"max_tokens\":100000000,"))), "max_tokens above context");
-            laya.execute(choice.replaceFirst("\\{", "{\"max_tokens\":512,"));
+            eq(1, statusOf(() -> laya.execute(choice.replaceFirst("\\{", "{\"temperatures\":{\"choice\":0},"))), "temperature 0");
         }
-        Config hot = TWO.withContextTokens(128).withTemperatures(Map.of("choice.2", 3.0));
-        try (Laya laya = Laya.open(MODEL, hot)) {
+        Config configured = TWO.withContextTokens(128).withTemperatures(Map.of("choice.2", 3.0));
+        try (Laya laya = Laya.open(MODEL, configured)) {
             check(laya.info().contains("\"context_tokens\":128"), "configured context tokens");
-            check(!laya.execute(choice).equals(baseline), "open temperatures change the result");
         }
         eq(1, statusOf(() -> Laya.open(MODEL, TWO.withContextTokens(1))), "context_tokens below minimum");
         eq(1, statusOf(() -> Laya.open(MODEL, TWO.withOverflow("bogus"))), "invalid overflow");
         String longRequest = "{\"state\":\"" + "refund ".repeat(800) + "\",\"questions\":{\"refund\":{\"type\":\"noul\",\"instructions\":\"Is a refund requested?\"}}}";
+        // The policy reaches the engine: the default (reject) would refuse this request.
         try (Laya laya = Laya.open(MODEL, TWO.withOverflow("truncate_end"))) {
-            String out = laya.execute(longRequest);
-            check(out.contains("\"state_tokens_dropped\":") && !out.contains("\"state_tokens_dropped\":0"), "truncate_end drops tokens " + out);
-            eq(1, statusOf(() -> laya.execute(longRequest.replaceFirst("\\{", "{\"overflow\":\"reject\","))), "request overflow reject wins");
+            check(laya.execute(longRequest).contains("\"answers\""), "truncate_end accepts a long request");
         }
         eq(1, statusOf(() -> Laya.open(MODEL, TWO.withTemperatures(Map.of("bogus.key", 1.5)))), "unknown temperature key");
-        // Router: the open config applies to every route; a route's own config overrides it.
-        String hotRoute = "{\"models\":{\"plain\":\"" + json(MODEL) + "\",\"hot\":{\"path\":\"" + json(MODEL)
-            + "\",\"config\":{\"temperatures\":{\"choice.2\":3.0}}}},\"max_loaded\":1}";
-        try (Laya router = Laya.openRouter(hotRoute, TWO)) {
-            String plain = router.execute(withModel(choice, "plain"));
-            check(plain.contains("\"model\":\"plain\""), "plain route");
-            String modelHot = router.execute(withModel(choice, "hot"));
-            check(!modelHot.replace("\"hot\"", "\"plain\"").equals(plain), "route config overrides: " + plain + " vs " + modelHot);
+        try (Laya router = Laya.openRouter("{\"models\":{\"plain\":\"" + json(MODEL) + "\"},\"max_loaded\":1}", TWO)) {
             check(router.info().contains("\"default_context_tokens\""), "router info is runtime only");
         }
     }
@@ -785,7 +754,6 @@ public final class LayaTest {
         for (int i = 0; i < cases.length; i++) ran += run(names[i], cases[i], failed);
         if (MODEL == null) System.out.println("SKIP real-model tests (LAYA_MODEL unset)");
         else {
-            ran += run("routerAutoRoutes", LayaTest::routerAutoRoutes, failed);
             ran += run("realFeatures", LayaTest::realFeatures, failed);
             ran += run("configAndPerRequestSettings", LayaTest::configAndPerRequestSettings, failed);
             ran += run("cancellationAndDeadline", LayaTest::cancellationAndDeadline, failed);

@@ -7,12 +7,24 @@
 //   2. tokenization time grows linearly: text that matches a short special token
 //      every few bytes is timed at two sizes, and the larger one must not take
 //      quadratically longer.
-// Usage: laya-tokenizer-tests [--record] GOLDEN VOCAB.gguf...
+// Usage: laya-tokenizer-tests [--record] [--time NAME]... GOLDEN VOCAB.gguf...
 // Without --record, every vocabulary must have golden entries (an unknown vocabulary
 // fails), and every golden entry of a supplied vocabulary must be checked.
+// --time NAME (repeatable) times only the vocabularies whose file name is NAME or
+// ggml-vocab-NAME.gguf (each NAME must match a supplied vocabulary); without it every
+// vocabulary is timed. The golden comparison always covers every supplied vocabulary.
+// Sanitizer builds do not time (instrumentation slows tokenization several times over
+// without testing anything the timing checks): they print NOT APPLICABLE.
 #include "llama.h"
 #include "thread-cpu-time.hpp"
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__) || __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define DTL_SANITIZED 1
+#endif
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -147,7 +159,26 @@ int main(int argc, char **argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     const bool record = !args.empty() && args[0] == "--record";
     if (record) args.erase(args.begin());
-    if (args.size() < 2) { std::cerr << "usage: laya-tokenizer-tests [--record] GOLDEN VOCAB.gguf...\n"; return 2; }
+    std::set<std::string> timed_names; // empty: time every vocabulary
+    for (size_t i = 0; i < args.size();) {
+        if (args[i] != "--time") { ++i; continue; }
+        if (i + 1 >= args.size() || args[i + 1].empty()) { std::cerr << "--time needs a vocabulary name\n"; return 2; }
+        timed_names.insert(args[i + 1]);
+        args.erase(args.begin() + static_cast<std::ptrdiff_t>(i), args.begin() + static_cast<std::ptrdiff_t>(i) + 2);
+    }
+    if (args.size() < 2) { std::cerr << "usage: laya-tokenizer-tests [--record] [--time NAME]... GOLDEN VOCAB.gguf...\n"; return 2; }
+    std::set<std::string> unmatched = timed_names;
+    auto selected_for_timing = [&](const std::string &file) {
+        if (timed_names.empty()) return true;
+        for (const auto &name : timed_names)
+            if (file == name || file == "ggml-vocab-" + name + ".gguf") { unmatched.erase(name); return true; }
+        return false;
+    };
+    for (size_t v = 1; v < args.size(); ++v) selected_for_timing(args[v].substr(args[v].find_last_of("/\\") + 1));
+    if (!unmatched.empty()) { std::cerr << "--time " << *unmatched.begin() << " names no supplied vocabulary\n"; return 2; }
+#ifdef DTL_SANITIZED
+    if (!record) std::cout << "NOT APPLICABLE: tokenization timing (sanitizer instrumentation; the golden comparison runs)\n";
+#endif
     const std::string golden_path = args[0];
     llama_log_set([](ggml_log_level, const char *, void *) {}, nullptr);
     llama_backend_init();
@@ -198,12 +229,20 @@ int main(int argc, char **argv) {
             // Linear time: text matching the shortest special token every few bytes.
             std::string shortest;
             for (const auto &t : specials) if (shortest.empty() || t.size() < shortest.size()) shortest = t;
-            if (!shortest.empty() && !record) {
+#ifdef DTL_SANITIZED
+            const bool timed = false;
+#else
+            const bool timed = selected_for_timing(label);
+#endif
+            if (!timed && !record)
+                std::fprintf(stderr, "%s: %zu golden cases match; not timed\n", label.c_str(), checked);
+            if (timed && !shortest.empty() && !record) {
                 const std::string unit = "x" + shortest;
                 const size_t matches = (128 << 10) / unit.size();
-                // Every vocabulary is timed, none skipped. Every special token is searched in
-                // every fragment, so the linear cost per match differs between vocabularies;
-                // gpt-neox's is the highest of those checked (about 0.1 s for 4 KiB).
+                // Every special token is searched in every fragment, so the linear cost per
+                // match differs between vocabularies; gpt-neox's is the highest of those checked
+                // (about 0.1 s for 4 KiB). The patch's partition code is the same for every
+                // vocabulary, so tokenizer-partition times gpt-neox and one other (--time).
                 // The sizes differ 32-fold: linear growth is x32, quadratic x1024. The
                 // unpatched partition took about 31 s for 64 KiB of double spaces (about
                 // 0.1 s at 4 KiB), so its growth here is close to x1000, ten times the x96

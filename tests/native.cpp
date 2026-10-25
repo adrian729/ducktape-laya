@@ -55,9 +55,7 @@ int main(int argc, char **argv) {
         char *error = nullptr, *result = nullptr;
         expect(dtl_open(nullptr, nullptr, &raw, &error) == DTL_INVALID_ARGUMENT, "null path");
         expect(!raw && error, "error ownership"); dtl_free(error);
-        expect(dtl_open("missing.gguf", "{\"bogus\":1}", &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "unknown config key"); dtl_free(error);
-        expect(dtl_open("missing.gguf", "{\"threads\":257}", &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "threads bound"); dtl_free(error);
-        expect(dtl_open("missing.gguf", "{", &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "malformed config"); dtl_free(error);
+        // The open config rejections themselves are in control-errors (tests/control.cpp).
         expect(dtl_open_router(self("{\"models\":{\"a\":\"SELF\"}}").c_str(), "{\"bogus\":1}", &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "router unknown config key"); dtl_free(error);
         expect(dtl_open_router(self("{\"models\":{\"a\":{\"path\":\"SELF\",\"config\":{\"bogus\":1}}}}").c_str(), nullptr, &raw, &error) == DTL_INVALID_ARGUMENT && !raw, "route unknown config key"); dtl_free(error);
         {

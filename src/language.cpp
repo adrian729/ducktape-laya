@@ -10,6 +10,7 @@
 #include "language.hpp"
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string_view>
@@ -19,98 +20,115 @@
 namespace dtl {
 namespace {
 using words = std::set<std::string, std::less<>>;
-// Function words per language, in the original's order (it reports the first best).
+// Function words per language, as constant data (a brace-initialized table of sets compiled
+// to one huge initializer function); the sets are built from it once, at first use.
+constexpr std::string_view words_en[] = {
+    "and", "are", "as", "at", "be", "but", "can", "for", "from", "has", "have", "i", "in", "is",
+    "it", "not", "of", "on", "please", "that", "the", "their", "there", "this", "to", "was",
+    "we", "were", "what", "which", "will", "with", "would", "you",
+};
+constexpr std::string_view words_fr[] = {
+    "alors", "au", "aux", "avec", "bien", "bonjour", "ce", "ces", "cette", "comment", "dans",
+    "des", "deux", "dois", "doit", "donc", "du", "elle", "elles", "est", "et", "fait", "fois",
+    "il", "ils", "je", "jour", "jours", "la", "le", "les", "ma", "mais", "merci", "mes", "mois",
+    "mon", "nous", "ont", "ou", "pas", "peut", "peux", "plus", "pour", "pourquoi", "quand",
+    "que", "qui", "sa", "ses", "sont", "sur", "ta", "tes", "ton", "tous", "tout", "toute",
+    "trois", "très", "tu", "une", "veut", "veux", "vous", "être",
+};
+constexpr std::string_view words_de[] = {
+    "aber", "auch", "auf", "aus", "bei", "bitte", "das", "dem", "den", "der", "dich", "die",
+    "diese", "diesen", "dieser", "dieses", "dir", "ein", "eine", "einem", "einen", "einer",
+    "für", "gibt", "habe", "haben", "heute", "ich", "im", "in", "ist", "jetzt", "kann",
+    "kannst", "mein", "meine", "meinem", "meinen", "meiner", "mich", "mir", "mit", "nach",
+    "nicht", "noch", "oder", "sich", "sind", "und", "uns", "von", "wann", "was", "welche",
+    "werden", "wie", "wir", "wird", "wo", "wurde", "zu", "zum", "zur",
+};
+constexpr std::string_view words_es[] = {
+    "al", "algo", "aquí", "aunque", "como", "con", "cuando", "del", "donde", "dos", "el",
+    "entre", "es", "esa", "ese", "eso", "esta", "este", "esto", "está", "fue", "fueron",
+    "gracias", "han", "hay", "hemos", "hoy", "la", "las", "le", "les", "lo", "los", "mi", "muy",
+    "más", "nada", "necesito", "ni", "nos", "para", "pero", "por", "porque", "puede", "pueden",
+    "que", "quiero", "se", "ser", "sobre", "son", "su", "sus", "también", "tengo", "tiene",
+    "tienen", "todo", "tres", "tu", "un", "una", "y", "ya",
+};
+constexpr std::string_view words_pt[] = {
+    "agora", "ainda", "alguem", "alguém", "ali", "antes", "ao", "aos", "aqui", "as", "até",
+    "boa", "cadê", "com", "como", "consigo", "da", "das", "depois", "deu", "do", "dois", "dos",
+    "e", "em", "entao", "então", "era", "esta", "estamos", "estava", "este", "estou", "está",
+    "eu", "ficou", "fiz", "foi", "gostaria", "hoje", "isso", "isto", "ja", "já", "mais", "mas",
+    "meu", "meus", "minha", "minhas", "muito", "na", "nada", "nao", "nas", "nenhum", "nenhuma",
+    "ninguem", "ninguém", "noite", "nos", "nossa", "nosso", "não", "o", "obrigada", "obrigado",
+    "olá", "onde", "ontem", "os", "para", "pela", "pelo", "pode", "podem", "por", "porque",
+    "pra", "preciso", "quando", "que", "quero", "sao", "se", "ser", "seu", "sou", "sua", "são",
+    "tambem", "também", "tarde", "tem", "tenho", "três", "tudo", "tá", "um", "uma", "vc", "vcs",
+    "voce", "voces", "você", "vocês", "é",
+};
+constexpr std::string_view words_it[] = {
+    "abbiamo", "adesso", "agli", "alla", "alle", "anche", "ancora", "avete", "che", "ci",
+    "ciao", "col", "come", "con", "da", "dagli", "dal", "dalla", "dallo", "degli", "dei", "del",
+    "della", "delle", "dello", "deve", "devo", "devono", "di", "dove", "e", "ed", "era", "fra",
+    "già", "gli", "grazie", "ha", "hai", "hanno", "ho", "ieri", "il", "la", "le", "lo", "mai",
+    "mi", "mia", "mio", "molto", "ne", "negli", "nel", "nell", "nella", "non", "o", "oggi",
+    "per", "perche", "più", "poco", "quando", "questa", "questo", "scusa", "sempre", "si",
+    "sono", "stata", "stato", "su", "sua", "sul", "sulla", "sulle", "tra", "tuo", "un", "una",
+    "uno", "voglio", "vorrei", "è",
+};
+constexpr std::string_view words_nl[] = {
+    "aan", "dat", "deze", "door", "een", "het", "is", "maar", "met", "naar", "niet", "ook",
+    "op", "te", "van", "voor", "worden", "wordt", "zijn",
+};
+constexpr std::string_view words_sv[] = {
+    "appen", "aterbetala", "aterbetalning", "att", "behover", "behöver", "blivit", "debiterade",
+    "dessa", "detta", "faktura", "fel", "från", "får", "ganger", "gång", "gånger", "gör",
+    "göra", "hittar", "hjalp", "hjalpa", "hjälp", "hjälpa", "här", "installningarna",
+    "installningen", "inställningarna", "inställningen", "inte", "jag", "kommer", "kraschar",
+    "kvittot", "losenord", "lösenord", "mig", "min", "mitt", "måste", "nar", "när", "nästa",
+    "och", "också", "om", "oppnar", "paket", "ska", "skicka", "skulle", "sparningen",
+    "spårningen", "säger", "till", "tva", "två", "upp", "uppdaterats", "utan", "vi", "vill",
+    "är", "återbetala", "återbetalning", "öppnar",
+};
+constexpr std::string_view words_ro[] = {
+    "aceasta", "această", "acest", "acesta", "acum", "ale", "care", "dar", "din", "după",
+    "este", "foarte", "fost", "fără", "lui", "mi", "nu", "pentru", "până", "sunt", "să",
+    "trebuie", "vreau", "vă", "în", "și", "ți",
+};
+constexpr std::string_view words_bn[] = {
+    "abar", "ajke", "akhon", "amader", "amake", "amar", "ami", "amra", "apnake", "apnar",
+    "apnara", "apni", "ar", "asbe", "bhai", "bhalo", "bolte", "bolun", "chai", "chaina",
+    "dhonnobad", "dilam", "dite", "diye", "diyechi", "dorkar", "duibar", "ei", "eita", "ekbar",
+    "ekhon", "ekhono", "ekta", "ferot", "geche", "gese", "hobe", "hocche", "hoise", "hoye",
+    "hoyeche", "hoyni", "jabe", "jodi", "jonno", "kalke", "keno", "keu", "kharap", "khub", "ki",
+    "kibhabe", "kichu", "kintu", "kivabe", "kobe", "kokhon", "korbo", "korchi", "kore",
+    "koreche", "korechi", "koren", "korlam", "korsi", "korte", "korun", "kothay", "koto",
+    "lagbe", "moddhe", "nai", "niye", "oi", "oita", "onek", "ota", "pabo", "paini", "parben",
+    "parbo", "parchi", "parchina", "peyechi", "sathe", "shathe", "shob", "shomossa", "somossa",
+    "tader", "tahole", "taka", "theke", "tomake", "tomar", "tomra", "tumi", "valo",
+};
+constexpr std::string_view words_az[] = {
+    "amma", "ancaq", "artiq", "artıq", "bir", "biz", "bu", "cox", "daha", "deyil", "də", "eger",
+    "görə", "həm", "hər", "ile", "ilə", "isə", "kimi", "lakin", "mən", "nə", "olan", "olmasa",
+    "olub", "onlar", "siz", "sonra", "sən", "ucun", "var", "ve", "və", "yalniz", "yalnız",
+    "yox", "yoxdur", "çox", "üçün", "əgər",
+};
+struct word_list { std::string_view language; const std::string_view *begin, *end; };
+#define DTL_WORDS(lang) word_list{#lang, std::begin(words_##lang), std::end(words_##lang)}
+// In the original's order (it reports the first best).
+constexpr word_list word_lists[] = {
+    DTL_WORDS(en), DTL_WORDS(fr), DTL_WORDS(de), DTL_WORDS(es), DTL_WORDS(pt), DTL_WORDS(it), DTL_WORDS(nl), DTL_WORDS(sv),
+    DTL_WORDS(ro), DTL_WORDS(bn), DTL_WORDS(az),
+};
+#undef DTL_WORDS
 const std::vector<std::pair<std::string, words>> &stopwords() {
-    static const std::vector<std::pair<std::string, words>> table = {
-    {"en", {
-        "and", "are", "as", "at", "be", "but", "can", "for", "from", "has", "have", "i", "in", "is",
-        "it", "not", "of", "on", "please", "that", "the", "their", "there", "this", "to", "was",
-        "we", "were", "what", "which", "will", "with", "would", "you",
-    }},
-    {"fr", {
-        "alors", "au", "aux", "avec", "bien", "bonjour", "ce", "ces", "cette", "comment", "dans",
-        "des", "deux", "dois", "doit", "donc", "du", "elle", "elles", "est", "et", "fait", "fois",
-        "il", "ils", "je", "jour", "jours", "la", "le", "les", "ma", "mais", "merci", "mes", "mois",
-        "mon", "nous", "ont", "ou", "pas", "peut", "peux", "plus", "pour", "pourquoi", "quand",
-        "que", "qui", "sa", "ses", "sont", "sur", "ta", "tes", "ton", "tous", "tout", "toute",
-        "trois", "très", "tu", "une", "veut", "veux", "vous", "être",
-    }},
-    {"de", {
-        "aber", "auch", "auf", "aus", "bei", "bitte", "das", "dem", "den", "der", "dich", "die",
-        "diese", "diesen", "dieser", "dieses", "dir", "ein", "eine", "einem", "einen", "einer",
-        "für", "gibt", "habe", "haben", "heute", "ich", "im", "in", "ist", "jetzt", "kann",
-        "kannst", "mein", "meine", "meinem", "meinen", "meiner", "mich", "mir", "mit", "nach",
-        "nicht", "noch", "oder", "sich", "sind", "und", "uns", "von", "wann", "was", "welche",
-        "werden", "wie", "wir", "wird", "wo", "wurde", "zu", "zum", "zur",
-    }},
-    {"es", {
-        "al", "algo", "aquí", "aunque", "como", "con", "cuando", "del", "donde", "dos", "el",
-        "entre", "es", "esa", "ese", "eso", "esta", "este", "esto", "está", "fue", "fueron",
-        "gracias", "han", "hay", "hemos", "hoy", "la", "las", "le", "les", "lo", "los", "mi", "muy",
-        "más", "nada", "necesito", "ni", "nos", "para", "pero", "por", "porque", "puede", "pueden",
-        "que", "quiero", "se", "ser", "sobre", "son", "su", "sus", "también", "tengo", "tiene",
-        "tienen", "todo", "tres", "tu", "un", "una", "y", "ya",
-    }},
-    {"pt", {
-        "agora", "ainda", "alguem", "alguém", "ali", "antes", "ao", "aos", "aqui", "as", "até",
-        "boa", "cadê", "com", "como", "consigo", "da", "das", "depois", "deu", "do", "dois", "dos",
-        "e", "em", "entao", "então", "era", "esta", "estamos", "estava", "este", "estou", "está",
-        "eu", "ficou", "fiz", "foi", "gostaria", "hoje", "isso", "isto", "ja", "já", "mais", "mas",
-        "meu", "meus", "minha", "minhas", "muito", "na", "nada", "nao", "nas", "nenhum", "nenhuma",
-        "ninguem", "ninguém", "noite", "nos", "nossa", "nosso", "não", "o", "obrigada", "obrigado",
-        "olá", "onde", "ontem", "os", "para", "pela", "pelo", "pode", "podem", "por", "porque",
-        "pra", "preciso", "quando", "que", "quero", "sao", "se", "ser", "seu", "sou", "sua", "são",
-        "tambem", "também", "tarde", "tem", "tenho", "três", "tudo", "tá", "um", "uma", "vc", "vcs",
-        "voce", "voces", "você", "vocês", "é",
-    }},
-    {"it", {
-        "abbiamo", "adesso", "agli", "alla", "alle", "anche", "ancora", "avete", "che", "ci",
-        "ciao", "col", "come", "con", "da", "dagli", "dal", "dalla", "dallo", "degli", "dei", "del",
-        "della", "delle", "dello", "deve", "devo", "devono", "di", "dove", "e", "ed", "era", "fra",
-        "già", "gli", "grazie", "ha", "hai", "hanno", "ho", "ieri", "il", "la", "le", "lo", "mai",
-        "mi", "mia", "mio", "molto", "ne", "negli", "nel", "nell", "nella", "non", "o", "oggi",
-        "per", "perche", "più", "poco", "quando", "questa", "questo", "scusa", "sempre", "si",
-        "sono", "stata", "stato", "su", "sua", "sul", "sulla", "sulle", "tra", "tuo", "un", "una",
-        "uno", "voglio", "vorrei", "è",
-    }},
-    {"nl", {
-        "aan", "dat", "deze", "door", "een", "het", "is", "maar", "met", "naar", "niet", "ook",
-        "op", "te", "van", "voor", "worden", "wordt", "zijn",
-    }},
-    {"sv", {
-        "appen", "aterbetala", "aterbetalning", "att", "behover", "behöver", "blivit", "debiterade",
-        "dessa", "detta", "faktura", "fel", "från", "får", "ganger", "gång", "gånger", "gör",
-        "göra", "hittar", "hjalp", "hjalpa", "hjälp", "hjälpa", "här", "installningarna",
-        "installningen", "inställningarna", "inställningen", "inte", "jag", "kommer", "kraschar",
-        "kvittot", "losenord", "lösenord", "mig", "min", "mitt", "måste", "nar", "när", "nästa",
-        "och", "också", "om", "oppnar", "paket", "ska", "skicka", "skulle", "sparningen",
-        "spårningen", "säger", "till", "tva", "två", "upp", "uppdaterats", "utan", "vi", "vill",
-        "är", "återbetala", "återbetalning", "öppnar",
-    }},
-    {"ro", {
-        "aceasta", "această", "acest", "acesta", "acum", "ale", "care", "dar", "din", "după",
-        "este", "foarte", "fost", "fără", "lui", "mi", "nu", "pentru", "până", "sunt", "să",
-        "trebuie", "vreau", "vă", "în", "și", "ți",
-    }},
-    {"bn", {
-        "abar", "ajke", "akhon", "amader", "amake", "amar", "ami", "amra", "apnake", "apnar",
-        "apnara", "apni", "ar", "asbe", "bhai", "bhalo", "bolte", "bolun", "chai", "chaina",
-        "dhonnobad", "dilam", "dite", "diye", "diyechi", "dorkar", "duibar", "ei", "eita", "ekbar",
-        "ekhon", "ekhono", "ekta", "ferot", "geche", "gese", "hobe", "hocche", "hoise", "hoye",
-        "hoyeche", "hoyni", "jabe", "jodi", "jonno", "kalke", "keno", "keu", "kharap", "khub", "ki",
-        "kibhabe", "kichu", "kintu", "kivabe", "kobe", "kokhon", "korbo", "korchi", "kore",
-        "koreche", "korechi", "koren", "korlam", "korsi", "korte", "korun", "kothay", "koto",
-        "lagbe", "moddhe", "nai", "niye", "oi", "oita", "onek", "ota", "pabo", "paini", "parben",
-        "parbo", "parchi", "parchina", "peyechi", "sathe", "shathe", "shob", "shomossa", "somossa",
-        "tader", "tahole", "taka", "theke", "tomake", "tomar", "tomra", "tumi", "valo",
-    }},
-    {"az", {
-        "amma", "ancaq", "artiq", "artıq", "bir", "biz", "bu", "cox", "daha", "deyil", "də", "eger",
-        "görə", "həm", "hər", "ile", "ilə", "isə", "kimi", "lakin", "mən", "nə", "olan", "olmasa",
-        "olub", "onlar", "siz", "sonra", "sən", "ucun", "var", "ve", "və", "yalniz", "yalnız",
-        "yox", "yoxdur", "çox", "üçün", "əgər",
-    }},
-    };
+    static const std::vector<std::pair<std::string, words>> table = [] {
+        std::vector<std::pair<std::string, words>> out;
+        out.reserve(std::size(word_lists));
+        for (const auto &list : word_lists) {
+            words set;
+            for (auto word = list.begin; word != list.end; ++word) set.emplace(*word);
+            out.emplace_back(std::string(list.language), std::move(set));
+        }
+        return out;
+    }();
     return table;
 }
 // Words that more than one list claims; they name no language by themselves.

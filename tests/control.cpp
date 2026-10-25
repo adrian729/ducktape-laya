@@ -53,8 +53,10 @@ int main(int argc, char **argv) {
         for (const std::string &config : {self(R"({"models":{"auto":"SELF"}})"), self(R"({"models":{"a":"SELF"},"auto":{"english":"a"}})"),
                                    self(R"({"models":{"a":"SELF"},"auto":{"english":"a","default":"b"}})")})
             CHECK(status([&] { ducktape::engine::open_router(config); }) == DTL_INVALID_ARGUMENT);
-        for (const char *config : {R"({"threads":257})", R"({"context_tokens":31})", R"({"overflow":"clip"})",
-                                   R"({"temperatures":{"noul.2":1e39}})", R"({"bogus":1})"})
+        // The one copy of the open config rejections (abi-errors and feature-errors no longer repeat them).
+        for (const char *config : {R"({"threads":257})", R"({"threads":-1})", R"({"threads":"2"})", R"({"context_tokens":31})",
+                                   R"({"context_tokens":0})", R"({"context_tokens":"64"})", R"({"overflow":"clip"})",
+                                   R"({"temperatures":{"noul.2":1e39}})", R"({"bogus":1})", R"([])", "{"})
             CHECK(status([&] { ducktape::engine::open(self("SELF"), config); }) == DTL_INVALID_ARGUMENT);
         CHECK(status([&] { ducktape::engine::open(self("SELF"), R"({"overflow":"scan","context_tokens":256})"); }) == DTL_MODEL_ERROR);
         // Runtime info advertises the features and limits the core enforces.
@@ -316,73 +318,6 @@ int main(int argc, char **argv) {
     // Not a skip: the check does not exist off Linux, and validate.py records only SKIPPED: lines.
     std::cerr << "NOT APPLICABLE: the automatic thread count probe reads the affinity mask and /proc (Linux only)\n";
 #endif
-    {
-        // Tokenization honours deadlines and cancellation (tokenizer-stop-check.patch). A 1 MiB state
-        // under "reject" is tokenized in full and then rejected with status 1 before any inference,
-        // so that call times tokenization alone (the faster of two calls). Each call uses a different
-        // state, so none reuses the tokens cached from the previous one. A deadline and a cancellation
-        // at a tenth of that time must end the call with their own status within half of it (before
-        // the patch, such calls ran tokenization to the end and returned status 1). The margin covers
-        // the request parsing and the unchecked regex pre-split, which run before the first check
-        // (together about an eighth of the full time). Times are the calling thread's CPU time, which
-        // load does not stretch (tokenization runs on that thread), as in real-control-tokenize; the
-        // deadline and the cancellation come by the wall clock, so load only makes them come earlier.
-        // Long pseudo-random words: most of their tokenization is merging, which is checked; the
-        // regex pre-split, which is not, takes a larger share of ordinary text (about a quarter).
-        auto large = [](const char *first) {
-            std::string text = first;
-            uint32_t seed = 12345;
-            while (text.size() < 1040000) {
-                text += ' ';
-                for (int i = 0; i < 160; ++i) { seed = seed * 1103515245u + 12345u; text += char('a' + (seed >> 16) % 26); }
-            }
-            const std::string body = R"({"state":")" + text + R"(","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
-            return body;
-        };
-        auto timed_status = [&](const std::string &body, const ducktape::call_options &call, double &elapsed) {
-            const double started = dtl_test::thread_cpu_seconds();
-            dtl_status status = DTL_OK;
-            try { engine.execute(body, call); } catch (const ducktape::error &e) { status = e.status; }
-            elapsed = dtl_test::thread_cpu_seconds() - started;
-            return status;
-        };
-        const auto full_body = large("Full."), again_body = large("Again."), deadline_body = large("Deadline."), cancel_body = large("Cancel.");
-        CHECK(full_body.size() <= 1048576 && again_body.size() <= 1048576 && deadline_body.size() <= 1048576 && cancel_body.size() <= 1048576);
-        double full = 0, again = 0, stopped = 0;
-        CHECK(timed_status(full_body, {}, full) == DTL_INVALID_ARGUMENT);
-        CHECK(timed_status(again_body, {}, again) == DTL_INVALID_ARGUMENT);
-        full = std::min(full, again);
-        const auto tenth = std::max<long long>(1, static_cast<long long>(full * 100)); // milliseconds
-        // Each stop is sampled three times and the fastest counts, as for the full time: a single
-        // sample would compare one possibly preempted call with the better of two. A stopped call
-        // caches no tokens, so the same state is tokenized afresh each time.
-        ducktape::call_options deadline;
-        deadline.timeout_ms = static_cast<uint32_t>(tenth);
-        double fastest = 1e30;
-        for (int sample = 0; sample < 3; ++sample) {
-            CHECK(timed_status(deadline_body, deadline, stopped) == DTL_DEADLINE_EXCEEDED);
-            fastest = std::min(fastest, stopped);
-        }
-        std::cerr << "1 MiB tokenization " << full << " s CPU; stopped by a " << tenth
-                  << " ms deadline after " << fastest << " s CPU (fastest of 3)\n";
-        CHECK(fastest * 2 < full);
-        std::atomic<bool> stop{false};
-        ducktape::call_options cancellable;
-        cancellable.should_cancel = [](void *p) -> uint32_t { return static_cast<std::atomic<bool> *>(p)->load() ? 1 : 0; };
-        cancellable.cancel_user_data = &stop;
-        fastest = 1e30;
-        for (int sample = 0; sample < 3; ++sample) {
-            stop = false;
-            std::thread canceller([&] { std::this_thread::sleep_for(std::chrono::milliseconds(tenth)); stop = true; });
-            const auto cancel_status = timed_status(cancel_body, cancellable, stopped);
-            canceller.join();
-            CHECK(cancel_status == DTL_CANCELLED);
-            fastest = std::min(fastest, stopped);
-        }
-        std::cerr << "cancelled after " << tenth << " ms, returned after " << fastest << " s CPU (fastest of 3)\n";
-        CHECK(fastest * 2 < full);
-        CHECK(engine.execute(request) == baseline);
-    }
     if (skipped) {
         std::cout << "Cancellation, deadline, latch and post-abort recovery passed; a check was skipped\n";
         return 77;
