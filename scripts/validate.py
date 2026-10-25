@@ -133,12 +133,13 @@ def run(label, command, gate=None, extra_env=None):
     if code: raise RuntimeError(f'{label} failed; see {out / (label + ".log")}')
 def record_ctest_skips(junit):
     """Record tests CTest reports as skipped (SKIP_RETURN_CODE) and checks inside passing tests
-    that report a 'SKIPPED:' line, so no skipped check is left out silently."""
+    that report a 'SKIPPED:' line, so no skipped check is left out silently. A check that does not
+    apply to the platform prints 'NOT APPLICABLE:' instead and is not recorded: it is not a skip."""
     import xml.etree.ElementTree as ElementTree
     if not junit.is_file(): return
     for case in ElementTree.parse(junit).getroot().iter('testcase'):
         name, output = case.get('name'), case.findtext('system-out') or ''
-        lines = [line.strip() for line in output.splitlines() if 'SKIPPED' in line]
+        lines = [line.strip() for line in output.splitlines() if 'SKIPPED:' in line]
         if case.get('status') in ('notrun', 'disabled') or case.find('skipped') is not None:
             report['skipped'][name] = 'reported skipped by the test: ' + ('; '.join(lines) or case.get('status', 'skipped'))
         elif lines:

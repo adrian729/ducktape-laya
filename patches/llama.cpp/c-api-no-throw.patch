@@ -81,7 +81,7 @@
      // reset splits
      sched->n_splits = 0;
      sched->n_graph_inputs = 0;
-@@ -1749,6 +1767,26 @@
+@@ -1749,6 +1767,34 @@
      }
  }
  
@@ -99,6 +99,14 @@
 +    }
 +}
 +
++// DTL: the same split with a failure value, for llama_context::graph_reserve's split-only path (the
++// fused operation probes that every context creation runs while flash attention is automatic): a
++// failed allocation fails the context (NULL, status 2) instead of aborting. Declared by the patched
++// src/llama-context.cpp; the exception is caught here and never crosses the C boundary.
++extern "C" bool dtl_ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
++    return ggml_backend_sched_split_graph_nothrow(sched, graph);
++}
++
 +void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
 +    if (!ggml_backend_sched_split_graph_nothrow(sched, graph)) {
 +        GGML_ABORT("%s: failed to allocate the graph splits", __func__);
@@ -108,7 +116,39 @@
  static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
      bool backend_ids_changed = false;
      for (int i = 0; i < sched->graph.n_nodes; i++) {
-@@ -2076,7 +2114,9 @@
+@@ -2065,18 +2111,40 @@
+ 
+     ggml_backend_sched_synchronize(sched);
+ 
+-    ggml_backend_sched_split_graph(sched, measure_graph);
++    if (!ggml_backend_sched_split_graph_nothrow(sched, measure_graph)) {
++        GGML_ABORT("%s: failed to allocate the graph splits", __func__);
++    }
+ 
+     ggml_gallocr_reserve_n_size(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids, sizes);
+ }
+ 
++// DTL: ggml_backend_sched_reserve_size with a failure value (false when the graph cannot be split)
++extern "C" bool dtl_ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes) {
++    GGML_ASSERT(sched);
++    GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
++    GGML_ASSERT(sizes);
++
++    ggml_backend_sched_reset(sched);
++
++    ggml_backend_sched_synchronize(sched);
++
++    if (!ggml_backend_sched_split_graph_nothrow(sched, measure_graph)) {
++        return false;
++    }
++
++    ggml_gallocr_reserve_n_size(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids, sizes);
++    return true;
++}
++
+ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph) {
+     GGML_ASSERT(sched);
+     GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
  
      ggml_backend_sched_synchronize(sched);
  
@@ -119,7 +159,7 @@
  
      if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
          return false;
-@@ -2095,7 +2135,9 @@
+@@ -2095,7 +2163,9 @@
      sched->cur_copy = sched->next_copy;
      sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
  
@@ -130,7 +170,7 @@
  
      if (!ggml_backend_sched_alloc_splits(sched)) {
          return false;
-@@ -2557,7 +2599,12 @@
+@@ -2557,7 +2627,12 @@
          return NULL;
      }
  
@@ -376,3 +416,36 @@
      ggml_tensor * op_tensor = fn(ctx.get());
      for (int i = 0; i < GGML_MAX_SRC; i++) {
          if (op_tensor->src[i] != nullptr) {
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -22,6 +22,11 @@
+ #include <string>
+ #include <unordered_map>
+ 
++// DTL: ggml_backend_sched_split_graph and ggml_backend_sched_reserve_size with a failure value
++// (ggml/src/ggml-backend.cpp, patches/llama.cpp/c-api-no-throw.patch)
++extern "C" bool dtl_ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
++extern "C" bool dtl_ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes);
++
+ //
+ // llama_context
+ //
+@@ -2569,10 +2574,14 @@
+ 
+     // initialize scheduler with the specified graph
+     if (split_only) {
+-        if (sizes) {
+-            ggml_backend_sched_reserve_size(sched.get(), gf, sizes);
+-        } else {
+-            ggml_backend_sched_split_graph(sched.get(), gf);
++        // DTL: the splitting variants with a failure value (patches/llama.cpp/c-api-no-throw.patch): a
++        // failed allocation here, which every context creation reaches through the fused operation
++        // probes, returns nullptr and the callers fail the context, rather than aborting
++        const bool split = sizes ? dtl_ggml_backend_sched_reserve_size(sched.get(), gf, sizes)
++                                 : dtl_ggml_backend_sched_split_graph(sched.get(), gf);
++        if (!split) {
++            LLAMA_LOG_ERROR("%s: failed to split the graph\n", __func__);
++            return nullptr;
+         }
+     } else if (!ggml_backend_sched_reserve(sched.get(), gf)) {
+         GGML_ASSERT(!sizes);

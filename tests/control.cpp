@@ -313,7 +313,8 @@ int main(int argc, char **argv) {
         }
     }
 #else
-    std::cerr << "SKIPPED: the automatic thread count probe reads the affinity mask and /proc (Linux only)\n";
+    // Not a skip: the check does not exist off Linux, and validate.py records only SKIPPED: lines.
+    std::cerr << "NOT APPLICABLE: the automatic thread count probe reads the affinity mask and /proc (Linux only)\n";
 #endif
     {
         // Tokenization honours deadlines and cancellation (tokenizer-stop-check.patch). A 1 MiB state

@@ -71,7 +71,7 @@ Rerun steps that failed for environmental reasons (machine load, a missing test 
    scripts/check-release-assets.sh build/release-assets COMMIT vX.Y.Z build/release-record/release
    ```
 
-   COMMIT is the full 40-hex SHA of the candidate commit (`git rev-parse vX.Y.Z^{commit}`), not an abbreviation or a branch name.
+   COMMIT is the full 40-hex SHA of the candidate commit (`git rev-parse HEAD` in the candidate checkout; the tag does not exist yet), not an abbreviation or a branch name.
 
    Assembly refuses a `gates.json` that is not `release_ready` or not schema 2, package directories whose inventory is not the one `gates.json` qualified or whose files differ from it, and native packages whose platforms are not the qualified targets. The output is the full asset set: every artifact in the native inventory (each target's archive and wheel, the multi-platform npm tarball, jar, sources and javadoc jars, POM and `.nupkg`, both `.crate` files) and in the browser inventory (the browser npm tarball), the inventories as `native-inventory.json` and `npm-browser-inventory.json`, the SBOMs as `native-sbom.cdx.json` and `npm-browser-sbom.cdx.json`, `gates.json` and `SHA256SUMS`.
 2. Tag `vX.Y.Z` (annotated) at the candidate commit and push the tag.

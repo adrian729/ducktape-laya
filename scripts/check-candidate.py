@@ -49,7 +49,7 @@ with subprocess.Popen(['git', '-C', str(ROOT), 'archive', commit], stdout=subpro
 record = read_json(candidate_tree / 'release/compatibility.json')
 check_record(docs=False)  # the checker checkout: runtime pin, patches and package versions (the docs are the candidate's, below)
 # The candidate's own record, policy and targets (an empty required_gates list, an unknown gate or a
-# missing build workflow in a candidate whose checker checkout is newer must not pass unnoticed).
+# missing build workflow must not pass unnoticed).
 try:
     if record.get('schema_version') != 2: raise ValueError('Unsupported compatibility record schema')
     policy = check_qualification(record, candidate_tree)
@@ -70,7 +70,7 @@ load, same_source = ctx.load, ctx.same_source
 # Inputs of the library under test, and of each reusable gate's harness.
 LIBRARY_INPUTS = ['src/*', 'include/*', 'cmake/*', 'patches/*', 'CMakeLists.txt', 'release/compatibility.json',
                   'models/*', 'third_party/*', '.gitmodules']
-NATIVE_TESTS = ['tests/*.cpp', 'tests/*.c', 'tests/consumers/*', 'tests/fixtures/*']
+NATIVE_TESTS = ['tests/*.cpp', 'tests/*.c', 'tests/*.hpp', 'tests/consumers/*', 'tests/fixtures/*']
 # Binding code and build manifests; package metadata alone does not change behaviour.
 BINDING_CODE = ['bindings/*.cjs', 'bindings/*.mjs', 'bindings/*.cpp', 'bindings/*.rs', 'bindings/*.toml', 'bindings/*.lock',
                 'bindings/*.py', 'bindings/*.go', 'bindings/*.mod', 'bindings/*.java', 'bindings/*.xml', 'bindings/*.sh',
