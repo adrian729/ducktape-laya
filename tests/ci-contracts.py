@@ -22,6 +22,7 @@ and that the check lists of the scripts agree with each other:
   release_targets.PROFILE_CHECKS[profile]; side_outputs is {'native-linux-x64': ['cross-host']}
   for linux-x64 and empty everywhere else;
 - set(validate.FULL_CHECKS) <= set(ci_paths.VALIDATE_CHECKS);
+- validate.FULL_POLICY_CHECKS and release_targets.POLICY_LABELS name exactly the check-policy.py labels;
 - every label of scripts/check-policy.py has POLICY_CHECKS inputs, and packaging-identities and
   browser-backend-identities keep their labels.
 
@@ -373,6 +374,13 @@ def main(argv=None):
     for label in ('packaging-identities', 'browser-backend-identities'):
         if label not in labels:
             problems.append(f'check-policy.py has no {label} label')
+    # --full and the tier-1 checker require every policy check: their hard-coded lists (M1) must name
+    # exactly check-policy.py's labels, or a new check would escape the host-full evidence.
+    for name, listed in (('validate.FULL_POLICY_CHECKS', validate.FULL_POLICY_CHECKS),
+                         ('release_targets.POLICY_LABELS', release_targets.POLICY_LABELS)):
+        if set(listed) != set(labels):
+            problems.append(f'{name} differs from the check-policy.py labels: missing {sorted(set(labels) - set(listed))}, '
+                            f'extra {sorted(set(listed) - set(labels))}')
     unclassified = sorted(label for label in labels if not ci_paths.POLICY_CHECKS.get(label))
     if unclassified:
         problems.append(f'check-policy.py labels without POLICY_CHECKS inputs: {unclassified}')
