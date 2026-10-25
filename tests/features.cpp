@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vector>
 #include <chrono>
+#include "thread-cpu-time.hpp"
 using json = nlohmann::ordered_json;
 #ifndef __has_feature
 #define __has_feature(x) 0
@@ -183,23 +184,21 @@ int main(int argc, char **argv) {
         {
             // Runs of spaces have no length limit (0.2.0 rejected runs over 4,096) and tokenize in
             // linear time: 128 KiB of spaces in the state takes no longer than twice the same size
-            // of ordinary words (fastest of two calls each; each state is new, so none reuses the
-            // previous call's tokens). Both are truncated to one 64-token window, so the calls'
-            // time is mostly tokenization.
+            // of ordinary words. Both are truncated to one 64-token window, so the calls' time is
+            // mostly tokenization, which runs on the calling thread: each is timed in that thread's
+            // CPU time over at least 0.25 s of calls, every state new so that none reuses the
+            // previous call's tokens.
+            unsigned nonce = 0;
             const auto timed = [&](const std::string &state) {
-                double best = 1e30;
-                for (const char *nonce : {"A", "B"}) {
-                    const json request = {{"state", std::string("Refund ") + nonce + "." + state + "Thanks."}, {"overflow", "truncate_end"},
+                return dtl_test::cpu_seconds_per_run([&] {
+                    const json request = {{"state", "Refund " + std::to_string(++nonce) + "." + state + "Thanks."}, {"overflow", "truncate_end"},
                                           {"max_tokens", 64}, {"questions", {{"refund", requests[0]["questions"]["refund"]}}}};
-                    const auto started = std::chrono::steady_clock::now();
                     const auto result = json::parse(engine.execute(request.dump()));
-                    best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
                     expect(result["usage"]["state_tokens_dropped"].get<size_t>() > 0, "a long state is truncated");
-                }
-                return best;
+                });
             };
             const double spaces = timed(std::string(128 << 10, ' ')), words = timed(repeated("refund ", (128 << 10) / 7));
-            std::cerr << "128 KiB of spaces: " << spaces << " s; of words: " << words << " s\n";
+            std::cerr << "128 KiB of spaces: " << spaces << " s CPU per call; of words: " << words << " s\n";
             expect(spaces <= 2 * words, "a long run of spaces tokenizes in about the time of ordinary text");
         }
         json long_option = primitive("Please refund me.");

@@ -300,7 +300,10 @@ if(DUCKTAPE_BUILD_TESTS)
     add_test(NAME real-features COMMAND laya-feature-tests ${DUCKTAPE_TEST_MODEL})
     add_test(NAME real-tokenizer COMMAND laya-tokenizer-tests ${DTL_TOKENIZER_GOLDEN} ${DUCKTAPE_TEST_MODEL})
     add_test(NAME real-decision-head COMMAND laya-decision-head-tests ${DUCKTAPE_TEST_MODEL})
-    set_tests_properties(real-features PROPERTIES TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT})
+    set_tests_properties(real-control real-control-tokenize real-model real-features real-tokenizer real-decision-head
+      PROPERTIES TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT})
+    # A check the host forbids (setting the CPU affinity in a sandbox) exits 77: reported skipped, not passed.
+    set_tests_properties(real-control PROPERTIES SKIP_RETURN_CODE 77)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       add_test(NAME real-faults COMMAND laya-fault-tests ${DUCKTAPE_TEST_MODEL})
       set_tests_properties(real-faults PROPERTIES TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT})
