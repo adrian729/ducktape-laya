@@ -18,6 +18,7 @@
 #include <map>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string_view>
 #include <thread>
 
@@ -34,14 +35,31 @@ namespace {
 constexpr int32_t tokenize_stopped = std::numeric_limits<int32_t>::min() + 1;
 constexpr int32_t tokenize_no_memory = std::numeric_limits<int32_t>::min() + 2;
 constexpr int32_t tokenize_failed = std::numeric_limits<int32_t>::min() + 3;
-std::string meta(llama_model *m, const std::string &key) {
-    int n = llama_model_meta_val_str(m, key.c_str(), nullptr, 0);
-    if (n < 0) throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
-    std::string value(static_cast<size_t>(n) + 1, '\0');
-    if (llama_model_meta_val_str(m, key.c_str(), value.data(), value.size()) != n)
-        throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
-    value.resize(static_cast<size_t>(n));
-    return value;
+// The value of a model metadata key, found by index: llama_model_meta_val_str and
+// llama_model_chat_template build a std::string from the key, whose allocation failure would
+// throw through the C function (undefined behaviour with clang-cl's /EHsc, the Windows build);
+// the by-index functions do not allocate. Keys never contain NUL (llama.cpp stores them as C strings).
+std::optional<std::string> find_meta(const llama_model *m, const std::string &key) {
+    std::string name;
+    for (int32_t i = 0, count = llama_model_meta_count(m); i < count; ++i) {
+        const int32_t length = llama_model_meta_key_by_index(m, i, nullptr, 0);
+        if (length < 0 || static_cast<size_t>(length) != key.size()) continue;
+        name.assign(static_cast<size_t>(length) + 1, '\0');
+        if (llama_model_meta_key_by_index(m, i, name.data(), name.size()) != length ||
+            std::string_view(name.data(), key.size()) != key) continue;
+        const int32_t n = llama_model_meta_val_str_by_index(m, i, nullptr, 0);
+        if (n < 0) break;
+        std::string value(static_cast<size_t>(n) + 1, '\0');
+        if (llama_model_meta_val_str_by_index(m, i, value.data(), value.size()) != n) break;
+        value.resize(static_cast<size_t>(n));
+        return value;
+    }
+    return std::nullopt;
+}
+std::string meta(const llama_model *m, const std::string &key) {
+    auto value = find_meta(m, key);
+    if (!value) throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
+    return std::move(*value);
 }
 }
 struct prepared_window {
@@ -104,10 +122,11 @@ struct backend::impl {
             throw failure(DTL_MODEL_ERROR, "Only Laya decision models are supported");
         if (llama_model_n_embd_out(model.get()) != 3)
             throw failure(DTL_MODEL_ERROR, "Expected three Laya decision output columns");
-        const char *tmpl = llama_model_chat_template(model.get(), "systemone");
+        // The key llama_model_chat_template(model, "systemone") reads (see find_meta).
+        const auto tmpl = find_meta(model.get(), "tokenizer.chat_template.systemone");
         if (!tmpl) throw failure(DTL_MODEL_ERROR, "Missing systemone template");
         jinja::lexer lexer;
-        auto lexed = lexer.tokenize(tmpl);
+        auto lexed = lexer.tokenize(*tmpl);
         source = lexed.source;
         program = jinja::parse_from_tokens(lexed);
         vocab = llama_model_get_vocab(model.get());

@@ -132,9 +132,10 @@ def native_gate(gate):
         report = native()
         need(report['gates'][gate]['status'] == 'passed', f'native: {gate} {report["gates"][gate]["status"]}')
         # Every additional pinned model is qualified like the primary one: the reference gates, and
-        # within the native contracts its tokenizer golden entries and selected decision head
-        # (real-tokenizer and real-decision-head run on the primary model).
-        per_model = {'original_reference': [gate], 'upstream_reference': [gate], 'native_contracts': ['tokenizer', 'decision_head']}
+        # within the native contracts its tokenizer golden entries, selected decision head and
+        # tokenization stops (real-tokenizer, real-decision-head and real-control-tokenize run on the primary model).
+        per_model = {'original_reference': [gate], 'upstream_reference': [gate],
+                     'native_contracts': ['tokenizer', 'decision_head', 'control_tokenize']}
         for name in record.get('additional_models', []) if gate in per_model else []:
             model_id = read_json(candidate_tree / name)['id']
             for model_gate in per_model[gate]:

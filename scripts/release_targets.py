@@ -53,10 +53,10 @@ def require_complete_validation(report, name):
          f'{name}: configured with a compiler cache ({configured}), not without one')
 
 
-# Native tests every target registers; real-faults and real-c-faults are Linux-only (CMakeLists.txt).
+# Native tests every target registers; the fault-injection tests are Linux-only (CMakeLists.txt).
 MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
 REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head'}
-LINUX_TESTS = {'real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults'}
+LINUX_TESTS = {'real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults'}
 # Suites scripts/validate.py leaves out with --bindings or --skip-native-tests (listed under skipped).
 SELECTABLE_SUITES = {'native', 'rust', 'node', 'python', 'java', 'dotnet', 'go', 'bindings', 'installed'}
 # The run that may produce candidate evidence.

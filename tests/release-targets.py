@@ -19,7 +19,8 @@ reports configured with a compiler cache (build_options) are refused, the native
 matrix's included; evidence reused from an ancestor fails when one of its gate's
 own inputs changed since (fixtures for fuzz, routing references for sanitizers,
 package manifests for the security review), and stress, soak and fuzz must meet
-the candidate's budgets; an untracked module under scripts/ makes the checker dirty."""
+the candidate's budgets; an additional model without its tokenization-stop run fails the
+native contracts; an untracked module under scripts/ makes the checker dirty."""
 import json
 import os
 import pathlib
@@ -342,6 +343,16 @@ class CheckCandidate(unittest.TestCase):
         value = json.loads(world.paths['installed_release'].read_text())
         world.paths['installed_release'].write_text(json.dumps({**value, 'artifact_inventory_sha256': '0' * 64}))
         self.assertIn('not the release packages', self.check(world)['gates']['installed_packages']['detail'])
+
+    def test_additional_model_native_gates(self):
+        # Every additional model's tokenizer, decision-head and tokenization-stop runs belong to the native contracts.
+        world = self.world('additional')
+        model_id = json.loads((ROOT / world.record['additional_models'][0]).read_text())['id']
+        self.assertEqual(self.check(world)['gates']['native_contracts'], {'status': 'passed'})
+        report = json.loads(world.paths['native'].read_text())
+        del report['additional_model_gates'][model_id]['control_tokenize']
+        world.paths['native'].write_text(json.dumps(report))
+        self.assertIn(f'native: control_tokenize for {model_id} not_run', self.check(world)['gates']['native_contracts']['detail'])
 
     def candidate_with_record(self, change):
         """A dangling commit: HEAD with release/compatibility.json changed (no branch, index or work tree is touched)."""
