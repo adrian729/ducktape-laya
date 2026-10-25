@@ -31,6 +31,10 @@ Agreement with the original Laya is checked per platform against the same limits
 
 The next release keeps C ABI 2 and `libducktape_laya.so.1`: a program built against 0.2.0 runs with the new library without a rebuild, and the C and C++ signatures are unchanged. C, C++, Rust and Go users upgrade the native library (and the crate or Go module for their fixes); the other bindings bundle their library and are upgraded as packages. The changes below are in the bindings' error reporting and library lookup, and in the prompts of some structured values; the full list is in the [changelog](../CHANGELOG.md#unreleased).
 
+### C and CMake
+
+- **`find_package(ducktape_laya 0.2 ...)` does not find 0.3.** The package version file uses `SameMinorVersion`, so a request for 0.2 is not satisfied by an installed 0.3. Request `0.3` (`find_package(ducktape_laya 0.3 REQUIRED)`) or drop the version. The ABI and `libducktape_laya.so.1` are unchanged, so programs that are already built keep running.
+
 ### Node.js and browser
 
 - **Match errors on `status` and `code`.** Every error now carries `status`, and every status-7 error (a missing, unloadable or wrong-ABI addon or runtime, or a CPU without the required features) carries `code` `'ERR_LAYA_UNSUPPORTED'`. Code that recognised a load failure by its message or by a missing `status` should test `error.code === 'ERR_LAYA_UNSUPPORTED'` instead. In TypeScript, `LayaError.status` is no longer optional and `code` has one more value; an exhaustive `switch` over `code` needs a case for it.
@@ -62,7 +66,7 @@ The next release keeps C ABI 2 and `libducktape_laya.so.1`: a program built agai
 These change results or accepted input without any code change:
 
 - **Integers outside the 64-bit range** in a structured state, instructions or descriptions now enter the prompt with all their digits (`100000000000000000000000`, not `1e+23`), as in the original Laya, so token counts and probabilities can change for requests that contain them. A `score` answer's `legend` writes them with all their digits too, not as floats.
-- **A structured state whose serialized text exceeds 2 MiB** is rejected with status 1. Numbers can serialize longer than they are written in the request (`1e15` becomes `1000000000000000.0`), so a state well under the 1 MiB request limit can reach it.
+- **A structured state whose serialized text exceeds 2 MiB** is rejected with status 1 when the request runs the model. Numbers can serialize longer than they are written in the request (`1e15` becomes `1000000000000000.0`), so a state well under the 1 MiB request limit can reach it.
 - **Runs of more than 4,096 spaces** are accepted again.
 - **`threads` 0** may now pick fewer than 4 threads: at most the CPUs the process may use (its affinity mask and, on Linux, the CPU quota of its cgroup and the cgroup's ancestors). Set `threads` explicitly to keep the old count.
 - **Deadlines and cancellation** now also stop tokenization, so a call over a long text can end with status 5 or 6 earlier than before.
@@ -115,7 +119,7 @@ These change results or accepted input without any code change:
 
 - **Stored temperatures are bounded to [0.5, 5]**, as in the original Laya. The English model stores `choice.11` = 0.1006, so `choice` questions with 11 or more options now report much less extreme probabilities (a 0.24 top probability had been reported as 0.9999). Pass `temperatures` to choose other values; app-supplied values are used as given.
 - **Structured values are serialized as the original Laya does** (Python `json.dumps`): floats keep full precision (`149.0` stays `149.0`), and `0`/`false` criterion descriptions are kept. Prompts for structured state, instructions or descriptions change, and so can token counts and probabilities.
-- **`context_tokens` replaces the fixed 512-token limit.** The default is still 512; set it up to the model's trained length.
+- **`context_tokens` replaces the fixed 512-token limit.** The default is still 512; set it up to the model's maximum (`trained_context_tokens`, 8,192 for the shipped files).
 - **A `choice` with a single option** is accepted and answered without inference (probability 1, no input tokens), and so is a schema string `enum` with one value; 0.1.0 required at least two. `choice` criteria may also be a list of labels.
 - **`"auto"` is reserved** and cannot be a route ID.
 - **Rejecting over-long input is now the default policy**, not the only behavior: requests or engines may choose `truncate_end`, `truncate_start` or `scan`. Under the default, results are unchanged.

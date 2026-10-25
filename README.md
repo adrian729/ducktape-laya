@@ -25,7 +25,7 @@ One native library does the work; thin bindings expose it to C/C++, Rust, Node.j
 | Linux arm64 (next release) | Armv8.2-A with dot product and FP16 (Graviton2+, Ampere Altra, Raspberry Pi 5) | as Linux x86-64 |
 | Windows x64 (next release) | as Linux x86-64 | Microsoft Visual C++ Redistributable |
 
-On a CPU without the required features, opening an engine fails with status 7 and names the missing feature. Plan for about 0.6 GiB of memory per open engine with the English model (1.2 GiB with the multilingual one) and 449 MB of disk for the English model. Language runtimes, tested versions and macOS: [docs/PLATFORMS.md](docs/PLATFORMS.md).
+On a CPU without the required features, opening an engine fails with status 7 and names the missing feature (a router checks when its first request loads a model). Plan for about 0.6 GiB of memory per open engine with the English model (1.2 GiB with the multilingual one) and 449 MB of disk for the English model. Language runtimes, tested versions and macOS: [docs/PLATFORMS.md](docs/PLATFORMS.md).
 
 ## Install
 
@@ -101,7 +101,7 @@ Every answer also carries `answer_confidence` (the probability of the reported a
 
 ## Performance and accuracy
 
-On a 4-core laptop CPU (Intel Core i7-1165G7, 4 threads), a request with three short questions took 1.5 to 1.8 s with the English model and 0.4 to 0.6 s with the multilingual one (0.2.0-era builds); each question is one model pass, so time grows with the number of questions and the length of the text ([performance](docs/PERFORMANCE.md)). Every release checks each model against results recorded with the original Laya implementation, with probabilities within 0.05 ([accuracy](docs/PERFORMANCE.md#accuracy-against-the-original-laya)).
+On a 4-core laptop CPU (Intel Core i7-1165G7, 4 threads), a request with three short questions took 1.5 to 1.8 s with the English model and 0.4 to 0.6 s with the multilingual one (0.2.0-era builds); each question is one model pass, so time grows with the number of questions and the length of the text ([performance](docs/PERFORMANCE.md)). Every release checks each model against results recorded with the original Laya implementation, with probabilities within 0.05 on Linux x86-64 ([accuracy](docs/PERFORMANCE.md#accuracy-against-the-original-laya)); the other platforms are checked with the English model only, and Windows has one documented, separately capped deviation ([known deviations](docs/COMPATIBILITY.md#known-deviations)).
 
 ## Documentation
 

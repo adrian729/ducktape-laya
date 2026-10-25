@@ -63,7 +63,7 @@ Options for both:
 | Option | Meaning |
 |---|---|
 | `threads` | 0 (automatic: at most 4 and at most the CPUs the process may use) or 1–256 |
-| `contextTokens` | Prompt capacity: 32 up to the model's trained length, default 512 |
+| `contextTokens` | Prompt capacity: 32 up to the model's maximum (`trained_context_tokens`, 8,192 for the shipped files), default 512 |
 | `overflow` | Default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan` |
 | `temperatures` | Calibration overrides keyed like `choice`, `choice.3_5` or `noul.2`; finite and above 0 |
 | `maxPending` | Accepted calls (each call or whole batch is one), 1–1024, default 16 |
