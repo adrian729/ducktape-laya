@@ -31,8 +31,9 @@ except ValueError as error:
 if a.jobs < 1: p.error('--jobs must be positive')
 launcher, env = '', dict(os.environ)
 if a.compiler_launcher == 'ccache':
-    launcher = shutil.which('ccache')
-    if not launcher: p.error('--compiler-launcher ccache: ccache is not on PATH')
+    # The name, as the other runners pass it: laya.build.json records the launcher, not this host's path to it.
+    if not shutil.which('ccache'): p.error('--compiler-launcher ccache: ccache is not on PATH')
+    launcher = 'ccache'
     env.update(CCACHE_ENVIRONMENT)
 record = check_record()
 pin = read_json(ROOT / 'release/browser-toolchain.json')
