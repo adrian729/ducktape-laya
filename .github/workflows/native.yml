@@ -1,562 +1,746 @@
 name: Native checks
-# Linux x86-64 and arm64 and Windows x64 (scripts/validate.py on each), the
-# multi-platform packages assembled from their fragments and installed on every
-# platform, and build reproducibility.
+# The release targets: Linux x86-64 (gcc, and clang pinned to LLVM 22.1.8), Linux arm64 and
+# Windows x64, the multi-platform packages assembled from their fragments, sanitizers, fuzz,
+# reproducibility and every dispatch mode. macOS is in platforms.yml.
 #
-# A release candidate run (dispatch with candidate=true on the exact candidate
-# commit, see docs/RELEASE_CHECKS.md) also runs the tier-2 targets' short stress
-# and reproducibility and keeps every target's evidence for
-# scripts/fetch-ci-evidence.py: evidence-<platform> (validate.py report and
-# outputs), packages-<platform> (fragments), packages-assembled (the release
-# packages), installed-<platform>-real-model, stress-<platform> and
-# reproducibility-<platform>.
+# The `changes` job decides what runs (scripts/ci-changes.py with scripts/ci_paths.py): a job runs
+# when its name is in the `run` output. Every job other than `changes` therefore has
+#   if: !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), '<name>')
+# so a needed job skipped as not stale does not skip its dependants. A job's `name:` is its
+# verification unit (scripts/ci_paths.py JOBS); tests/ci-contracts.py compares the names and the
+# `needs:` edges of each profile with JOBS.
+#
+# - Branch push: `changes`, `policy` with the stale policy checks and `generic-linux-x64` when stale.
+# - Push to main or a merge commit: the whole push profile, unless the tree is identical to a fully
+#   verified one (skip_all).
+# - Dispatch (scripts/verify.py, a release): mode verify (scope affected, all or a job list; with
+#   real_model the real-model profile too), candidate (everything, the release evidence that
+#   scripts/fetch-ci-evidence.py downloads), qualify (sanitizers, the fuzz campaign and the runtime
+#   upgrade rehearsal), warm-cache (build-only cache seeds, then cache-prune), experiment.
+#   cache=off builds without a compiler cache.
+# - Schedule: nightly warm-cache (always, so main's caches never age out); weekly the full
+#   push and real-model profiles (drift check of runner images and toolchains).
+#
+# A release dispatches mode=candidate first and mode=qualify once the candidate's build-* jobs have
+# finished, so the candidate's shards get the runners first (docs/RELEASING.md).
+#
+# Artifacts kept as release evidence (30 days in a candidate run): evidence-<platform>,
+# native-x64-<compiler>-node-<version>, packages-<platform>, packages-assembled,
+# installed-<platform>-real-model, stress-<platform> and reproducibility-<platform>; in a qualify
+# run sanitizers, fuzz and upgrade. Internal: build-<platform> (the build tarball) and
+# shard-<platform>-<checks>, 7 days, so a failed shard can be rerun within the week.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('Native checks mode={0} scope={1} real_model={2} cache={3}', inputs.mode, inputs.scope, inputs.real_model, inputs.cache)
+      || github.event_name == 'schedule'
+      && format('Native checks {0}', github.event.schedule == '17 3 * * *' && 'nightly warm-cache' || 'weekly full run')
+      || '' }}
 on:
   push:
   pull_request:
+  schedule:
+    - cron: '17 3 * * *' # nightly: mode warm-cache
+    - cron: '41 4 * * 6' # weekly: scope all with the real model
   workflow_dispatch:
     inputs:
+      mode:
+        description: verify (stale or selected jobs), candidate (release evidence), qualify (CI long gates), warm-cache (cache seeds), experiment
+        type: choice
+        options: [verify, candidate, qualify, warm-cache, experiment]
+        default: verify
+      scope:
+        description: affected (the stale jobs), all, or a comma-separated list of job names
+        type: string
+        default: affected
       real_model:
-        description: Download the pinned test model and run native artifact checks
+        description: Also the real-model profile (mode verify)
         type: boolean
         default: false
-      candidate:
-        description: Release candidate run (implies the real model; adds the tier-2 stress and reproducibility evidence)
-        type: boolean
-        default: false
+      cache:
+        description: auto, or off to build every job of the run without a compiler cache
+        type: choice
+        options: [auto, 'off']
+        default: auto
+      runtime:
+        description: mode qualify, qualify-upgrade the runtime commit to rehearse (default the pinned one)
+        type: string
+        default: ''
+      fuzz_seconds:
+        description: mode qualify, length of the qualify-fuzz campaign
+        type: number
+        default: 3600
 permissions:
   contents: read
-# A newer push to the same branch cancels the older push run (scripts/ci-changes.py compares a
-# branch with main, so the newer run checks everything the older one would have). Runs on main,
-# pull requests and dispatches (candidate runs included) are never cancelled.
+  actions: read
+# A newer push to the same branch cancels the older push run (each push's `changes` computes its own
+# stale jobs from job records). Runs on main, pull requests, dispatches and schedules are never cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
-# Compiler cache (non-candidate build jobs; see docs/RELEASE_CHECKS.md, Continuous integration):
-# ccache checks the compiler by content, and has no base_dir: base_dir would hand the compiler
-# relative paths, which -ffile-prefix-map does not map, and change the objects' bytes.
+defaults:
+  run:
+    shell: bash
+# Compiler cache (docs/RELEASE_CHECKS.md): ccache checks the compiler by content, has no base_dir (it
+# would hand the compiler relative paths, which -ffile-prefix-map does not map, and change the
+# objects' bytes) and no sloppiness. The scripts set the same and record `ccache --show-config`.
 env:
   CCACHE_COMPILERCHECK: content
+  CCACHE_BASEDIR: ''
+  CCACHE_SLOPPINESS: ''
+  PY: python3
+  PYTHONUTF8: '1'
+  # Git Bash on Windows: never rewrite arguments such as /O2 into Windows paths.
+  MSYS_NO_PATHCONV: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  GOTOOLCHAIN: local
 jobs:
-  # Documentation-only changes skip the build jobs (scripts/ci-changes.py); a dispatch never does.
   changes:
-    name: Changed files
+    name: changes
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
-      docs_only: ${{ steps.classify.outputs.docs_only }}
-      library: ${{ steps.classify.outputs.library }}
+      run: ${{ steps.plan.outputs.run }}
+      mode: ${{ steps.inputs.outputs.mode }}
+      cache: ${{ steps.inputs.outputs.cache }}
+      real_model: ${{ steps.inputs.outputs.real_model }}
+      skip_all: ${{ steps.changes.outputs.skip_all }}
+      docs_only: ${{ steps.changes.outputs.docs_only }}
+      policy: ${{ steps.plan.outputs.policy }}
+      base_policy: ${{ steps.changes.outputs.base_policy }}
+      runtime: ${{ steps.plan.outputs.runtime }}
+      bindings_linux_x64: ${{ steps.plan.outputs.bindings_linux_x64 }}
+      bindings_windows_x64: ${{ steps.plan.outputs.bindings_windows_x64 }}
+      assembled: ${{ steps.plan.outputs.assembled }}
+      shards_linux_x64: ${{ steps.plan.outputs.shards_linux_x64 }}
+      shards_linux_x64_clang: ${{ steps.plan.outputs.shards_linux_x64_clang }}
+      shards_linux_arm64: ${{ steps.plan.outputs.shards_linux_arm64 }}
+      shards_windows_x64: ${{ steps.plan.outputs.shards_windows_x64 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - id: classify
+      # Schedules have no inputs: the nightly cron is the warm-cache seeder, the weekly one the full run.
+      - name: Mode, scope and cache of this run
+        id: inputs
         env:
           EVENT: ${{ github.event_name }}
-          REF: ${{ github.ref }}
-          BEFORE: ${{ github.event.before }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          SCHEDULE: ${{ github.event.schedule }}
+          IN_MODE: ${{ inputs.mode }}
+          IN_SCOPE: ${{ inputs.scope }}
+          IN_REAL_MODEL: ${{ inputs.real_model }}
+          IN_CACHE: ${{ inputs.cache }}
         run: |
-          base=
-          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"
-          elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then base="$BEFORE"
-          elif [ "$EVENT" = push ]; then base="$(git merge-base origin/main HEAD || true)"
-          fi
-          python3 scripts/ci-changes.py --event "$EVENT" --base "$base"
-
-  docs:
-    name: Documentation and policy checks
-    needs: changes
-    if: needs.changes.outputs.docs_only == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - name: Links, release notes, qualification policy, result comparison and the CI change rules
-        run: |
-          python3 tests/docs-links.py
-          python3 tests/docs-links.py --self-test
-          python3 tests/release-notes.py
-          python3 tests/qualification.py
-          python3 tests/result-comparison.py
-          python3 tests/ci-changes.py
-
-  parser-sanitizers:
-    needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      CC: clang
-      CXX: clang++
-      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
-      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          submodules: recursive
-          persist-credentials: false
-      - name: Compiler cache
-        if: ${{ !inputs.candidate }}
-        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
-        with:
-          key: ${{ runner.os }}-x64-clang-sanitizers-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
-          restore-keys: ${{ runner.os }}-x64-clang-sanitizers
-          max-size: 500M
-          install: binary
-      - name: Build instrumented shared library and model-free contracts
+          case "$EVENT" in
+            workflow_dispatch) mode=$IN_MODE scope=$IN_SCOPE real_model=$IN_REAL_MODEL cache=$IN_CACHE ;;
+            schedule)
+              if [ "$SCHEDULE" = '17 3 * * *' ]; then mode=warm-cache real_model=false
+              else mode=verify real_model=true
+              fi
+              scope=all cache=auto ;;
+            *) mode=verify scope=affected real_model=false cache=auto ;;
+          esac
+          case "$mode" in verify|candidate|qualify|warm-cache|experiment) ;; *) echo "unknown mode $mode" >&2; exit 1 ;; esac
+          case "$cache" in auto|off) ;; *) echo "unknown cache $cache" >&2; exit 1 ;; esac
+          if ! printf '%s' "$scope" | grep -Eq '^[a-z0-9][a-z0-9,-]*$'; then echo "invalid scope $scope" >&2; exit 1; fi
+          { echo "mode=$mode"; echo "scope=$scope"; echo "real_model=$real_model"; echo "cache=$cache"; } | tee -a "$GITHUB_OUTPUT"
+      # Per-job staleness from the jobs' last trusted successes (push, schedule and dispatch runs on
+      # an ancestor, never pull_request runs), the identical-tree skip and the run-set closure; any
+      # API or git failure marks every job stale. Outputs run, skip_all, base_<job>, docs_only.
+      - name: Stale jobs
+        id: changes
         env:
-          LAUNCHER: ${{ !inputs.candidate && 'ccache' || '' }}
-        run: |
-          cmake -S . -B build-sanitized -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
-            '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
-            -DGGML_CCACHE=OFF "-DCMAKE_C_COMPILER_LAUNCHER=$LAUNCHER" "-DCMAKE_CXX_COMPILER_LAUNCHER=$LAUNCHER"
-          cmake --build build-sanitized --parallel 4
-          ctest --test-dir build-sanitized --output-on-failure
-      - name: Mutate request, schema and router inputs
-        run: |
-          clang++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
-            tests/input-fuzz.cpp -Iinclude -Lbuild-sanitized -lducktape_laya -o build-sanitized/input-fuzz
-          LD_LIBRARY_PATH="$PWD/build-sanitized" build-sanitized/input-fuzz \
-            tests/fixtures/primitive.json tests/fixtures/structured.json tests/fixtures/batch.json
-      - name: Retain sanitizer evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: parser-sanitizers
-          path: build-sanitized/Testing/Temporary/LastTest.log
-          if-no-files-found: warn
-          retention-days: 14
-
-  # The libFuzzer smoke in its own job and build directory, in parallel with the sanitizer job.
-  parser-fuzzer:
-    needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      CC: clang
-      CXX: clang++
-      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
-      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          submodules: recursive
-          persist-credentials: false
-      - name: Compiler cache
-        if: ${{ !inputs.candidate }}
-        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
-        with:
-          key: ${{ runner.os }}-x64-clang-fuzzer-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
-          restore-keys: ${{ runner.os }}-x64-clang-fuzzer
-          max-size: 500M
-          install: binary
-      - name: Coverage-guided parser and router smoke
-        env:
-          LAUNCHER: ${{ !inputs.candidate && 'ccache' || '' }}
-        run: |
-          cmake -S . -B build-fuzzer -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDUCKTAPE_BUILD_FUZZERS=ON -DDUCKTAPE_BUILD_TESTS=OFF \
-            '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
-            '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
-            -DGGML_CCACHE=OFF "-DCMAKE_C_COMPILER_LAUNCHER=$LAUNCHER" "-DCMAKE_CXX_COMPILER_LAUNCHER=$LAUNCHER"
-          cmake --build build-fuzzer --target laya-input-fuzzer --parallel 4
-          python3 tests/fuzz-corpus.py build-fuzzer/corpus
-          build-fuzzer/laya-input-fuzzer build-fuzzer/corpus -seed=444211238 \
-            -max_total_time=60 -max_len=1048577 -timeout=30 \
-            -artifact_prefix=build-fuzzer/fuzzer- -print_final_stats=1 \
-            > build-fuzzer/fuzzer-smoke.log 2>&1
-      - name: Retain fuzz evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: parser-fuzzer
-          path: build-fuzzer/fuzzer-*
-          if-no-files-found: warn
-          retention-days: 14
-
-  native:
-    name: ${{ matrix.compiler }} / Node ${{ matrix.node }} / ${{ matrix.arch }} / ${{ (inputs.real_model || inputs.candidate) && 'real model' || 'model free' }}
-    needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 75
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - compiler: clang
-            cc: clang
-            cxx: clang++
-            node: 24.21.0
-            runner: ubuntu-24.04
-            arch: x64
-          # The release platform's fragment and evidence (gcc, the release compiler).
-          - compiler: gcc
-            cc: gcc
-            cxx: g++
-            node: 26.7.0
-            runner: ubuntu-24.04
-            arch: x64
-            platform: linux-x64
-          # Linux arm64: native build, ctest, every binding suite and per-platform
-          # packages (linux-arm64 tarball, npm, wheel, jar, nupkg) with scripts/package-native.py.
-          - compiler: gcc
-            cc: gcc
-            cxx: g++
-            node: 24.21.0
-            runner: ubuntu-24.04-arm
-            arch: arm64
-            platform: linux-arm64
-    env:
-      CC: ${{ matrix.cc }}
-      CXX: ${{ matrix.cxx }}
-      # A candidate run builds without a compiler cache (scripts/check-candidate.py requires it).
-      LAUNCHER: ${{ inputs.candidate && 'none' || 'ccache' }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          submodules: recursive
-          persist-credentials: false
-      - name: Compiler cache
-        if: ${{ !inputs.candidate }}
-        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
-        with:
-          key: ${{ runner.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-${{ matrix.compiler }}
-          max-size: 500M
-          install: binary
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: ${{ matrix.node }}
-      - name: Install pinned Rust toolchain and fetch locked test dependencies
-        run: |
-          rustup toolchain install 1.98.0 --profile minimal
-          rustup override set 1.98.0
-          cargo fetch --locked --manifest-path bindings/rust/Cargo.toml
-          cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          # Exact: javadoc output changes between patch releases, and every platform's
-          # javadoc and classes must be the same for scripts/assemble-packages.py.
-          java-version: '25.0.4'
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '10.0.402'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.2'
-          cache: false
-      - name: Install QEMU user mode for the emulated-CPU guard test
-        if: (inputs.real_model || inputs.candidate) && matrix.arch == 'x64'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user
-      - name: Download and verify explicitly requested test model
-        if: (inputs.real_model || inputs.candidate)
-        run: |
-          mkdir -p build-model
-          python3 - <<'PY'
-          import json, pathlib, urllib.request
-          model = json.loads(pathlib.Path('models/manifest.json').read_text())
-          urllib.request.urlretrieve(model['url'], 'build-model/laya.gguf')
-          PY
-          python3 scripts/verify-model.py build-model/laya.gguf
-      - name: Install locked TypeScript consumer test tools
-        run: npm ci --ignore-scripts --prefix tests/typescript
-      - name: Model-free checks
-        if: ${{ !(inputs.real_model || inputs.candidate) }}
-        run: python3 scripts/validate.py --packages --output build-ci-report --jobs 4 --compiler-launcher "$LAUNCHER"
-      - name: Real-model and installed artifact checks
-        if: (inputs.real_model || inputs.candidate)
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          MODE: ${{ steps.inputs.outputs.mode }}
+          SCOPE: ${{ steps.inputs.outputs.scope }}
+          REAL_MODEL: ${{ steps.inputs.outputs.real_model }}
         run: >-
-          python3 scripts/validate.py --model build-model/laya.gguf --packages --upstream-reference --output build-ci-report
-          --jobs 4 --compiler-launcher "$LAUNCHER"
-      - name: Record exact outputs of the built library on this runner CPU
-        if: (inputs.real_model || inputs.candidate) && matrix.arch == 'x64'
+          python3 scripts/ci-changes.py --workflow native.yml --repository "$GITHUB_REPOSITORY"
+          --event "$EVENT" --ref "$GITHUB_REF" --head "$GITHUB_SHA"
+          --mode "$MODE" --scope "$SCOPE" --real-model "$REAL_MODEL"
+      # The matrices of the jobs whose names come from data: the binding jobs, the assembled jobs and
+      # the real-model and candidate shards (scripts/ci_paths.py SHARDS, so rebalancing the shards
+      # needs no workflow edit), each filtered to the jobs in `run`.
+      - name: Job matrices
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          MODE: ${{ steps.inputs.outputs.mode }}
+          SCOPE: ${{ steps.inputs.outputs.scope }}
+          RUN: ${{ steps.changes.outputs.run }}
+          SKIP_ALL: ${{ steps.changes.outputs.skip_all }}
+          RUNTIME: ${{ inputs.runtime }}
         run: |
-          python3 tests/cross-host.py bundle --build build-validation --output build-ci-report/cross-host/bundle
-          python3 tests/cross-host.py record --bundle build-ci-report/cross-host/bundle \
-            --model build-model/laya.gguf --report build-ci-report/cross-host/record.json
-      - name: Short stress run on the validated library (tier-2 target)
-        if: inputs.candidate && matrix.platform == 'linux-arm64'
-        run: python3 scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 4
-      # On the validated build's runner: another image may link other toolchain libraries.
-      - name: Two independent builds of one source snapshot (tier-2 target)
-        if: inputs.candidate && matrix.platform == 'linux-arm64'
-        run: python3 scripts/check-reproducibility.py --output build-repro --jobs 4 --cc gcc --cxx g++
-      # Model-free and after every other use of the build: reconfiguring the validated build
-      # recompiles nothing, and an edited patched runtime copy is restored and recompiled alone.
-      - name: Reconfigure without recompiling
-        if: matrix.compiler == 'clang'
-        run: python3 tests/reconfigure.py --build build-validation --jobs 4 --edit-copy
-      # The gcc builds' packages (the release compiler) are this platform's fragment for
-      # scripts/assemble-packages.py, which the assemble job below merges with Windows.
-      - name: Retain this platform's packages
-        if: matrix.platform
+          python3 - <<'PY'
+          import json, os, re, subprocess, sys
+          sys.path.insert(0, 'scripts')
+          import ci_paths
+
+          mode, event, scope = os.environ['MODE'], os.environ['EVENT'], os.environ['SCOPE']
+          run = [] if os.environ.get('SKIP_ALL') == 'true' else json.loads(os.environ['RUN'] or '[]')
+          if not isinstance(run, list) or not all(isinstance(name, str) for name in run):
+              raise SystemExit(f'ci-changes: run is not a list of job names: {run!r}')
+          outputs = {'run': run}
+
+          def matrix(name, entries):
+              outputs[name] = entries
+              print(f'{name}: {[entry.get("job", entry) for entry in entries]}')
+
+          # Binding jobs: one per language whose binding-<lang>-<platform> job runs.
+          for platform in ('linux-x64', 'windows-x64'):
+              langs = sorted(m[1] for m in (re.fullmatch(rf'binding-([a-z]+)-{platform}', job) for job in run) if m)
+              matrix('bindings_' + platform.replace('-', '_'), [{'job': f'binding-{lang}-{platform}', 'lang': lang} for lang in langs])
+          runners = {'linux-x64': ('ubuntu-24.04', 'python3', 'bash'), 'linux-arm64': ('ubuntu-24.04-arm', 'python3', 'bash'),
+                     # PowerShell on Windows: Strawberry Perl's pkg-config.bat does not run from Git Bash.
+                     'windows-x64': ('windows-2025', 'python', 'pwsh')}
+          matrix('assembled', [{'job': f'assembled-{platform}', 'platform': platform, 'runner': runner, 'python': python, 'shell': shell}
+                               for platform, (runner, python, shell) in runners.items() if f'assembled-{platform}' in run])
+
+          # Shards: the candidate mode's SHARDS in a candidate run, the real-model mode's otherwise.
+          # packages-<platform> is a workflow job of its own (assemble starts as soon as it ends).
+          # Toolchains per check; an unknown check gets all of them.
+          everything = ['rust', 'java', 'dotnet', 'go', 'typescript']
+          tools = {'ctest': [], 'references': [], 'parity:smoke': ['rust', 'java', 'dotnet', 'go'], 'parity:full-a': ['rust'],
+                   'parity:full-b': ['java', 'dotnet', 'go'], 'bindings': ['rust', 'java', 'dotnet', 'go'],
+                   'packages': ['rust', 'java', 'dotnet', 'go'], 'policy-platform': ['typescript']}
+          shard_mode = 'candidate' if mode == 'candidate' else 'real_model'
+          for platform in ('linux-x64', 'linux-x64-clang', 'linux-arm64', 'windows-x64'):
+              table = ci_paths.SHARDS.get(shard_mode, {}).get(platform, {})
+              side = table.get('side_outputs', {})
+              entries = []
+              for job, checks in table.get('jobs', {}).items():
+                  if job == f'packages-{platform}' or job not in run:
+                      continue
+                  needed = sorted({tool for check in checks for tool in tools.get(check, everything)})
+                  entries.append({'job': job, 'checks': ','.join(checks),
+                                  'label': '+'.join(check.replace(':', '-') for check in checks),
+                                  'tools': ','.join(needed),
+                                  'qemu': 'ctest' in checks and platform.startswith('linux-x64'),
+                                  'cross_host': 'cross-host' in side.get(job, [])})
+              matrix('shards_' + platform.replace('-', '_'), entries)
+
+          # The policy job runs the stale policy checks on a branch push, a pull request and an affected
+          # verify dispatch; every policy check otherwise (main, merges, schedules, scope all or a list).
+          parents = subprocess.run(['git', 'rev-list', '--parents', '-n', '1', 'HEAD'], capture_output=True, text=True).stdout.split()
+          branch_push = event == 'push' and os.environ['GITHUB_REF'] != 'refs/heads/main' and len(parents) == 2
+          stale = branch_push or event == 'pull_request' or (event == 'workflow_dispatch' and scope == 'affected')
+          outputs['policy'] = 'stale' if stale else 'all'
+
+          # qualify-upgrade: the requested runtime commit, or the pinned one.
+          pinned = json.load(open('release/compatibility.json'))['runtime']['commit']
+          runtime = os.environ.get('RUNTIME') or pinned
+          if not re.fullmatch(r'[0-9a-f]{40}', runtime):
+              raise SystemExit(f'runtime must be a full commit hash, not {runtime!r}')
+          outputs['runtime'] = runtime
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              for key, value in outputs.items():
+                  stream.write(f'{key}={value if isinstance(value, str) else json.dumps(value)}\n')
+          print(f'mode {mode}, {len(run)} jobs: {", ".join(run) or "none"}')
+          PY
+
+  # ---------------------------------------------------------------- push profile
+
+  policy:
+    name: policy
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'policy') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DTL_JOB: policy
+      DTL_NODE: 26.7.0
+      DTL_TOOLS: typescript
+    steps:
+      # No submodules: a policy check that needs the runtime tree belongs in generic-linux-x64.
+      - &checkout-plain
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - &setup-node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: env.DTL_NODE != ''
+        with:
+          node-version: ${{ env.DTL_NODE }}
+      - &typescript
+        name: Install locked TypeScript consumer test tools
+        if: contains(format(',{0},', env.DTL_TOOLS), ',typescript,')
+        run: npm ci --ignore-scripts --prefix tests/typescript
+      # --stale selects the checks whose inputs changed since this job's last trusted success
+      # (scripts/ci-changes.py's base_policy; empty when there is none, then every check runs).
+      - name: Policy checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTION: ${{ needs.changes.outputs.policy }}
+          CI_POLICY_BASE: ${{ needs.changes.outputs.base_policy }}
+        run: python3 scripts/check-policy.py "--$SELECTION" --jobs 4 --output build-ci-report
+      - &report
+        name: Retain the report and logs
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: packages-${{ matrix.platform }}
-          path: build-ci-report/packages/
-          if-no-files-found: error
-          retention-days: ${{ inputs.candidate && 30 || 14 }}
-          overwrite: true
-      - name: Retain this platform's release evidence
-        if: inputs.candidate && matrix.platform
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: evidence-${{ matrix.platform }}
+          name: report-${{ env.DTL_JOB }}
           path: |
             build-ci-report/
             !build-ci-report/packages/
             !build-ci-report/assembled/
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
-      - name: Retain the stress report
-        if: inputs.candidate && matrix.platform == 'linux-arm64'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: stress-${{ matrix.platform }}
-          path: build-stress/
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
-      - name: Retain the reproducibility report
-        if: inputs.candidate && matrix.platform == 'linux-arm64'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: reproducibility-${{ matrix.platform }}
-          path: |
-            build-repro/report.json
-            build-repro/*.log
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
-      - name: Retain logs and explicit gate report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: native-${{ matrix.arch }}-${{ matrix.compiler }}-node-${{ matrix.node }}
-          path: build-ci-report/
-          if-no-files-found: warn
-          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          if-no-files-found: ignore
+          retention-days: 14
           overwrite: true
 
-  windows:
-    name: Windows x64 / ${{ (inputs.real_model || inputs.candidate) && 'real model' || 'model free' }}
+  generic-linux-x64:
+    name: generic-linux-x64
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
-    runs-on: windows-2025
-    timeout-minutes: 120
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'generic-linux-x64') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
-      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-      DOTNET_NOLOGO: '1'
-      # The test and release scripts read UTF-8 files with Python's default encoding.
-      PYTHONUTF8: '1'
-      GOTOOLCHAIN: local
-      # A candidate run builds without a compiler cache (scripts/check-candidate.py requires it).
-      LAUNCHER: ${{ inputs.candidate && 'none' || 'sccache' }}
+      DTL_JOB: generic-linux-x64
+      DTL_NODE: 26.7.0
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_SAVE: 'true'
+      CC: gcc
+      CXX: g++
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - &checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           submodules: recursive
           persist-credentials: false
-      # sccache: clang-cl through Ninja (ccache's MSVC-style support is narrower).
-      - name: Compiler cache
-        if: ${{ !inputs.candidate }}
+      - &ninja
+        uses: ./.github/actions/setup-ninja
+      - &compiler-cache
+        name: Compiler cache
+        if: env.DTL_LAUNCHER != 'none'
         uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
-          variant: sccache
-          key: ${{ runner.os }}-x64-clang-cl-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
-          restore-keys: ${{ runner.os }}-x64-clang-cl
+          variant: ${{ env.DTL_LAUNCHER }}
+          # ccache-<os>-<arch>-<compiler>-<config>-<pin hash>-<timestamp>; restored by prefix.
+          # scripts/ci-cache-prune.py keeps the newest two per prefix and ref.
+          key: ${{ env.DTL_CACHE_KEY }}-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+          restore-keys: |
+            ${{ env.DTL_CACHE_KEY }}-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+            ${{ env.DTL_CACHE_KEY }}
           max-size: 500M
+          save: ${{ env.DTL_CACHE_SAVE }}
           install: binary
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: 24.21.0
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          # Exact: javadoc output changes between patch releases, and every platform's
-          # javadoc and classes must be the same for scripts/assemble-packages.py.
-          java-version: '25.0.4'
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '10.0.402'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.2'
-          cache: false
-      - name: Install pinned Rust toolchain and fetch locked test dependencies
+          job-summary: ''
+      - *setup-node
+      # Generic: configure, build, the tier-generic tests, examples, ABI exports and the
+      # binary constraints (scripts/check-binary.py) of the library and addon.
+      - name: Generic validation
+        run: python3 scripts/validate.py --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER"
+      - &cache-stats
+        name: Compiler cache statistics
+        if: always() && env.DTL_LAUNCHER != 'none'
+        shell: bash
         run: |
-          rustup toolchain install 1.98.0 --profile minimal
-          rustup override set 1.98.0
-          cargo fetch --locked --manifest-path bindings/rust/Cargo.toml
-          cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
-      - name: Install locked TypeScript consumer test tools
-        run: npm ci --ignore-scripts --prefix tests/typescript
-      - name: Node-API headers and node.lib for this Node, checked against its SHASUMS256.txt
-        shell: pwsh
-        run: |
-          $sdk = python scripts/fetch-node-sdk.py build-node-sdk --lib
-          if ($LASTEXITCODE) { exit 1 }
-          $sdk | ForEach-Object { $_.Replace('\', '/') } >> $env:GITHUB_ENV
-      - name: Download and verify explicitly requested test model
-        if: (inputs.real_model || inputs.candidate)
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force build-model | Out-Null
-          python -c "import json, pathlib, urllib.request; m = json.loads(pathlib.Path('models/manifest.json').read_text()); urllib.request.urlretrieve(m['url'], 'build-model/laya.gguf')"
-          python scripts/verify-model.py build-model/laya.gguf
-          if ($LASTEXITCODE) { exit 1 }
-          "LAYA_MODEL=$((Resolve-Path build-model/laya.gguf).Path.Replace('\', '/'))" >> $env:GITHUB_ENV
-      # scripts/validate.py as on Linux, with clang-cl: native tests, exports, ABI layouts,
-      # every binding suite, the packages loaded outside the checkout; with the model also
-      # exact agreement between all eight bindings, the original Laya and llama.cpp
-      # references and the installed packages. Linux-only tests are listed as skipped.
-      - name: Validate with clang-cl
-        shell: cmd
-        run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
-          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
-          set "MODEL="
-          if defined LAYA_MODEL set "MODEL=--model %LAYA_MODEL% --upstream-reference"
-          rem Strawberry Perl's patch.exe comes first on PATH and crashes; use the one from Git for Windows.
-          python scripts/validate.py %MODEL% --packages --output build-ci-report --jobs 4 --compiler-launcher %LAUNCHER% --node-include "%NODE_INCLUDE_DIR%" --node-lib "%NODE_LIB%" --cmake-arg=-GNinja "--cmake-arg=-DCMAKE_C_COMPILER=%CLANG%" "--cmake-arg=-DCMAKE_CXX_COMPILER=%CLANG%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
-      - name: Short stress run on the validated library (tier-2 target)
-        if: inputs.candidate
-        shell: cmd
-        run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
-          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          python scripts/check-stress.py build-model/laya.gguf --build build-validation --output build-stress --budget short --jobs 4 || exit /b 1
-      # On the validated build's runner: the DLL links the image's MSVC and SDK libraries, so a
-      # build on another image version differs.
-      - name: Two independent builds of one source snapshot with clang-cl (tier-2 target)
-        if: inputs.candidate
-        shell: cmd
-        run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
-          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
-          python scripts/check-reproducibility.py --output "%RUNNER_TEMP%\repro" --jobs 4 --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
-      - name: Retain logs and explicit gate report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: windows-x64-${{ (inputs.real_model || inputs.candidate) && 'real-model' || 'model-free' }}
-          path: |
-            build-ci-report/
-            !build-ci-report/packages/
-            !build-ci-report/assembled/
-            build-validation/Testing/Temporary/LastTest.log
-            build-stress/
-          if-no-files-found: warn
-          retention-days: ${{ inputs.candidate && 30 || 14 }}
-          overwrite: true
-      - name: Retain this platform's packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: packages-windows-x64
-          path: build-ci-report/packages/
-          if-no-files-found: error
-          retention-days: ${{ inputs.candidate && 30 || 14 }}
-          overwrite: true
-      - name: Retain this platform's release evidence
-        if: inputs.candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: evidence-windows-x64
-          path: |
-            build-ci-report/
-            !build-ci-report/packages/
-            !build-ci-report/assembled/
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
-      - name: Retain the stress report
-        if: inputs.candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: stress-windows-x64
-          path: build-stress/
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
-      - name: Retain the reproducibility report
-        if: inputs.candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: reproducibility-windows-x64
-          path: |
-            ${{ runner.temp }}/repro/report.json
-            ${{ runner.temp }}/repro/*.log
-            ${{ runner.temp }}/repro/first/install/bin/*.dll
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
+          { echo "### $DTL_LAUNCHER -s ($DTL_JOB)"; echo '```'; "$DTL_LAUNCHER" -s || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - *report
 
-  # Two independent builds of one source snapshot install identical files, on Windows on every
-  # push that changes a library input (scripts/ci-changes.py) and on every dispatch. (A candidate
-  # run does this inside each tier-2 target's validation job instead, on the validated build's
-  # runner; Linux x86-64 is checked on the release host.) Never through a compiler cache.
-  reproducibility:
-    name: Windows x64 / independent builds
+  generic-linux-x64-clang:
+    name: generic-linux-x64-clang
     needs: changes
-    if: ${{ !inputs.candidate && needs.changes.outputs.library == 'true' }}
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'generic-linux-x64-clang') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DTL_JOB: generic-linux-x64-clang
+      DTL_NODE: 24.21.0
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-validate
+      DTL_CACHE_SAVE: 'true'
+    steps:
+      - *checkout
+      - &llvm
+        uses: ./.github/actions/setup-llvm
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - name: Generic validation
+        run: python3 scripts/validate.py --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER"
+      # After every other use of the build: reconfiguring recompiles nothing, and an edited patched
+      # runtime copy is restored and recompiled alone.
+      - name: Reconfigure without recompiling
+        run: python3 tests/reconfigure.py --build build-validation --jobs 4 --edit-copy
+      - *cache-stats
+      - *report
+
+  generic-linux-arm64:
+    name: generic-linux-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'generic-linux-arm64') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      DTL_JOB: generic-linux-arm64
+      DTL_NODE: 24.21.0
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-arm64-gcc-validate
+      DTL_CACHE_SAVE: 'true'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - name: Generic validation
+        run: python3 scripts/validate.py --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER"
+      - *cache-stats
+      - *report
+
+  generic-windows-x64:
+    name: generic-windows-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'generic-windows-x64') }}
     runs-on: windows-2025
     timeout-minutes: 60
     env:
-      PYTHONUTF8: '1'
+      DTL_JOB: generic-windows-x64
+      DTL_NODE: 24.21.0
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
+      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_SAVE: 'true'
+      PY: python
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          submodules: recursive
-          persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: 24.21.0
-      - name: Node-API headers and node.lib for this Node, checked against its SHASUMS256.txt
+      - &defender
+        name: Windows Defender exclusion for the build directories and caches
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $sdk = python scripts/fetch-node-sdk.py build-node-sdk --lib
-          if ($LASTEXITCODE) { exit 1 }
-          $sdk | ForEach-Object { $_.Replace('\', '/') } >> $env:GITHUB_ENV
-      - name: Compile one source snapshot in two directories with clang-cl and compare the installed files
-        shell: cmd
+          $paths = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:RUNNER_TOOL_CACHE, "$env:LOCALAPPDATA\Mozilla\sccache",
+                     "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", "$env:USERPROFILE\.nuget", "$env:LOCALAPPDATA\go-build",
+                     "$env:USERPROFILE\go")
+          try { Add-MpPreference -ExclusionPath $paths -ErrorAction Stop; "Defender exclusions: $($paths -join ', ')" }
+          catch { "Defender exclusion skipped (Defender passive or absent): $_" }
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - &node-sdk
+        name: Node-API headers and node.lib for this Node, checked against its SHASUMS256.txt
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python scripts/fetch-node-sdk.py build-node-sdk --lib | tr -d '\r' | tr '\134' '/' | tee -a "$GITHUB_ENV"
+      # The Visual Studio x64 environment for the following steps, and the clang-cl arguments every
+      # Windows scripts/validate.py run takes (one per line, for bash's mapfile). Git's patch.exe:
+      # Strawberry Perl's comes first on PATH and crashes.
+      - &vs-env
+        name: Visual Studio x64 environment and clang-cl arguments
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS=%%i"
-          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          set "CLANG=%VS%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
-          python scripts/check-reproducibility.py --output "%RUNNER_TEMP%\repro" --jobs 4 --cc "%CLANG%" --cxx "%CLANG%" --node-include "%NODE_INCLUDE_DIR%" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=%NODE_LIB%" "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" || exit /b 1
-      - name: Retain the report
-        if: always()
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $lines = cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set"
+          if ($LASTEXITCODE) { exit 1 }
+          $current = [Environment]::GetEnvironmentVariables()
+          foreach ($line in $lines) {
+            if ($line -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$' -and $current[$Matches[1]] -ne $Matches[2] -and $Matches[1] -notmatch '^(GITHUB|RUNNER)_') {
+              "$($Matches[1])=$($Matches[2])" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            }
+          }
+          $clang = "$vs\VC\Tools\Llvm\x64\bin\clang-cl.exe".Replace('\', '/')
+          "DTL_CLANG_CL=$clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - &windows-args
+        name: clang-cl arguments of scripts/validate.py
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          file="$(cygpath -u "$RUNNER_TEMP")/dtl-windows-args.txt"
+          printf '%s\n' "--node-include=$NODE_INCLUDE_DIR" "--node-lib=$NODE_LIB" --cmake-arg=-GNinja \
+            "--cmake-arg=-DCMAKE_C_COMPILER=$DTL_CLANG_CL" "--cmake-arg=-DCMAKE_CXX_COMPILER=$DTL_CLANG_CL" \
+            '--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe' > "$file"
+          cat "$file"
+          echo "DTL_WINDOWS_ARGS=$file" >> "$GITHUB_ENV"
+      - name: Generic validation with clang-cl
+        run: |
+          mapfile -t windows < "$DTL_WINDOWS_ARGS"
+          python scripts/validate.py --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER" "${windows[@]}"
+      # The platform policy checks whose Windows results differ from Linux: ABI layouts with clang
+      # and the packaging identities with clang-cl (S2). The Linux policy job runs them too.
+      - name: ABI layouts and packaging identities on Windows
+        run: |
+          # tests/abi-layout.py compiles with CC and CXX, which need a GNU-style driver: the clang
+          # next to clang-cl (as scripts/validate.py's layout step chose before).
+          clang="${DTL_CLANG_CL%clang-cl.exe}clang.exe"
+          CC="$clang" CXX="${clang%clang.exe}clang++.exe" \
+            python scripts/check-policy.py --only abi-layouts,packaging-identities --output build-ci-report/policy
+      - *cache-stats
+      - *report
+
+  binding-linux-x64:
+    name: binding-${{ matrix.lang }}-linux-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.bindings_linux_x64 != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.bindings_linux_x64) }}
+    env:
+      DTL_JOB: ${{ matrix.job }}
+      DTL_NODE: 26.7.0
+      DTL_TOOLS: ${{ matrix.lang }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_SAVE: 'false'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - &rust-cache
+        name: Rust toolchain and crate cache
+        if: contains(format(',{0},', env.DTL_TOOLS), ',rust,')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/1.98.0-*
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: rust-1.98.0-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bindings/rust/Cargo.lock', 'tests/consumers/rust/Cargo.lock') }}
+      - &rust
+        name: Install pinned Rust toolchain and fetch locked test dependencies
+        if: contains(format(',{0},', env.DTL_TOOLS), ',rust,')
+        shell: bash
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
+          cargo fetch --locked --manifest-path bindings/rust/Cargo.toml
+          cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
+      - &java
+        if: contains(format(',{0},', env.DTL_TOOLS), ',java,')
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          # Exact: javadoc output changes between patch releases, and every platform's
+          # javadoc and classes must be the same for scripts/assemble-packages.py.
+          java-version: '25.0.4'
+      - &nuget-cache
+        name: NuGet package cache
+        if: contains(format(',{0},', env.DTL_TOOLS), ',dotnet,')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bindings/dotnet/**/*.csproj', 'tests/consumers/dotnet/*.csproj') }}
+      - &dotnet
+        if: contains(format(',{0},', env.DTL_TOOLS), ',dotnet,')
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.402'
+      # Go 1.27.2 is not in the runner images' tool cache: keep the downloaded one.
+      - &go-toolcache
+        name: Go tool cache
+        if: contains(format(',{0},', env.DTL_TOOLS), ',go,')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/go/1.27.2
+          key: go-toolcache-1.27.2-${{ runner.os }}-${{ runner.arch }}
+      - &go
+        if: contains(format(',{0},', env.DTL_TOOLS), ',go,')
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+      # Go's build cache does not see the library's contents (golang/go#29843): the header is in the
+      # key, the tests always rerun (-count=1) and the library is linked dynamically.
+      - &go-cache
+        name: Go build cache
+        if: contains(format(',{0},', env.DTL_TOOLS), ',go,')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\go-build' || '~/.cache/go-build' }}
+          key: gocache-1.27.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bindings/go/go.mod', 'tests/consumers/go/go.mod', 'include/ducktape_laya.h') }}
+      - name: Model-free binding suite
+        run: python3 scripts/validate.py --library-only --bindings "${{ matrix.lang }}" --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER"
+      - *cache-stats
+      - *report
+
+  binding-windows-x64:
+    name: binding-${{ matrix.lang }}-windows-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.bindings_windows_x64 != '[]' }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.bindings_windows_x64) }}
+    env:
+      DTL_JOB: ${{ matrix.job }}
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: ${{ matrix.lang }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
+      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_SAVE: 'false'
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *node-sdk
+      - *vs-env
+      - *windows-args
+      - name: Model-free binding suite with clang-cl
+        run: |
+          mapfile -t windows < "$DTL_WINDOWS_ARGS"
+          python scripts/validate.py --library-only --bindings "${{ matrix.lang }}" --output build-ci-report --jobs 4 \
+            --compiler-launcher "$DTL_LAUNCHER" "${windows[@]}"
+      - *cache-stats
+      - *report
+
+  # The push profile's package jobs: model-free, no build dependency. The candidate's packages-<P>
+  # are other workflow jobs with the same names (packages-candidate-<P>, from the build tarball).
+  packages-linux-x64:
+    name: packages-linux-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode != 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-linux-x64') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DTL_JOB: packages-linux-x64
+      DTL_PLATFORM: linux-x64
+      DTL_NODE: 26.7.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_SAVE: 'false'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - &packages-push
+        name: Packages and package smoke
+        run: |
+          windows=()
+          if [ -n "${DTL_WINDOWS_ARGS:-}" ]; then mapfile -t windows < "$DTL_WINDOWS_ARGS"; fi
+          "$PY" scripts/validate.py --library-only --packages --output build-ci-report --jobs 4 \
+            --compiler-launcher "$DTL_LAUNCHER" "${windows[@]}"
+      - &packages-upload
+        name: Retain this platform's packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-x64-reproducibility
-          path: |
-            ${{ runner.temp }}/repro/report.json
-            ${{ runner.temp }}/repro/*.log
-            ${{ runner.temp }}/repro/first/install/bin/*.dll
-            ${{ runner.temp }}/repro/first/install/lib/**/*.node
-          if-no-files-found: ignore
+          name: packages-${{ env.DTL_PLATFORM }}
+          path: build-ci-report/packages/
+          if-no-files-found: error
           retention-days: 14
+          overwrite: true
+      - *cache-stats
+      - *report
 
-  # The release packages: every platform's fragment merged into one npm package, one jar
-  # and one NuGet package (scripts/assemble-packages.py), next to each platform's archive
-  # and wheel, then installed and loaded on every platform. (platforms.yml builds the
-  # macOS fragment; the assembler takes it too.)
+  packages-linux-arm64:
+    name: packages-linux-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode != 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-linux-arm64') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      DTL_JOB: packages-linux-arm64
+      DTL_PLATFORM: linux-arm64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-arm64-gcc-validate
+      DTL_CACHE_SAVE: 'false'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *packages-push
+      - *packages-upload
+      - *cache-stats
+      - *report
+
+  packages-windows-x64:
+    name: packages-windows-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode != 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-windows-x64') }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      DTL_JOB: packages-windows-x64
+      DTL_PLATFORM: windows-x64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
+      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_SAVE: 'false'
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *node-sdk
+      - *vs-env
+      - *windows-args
+      - *packages-push
+      - *packages-upload
+      - *cache-stats
+      - *report
+
+  # The release packages: every platform's fragment of this run merged into one npm package, one jar
+  # and one NuGet package (scripts/assemble-packages.py), next to each platform's archive and wheel.
+  # The push and the candidate packages-<P> jobs are both needed: only one of each pair runs.
   assemble:
-    name: Multi-platform packages
-    needs: [native, windows]
+    name: assemble
+    needs: [changes, packages-linux-x64, packages-linux-arm64, packages-windows-x64,
+            packages-candidate-linux-x64, packages-candidate-linux-arm64, packages-candidate-windows-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'assemble') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - &checkout-shallow
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -576,20 +760,119 @@ jobs:
           name: packages-assembled
           path: assembled/
           if-no-files-found: error
-          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          retention-days: ${{ needs.changes.outputs.mode == 'candidate' && 30 || 14 }}
+          overwrite: true
+
+  # The assembled packages installed and loaded on every platform; in a candidate run also with the
+  # real model (tests/installed-packages.py, the only installed_packages carrier) and Electron.
+  assembled:
+    name: assembled-${{ matrix.platform }}
+    needs: [changes, assemble]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.assembled != '[]' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.assembled) }}
+    env:
+      DTL_JOB: ${{ matrix.job }}
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: ${{ needs.changes.outputs.mode == 'candidate' && 'rust,java,dotnet,go' || 'java,dotnet' }}
+      DTL_MODEL: ${{ needs.changes.outputs.mode == 'candidate' }}
+      DTL_KIND: ${{ needs.changes.outputs.mode == 'candidate' && 'real-model' || 'model-free' }}
+      PY: ${{ matrix.python }}
+    # PowerShell on Windows (the commands below are written for both shells).
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - *defender
+      - *checkout-shallow
+      - *setup-node
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *rust-cache
+      - name: Install pinned Rust toolchain and fetch the consumer's locked dependencies
+        if: contains(format(',{0},', env.DTL_TOOLS), ',rust,')
+        shell: bash
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
+          cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packages-assembled
+          path: assembled
+      - name: Load every package outside the checkout
+        run: ${{ matrix.python }} tests/package-smoke.py assembled --platform ${{ matrix.platform }}
+      - &model-key
+        name: Pinned test model key
+        id: model-key
+        if: env.DTL_MODEL == 'true'
+        shell: bash
+        run: echo "sha256=$("$PY" -c 'import json; print(json.load(open("models/manifest.json"))["sha256"])')" >> "$GITHUB_OUTPUT"
+      - &model-restore
+        name: Restore the pinned test model
+        id: model-cache
+        if: env.DTL_MODEL == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build-model/laya.gguf
+          key: laya-model-${{ steps.model-key.outputs.sha256 }}
+          enableCrossOsArchive: true
+      - &model-fetch
+        name: Download the pinned test model on a cache miss, and verify it
+        if: env.DTL_MODEL == 'true'
+        shell: bash
+        run: |
+          mkdir -p build-model
+          if [ ! -f build-model/laya.gguf ]; then
+            "$PY" -c "import json, urllib.request; m = json.load(open('models/manifest.json')); urllib.request.urlretrieve(m['url'], 'build-model/laya.gguf')"
+          fi
+          "$PY" scripts/verify-model.py build-model/laya.gguf
+      - name: Installed packages with the real model
+        if: env.DTL_MODEL == 'true'
+        run: >-
+          ${{ matrix.python }} tests/installed-packages.py assembled build-model/laya.gguf --platform ${{ matrix.platform }}
+          --report build-report/installed.json
+      # Electron's Chromium sandbox needs unprivileged user namespaces, which Ubuntu 24.04
+      # restricts through AppArmor; the arm64 image also lacks some of Chromium's libraries.
+      - name: Electron prerequisites on Linux
+        if: env.DTL_MODEL == 'true' && runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libnss3 libasound2t64 libgtk-3-0t64 libgbm1 libxss1
+      - name: Electron consumer of the multi-platform npm package, directory and ASAR
+        if: env.DTL_MODEL == 'true'
+        run: >-
+          npm ci --prefix tests/electron --no-audit --no-fund &&
+          node tests/electron/run.cjs assembled/ducktape-laya-$(${{ matrix.python }} -c "import json; print(json.load(open('assembled/inventory.json'))['package_version'])").tgz
+          build-model/laya.gguf build-report/electron.json
+      - name: Retain reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: installed-${{ matrix.platform }}-${{ env.DTL_KIND }}
+          path: build-report/
+          if-no-files-found: ignore
+          retention-days: ${{ needs.changes.outputs.mode == 'candidate' && 30 || 14 }}
           overwrite: true
 
   # musl (Alpine) is not supported: the packages bundle glibc builds. The loaders must say so
   # instead of failing with a loader error, and npm must refuse the Linux-only npm package.
   musl:
-    name: Packages on Alpine (musl) report glibc
-    needs: assemble
+    name: musl
+    needs: [changes, assemble]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'musl') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
+      - *checkout-shallow
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: packages-assembled
@@ -614,99 +897,1370 @@ jobs:
       - name: Java on Alpine
         run: docker run --rm -v "$PWD:/w:ro" eclipse-temurin:25.0.4_7-jdk-alpine-3.24@sha256:541729c21f9308a68cebbe5a0627e4cd465dfe8980fc03bac0b2feaee57daafd sh /w/tests/musl-packages.sh java /w/assembled
 
-  assembled:
-    name: Multi-platform packages on ${{ matrix.platform }} / ${{ (inputs.real_model || inputs.candidate) && 'real model' || 'model free' }}
-    needs: assemble
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux-x64
-            runner: ubuntu-24.04
-            python: python3
-            shell: bash
-          - platform: linux-arm64
-            runner: ubuntu-24.04-arm
-            python: python3
-            shell: bash
-          # PowerShell on Windows: Strawberry Perl's pkg-config.bat does not run from Git Bash.
-          # The commands below are written for both shells.
-          - platform: windows-x64
-            runner: windows-2025
-            python: python
-            shell: pwsh
+  # Model-free ASan+UBSan through the sanitize preset, pinned clang. The real-model sanitizer
+  # runs are qualify-sanitizers-address and -thread.
+  sanitizers:
+    name: sanitizers
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'sanitizers') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
-      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-      DOTNET_NOLOGO: '1'
-      PYTHONUTF8: '1'
-      GOTOOLCHAIN: local
-    defaults:
-      run:
-        shell: ${{ matrix.shell }}
+      DTL_JOB: sanitizers
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-asan
+      DTL_CACHE_SAVE: 'true'
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: 24.21.0
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          # Exact: javadoc output changes between patch releases, and every platform's
-          # javadoc and classes must be the same for scripts/assemble-packages.py.
-          java-version: '25.0.4'
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '10.0.402'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: (inputs.real_model || inputs.candidate)
-        with:
-          go-version: '1.27.2'
-          cache: false
-      - name: Install pinned Rust toolchain and fetch the consumer's locked dependencies
-        if: (inputs.real_model || inputs.candidate)
-        run: >-
-          rustup toolchain install 1.98.0 --profile minimal && rustup override set 1.98.0 &&
-          cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: packages-assembled
-          path: assembled
-      - name: Load every package outside the checkout
-        run: ${{ matrix.python }} tests/package-smoke.py assembled --platform ${{ matrix.platform }}
-      - name: Download and verify explicitly requested test model
-        if: (inputs.real_model || inputs.candidate)
-        run: >-
-          ${{ matrix.python }} -c "import json, pathlib, urllib.request; pathlib.Path('build-model').mkdir(); m = json.loads(pathlib.Path('models/manifest.json').read_text()); urllib.request.urlretrieve(m['url'], 'build-model/laya.gguf')" &&
-          ${{ matrix.python }} scripts/verify-model.py build-model/laya.gguf
-      - name: Installed packages with the real model
-        if: (inputs.real_model || inputs.candidate)
-        run: >-
-          ${{ matrix.python }} tests/installed-packages.py assembled build-model/laya.gguf --platform ${{ matrix.platform }}
-          --report build-report/installed.json
-      # Electron's Chromium sandbox needs unprivileged user namespaces, which Ubuntu 24.04
-      # restricts through AppArmor; the arm64 image also lacks some of Chromium's libraries.
-      - name: Electron prerequisites on Linux
-        if: (inputs.real_model || inputs.candidate) && runner.os == 'Linux'
+      - *checkout
+      - *llvm
+      - *ninja
+      - *compiler-cache
+      - name: Instrumented build and the tier-generic tests
         run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libnss3 libasound2t64 libgtk-3-0t64 libgbm1 libxss1
-      - name: Electron consumer of the multi-platform npm package, directory and ASAR
-        if: (inputs.real_model || inputs.candidate)
-        run: >-
-          npm ci --prefix tests/electron --no-audit --no-fund &&
-          node tests/electron/run.cjs assembled/ducktape-laya-$(${{ matrix.python }} -c "import json; print(json.load(open('assembled/inventory.json'))['package_version'])").tgz
-          build-model/laya.gguf build-report/electron.json
-      - name: Retain reports
+          launcher=
+          [ "$DTL_LAUNCHER" = none ] || launcher=$DTL_LAUNCHER
+          cmake --preset sanitize -DGGML_CCACHE=OFF "-DCMAKE_C_COMPILER_LAUNCHER=$launcher" "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher"
+          cmake --build build-sanitize --parallel 4
+          ctest --preset sanitize -L '^tier-generic$' --no-tests=error --output-on-failure
+      - *cache-stats
+      - name: Retain the test log
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: installed-${{ matrix.platform }}-${{ (inputs.real_model || inputs.candidate) && 'real-model' || 'model-free' }}
-          path: build-report/
-          if-no-files-found: ignore
-          retention-days: ${{ inputs.candidate && 30 || 14 }}
+          name: report-sanitizers
+          path: build-sanitize/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+  # The libFuzzer smoke: fuzz preset, laya-input-fuzzer, 60 seconds from the generated corpus.
+  fuzzer:
+    name: fuzzer
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'fuzzer') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DTL_JOB: fuzzer
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-fuzz
+      DTL_CACHE_SAVE: 'true'
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - *checkout
+      - *llvm
+      - *ninja
+      - *compiler-cache
+      - name: Coverage-guided parser and router smoke
+        run: |
+          launcher=
+          [ "$DTL_LAUNCHER" = none ] || launcher=$DTL_LAUNCHER
+          cmake --preset fuzz -DGGML_CCACHE=OFF "-DCMAKE_C_COMPILER_LAUNCHER=$launcher" "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher"
+          cmake --build build-fuzz --target laya-input-fuzzer --parallel 4
+          python3 tests/fuzz-corpus.py build-fuzz/corpus
+          build-fuzz/laya-input-fuzzer build-fuzz/corpus -seed=444211238 \
+            -max_total_time=60 -max_len=1048577 -timeout=30 \
+            -artifact_prefix=build-fuzz/fuzzer- -print_final_stats=1 \
+            > build-fuzz/fuzzer-smoke.log 2>&1
+      - *cache-stats
+      - name: Retain fuzz output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: report-fuzzer
+          path: build-fuzz/fuzzer-*
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+  # Two independent uncached builds of one source snapshot install identical files. One job for the
+  # push and the candidate profile (one success verifies the name for both). In a candidate run
+  # evidence-windows-x64 requires its build environment to equal the validated build's.
+  reproducibility-windows-x64:
+    name: reproducibility-windows-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'reproducibility-windows-x64') }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      DTL_JOB: reproducibility-windows-x64
+      DTL_NODE: 24.21.0
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *ninja
+      - *setup-node
+      - *node-sdk
+      - *vs-env
+      - name: Compile one source snapshot in two directories with clang-cl and compare the installed files
+        run: >-
+          python scripts/check-reproducibility.py --output "$RUNNER_TEMP/repro" --jobs 4 --cc "$DTL_CLANG_CL" --cxx "$DTL_CLANG_CL"
+          --node-include "$NODE_INCLUDE_DIR" --cmake-arg=-GNinja "--cmake-arg=-DNODE_LIB=$NODE_LIB"
+          "--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
+      - name: Retain the reproducibility report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reproducibility-windows-x64
+          path: |
+            ${{ runner.temp }}/repro/report.json
+            ${{ runner.temp }}/repro/*.log
+            ${{ runner.temp }}/repro/first/install/bin/*.dll
+            ${{ runner.temp }}/repro/first/install/lib/**/*.node
+          if-no-files-found: warn
+          retention-days: ${{ needs.changes.outputs.mode == 'candidate' && 30 || 14 }}
+          overwrite: true
+
+  # ---------------------------------------------------------------- candidate: tooling and tier-2 reproducibility
+
+  # Every policy check; its success is part of the candidate run's success conclusion, which the
+  # release checker requires of the evidence run.
+  tooling:
+    name: tooling
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'tooling') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DTL_JOB: tooling
+      DTL_NODE: 26.7.0
+      DTL_TOOLS: typescript
+    steps:
+      - *checkout-plain
+      - *setup-node
+      - *typescript
+      - name: Every policy check
+        run: python3 scripts/check-policy.py --all --jobs 4 --output build-ci-report
+      - *report
+
+  reproducibility-linux-arm64:
+    name: reproducibility-linux-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'reproducibility-linux-arm64') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      DTL_JOB: reproducibility-linux-arm64
+      DTL_NODE: 24.21.0
+    steps:
+      - *checkout
+      - *ninja
+      - *setup-node
+      - name: Two independent builds of one source snapshot
+        run: python3 scripts/check-reproducibility.py --output build-repro --jobs 4 --cc gcc --cxx g++
+      - name: Retain the reproducibility report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reproducibility-linux-arm64
+          path: |
+            build-repro/report.json
+            build-repro/*.log
+          if-no-files-found: warn
+          retention-days: ${{ needs.changes.outputs.mode == 'candidate' && 30 || 14 }}
+          overwrite: true
+
+  # ---------------------------------------------------------------- real-model and candidate: build once per platform
+
+  # validate.py --phase build (with --full in a candidate run): library, addon, tests and the
+  # reference probe, through the compiler cache unless cache=off. The build tarball is the whole
+  # build directory without objects and the runtime's static archives, plus the build report;
+  # every shard of the platform restores it at the same absolute path.
+  build-linux-x64:
+    name: build-linux-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'build-linux-x64') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DTL_JOB: build-linux-x64
+      DTL_PLATFORM: linux-x64
+      DTL_NODE: 26.7.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_SAVE: 'true'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - &build-phase
+        name: Build phase
+        run: |
+          full=()
+          windows=()
+          [ "$DTL_MODE" = candidate ] && full=(--full)
+          if [ -n "${DTL_WINDOWS_ARGS:-}" ]; then mapfile -t windows < "$DTL_WINDOWS_ARGS"; fi
+          "$PY" scripts/validate.py "${full[@]}" --phase build --model build-model/laya.gguf --upstream-reference \
+            --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER" "${windows[@]}"
+      - &build-tarball
+        name: Build tarball
+        run: |
+          tar --exclude='*.o' --exclude='*.obj' --exclude='*.d' \
+            --exclude='libggml*.a' --exclude='libllama.a' --exclude='libllama-common*.a' --exclude='libmtmd.a' \
+            --exclude='ggml*.lib' --exclude='llama.lib' --exclude='llama-common*.lib' --exclude='mtmd.lib' \
+            -cf "build-$DTL_PLATFORM.tar" build-validation build-ci-report
+          ls -l "build-$DTL_PLATFORM.tar"
+      - &build-upload
+        name: Retain the build tarball for the shards
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-${{ env.DTL_PLATFORM }}
+          path: build-${{ env.DTL_PLATFORM }}.tar
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 1
+          overwrite: true
+      - *cache-stats
+      - *report
+
+  build-linux-x64-clang:
+    name: build-linux-x64-clang
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'build-linux-x64-clang') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DTL_JOB: build-linux-x64-clang
+      DTL_PLATFORM: linux-x64-clang
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-validate
+      DTL_CACHE_SAVE: 'true'
+    steps:
+      - *checkout
+      - *llvm
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-phase
+      - *build-tarball
+      - *build-upload
+      - *cache-stats
+      - *report
+
+  build-linux-arm64:
+    name: build-linux-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'build-linux-arm64') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      DTL_JOB: build-linux-arm64
+      DTL_PLATFORM: linux-arm64
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-arm64-gcc-validate
+      DTL_CACHE_SAVE: 'true'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-phase
+      - *build-tarball
+      - *build-upload
+      - *cache-stats
+      - *report
+
+  build-windows-x64:
+    name: build-windows-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'build-windows-x64') }}
+    runs-on: windows-2025
+    timeout-minutes: 75
+    env:
+      DTL_JOB: build-windows-x64
+      DTL_PLATFORM: windows-x64
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
+      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_SAVE: 'true'
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *node-sdk
+      - *vs-env
+      - *windows-args
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-phase
+      - *build-tarball
+      - *build-upload
+      - *cache-stats
+      - *report
+
+  # ---------------------------------------------------------------- shards (from the build tarball)
+
+  # One matrix job per platform; the jobs, their checks and side outputs come from
+  # scripts/ci_paths.py SHARDS (real_model or candidate mode). validate.py --phase test never
+  # builds: it requires the library, addon and CMake cache of the build report.
+  shards-linux-x64:
+    name: ${{ matrix.job }}
+    needs: [changes, build-linux-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.shards_linux_x64 != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.shards_linux_x64) }}
+    env:
+      DTL_JOB: ${{ matrix.job }}
+      DTL_PLATFORM: linux-x64
+      DTL_NODE: 26.7.0
+      DTL_TOOLS: ${{ matrix.tools }}
+      DTL_MODEL: 'true'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *typescript
+      - &qemu
+        name: QEMU user mode for the emulated-CPU guard test
+        if: matrix.qemu
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - &build-download
+        name: Restore the build tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: build-${{ env.DTL_PLATFORM }}
+      - &build-extract
+        name: Extract the build at its absolute path
+        run: |
+          tar -xf "build-$DTL_PLATFORM.tar"
+          rm "build-$DTL_PLATFORM.tar"
+      - &shard-run
+        name: Shard checks
+        env:
+          CHECKS: ${{ matrix.checks }}
+        run: |
+          windows=()
+          if [ -n "${DTL_WINDOWS_ARGS:-}" ]; then mapfile -t windows < "$DTL_WINDOWS_ARGS"; fi
+          "$PY" scripts/validate.py --phase test --from build-validation --checks "$CHECKS" --output build-shard \
+            --test-jobs 4 "${windows[@]}"
+      # The CI side of the tier-1 cross_cpu comparison (a SHARDS side output of native-linux-x64).
+      - &cross-host
+        name: Record exact outputs of the built library on this runner CPU
+        if: matrix.cross_host
+        run: |
+          python3 tests/cross-host.py bundle --build build-validation --output build-shard/cross-host/bundle
+          python3 tests/cross-host.py record --bundle build-shard/cross-host/bundle \
+            --model build-model/laya.gguf --report build-shard/cross-host/record.json
+      - &shard-upload
+        name: Retain the shard for the merge
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: shard-${{ env.DTL_PLATFORM }}-${{ matrix.label }}
+          path: |
+            build-shard/
+            !build-shard/packages/
+          if-no-files-found: warn
+          retention-days: 7
+          overwrite: true
+
+  shards-linux-x64-clang:
+    name: ${{ matrix.job }}
+    needs: [changes, build-linux-x64-clang]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.shards_linux_x64_clang != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.shards_linux_x64_clang) }}
+    env:
+      DTL_JOB: ${{ matrix.job }}
+      DTL_PLATFORM: linux-x64-clang
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: ${{ matrix.tools }}
+      DTL_MODEL: 'true'
+    steps:
+      - *checkout
+      - *llvm
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *typescript
+      - *qemu
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *shard-run
+      - *cross-host
+      - *shard-upload
+
+  shards-linux-arm64:
+    name: ${{ matrix.job }}
+    needs: [changes, build-linux-arm64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.shards_linux_arm64 != '[]' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.shards_linux_arm64) }}
+    env:
+      DTL_JOB: ${{ matrix.job }}
+      DTL_PLATFORM: linux-arm64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: ${{ matrix.tools }}
+      DTL_MODEL: 'true'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *typescript
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *shard-run
+      - *cross-host
+      - *shard-upload
+
+  shards-windows-x64:
+    name: ${{ matrix.job }}
+    needs: [changes, build-windows-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.shards_windows_x64 != '[]' }}
+    runs-on: windows-2025
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.shards_windows_x64) }}
+    env:
+      DTL_JOB: ${{ matrix.job }}
+      DTL_PLATFORM: windows-x64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: ${{ matrix.tools }}
+      DTL_MODEL: 'true'
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *typescript
+      - *node-sdk
+      - *vs-env
+      - *windows-args
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *shard-run
+      - *cross-host
+      - *shard-upload
+
+  # The candidate's packages-<P>: the packages check from the build tarball, a short job so that
+  # assemble starts early. Same names as the push profile's jobs, with a build dependency.
+  packages-candidate-linux-x64:
+    name: packages-linux-x64
+    needs: [changes, build-linux-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode == 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-linux-x64') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DTL_JOB: packages-linux-x64
+      DTL_PLATFORM: linux-x64
+      DTL_NODE: 26.7.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_MODEL: 'true'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - &packages-shard
+        name: Packages check
+        run: |
+          windows=()
+          if [ -n "${DTL_WINDOWS_ARGS:-}" ]; then mapfile -t windows < "$DTL_WINDOWS_ARGS"; fi
+          "$PY" scripts/validate.py --phase test --from build-validation --checks packages --output build-shard \
+            --test-jobs 4 "${windows[@]}"
+      - &packages-candidate-upload
+        name: Retain this platform's packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: packages-${{ env.DTL_PLATFORM }}
+          path: build-shard/packages/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+      - &packages-shard-upload
+        name: Retain the shard for the merge
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: shard-${{ env.DTL_PLATFORM }}-packages
+          path: |
+            build-shard/
+            !build-shard/packages/
+          if-no-files-found: warn
+          retention-days: 7
+          overwrite: true
+
+  packages-candidate-linux-arm64:
+    name: packages-linux-arm64
+    needs: [changes, build-linux-arm64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode == 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-linux-arm64') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      DTL_JOB: packages-linux-arm64
+      DTL_PLATFORM: linux-arm64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_MODEL: 'true'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *packages-shard
+      - *packages-candidate-upload
+      - *packages-shard-upload
+
+  packages-candidate-windows-x64:
+    name: packages-windows-x64
+    needs: [changes, build-windows-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode == 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-windows-x64') }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      DTL_JOB: packages-windows-x64
+      DTL_PLATFORM: windows-x64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_MODEL: 'true'
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *node-sdk
+      - *vs-env
+      - *windows-args
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *packages-shard
+      - *packages-candidate-upload
+      - *packages-shard-upload
+
+  # ---------------------------------------------------------------- candidate: tier-2 short stress
+
+  stress-linux-arm64:
+    name: stress-linux-arm64
+    needs: [changes, build-linux-arm64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'stress-linux-arm64') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      DTL_JOB: stress-linux-arm64
+      DTL_PLATFORM: linux-arm64
+      DTL_MODEL: 'true'
+    steps:
+      - *checkout
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - &stress-run
+        name: Short stress run on the validated library (300 s, at least 40 rounds)
+        run: >-
+          "$PY" scripts/check-stress.py build-model/laya.gguf --prebuilt --build build-validation --budget short
+          --output build-stress --jobs 4
+      - &stress-upload
+        name: Retain the stress report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stress-${{ env.DTL_PLATFORM }}
+          path: build-stress/
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true
+
+  stress-windows-x64:
+    name: stress-windows-x64
+    needs: [changes, build-windows-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'stress-windows-x64') }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      DTL_JOB: stress-windows-x64
+      DTL_PLATFORM: windows-x64
+      DTL_MODEL: 'true'
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *vs-env
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *stress-run
+      - *stress-upload
+
+  # ---------------------------------------------------------------- candidate: merged evidence per platform
+
+  # scripts/merge-validation.py merges the platform's shards into one report (profile from SHARDS:
+  # ci-full, or ci-compiler for linux-x64-clang). On a tier-2 platform the stress and
+  # reproducibility runs must have run on the build's image (build_environment), or the merge stops.
+  evidence-linux-x64:
+    name: evidence-linux-x64
+    needs: [changes, build-linux-x64, shards-linux-x64, packages-candidate-linux-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'evidence-linux-x64') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DTL_JOB: evidence-linux-x64
+      DTL_PLATFORM: linux-x64
+      DTL_EVIDENCE: evidence-linux-x64
+      DTL_NATIVE: native-x64-gcc-node-26.7.0
+      DTL_TIER2: 'false'
+    steps:
+      - *checkout
+      - *build-download
+      - *build-extract
+      - &shards-download
+        name: Restore the shards
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: shard-${{ env.DTL_PLATFORM }}-*
+          path: shards
+      - &tier2-stress
+        name: Restore the stress report
+        if: env.DTL_TIER2 == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: stress-${{ env.DTL_PLATFORM }}
+          path: tier2/stress
+      - &tier2-reproducibility
+        name: Restore the reproducibility report
+        if: env.DTL_TIER2 == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: reproducibility-${{ env.DTL_PLATFORM }}
+          path: tier2/reproducibility
+      - &image-check
+        name: Stress and reproducibility on the build's image
+        if: env.DTL_TIER2 == 'true'
+        run: |
+          "$PY" - <<'PY'
+          import json
+          build = json.load(open('build-ci-report/report.json')).get('build_environment')
+          for name in ('stress', 'reproducibility'):
+              other = json.load(open(f'tier2/{name}/report.json')).get('build_environment')
+              if other != build:
+                  raise SystemExit(f'image changed: rerun (the {name} job ran on {other}, the build on {build})')
+          print(f'build environment {build}')
+          PY
+      - &merge
+        name: Merge the shards
+        run: |
+          profile=$("$PY" -c "import sys; sys.path.insert(0, 'scripts'); import ci_paths; print(ci_paths.SHARDS['candidate']['$DTL_PLATFORM']['profile'])")
+          ls shards
+          "$PY" scripts/merge-validation.py --profile "$profile" --output build-evidence --build build-validation shards/*
+      - &evidence-upload
+        name: Retain this platform's release evidence
+        if: env.DTL_EVIDENCE != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.DTL_EVIDENCE }}
+          path: |
+            build-evidence/
+            !build-evidence/packages/
+            !build-evidence/assembled/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+      # The native matrix report (and on gcc the cross-host record and bundle) under the name
+      # scripts/fetch-ci-evidence.py takes as optional native-x64-* evidence.
+      - &native-upload
+        name: Retain the native matrix report
+        if: env.DTL_NATIVE != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.DTL_NATIVE }}
+          path: |
+            build-evidence/
+            !build-evidence/packages/
+            !build-evidence/assembled/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+  evidence-linux-x64-clang:
+    name: evidence-linux-x64-clang
+    needs: [changes, build-linux-x64-clang, shards-linux-x64-clang]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'evidence-linux-x64-clang') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DTL_JOB: evidence-linux-x64-clang
+      DTL_PLATFORM: linux-x64-clang
+      DTL_EVIDENCE: ''
+      DTL_NATIVE: native-x64-clang-node-24.21.0
+      DTL_TIER2: 'false'
+    steps:
+      - *checkout
+      - *build-download
+      - *build-extract
+      - *shards-download
+      - *merge
+      - *native-upload
+
+  evidence-linux-arm64:
+    name: evidence-linux-arm64
+    needs: [changes, build-linux-arm64, shards-linux-arm64, packages-candidate-linux-arm64, stress-linux-arm64, reproducibility-linux-arm64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'evidence-linux-arm64') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      DTL_JOB: evidence-linux-arm64
+      DTL_PLATFORM: linux-arm64
+      DTL_EVIDENCE: evidence-linux-arm64
+      DTL_NATIVE: ''
+      DTL_TIER2: 'true'
+    steps:
+      - *checkout
+      - *build-download
+      - *build-extract
+      - *shards-download
+      - *tier2-stress
+      - *tier2-reproducibility
+      - *image-check
+      - *merge
+      - *evidence-upload
+
+  evidence-windows-x64:
+    name: evidence-windows-x64
+    needs: [changes, build-windows-x64, shards-windows-x64, packages-candidate-windows-x64, stress-windows-x64, reproducibility-windows-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'evidence-windows-x64') }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      DTL_JOB: evidence-windows-x64
+      DTL_PLATFORM: windows-x64
+      DTL_EVIDENCE: evidence-windows-x64
+      DTL_NATIVE: ''
+      DTL_TIER2: 'true'
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *build-download
+      - *build-extract
+      - *shards-download
+      - *tier2-stress
+      - *tier2-reproducibility
+      - *image-check
+      - *merge
+      - *evidence-upload
+
+  # ---------------------------------------------------------------- qualify: the CI long gates
+
+  # mode=qualify (dispatched after the candidate's build jobs have finished): the real-model
+  # sanitizer runs, the fuzz campaign and the runtime upgrade rehearsal, through the compiler
+  # cache (instrumented or rehearsal builds, never shipped). scripts/fetch-ci-evidence.py --qualify
+  # downloads sanitizers, fuzz and upgrade.
+  qualify-sanitizers-address:
+    name: qualify-sanitizers-address
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'qualify-sanitizers-address') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DTL_JOB: qualify-sanitizers-address
+      DTL_MODEL: 'true'
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-asan
+      DTL_CACHE_SAVE: 'false'
+    steps:
+      - *checkout
+      - *llvm
+      - *ninja
+      - *compiler-cache
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - name: ASan and UBSan with the real model (sanitize preset)
+        run: >-
+          python3 scripts/check-sanitizers.py build-model/laya.gguf --only address --compiler-launcher "$DTL_LAUNCHER"
+          --jobs 4 --test-jobs 4 --output build-qualify/address
+      - *cache-stats
+      - &qualify-upload
+        name: Retain the report for the merge
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.DTL_JOB }}
+          path: build-qualify/
+          if-no-files-found: warn
+          retention-days: 7
+          overwrite: true
+
+  qualify-sanitizers-thread:
+    name: qualify-sanitizers-thread
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'qualify-sanitizers-thread') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DTL_JOB: qualify-sanitizers-thread
+      DTL_MODEL: 'true'
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-tsan
+      DTL_CACHE_SAVE: 'false'
+    steps:
+      - *checkout
+      - *llvm
+      - *ninja
+      - *compiler-cache
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      # TSan's shadow mapping does not fit the runner kernel's default ASLR entropy.
+      - name: Address-space randomization for ThreadSanitizer
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      # The Rust leg: cargo +nightly-2026-10-17 test -Zbuild-std (rustc 1.101.0-nightly 5d8fec066).
+      - name: Pinned Rust nightly with rust-src
+        run: rustup toolchain install nightly-2026-10-17 --profile minimal --component rust-src
+      - name: TSan with the real model (sanitize-thread preset), native and Rust
+        run: >-
+          python3 scripts/check-sanitizers.py build-model/laya.gguf --only thread --compiler-launcher "$DTL_LAUNCHER"
+          --jobs 4 --test-jobs 4 --output build-qualify/thread
+      - *cache-stats
+      - *qualify-upload
+
+  qualify-sanitizers:
+    name: qualify-sanitizers
+    needs: [changes, qualify-sanitizers-address, qualify-sanitizers-thread]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'qualify-sanitizers') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - *checkout
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: qualify-sanitizers-address
+          path: qualify/address-run
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: qualify-sanitizers-thread
+          path: qualify/thread-run
+      # Refuses unless both passed on the same clean commit, model and runtime.
+      - name: Merge the address and thread reports
+        run: >-
+          python3 scripts/check-sanitizers.py --merge qualify/address-run/address qualify/thread-run/thread
+          --output build-qualify/sanitizers
+      - name: Retain the sanitizer evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sanitizers
+          path: build-qualify/sanitizers/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+  qualify-fuzz:
+    name: qualify-fuzz
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'qualify-fuzz') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      DTL_JOB: qualify-fuzz
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-fuzz
+      DTL_CACHE_SAVE: 'false'
+      FUZZ_SECONDS: ${{ inputs.fuzz_seconds }}
+    steps:
+      - *checkout
+      - *llvm
+      - *ninja
+      - *compiler-cache
+      - name: Fuzz campaign (fuzz preset)
+        run: |
+          cmake --preset fuzz
+          python3 scripts/check-fuzz.py --seconds "$FUZZ_SECONDS" --compiler-launcher "$DTL_LAUNCHER" --jobs 4 --output build-qualify/fuzz
+      - *cache-stats
+      - name: Retain the fuzz evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz
+          path: build-qualify/fuzz/
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true
+
+  # check-upgrade.py runs ctest, the Cargo and Node tests and tests/parity.py for each pair: gcc
+  # (the product compiler) and every binding toolchain. The rehearsed runtime commit is fetched
+  # into the submodule's object database.
+  qualify-upgrade:
+    name: qualify-upgrade
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'qualify-upgrade') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DTL_JOB: qualify-upgrade
+      DTL_NODE: 26.7.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_MODEL: 'true'
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_SAVE: 'false'
+      RUNTIME: ${{ needs.changes.outputs.runtime }}
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go
+      - *go-cache
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - name: Runtime commit to rehearse
+        run: |
+          git -C third_party/llama.cpp cat-file -e "$RUNTIME^{commit}" 2>/dev/null \
+            || git -C third_party/llama.cpp fetch --no-tags --depth=1 origin "$RUNTIME"
+          git -C third_party/llama.cpp log -1 --format='%H %cs %s' "$RUNTIME"
+      - name: Runtime upgrade rehearsal
+        run: >-
+          python3 scripts/check-upgrade.py --runtime "$RUNTIME" --model build-model/laya.gguf
+          --compiler-launcher "$DTL_LAUNCHER" --jobs 4 --output build-qualify/upgrade
+      - *cache-stats
+      - name: Retain the upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: upgrade
+          path: build-qualify/upgrade/
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true
+
+  # ---------------------------------------------------------------- warm-cache: nightly seeds, then prune
+
+  # Build-only jobs for every evidence configuration, every night (also when main is unchanged, so
+  # main's entries never age out). Saved from main, every branch restores them. Only these jobs
+  # save the model and the LLVM toolchain.
+  warm-linux-x64:
+    name: warm-linux-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'warm-linux-x64') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DTL_JOB: warm-linux-x64
+      DTL_NODE: 26.7.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_SAVE: 'true'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - name: Save the pinned test model
+        if: env.DTL_MODEL == 'true' && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build-model/laya.gguf
+          key: laya-model-${{ steps.model-key.outputs.sha256 }}
+          enableCrossOsArchive: true
+      - *build-phase
+      - *cache-stats
+
+  warm-linux-x64-clang:
+    name: warm-linux-x64-clang
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'warm-linux-x64-clang') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DTL_JOB: warm-linux-x64-clang
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-validate
+      DTL_CACHE_SAVE: 'true'
+    steps:
+      - *checkout
+      # The one job that saves the extracted LLVM toolchain.
+      - uses: ./.github/actions/setup-llvm
+        with:
+          save: 'true'
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-phase
+      - *cache-stats
+
+  warm-linux-arm64:
+    name: warm-linux-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'warm-linux-arm64') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      DTL_JOB: warm-linux-arm64
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-arm64-gcc-validate
+      DTL_CACHE_SAVE: 'true'
+      CC: gcc
+      CXX: g++
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-phase
+      - *cache-stats
+
+  warm-windows-x64:
+    name: warm-windows-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'warm-windows-x64') }}
+    runs-on: windows-2025
+    timeout-minutes: 75
+    env:
+      DTL_JOB: warm-windows-x64
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
+      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_SAVE: 'true'
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *node-sdk
+      - *vs-env
+      - *windows-args
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-phase
+      - *cache-stats
+
+  warm-asan:
+    name: warm-asan
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'warm-asan') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DTL_JOB: warm-asan
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-asan
+      DTL_CACHE_SAVE: 'true'
+      DTL_PRESET: sanitize
+      DTL_TARGET: all
+    steps:
+      - *checkout
+      - *llvm
+      - *ninja
+      - *compiler-cache
+      - &preset-build
+        name: Build through the preset
+        run: |
+          launcher=
+          [ "$DTL_LAUNCHER" = none ] || launcher=$DTL_LAUNCHER
+          cmake --preset "$DTL_PRESET" -DGGML_CCACHE=OFF "-DCMAKE_C_COMPILER_LAUNCHER=$launcher" "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher"
+          cmake --build "build-$DTL_PRESET" --target "$DTL_TARGET" --parallel 4
+      - *cache-stats
+
+  warm-tsan:
+    name: warm-tsan
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'warm-tsan') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DTL_JOB: warm-tsan
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-tsan
+      DTL_CACHE_SAVE: 'true'
+      DTL_PRESET: sanitize-thread
+      DTL_TARGET: all
+    steps:
+      - *checkout
+      - *llvm
+      - *ninja
+      - *compiler-cache
+      - *preset-build
+      - *cache-stats
+
+  warm-fuzz:
+    name: warm-fuzz
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'warm-fuzz') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DTL_JOB: warm-fuzz
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: linux-x64-clang-fuzz
+      DTL_CACHE_SAVE: 'true'
+      DTL_PRESET: fuzz
+      DTL_TARGET: laya-input-fuzzer
+    steps:
+      - *checkout
+      - *llvm
+      - *ninja
+      - *compiler-cache
+      - *preset-build
+      - *cache-stats
+
+  # Keep the newest two entries per key prefix and ref; drop entries of deleted or merged branches.
+  # A warm-cache dispatch on another ref only lists what it would delete.
+  cache-prune:
+    name: cache-prune
+    needs: [changes, warm-linux-x64, warm-linux-x64-clang, warm-linux-arm64, warm-windows-x64, warm-asan, warm-tsan, warm-fuzz]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'cache-prune') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - *checkout-plain
+      - name: Prune the caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dry=()
+          [ "$GITHUB_REF" = refs/heads/main ] || dry=(--dry-run)
+          python3 scripts/ci-cache-prune.py --repository "$GITHUB_REPOSITORY" "${dry[@]}"
+
+  # ---------------------------------------------------------------- experiment (V1)
+
+  # Windows inference speed: tests/benchmark.py with the product flags and with /clang:-O3, and the
+  # page faults of opening the model. Data for a follow-up; a flag change is adopted only if
+  # faster with byte-identical outputs.
+  bench-windows-x64:
+    name: bench-windows-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'bench-windows-x64') }}
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      DTL_JOB: bench-windows-x64
+      DTL_MODEL: 'true'
+      PY: python
+    steps:
+      - *defender
+      - *checkout
+      - *ninja
+      - *vs-env
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - name: Library builds with the product flags and with /clang:-O3
+        run: |
+          for variant in product o3; do
+            flags=()
+            [ "$variant" = o3 ] && flags=('-DCMAKE_C_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /clang:-O3' '-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /clang:-O3')
+            cmake -S . -B "build-bench/$variant" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              "-DCMAKE_C_COMPILER=$DTL_CLANG_CL" "-DCMAKE_CXX_COMPILER=$DTL_CLANG_CL" \
+              '-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe' \
+              -DDUCKTAPE_BUILD_NODE=OFF -DDUCKTAPE_BUILD_TESTS=OFF -DDUCKTAPE_BUILD_EXAMPLES=OFF "${flags[@]}"
+            cmake --build "build-bench/$variant" --parallel 4
+          done
+      - name: Page faults and time of opening the model
+        run: |
+          for variant in product o3; do
+            "$PY" - "build-bench/$variant" build-model/laya.gguf "build-bench/open-$variant.json" <<'PY'
+          import ctypes as c, ctypes.wintypes as w, json, os, pathlib, sys, time
+          class Counters(c.Structure):
+              _fields_ = [('cb', w.DWORD), ('PageFaultCount', w.DWORD)] + [(name, c.c_size_t) for name in (
+                  'PeakWorkingSetSize', 'WorkingSetSize', 'QuotaPeakPagedPoolUsage', 'QuotaPagedPoolUsage',
+                  'QuotaPeakNonPagedPoolUsage', 'QuotaNonPagedPoolUsage', 'PagefileUsage', 'PeakPagefileUsage')]
+          psapi, kernel32 = c.WinDLL('psapi'), c.WinDLL('kernel32')
+          kernel32.GetCurrentProcess.restype = w.HANDLE
+          psapi.GetProcessMemoryInfo.argtypes = [w.HANDLE, c.POINTER(Counters), w.DWORD]
+          def counters():
+              value = Counters(cb=c.sizeof(Counters))
+              psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), c.byref(value), value.cb)
+              return value
+          build, model, report = map(pathlib.Path, sys.argv[1:4])
+          os.add_dll_directory(str(build.resolve()))
+          library = c.CDLL(str((build / 'ducktape_laya.dll').resolve()))
+          library.dtl_open.argtypes = [c.c_char_p, c.c_char_p, c.POINTER(c.c_void_p), c.POINTER(c.c_void_p)]
+          library.dtl_open.restype = c.c_int32
+          library.dtl_close.argtypes = [c.c_void_p]
+          before, started = counters(), time.perf_counter()
+          engine, error = c.c_void_p(), c.c_void_p()
+          status = library.dtl_open(str(model.resolve()).encode(), b'{"threads": 4}', c.byref(engine), c.byref(error))
+          elapsed, after = time.perf_counter() - started, counters()
+          if status == 0: library.dtl_close(engine)
+          result = {'status': status, 'open_seconds': elapsed, 'page_faults': after.PageFaultCount - before.PageFaultCount,
+                    'peak_working_set_bytes': after.PeakWorkingSetSize}
+          report.write_text(json.dumps(result, indent=2) + '\n')
+          print(build.name, result)
+          PY
+          done
+      # tests/benchmark.py measures RSS with the Unix-only resource module; the step records
+      # whatever it gets on Windows without failing the experiment.
+      - name: Benchmark with the product flags and with /clang:-O3
+        continue-on-error: true
+        run: |
+          for variant in product o3; do
+            "$PY" tests/benchmark.py build-model/laya.gguf --build "build-bench/$variant" --report "build-bench/benchmark-$variant.json" \
+              2>&1 | tee "build-bench/benchmark-$variant.log"
+          done
+      - name: Retain the measurements
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bench-windows-x64
+          path: |
+            build-bench/*.json
+            build-bench/*.log
+          if-no-files-found: warn
+          retention-days: 30
           overwrite: true
