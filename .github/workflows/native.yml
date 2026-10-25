@@ -254,12 +254,17 @@ jobs:
       DTL_NODE: 26.7.0
       DTL_TOOLS: typescript
     steps:
-      # No submodules: a policy check that needs the runtime tree belongs in generic-linux-x64.
+      # Full history for the policy base; the runtime submodule at depth 1 only, because
+      # release_support.check_record (validate.py, check-candidate.py and their tests) requires the
+      # pinned runtime checkout. checkout's submodules option would fetch its whole history here.
       - &checkout-plain
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
+      - &runtime-shallow
+        name: Pinned runtime checkout (depth 1)
+        run: git submodule update --init --depth 1 third_party/llama.cpp
       - &setup-node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         if: env.DTL_NODE != ''
@@ -1031,6 +1036,7 @@ jobs:
       DTL_TOOLS: typescript
     steps:
       - *checkout-plain
+      - *runtime-shallow
       - *setup-node
       - *typescript
       - name: Every policy check
