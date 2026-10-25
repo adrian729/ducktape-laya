@@ -8,6 +8,7 @@ Maven jar, the NuGet package and the Go module against the archive. Every
 consumer must give exactly the same results."""
 import argparse
 import atexit
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 
 from package_support import (EXE, clean_environment, extract_native, host_packages, library_directory, tool, venv_python,
                              with_library_path)
@@ -57,19 +59,24 @@ def save():
 
 
 atexit.register(save)
-with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
-    directory = pathlib.Path(directory)
-    for artifact in artifacts.glob('*.crate'):
-        with tarfile.open(artifact) as tar:
-            tar.extractall(directory, filter='data')
-    native = extract_native(artifacts, version, target, directory)
+# One real-model consumer at a time: each opens the model with 4 threads, and the builds and installs of the
+# other probes already share the machine.
+inference = threading.Lock()
+
+
+def consume(command, **kwargs):
+    with inference:
+        return json.loads(subprocess.check_output(command, input=request, **kwargs))
+
+
+def probe_native(directory, native):
+    # installed-native.py runs its CMake and pkg-config consumers itself.
     subprocess.run([sys.executable, str(root / 'tests/installed-native.py'), str(native), str(model), '--outputs', str(directory / 'native.json'),
                     '--skipped', str(directory / 'native-skipped.json')], check=True)
-    report['skipped'] = json.loads((directory / 'native-skipped.json').read_text())
-    for name, output in json.loads((directory / 'native.json').read_text()).items():
-        record(name, output)
-    libdir = next(native.glob('lib*/pkgconfig/ducktape-laya.pc')).parent.parent
-    runtime = library_directory(native, target)
+    return json.loads((directory / 'native-skipped.json').read_text()), json.loads((directory / 'native.json').read_text())
+
+
+def probe_node(directory, native):
     app = directory / 'application'
     app.mkdir()
     (app / 'package.json').write_text('{"private":true}')
@@ -90,11 +97,15 @@ with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
         assert paths and all(path.startswith('@loader_path') for path in paths), paths
     script = (root / 'tests/consumers/node.cjs').read_text().replace("require('../../bindings/node/index.cjs')", "require('ducktape-laya')")
     (app / 'test.cjs').write_text(script)
-    node = record('node', json.loads(subprocess.check_output(['node', 'test.cjs', str(model)], cwd=app, env=env, input=request)))
-    (app / 'src').mkdir()
+    return consume(['node', 'test.cjs', str(model)], cwd=app, env=env)
+
+
+def probe_rust(directory, native):
+    app = directory / 'rust'
+    (app / 'src').mkdir(parents=True)
     (app / 'src/main.rs').write_text((root / 'tests/consumers/rust/src/main.rs').read_text())
-    safe = directory / f'ducktape-laya-{version}'
-    sys_crate = directory / f'ducktape-laya-sys-{version}'
+    safe = crates / f'ducktape-laya-{version}'
+    sys_crate = crates / f'ducktape-laya-sys-{version}'
     assert 'path = ' not in (safe / 'Cargo.toml').read_text().split('[dependencies.ducktape-laya-sys]')[1].split('[')[0]
     assert not (safe / 'examples').exists()
     (app / 'Cargo.toml').write_text(f'''[package]
@@ -114,23 +125,30 @@ ducktape-laya-sys = {{ path = "{sys_crate.as_posix()}" }}
     else:
         build_env = dict(env, DUCKTAPE_LAYA_LIB_DIR=str(libdir))
     subprocess.run([tool('cargo'), 'build', '--offline', '--quiet'], cwd=app, env=build_env, check=True)
-    rust = record('rust', json.loads(subprocess.check_output([str(app / 'target/debug' / ('installed-consumer' + EXE)), str(model)],
-                                              cwd=app, env=with_library_path(env, runtime, target), input=request)))
-    assert node == rust
+    return consume([str(app / 'target/debug' / ('installed-consumer' + EXE)), str(model)], cwd=app, env=with_library_path(env, runtime, target))
+
+
+def probe_python(directory, native):
     # The wheel bundles the library; loader overrides must not be needed.
     wheel = artifacts / f'ducktape_laya-{version}-py3-none-{target.wheel}.whl'
     venv = directory / 'venv'
     subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
     subprocess.run([str(venv_python(venv)), '-m', 'pip', 'install', '--quiet', '--no-index', str(wheel)], check=True)
-    python = record('python', json.loads(subprocess.check_output([str(venv_python(venv)), str(root / 'tests/consumers/python/consumer.py'), str(model)],
-                                                cwd=app, env=env, input=request)))
-    assert python == rust
+    work = directory / 'python'
+    work.mkdir()
+    return consume([str(venv_python(venv)), str(root / 'tests/consumers/python/consumer.py'), str(model)], cwd=work, env=env)
+
+
+def probe_java(directory, native):
     # The Maven jar bundles the library as well.
     jar = artifacts / f'ducktape-laya-{version}.jar'
-    java = record('java', json.loads(subprocess.check_output(['java', '--enable-native-access=ALL-UNNAMED', '-cp', str(jar),
-                                               str(root / 'tests/consumers/java/Consumer.java'), str(model)],
-                                              cwd=app, env=env, input=request)))
-    assert java == rust
+    work = directory / 'java'
+    work.mkdir()
+    return consume(['java', '--enable-native-access=ALL-UNNAMED', '-cp', str(jar), str(root / 'tests/consumers/java/Consumer.java'), str(model)],
+                   cwd=work, env=env)
+
+
+def probe_dotnet(directory, native):
     # The NuGet package, restored from a local feed holding only the candidate package.
     dotnet = directory / 'dotnet'
     dotnet.mkdir()
@@ -147,8 +165,12 @@ ducktape-laya-sys = {{ path = "{sys_crate.as_posix()}" }}
     dotnet_env = dict(env, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1', NUGET_PACKAGES=str(directory / 'nuget-packages'))
     subprocess.run([tool('dotnet'), 'build', '-c', 'Release', '-o', str(dotnet / 'out'), '-m:1'], cwd=dotnet, env=dotnet_env,
                    check=True, capture_output=True)
-    net = record('dotnet', json.loads(subprocess.check_output([tool('dotnet'), str(dotnet / 'out/Consumer.dll'), str(model)], cwd=app, env=dotnet_env, input=request)))
-    assert net == rust
+    work = directory / 'dotnet-run'
+    work.mkdir()
+    return consume([tool('dotnet'), str(dotnet / 'out/Consumer.dll'), str(model)], cwd=work, env=dotnet_env)
+
+
+def probe_go(directory, native):
     # Go is distributed as source: the module outside the checkout, linked against the archive
     # (on Windows by MinGW-w64 gcc against the import library).
     go = directory / 'go'
@@ -160,8 +182,39 @@ ducktape-laya-sys = {{ path = "{sys_crate.as_posix()}" }}
                   CGO_CFLAGS=f'-I{(native / "include").as_posix()}', CGO_LDFLAGS=f'-L{libdir.as_posix()}')
     program = go / ('consumer-bin' + EXE)
     subprocess.run([tool('go'), 'build', '-o', str(program), '.'], cwd=go / 'consumer', env=go_env, check=True, capture_output=True)
-    golang = record('go', json.loads(subprocess.check_output([str(program), str(model)], cwd=app, env=with_library_path(env, runtime, target), input=request)))
-    assert golang == rust
+    work = go / 'run'
+    work.mkdir()
+    return consume([str(program), str(model)], cwd=work, env=with_library_path(env, runtime, target))
+
+
+# The ecosystem probes are independent: each works in its own directory, and they run concurrently. Results are
+# recorded and compared in this fixed order, and the first failing probe in this order is the one reported.
+PROBES = {'native': probe_native, 'node': probe_node, 'rust': probe_rust, 'python': probe_python, 'java': probe_java,
+          'dotnet': probe_dotnet, 'go': probe_go}
+with tempfile.TemporaryDirectory(prefix='ducktape-artifacts-') as directory:
+    directory = pathlib.Path(directory)
+    crates = directory / 'crates'
+    crates.mkdir()
+    for artifact in artifacts.glob('*.crate'):
+        with tarfile.open(artifact) as tar:
+            tar.extractall(crates, filter='data')
+    native = extract_native(artifacts, version, target, directory)
+    libdir = next(native.glob('lib*/pkgconfig/ducktape-laya.pc')).parent.parent
+    runtime = library_directory(native, target)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, os.cpu_count() or 1)) as pool:
+        futures = {}
+        for name, probe in PROBES.items():
+            (directory / f'probe-{name}').mkdir()
+            futures[name] = pool.submit(probe, directory / f'probe-{name}', native)
+        outputs = {name: future.result() for name, future in futures.items()}
+    report['skipped'], native_outputs = outputs.pop('native')
+    for name, output in native_outputs.items():
+        record(name, output)
+    rust = outputs['rust']
+    for name, output in outputs.items():
+        record(name, output)
+    for name in ('node', 'python', 'java', 'dotnet', 'go'):
+        assert outputs[name] == rust, name
     assert len(set(report['consumers'].values())) == 1, report['consumers']
 report['status'] = 'passed'
 print(f'Installed npm, Rust crate, Python wheel, Maven jar, NuGet and Go consumers on {target.name}: exact real-model agreement, '
