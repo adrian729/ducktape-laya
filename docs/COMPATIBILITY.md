@@ -61,10 +61,10 @@ The next release keeps C ABI 2 and `libducktape_laya.so.1`: a program built agai
 
 These change results or accepted input without any code change:
 
-- **Integers outside the 64-bit range** in a structured state, instructions or descriptions now enter the prompt with all their digits (`100000000000000000000000`, not `1e+23`), as in the original Laya, so token counts and probabilities can change for requests that contain them.
+- **Integers outside the 64-bit range** in a structured state, instructions or descriptions now enter the prompt with all their digits (`100000000000000000000000`, not `1e+23`), as in the original Laya, so token counts and probabilities can change for requests that contain them. A `score` answer's `legend` writes them with all their digits too, not as floats.
 - **A structured state whose serialized text exceeds 2 MiB** is rejected with status 1. Numbers can serialize longer than they are written in the request (`1e15` becomes `1000000000000000.0`), so a state well under the 1 MiB request limit can reach it.
 - **Runs of more than 4,096 spaces** are accepted again.
-- **`threads` 0** may now pick fewer than 4 threads: at most the CPUs the process may use (its affinity mask and, on Linux, its cgroup CPU quota). Set `threads` explicitly to keep the old count.
+- **`threads` 0** may now pick fewer than 4 threads: at most the CPUs the process may use (its affinity mask and, on Linux, the CPU quota of its cgroup and the cgroup's ancestors). Set `threads` explicitly to keep the old count.
 - **Deadlines and cancellation** now also stop tokenization, so a call over a long text can end with status 5 or 6 earlier than before.
 
 ## Upgrading across the ABI break
