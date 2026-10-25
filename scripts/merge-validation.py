@@ -170,7 +170,7 @@ def merge(profile, build, shard_dirs, output):
     halves = {}
     for half in ('a', 'b'):
         directory, report = shards[owner[f'parity:full-{half}']]
-        halves[half] = (read_json(directory / 'outputs.json'), read_json(directory / 'parity-timing.json'))
+        halves[half] = (read_json(directory / f'outputs-{half}.json'), read_json(directory / f'parity-timing-{half}.json'))
         need(halves[half][1].get('bindings') == half and halves[half][1].get('profile') == 'full', f'parity:full-{half}: its timing names '
              f'{halves[half][1].get("profile")}/{halves[half][1].get("bindings")}')
     outputs = merge_outputs(halves['a'][0], halves['b'][0])

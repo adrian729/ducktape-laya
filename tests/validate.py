@@ -262,7 +262,8 @@ class Validate(unittest.TestCase):
 
     def test_check_selection(self):
         system = FakeSystem(self.directory)
-        refused = [['--checks', 'parity:full-a,parity:full-b', '--model', self.model],
+        refused = [['--checks', 'parity:smoke,parity:full-a', '--model', self.model],
+                   ['--checks', 'parity:full,parity:full-b', '--model', self.model],
                    ['--checks', 'ctest,generic', '--model', self.model],
                    ['--checks', 'policy,policy-platform'],
                    ['--checks', 'nonsense'],
@@ -415,6 +416,15 @@ class Validate(unittest.TestCase):
         code, shard = run(system, '--phase', 'test', '--from', self.build, '--output', self.output(), '--checks', 'parity:full-a')
         self.assertEqual(code, 0, shard.get('error'))
         self.assertEqual((shard['mode'], shard['runs']['bindings-a']['command'][2]), ('real_model', str(self.model)))
+        # Both halves in one shard (linux-arm64): each writes its own outputs and timing.
+        output = self.output()
+        code, both = run(system, '--phase', 'test', '--from', self.build, '--output', output, '--checks', 'parity:full-a,parity:full-b')
+        self.assertEqual(code, 0, both.get('error'))
+        self.assertEqual({label: both['runs'][label]['exit_code'] for label in ('bindings-a', 'bindings-b')}, {'bindings-a': 0, 'bindings-b': 0})
+        for half in ('a', 'b'):
+            self.assertEqual(json.loads((output / f'parity-timing-{half}.json').read_text())['bindings'], half)
+            self.assertTrue((output / f'outputs-{half}.json').is_file())
+        self.assertFalse((output / 'outputs.json').exists())
         # The build keeps laya-stress (EXCLUDE_FROM_ALL) for the stress jobs.
         self.assertEqual(built['runs']['build']['command'][-3:], ['--target', 'all', 'laya-stress'])
         self.assertEqual(report['phase'], 'test')

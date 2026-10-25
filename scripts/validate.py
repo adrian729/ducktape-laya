@@ -239,8 +239,9 @@ def select(p, a, system):
         if a.policy != 'none':
             checks.append('policy' if a.policy == 'all' else 'policy-platform')
     parity = [name for name in checks if name.startswith('parity:')]
-    if len(parity) > 1:
-        p.error('one parity check per run (the halves run in separate shards and merge-validation.py joins them): ' + ', '.join(parity))
+    # The two halves may share a run (one CI shard, as on linux-arm64): each writes its own files.
+    if len(parity) > 1 and sorted(parity) != ['parity:full-a', 'parity:full-b']:
+        p.error('one parity check per run, or the two halves parity:full-a and parity:full-b: ' + ', '.join(parity))
     if 'generic' in checks and 'ctest' in checks:
         p.error('generic runs a subset of ctest: select one')
     if len({'policy', 'policy-platform'} & set(checks)) > 1:
@@ -626,8 +627,12 @@ class Validation:
 
     def parity(self, check):
         label, profile, half, gate = PARITY[check]
+        # A half writes outputs-<half>.json and parity-timing-<half>.json (scripts/merge-validation.py joins them into
+        # outputs.json); smoke and full write outputs.json and parity-timing.json.
+        suffix = f'-{half}' if check in ('parity:full-a', 'parity:full-b') else ''
         self.run(label, [sys.executable, ROOT / 'tests/parity.py', self.model, '--build-dir', self.build, '--profile', profile,
-                         '--bindings', half, '--report', self.out / 'outputs.json', '--timing', self.out / 'parity-timing.json'], gate)
+                         '--bindings', half, '--report', self.out / f'outputs{suffix}.json',
+                         '--timing', self.out / f'parity-timing{suffix}.json'], gate)
 
     def bindings(self):
         """The selected binding suites, concurrently; a failed suite fails binding_conformance (after all have run)."""

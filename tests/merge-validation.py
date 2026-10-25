@@ -75,13 +75,18 @@ class Merge(unittest.TestCase):
                                 '--build', build, '--output', root / 'build-report', '--cmake-arg=-GNinja')
         assert code == 0, report.get('error')
         shards = []
-        for check in PROFILE_CHECKS[profile]:
-            shard = root / f'shard-{platform}-{slug(check)}'
-            extra = cls.extra_args if check == 'references' and with_extra else []
-            code, report = fake.run(system, '--phase', 'test', '--from', build, '--model', cls.model, *extra, '--checks', check,
+        # One shard per check, except linux-arm64's parity halves, which share a shard as in
+        # scripts/ci_paths.py SHARDS (each half writes its own outputs-<half>.json).
+        groups = [[check] for check in PROFILE_CHECKS[profile] if not (platform == 'linux-arm64' and check == 'parity:full-b')]
+        if platform == 'linux-arm64':
+            next(group for group in groups if group == ['parity:full-a']).append('parity:full-b')
+        for checks in groups:
+            shard = root / f'shard-{platform}-{"+".join(map(slug, checks))}'
+            extra = cls.extra_args if 'references' in checks and with_extra else []
+            code, report = fake.run(system, '--phase', 'test', '--from', build, '--model', cls.model, *extra, '--checks', ','.join(checks),
                                     '--test-jobs', '4', '--output', shard)
-            assert code == 0, (check, report.get('error'))
-            if check == 'ctest' and platform == 'linux-x64' and profile == 'ci-full':
+            assert code == 0, (checks, report.get('error'))
+            if 'ctest' in checks and platform == 'linux-x64' and profile == 'ci-full':
                 cls.cross_host(shard, build)
             shards.append(shard)
         return {'build': build, 'shards': shards, 'profile': profile, 'platform': platform}
@@ -136,7 +141,8 @@ class Merge(unittest.TestCase):
         self.assertEqual([path.name for path in output.parent.iterdir() if '.partial-' in path.name], [])
 
     def shard(self, item, check):
-        return next(shard for shard in item['shards'] if shard.name.endswith('-' + slug(check)))
+        prefix = f'shard-{item["platform"]}-'
+        return next(shard for shard in item['shards'] if slug(check) in shard.name[len(prefix):].split('+'))
 
     def edit(self, path, change):
         value = json.loads(path.read_text())
@@ -237,10 +243,10 @@ class Merge(unittest.TestCase):
             ('sources', 'arm64', None, change('packages', 'report.json', lambda r: r.update(source_files_sha256='0' * 64)),
              'source_files_sha256 differs'),
             ('overlapping checks', 'arm64', None, duplicate('ctest'), 'ctest ran in both'),
-            ('C results', 'x64', None, change('parity:full-b', 'outputs.json',
+            ('C results', 'x64', None, change('parity:full-b', 'outputs-b.json',
                                              lambda r: r['fixtures']['primitive.json']['C']['answers']['department'].update(choice='sales')),
              'C results of primitive.json differ'),
-            ('open-config C results', 'arm64', None, change('parity:full-a', 'outputs.json', lambda r: r['open_config']['results']['C'].update(x=1)),
+            ('open-config C results', 'arm64', None, change('parity:full-a', 'outputs-a.json', lambda r: r['open_config']['results']['C'].update(x=1)),
              'open-config pass differ'),
             ('ci-compiler with packages', 'x64', 'ci-compiler', drop('policy-platform'), 'not the ci-compiler checks'),
             ('package run in another check', 'clang', None, change('bindings', 'report.json',
