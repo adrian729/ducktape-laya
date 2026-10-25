@@ -1,9 +1,11 @@
 """Shared maintainer checks. Standard library only; never used by consumers."""
 import hashlib
 import math
+import os
 import re
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -13,6 +15,61 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def read_json(path):
     return json.loads(pathlib.Path(path).read_text())
+
+# Peak resident memory of one compile job, in bytes (the largest translation units of the library and the
+# reference probe stay below it); the default job count keeps the build within the available memory.
+JOB_MEMORY = int(0.6 * 1024 ** 3)
+
+def default_jobs():
+    """DUCKTAPE_JOBS if set, else min(CPUs, MemAvailable / 0.6 GB) (all CPUs where MemAvailable is unknown)."""
+    configured = os.environ.get('DUCKTAPE_JOBS')
+    if configured:
+        if not configured.isdigit() or int(configured) < 1:
+            raise ValueError(f'DUCKTAPE_JOBS must be a positive integer, not {configured!r}')
+        return int(configured)
+    cpus = os.cpu_count() or 1
+    try:
+        available = next(int(line.split()[1]) * 1024 for line in pathlib.Path('/proc/meminfo').read_text().splitlines()
+                         if line.startswith('MemAvailable:'))
+    except (OSError, StopIteration, ValueError, IndexError):
+        return cpus
+    return max(1, min(cpus, available // JOB_MEMORY))
+
+def generator_arguments(cmake_args, build):
+    """['-G', 'Ninja'] unless a configure argument names a generator. A build directory configured with another
+    generator is reconfigured fresh (its CMakeCache.txt and CMakeFiles/ are removed first), since CMake cannot
+    switch the generator of an existing directory."""
+    if any(arg == '-G' or arg.startswith('-G') for arg in cmake_args):
+        return []
+    if not shutil.which('ninja'):
+        raise ValueError('Ninja is not on PATH (install ninja, or pass a generator with -G)')
+    cache = pathlib.Path(build) / 'CMakeCache.txt'
+    if cache.is_file():
+        found = re.search(r'^CMAKE_GENERATOR:INTERNAL=(.*)$', cache.read_text(errors='replace'), re.M)
+        if found and found[1] != 'Ninja':
+            cache.unlink()
+            shutil.rmtree(pathlib.Path(build) / 'CMakeFiles', ignore_errors=True)
+    return ['-G', 'Ninja']
+
+# The compiler cache environment of every script that may compile through ccache: no base_dir (it makes compiled
+# source paths relative, so -ffile-prefix-map no longer maps them and the library's bytes change), content-hashed
+# compilers, and no sloppiness (a user's or the dev preset's settings must not leak into these builds). Environment
+# variables override ccache.conf without editing it.
+CCACHE_ENVIRONMENT = {'CCACHE_BASEDIR': '', 'CCACHE_COMPILERCHECK': 'content', 'CCACHE_SLOPPINESS': ''}
+CCACHE_RECORDED = ('base_dir', 'compiler_check', 'sloppiness')
+
+def ccache_config(env):
+    """The ccache settings a build in ENV compiles with (`ccache --show-config`), or None without ccache."""
+    if not shutil.which('ccache', path=env.get('PATH')):
+        return None
+    output = subprocess.run(['ccache', '--show-config'], env=env, capture_output=True, text=True).stdout
+    settings = {}
+    for line in output.splitlines():
+        found = re.match(r'^\((.*?)\)\s+(\w+)\s+=\s?(.*)$', line)
+        if found and found[2] in CCACHE_RECORDED:
+            settings[found[2]] = found[3].strip()
+            settings[found[2] + '_origin'] = found[1]
+    return settings
 
 def sha256(path):
     with pathlib.Path(path).open('rb') as stream:
@@ -291,6 +348,14 @@ def check_qualification(record, root=ROOT):
             raise ValueError('Invalid qualification budget: ' + key)
     if policy['budgets']['short_stress_seconds'] >= policy['budgets']['routine_stress_seconds']:
         raise ValueError('The short stress budget must be shorter than routine stress')
+    # The soak serves the routine stress gate, so it is at least as long; its rounds floor keeps the
+    # from-1,000-rounds RSS rule applied (laya-stress), and the short stress keeps the from-40-rounds rule.
+    if policy['budgets']['candidate_soak_seconds'] < policy['budgets']['routine_stress_seconds']:
+        raise ValueError('The candidate soak must be at least as long as routine stress')
+    for key, minimum in (('candidate_soak_rounds', 1000), ('short_stress_rounds', 40)):
+        value = policy['budgets'].get(key)
+        if type(value) is not int or value < minimum:
+            raise ValueError(f'Invalid qualification budget: {key} must be an integer of at least {minimum}')
     if policy.get('numerical_contract', {}).get('policy') != 'distinct_profiles':
         raise ValueError('Unsupported numerical contract')
     binding = policy['budgets'].get('native_binding_absolute_tolerance')
@@ -573,6 +638,14 @@ def browser_build_identity(build, backend, record, toolchain, expected_source):
     # scripts/build-browser.py builds the product at -O1 without GPU tracing.
     if identity.get('optimization') != '1' or identity.get('webgpu_debug') is not False:
         raise ValueError(backend + ': not a product build (optimization or GPU tracing differs); rebuild with scripts/build-browser.py')
+    # Shipped browser assets are compiled without a cache: no gate compares them with an uncached build, and
+    # ccache's compiler check hashes the emcc wrapper, not the emsdk clang it runs. The build records its
+    # CMAKE_CXX_COMPILER_LAUNCHER (empty when none); a rehearsal build with --compiler-launcher is not packaged.
+    if 'compiler_launcher' not in identity:
+        raise ValueError(backend + ': the build identity does not record its compiler launcher; rebuild with scripts/build-browser.py')
+    if identity['compiler_launcher']:
+        raise ValueError(f'{backend}: compiled through the compiler launcher {identity["compiler_launcher"]!r} (a rehearsal build); '
+                         'rebuild without one for packaging')
     if (identity.get('package_version') != record['package_version'] or
         identity.get('llama_cpp_commit') != record['runtime']['commit'] or
         identity.get('runtime_patches') != record['runtime']['patches'] or

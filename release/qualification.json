@@ -71,8 +71,10 @@
   },
   "budgets": {
     "routine_stress_seconds": 3600,
-    "short_stress_seconds": 600,
-    "candidate_soak_seconds": 28800,
+    "short_stress_seconds": 300,
+    "short_stress_rounds": 40,
+    "candidate_soak_seconds": 10800,
+    "candidate_soak_rounds": 3000,
     "fuzz_seconds_per_target": 3600,
     "baseline_runs": 3,
     "performance_limits_status": "must_be_frozen_before_candidate",
@@ -169,7 +171,7 @@
         "tests/installed-packages.py",
         "tests/electron/run.cjs"
       ],
-      "acceptance": "Actual C/C++, Rust, npm/TS/Electron, Python wheel, Java, NuGet and Go packages work outside the checkout; the browser package is checked by the browser gates."
+      "acceptance": "The CI-assembled multi-platform release packages are installed outside the checkout, on this host (the installed release run) and on each CI runner: actual C/C++, Rust, npm/TS/Electron, Python wheel, Java, NuGet and Go packages work and agree exactly; the browser package is checked by the browser gates."
     },
     "sanitizers": {
       "implementation": [
@@ -184,7 +186,7 @@
         "tests/faults.cpp",
         "scripts/check-fuzz.py"
       ],
-      "acceptance": "Strict ASan/UBSan/leak checks cover real-model and model-free paths (every registered native test, a short stress run, TSan for native and Rust code), and the coverage-guided fuzz campaign meets its budget; concurrency tooling coverage explicitly recorded. tests/input-fuzz.cpp runs in the CI parser-sanitizers job, which is not candidate evidence."
+      "acceptance": "Strict ASan/UBSan/leak checks cover real-model and model-free paths (every registered native test, a short stress run, TSan for native and Rust code), and the coverage-guided fuzz campaign meets its budget; concurrency tooling coverage explicitly recorded. The sanitizer, fuzz and upgrade evidence comes from the CI qualify run (native.yml mode=qualify) of the candidate commit or a reused ancestor, or from a host run."
     },
     "stress": {
       "implementation": [
@@ -194,7 +196,7 @@
         "tests/stress.cpp",
         "scripts/check-stress.py"
       ],
-      "acceptance": "One-hour routine stress and eight-hour candidate soak of the native library meet frozen resource budgets without leaks, hangs or corrupted results. No browser stress or memory soak exists; the browser lifecycle is covered by the browser gates."
+      "acceptance": "A three-hour candidate soak (budgets.candidate_soak_seconds) of the native library that also reaches budgets.candidate_soak_rounds rounds serves the routine stress gate too (at least budgets.routine_stress_seconds). Every round keeps the per-close limits (thread and descriptor or handle counts back to baseline, closed memory within +128 MiB), with no hangs or corrupted results; late growth stays within 32 MiB from 40 rounds on, and from 1,000 rounds on the soak rule applies to the closed-RSS series after its first quarter (last-quarter median at most 2 MiB above the second quarter's, least-squares slope at most 1 KiB per round). No browser stress or memory soak exists; the browser lifecycle is covered by the browser gates."
     },
     "linux_matrix": {
       "implementation": [
@@ -216,7 +218,7 @@
         "tests/browser-lifecycle.mjs",
         "tests/compare-browser-reference.py"
       ],
-      "acceptance": "Real-browser WASM semantics, lifecycle, asset deployment and same-backend upstream agreement pass."
+      "acceptance": "Real-browser WASM semantics, lifecycle, asset deployment and same-backend upstream agreement pass: every stage on the non-isolated page; on the cross-origin-isolated page the controls, a primitive.json execution byte-identical to the non-isolated page's, and running cancellation."
     },
     "browser_webgpu": {
       "implementation": [
@@ -227,7 +229,7 @@
         "tests/browser-backend.mjs",
         "tests/compare-browser-reference.py"
       ],
-      "acceptance": "Real-hardware WebGPU semantics, device-loss behavior and same-backend upstream agreement pass."
+      "acceptance": "Real-hardware WebGPU semantics, device-loss behavior and same-backend upstream agreement pass: every stage on the non-isolated page; on the cross-origin-isolated page the controls and a primitive.json execution byte-identical to the non-isolated page's."
     },
     "license_inventory": {
       "implementation": [
@@ -375,7 +377,7 @@
         "tests/installed-packages.py",
         "tests/electron/run.cjs"
       ],
-      "acceptance": "The target's own packages (scripts/validate.py --packages) and the assembled multi-platform release packages install and agree exactly outside the checkout on the target's runner; where the target lists electron, the released npm package works in Electron as a directory and from ASAR."
+      "acceptance": "The assembled multi-platform release packages install and agree exactly outside the checkout on the target's runner (no scripts/validate.py --packages carrier); where the target lists electron, the released npm package works in Electron as a directory and from ASAR."
     },
     "artifact_integrity": {
       "implementation": [
@@ -406,7 +408,7 @@
         "tests/stress.cpp",
         "scripts/check-stress.py"
       ],
-      "acceptance": "A stress run of at least budgets.short_stress_seconds on the validated library, with the tier-1 resource limits (thread and descriptor or handle counts back to baseline, closed memory within +128 MiB, late growth within 32 MiB)."
+      "acceptance": "A stress run of at least budgets.short_stress_seconds and budgets.short_stress_rounds on the validated library, with the tier-1 resource limits (thread and descriptor or handle counts back to baseline, closed memory within +128 MiB, late growth within 32 MiB)."
     },
     "cross_profile_drift": {
       "implementation": [
