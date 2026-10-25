@@ -50,7 +50,7 @@ for (const name of (await readdir(join(root, 'tests/fixtures'))).filter(x => x.e
 for (const backend of backends) {
   const base = args['package-dir'] ? join(resolve(args['package-dir']), backend) : join(root, 'build-browser-' + backend);
   for (const name of ['laya.mjs', 'laya.wasm', 'laya.build.json']) report.asset_hashes[backend + '/' + name] = await hash(join(base, name));
-  if (!args['skip-reference']) {
+  if (!args['skip-reference'] && !args.isolated) { // the isolated page runs no reference stage
     const reference = join(root, 'build-browser-' + backend);
     for (const name of ['laya-reference.mjs', 'laya-reference.wasm']) report.asset_hashes[backend + '/' + name] = await hash(join(reference, name));
   }
@@ -95,19 +95,37 @@ try {
             fallback: adapter.info.isFallbackAdapter } : null };
       });
       if (report.environment.crossOriginIsolated !== args.isolated) throw new Error('Isolation headers not applied');
-      const stages = [['execution', 'start', 'state'],
+      // Stages per page (docs: the browser table of the release checks). The non-isolated page runs every
+      // stage; the isolated page only what depends on cross-origin isolation or must hold in it: the
+      // controls, one primitive.json execution (byte-compared with the non-isolated page's by the
+      // checker) and, on WASM, cancellation of a running request through the SharedArrayBuffer flag.
+      const stages = args.isolated ? [
+        ...(!args['skip-controls'] ? [['controls', 'startControls', 'controls']] : []),
+        ['isolated_execution', 'startIsolatedExecution', 'isolatedExecution'],
+        ...(backend === 'wasm' ? [['running_cancellation', 'startRunningCancellation', 'runningCancellation']] : []),
+      ] : [['execution', 'start', 'state'],
         ...(!args['skip-reference'] ? [['reference', 'startReference', 'reference']] : []),
         ...(!args['skip-controls'] ? [['controls', 'startControls', 'controls'], ['assets', 'startAssets', 'assets'],
           ...(backend === 'webgpu' ? [['device_loss', 'startDeviceLoss', 'loss'], ['gpu_memory', 'startGpuMemory', 'gpuMemory']] : [])] : []),
         ...(backend === 'wasm' && args['constrained-wasm'] ? [['memory', 'startMemory', 'memory']] : [])];
-      gates.reference = { status: 'not_run' };
-      gates.controls = gates.assets = { status: 'not_run' };
-      if (backend === 'webgpu') gates.device_loss = gates.gpu_memory = { status: 'not_run' };
-      if (backend === 'wasm') gates.memory = { status: 'not_run' };
+      if (args.isolated) {
+        gates.controls = gates.isolated_execution = { status: 'not_run' };
+        if (backend === 'wasm') gates.running_cancellation = { status: 'not_run' };
+      } else {
+        gates.reference = { status: 'not_run' };
+        gates.controls = gates.assets = { status: 'not_run' };
+        if (backend === 'webgpu') gates.device_loss = gates.gpu_memory = { status: 'not_run' };
+        if (backend === 'wasm') gates.memory = { status: 'not_run' };
+      }
+      // Stage results the checker reads from the report itself (the byte comparison across the two pages).
+      const lifted = { execution: ['fixture_sha256'], isolated_execution: ['fixture', 'result_sha256'],
+        running_cancellation: ['cancel_status', 'next_result_sha256'] };
       for (const [name, method, state] of stages) {
         console.log(`${backend}/${name}: running`);
         const fixtures = Object.keys(report.fixture_hashes).map(name => name.slice(0, -'.json'.length));
-        await page.evaluate(([method, backend, fixtures]) => { void window[method](backend, fixtures); }, [method, backend, fixtures]);
+        const context = { expected_result_sha256: gates.isolated_execution?.result_sha256 };
+        await page.evaluate(([method, backend, fixtures, context]) => { void window[method](backend, fixtures, context); },
+          [method, backend, fixtures, context]);
         const file = backend + '-' + name + '.json';
         try {
           await page.waitForFunction(state => ['passed', 'failed'].includes(window[state]?.status), state, { timeout: stageTimeout });
@@ -120,11 +138,12 @@ try {
         const result = await page.evaluate(state => window[state], state);
         await writeFile(join(out, file), JSON.stringify(result, null, 2) + '\n');
         gates[name] = { status: result.status, report: file, sha256: await hash(join(out, file)) };
+        for (const key of lifted[name] ?? []) gates[name][key] = result[key] ?? null;
         if (result.status !== 'passed') failed = true;
         console.log(`${backend}/${name}: ${result.status}`);
         await save();
       }
-      for (const [name, script, inputs] of [
+      for (const [name, script, inputs] of args.isolated ? [] : [
         ['upstream_numeric', 'compare-browser-reference.py', args['skip-reference'] ? null : [join(out, backend + '-execution.json'), join(out, backend + '-reference.json')]],
         ['cross_profile_drift', 'compare-browser.py', args.native ? [join(out, backend + '-execution.json'), '--native', resolve(args.native)] : null],
       ]) {
