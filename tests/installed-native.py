@@ -7,6 +7,7 @@ import pathlib
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from package_support import built_program, clean_environment, cmake_consumer_options, library_directory, tool, with_library_path
@@ -26,6 +27,18 @@ fixture = (root / 'tests/fixtures/primitive.json').read_bytes()
 minor = '.'.join(json.loads((root / 'release/compatibility.json').read_text())['package_version'].split('.')[:2])
 # Windows has no run path: programs find the DLL in the prefix's bin/ through PATH.
 env = with_library_path(clean_environment(), library_directory(prefix, target), target) if target.os == 'win32' else clean_environment()
+
+
+def quiet(command):
+    """Run a build step without its output, but show the output when it fails."""
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if result.returncode:
+        sys.stdout.flush()
+        sys.stdout.buffer.write(result.stdout)
+        sys.stdout.flush()
+        raise SystemExit(f'{shlex.join(command)} failed with exit status {result.returncode}')
+
+
 with tempfile.TemporaryDirectory(prefix='ducktape-consumer-') as tmp:
     tmp = pathlib.Path(tmp)
     for source in ['c.c', 'cpp.cpp']:
@@ -38,9 +51,8 @@ add_executable(cpp cpp.cpp)
 target_link_libraries(c PRIVATE ducktape::laya)
 target_link_libraries(cpp PRIVATE ducktape::laya)
 ''')
-    subprocess.run(['cmake', '-S', str(tmp), '-B', str(tmp / 'build'), f'-DCMAKE_PREFIX_PATH={prefix}', *cmake_consumer_options()],
-                   check=True, capture_output=True)
-    subprocess.run(['cmake', '--build', str(tmp / 'build'), '--config', 'Release'], check=True, capture_output=True)
+    quiet(['cmake', '-S', str(tmp), '-B', str(tmp / 'build'), f'-DCMAKE_PREFIX_PATH={prefix}', *cmake_consumer_options()])
+    quiet(['cmake', '--build', str(tmp / 'build'), '--config', 'Release'])
     results = [json.loads(subprocess.check_output([str(built_program(tmp / 'build', exe)), str(model)], input=fixture, env=env))
                for exe in ['c', 'cpp']]
     assert results[0] == results[1]
