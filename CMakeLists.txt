@@ -288,6 +288,9 @@ if(DUCKTAPE_BUILD_TESTS)
     if(NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize")
       add_executable(laya-c-api-fault-tests tests/c-api-faults.cpp)
       target_link_libraries(laya-c-api-fault-tests PRIVATE llama)
+      # Fails allocations the sweep does not reach through these ggml functions (static libraries).
+      target_link_options(laya-c-api-fault-tests PRIVATE
+        -Wl,--wrap=ggml_backend_buft_alloc_buffer -Wl,--wrap=ggml_backend_reg_get_proc_address)
     endif()
   endif()
   if(DUCKTAPE_TEST_MODEL)
