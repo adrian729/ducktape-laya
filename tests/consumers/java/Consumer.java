@@ -1,21 +1,56 @@
 import io.github.adrian729.laya.Config;
 import io.github.adrian729.laya.Laya;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class Consumer {
+    // Usage: Consumer model.gguf [config.json] [--requests FILE... [--fresh-engine]] < request.json
+    // With --requests: one engine for all files (one per file with --fresh-engine), one result line per file.
     public static void main(String[] args) throws Exception {
-        if (args.length < 1) {
-            System.err.println("Usage: Consumer model.gguf [config.json] < request.json");
+        int at = args.length > 1 && !args[1].startsWith("--") ? 2 : 1;
+        String configText = at == 2 ? args[1] : "{\"threads\":4}";
+        List<String> files = null;
+        boolean fresh = false, usage = args.length < 1;
+        for (; at < args.length; at++) {
+            if (args[at].equals("--fresh-engine")) fresh = true;
+            else if (args[at].equals("--requests") && files == null) {
+                files = new ArrayList<>();
+                while (at + 1 < args.length && !args[at + 1].startsWith("--")) files.add(args[++at]);
+                usage |= files.isEmpty();
+            } else usage = true;
+        }
+        if (usage || (fresh && files == null)) {
+            System.err.println("Usage: Consumer model.gguf [config.json] [--requests FILE... [--fresh-engine]] < request.json");
             System.exit(1);
         }
-        String request = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
-        try (Laya laya = Laya.open(args[0], config(args.length > 1 ? args[1] : "{\"threads\":4}"))) {
-            System.out.write((laya.execute(request) + "\n").getBytes(StandardCharsets.UTF_8));
-            System.out.flush();
+        try {
+            if (files == null) {
+                String request = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
+                try (Laya laya = Laya.open(args[0], config(configText))) {
+                    System.out.write((laya.execute(request) + "\n").getBytes(StandardCharsets.UTF_8));
+                    System.out.flush();
+                }
+                return;
+            }
+            Laya laya = null;
+            try {
+                for (String file : files) {
+                    String request = Files.readString(Path.of(file), StandardCharsets.UTF_8);
+                    if (laya == null) laya = Laya.open(args[0], config(configText));
+                    System.out.write((laya.execute(request) + "\n").getBytes(StandardCharsets.UTF_8));
+                    System.out.flush();
+                    if (fresh) { laya.close(); laya = null; }
+                }
+            } finally {
+                if (laya != null) laya.close();
+            }
         } catch (RuntimeException e) {
             System.err.println(e.getMessage());
             System.exit(1);
