@@ -4,16 +4,20 @@
   "configurePresets": [
     {
       "name": "dev",
-      "displayName": "Development: Ninja, ccache, native tests",
-      "description": "Release build with the native tests, compiled through ccache (must be on PATH; the build preset clears base_dir, which would defeat -ffile-prefix-map). Not for packaging.",
+      "displayName": "Development: Ninja, ccache, native tests, fast edit loop",
+      "description": "Release build with the native tests through ccache (must be on PATH): -O1 test programs and core where results cannot change, precompiled JSON headers, no relink of test programs when only the library's content changed, unmapped source paths so another worktree's build can hit the same cache (the build preset sets base_dir). Never packaged: the packaging and validation scripts refuse it.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-dev",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER_LAUNCHER": "ccache",
         "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_LINK_DEPENDS_NO_SHARED": "ON",
         "GGML_CCACHE": "OFF",
-        "DUCKTAPE_BUILD_TESTS": "ON"
+        "DUCKTAPE_BUILD_TESTS": "ON",
+        "DUCKTAPE_DEV_BUILD": "ON",
+        "DUCKTAPE_DEV_PCH": "ON",
+        "DUCKTAPE_REPRODUCIBLE_PATHS": "OFF"
       }
     },
     {
@@ -51,15 +55,77 @@
         "DUCKTAPE_BUILD_FUZZERS": "OFF",
         "DUCKTAPE_REAL_TEST_TIMEOUT": "3600"
       }
+    },
+    {
+      "name": "sanitize-thread",
+      "displayName": "Sanitizers: Clang TSan, native tests",
+      "description": "The ThreadSanitizer build of scripts/check-sanitizers.py (Clang, RelWithDebInfo). Never packaged.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-sanitize-thread",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "GGML_CCACHE": "OFF",
+        "DUCKTAPE_BUILD_TESTS": "ON",
+        "DUCKTAPE_BUILD_NODE": "OFF",
+        "DUCKTAPE_BUILD_FUZZERS": "OFF",
+        "DUCKTAPE_REAL_TEST_TIMEOUT": "3600"
+      }
+    },
+    {
+      "name": "fuzz",
+      "displayName": "Fuzzing: Clang libFuzzer target with ASan and UBSan",
+      "description": "The coverage-guided request and router fuzzer of scripts/check-fuzz.py (target laya-input-fuzzer): the library compiled with libFuzzer coverage (every source, object libraries included) and ASan/UBSan. compile_commands.json lets check-fuzz.py check the instrumentation. Never packaged.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-fuzz",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "GGML_CCACHE": "OFF",
+        "DUCKTAPE_BUILD_FUZZERS": "ON",
+        "DUCKTAPE_BUILD_TESTS": "OFF",
+        "DUCKTAPE_BUILD_NODE": "OFF"
+      }
     }
   ],
   "buildPresets": [
-    {"name": "dev", "configurePreset": "dev", "environment": {"CCACHE_BASEDIR": ""}},
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "environment": {
+        "CCACHE_BASEDIR": "${sourceParentDir}",
+        "CCACHE_SLOPPINESS": "pch_defines,time_macros,include_file_mtime,include_file_ctime"
+      }
+    },
     {"name": "product", "configurePreset": "product"},
-    {"name": "sanitize", "configurePreset": "sanitize"}
+    {"name": "sanitize", "configurePreset": "sanitize"},
+    {"name": "sanitize-thread", "configurePreset": "sanitize-thread"},
+    {"name": "fuzz", "configurePreset": "fuzz", "targets": ["laya-input-fuzzer"]}
   ],
   "testPresets": [
-    {"name": "dev", "configurePreset": "dev", "output": {"outputOnFailure": true}},
+    {
+      "name": "dev",
+      "displayName": "Generic tier: model-free native tests",
+      "configurePreset": "dev",
+      "output": {"outputOnFailure": true},
+      "filter": {"include": {"label": "^tier-generic$"}},
+      "execution": {"jobs": 4}
+    },
+    {
+      "name": "dev-real",
+      "displayName": "Every registered test (configure with -DDUCKTAPE_TEST_MODEL=... for the real-model tests)",
+      "description": "Serial by default; pass -j N to run in parallel (CPU-time tests stay serial, PROCESSORS counts engine threads). A preset cannot read DUCKTAPE_TEST_JOBS with a default: an empty CTEST_PARALLEL_LEVEL means every CPU.",
+      "configurePreset": "dev",
+      "output": {"outputOnFailure": true},
+      "execution": {"jobs": 1}
+    },
     {
       "name": "sanitize",
       "configurePreset": "sanitize",
@@ -67,6 +133,14 @@
       "environment": {
         "ASAN_OPTIONS": "detect_leaks=1:strict_string_checks=1:halt_on_error=1",
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "sanitize-thread",
+      "configurePreset": "sanitize-thread",
+      "output": {"outputOnFailure": true},
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1"
       }
     }
   ]

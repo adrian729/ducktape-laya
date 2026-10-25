@@ -36,6 +36,12 @@ else()
   set(DTL_BUILD_TESTS_DEFAULT ${PROJECT_IS_TOP_LEVEL})
 endif()
 option(DUCKTAPE_BUILD_TESTS "Build native tests" ${DTL_BUILD_TESTS_DEFAULT})
+# Developer builds (the dev preset); never packaged: the packaging and validation scripts refuse them.
+option(DUCKTAPE_DEV_BUILD "Developer build: test programs, and the core where -O cannot change results, at -O1" OFF)
+option(DUCKTAPE_DEV_PCH "Developer build: precompiled nlohmann/json and standard headers for the core and its tests" OFF)
+# A compiler launcher (e.g. ccache) for the developer reference probe's own targets only; the
+# library's and addon's targets keep CMAKE_<LANG>_COMPILER_LAUNCHER (cmake/launcher_guard.cmake).
+set(DUCKTAPE_REFERENCE_PROBE_LAUNCHER "" CACHE STRING "Compiler launcher for the reference probe's own targets only")
 set(DUCKTAPE_TEST_MODEL "" CACHE FILEPATH "Local Laya GGUF for integration tests")
 set(DUCKTAPE_REAL_TEST_TIMEOUT 600 CACHE STRING "Per-test timeout in seconds for long real-model tests (raise for instrumented builds)")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -129,6 +135,15 @@ if(NOT EMSCRIPTEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     endif()
   endif()
 endif()
+# __DATE__ and __TIME__ would make every build differ: an error in every C and C++ compile,
+# the runtime's included (it uses neither). clang-cl takes it through /clang:.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/clang:-Werror=date-time>")
+  else()
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-Werror=date-time>")
+  endif()
+endif()
 add_subdirectory("${UPSTREAM}" "${CMAKE_CURRENT_BINARY_DIR}/third_party/llama.cpp" EXCLUDE_FROM_ALL)
 # Upstream Git discovery can find the parent project's repository in an archive.
 # Normalize its generated metadata to the explicit runtime identity instead (upstream
@@ -144,40 +159,84 @@ if(NOT EMSCRIPTEN)
   include(cmake/runtime_sources.cmake)
 endif()
 configure_file(cmake/build_config.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/build_config.hpp @ONLY)
-add_library(ducktape_laya ${DTL_LIBRARY_KIND} src/laya.cpp src/backend_llama.cpp src/language.cpp src/platform.cpp
-  ${UPSTREAM}/common/json.cpp ${UPSTREAM}/common/unicode.cpp
-  ${UPSTREAM}/common/jinja/lexer.cpp ${UPSTREAM}/common/jinja/parser.cpp
-  ${UPSTREAM}/common/jinja/runtime.cpp ${UPSTREAM}/common/jinja/value.cpp
-  ${UPSTREAM}/common/jinja/string.cpp)
-target_include_directories(ducktape_laya PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>
-  PRIVATE ${UPSTREAM}/common ${DTL_VENDOR_INCLUDE} ${UPSTREAM}/vendor ${CMAKE_CURRENT_BINARY_DIR}/generated)
-dtl_use_patched_sources(ducktape_laya)
-target_link_libraries(ducktape_laya PRIVATE llama)
-target_compile_definitions(ducktape_laya PRIVATE DUCKTAPE_LAYA_BUILD)
+# Explicit developer-only coverage instrumentation; never enable in artifacts.
+option(DUCKTAPE_BUILD_FUZZERS "Build Linux Clang libFuzzer request/config target" OFF)
+if(DUCKTAPE_BUILD_FUZZERS)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "Fuzzer builds require Linux and Clang")
+  endif()
+endif()
 if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-  foreach(feature AVX AVX2 FMA F16C BMI2 SSE42)
-    # MSVC-style builds (clang-cl too) have no GGML_FMA/GGML_F16C: ggml's /arch:AVX2 implies them.
-    if(GGML_${feature} OR (MSVC AND GGML_AVX2 AND feature MATCHES "^(FMA|F16C)$"))
-      target_compile_definitions(ducktape_laya PRIVATE DTL_NEED_${feature})
-    endif()
-  endforeach()
   foreach(feature AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AVX_VNNI)
     if(GGML_${feature})
       message(FATAL_ERROR "This package's CPU guard does not yet support GGML_${feature}; use the validated AVX2 or portable configuration")
     endif()
   endforeach()
 endif()
-if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-  if(GGML_CPU_ARM_ARCH MATCHES "dotprod")
-    target_compile_definitions(ducktape_laya PRIVATE DTL_NEED_DOTPROD)
+# Every compile option of the library, for the library and the OBJECT libraries it is built
+# from (dtl_json_io, dtl_language): the only place these are set, so an object library cannot
+# miss one (per-target options do not reach object libraries).
+function(dtl_apply_library_options target)
+  target_include_directories(${target} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>
+    PRIVATE ${UPSTREAM}/common ${DTL_VENDOR_INCLUDE} ${UPSTREAM}/vendor ${CMAKE_CURRENT_BINARY_DIR}/generated)
+  target_link_libraries(${target} PRIVATE llama)
+  target_compile_definitions(${target} PRIVATE DUCKTAPE_LAYA_BUILD)
+  if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    foreach(feature AVX AVX2 FMA F16C BMI2 SSE42)
+      # MSVC-style builds (clang-cl too) have no GGML_FMA/GGML_F16C: ggml's /arch:AVX2 implies them.
+      if(GGML_${feature} OR (MSVC AND GGML_AVX2 AND feature MATCHES "^(FMA|F16C)$"))
+        target_compile_definitions(${target} PRIVATE DTL_NEED_${feature})
+      endif()
+    endforeach()
   endif()
-  if(GGML_CPU_ARM_ARCH MATCHES "fp16")
-    target_compile_definitions(ducktape_laya PRIVATE DTL_NEED_FP16)
+  if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+    if(GGML_CPU_ARM_ARCH MATCHES "dotprod")
+      target_compile_definitions(${target} PRIVATE DTL_NEED_DOTPROD)
+    endif()
+    if(GGML_CPU_ARM_ARCH MATCHES "fp16")
+      target_compile_definitions(${target} PRIVATE DTL_NEED_FP16)
+    endif()
   endif()
-endif()
-set_target_properties(ducktape_laya PROPERTIES EXPORT_NAME laya VERSION ${PROJECT_VERSION} SOVERSION 1
-  CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+  if(EMSCRIPTEN AND GGML_WEBGPU)
+    target_compile_definitions(${target} PRIVATE DTL_BROWSER_WEBGPU)
+  endif()
+  set_target_properties(${target} PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+  get_target_property(type ${target} TYPE)
+  if(type STREQUAL "OBJECT_LIBRARY")
+    set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  endif()
+  if(DUCKTAPE_BUILD_FUZZERS)
+    target_compile_options(${target} PRIVATE -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
+    if(NOT type STREQUAL "OBJECT_LIBRARY")
+      target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+    endif()
+  endif()
+endfunction()
+# The JSON parser and serializer (src/json_io.cpp), instantiated once; the native tests that
+# parse or print library JSON link the same objects.
+add_library(dtl_json_io OBJECT src/json_io.cpp)
+dtl_apply_library_options(dtl_json_io)
+# Language detection, shared with its model-free test.
+add_library(dtl_language OBJECT src/language.cpp)
+dtl_apply_library_options(dtl_language)
+set(DTL_OBJECT_LIBRARIES dtl_json_io dtl_language)
+set(DTL_LIBRARY_SOURCES src/laya.cpp src/laya_request.cpp src/laya_plan.cpp src/backend_llama.cpp src/platform.cpp
+  src/runtime_info.cpp)
+add_library(ducktape_laya ${DTL_LIBRARY_KIND} ${DTL_LIBRARY_SOURCES}
+  $<TARGET_OBJECTS:dtl_json_io> $<TARGET_OBJECTS:dtl_language>
+  ${UPSTREAM}/common/json.cpp ${UPSTREAM}/common/unicode.cpp
+  ${UPSTREAM}/common/jinja/lexer.cpp ${UPSTREAM}/common/jinja/parser.cpp
+  ${UPSTREAM}/common/jinja/runtime.cpp ${UPSTREAM}/common/jinja/value.cpp
+  ${UPSTREAM}/common/jinja/string.cpp)
+dtl_apply_library_options(ducktape_laya)
+dtl_use_patched_sources(ducktape_laya)
+set_target_properties(ducktape_laya PROPERTIES EXPORT_NAME laya VERSION ${PROJECT_VERSION} SOVERSION 1)
+# Which targets compile the library (scripts/check-fuzz.py checks each one's instrumentation).
+set(DTL_LIBRARY_TARGETS "{}")
+string(JSON DTL_LIBRARY_TARGETS SET "${DTL_LIBRARY_TARGETS}" library "\"ducktape_laya\"")
+string(JSON DTL_LIBRARY_TARGETS SET "${DTL_LIBRARY_TARGETS}" object_libraries "[\"dtl_json_io\", \"dtl_language\"]")
+dtl_write_if_changed("${CMAKE_CURRENT_BINARY_DIR}/generated/library-targets.json" "${DTL_LIBRARY_TARGETS}\n")
 if(NOT EMSCRIPTEN)
   dtl_record_native_build(ducktape_laya)
   dtl_record_runtime_sources(ducktape_laya)
@@ -235,6 +294,46 @@ install(FILES include/ducktape_laya.h include/ducktape_laya.hpp DESTINATION ${CM
 install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya)
 install(DIRECTORY licenses/ DESTINATION ${CMAKE_INSTALL_DATADIR}/ducktape-laya/licenses)
 endif()
+# Every test is registered with a tier and a category (labels tier-<tier>, cat-<category>):
+#   TIER generic       model-free and fast: after every change and on every branch push
+#        specialized   needs the real model or a platform tool (QEMU): verify.py, real-model runs
+#        release       release evidence only
+#   CATEGORY native, real_model or faults; LABELS extras: timing (a CPU-time ratio check), qemu.
+# PROCESSORS is the most threads an engine of the test uses; SERIAL keeps CPU-time checks and
+# automatic thread counts (threads 0) off a loaded machine (ctest -j). Select with anchored
+# label regexes (ctest -L '^tier-generic$').
+function(dtl_add_test)
+  cmake_parse_arguments(PARSE_ARGV 0 arg "SERIAL" "NAME;TIER;CATEGORY;PROCESSORS;TIMEOUT;SKIP_RETURN_CODE" "COMMAND;LABELS")
+  if(arg_UNPARSED_ARGUMENTS OR NOT arg_NAME OR NOT arg_COMMAND)
+    message(FATAL_ERROR "dtl_add_test(NAME n COMMAND ... TIER t CATEGORY c ...): bad arguments ${arg_UNPARSED_ARGUMENTS}")
+  endif()
+  if(NOT arg_TIER MATCHES "^(generic|specialized|release)$")
+    message(FATAL_ERROR "dtl_add_test(${arg_NAME}): TIER generic, specialized or release is required")
+  endif()
+  if(NOT arg_CATEGORY MATCHES "^(native|real_model|faults)$")
+    message(FATAL_ERROR "dtl_add_test(${arg_NAME}): CATEGORY native, real_model or faults is required")
+  endif()
+  foreach(label IN LISTS arg_LABELS)
+    if(NOT label MATCHES "^(timing|qemu)$")
+      message(FATAL_ERROR "dtl_add_test(${arg_NAME}): unknown extra label ${label} (timing, qemu)")
+    endif()
+  endforeach()
+  add_test(NAME ${arg_NAME} COMMAND ${arg_COMMAND})
+  set_tests_properties(${arg_NAME} PROPERTIES LABELS "tier-${arg_TIER};cat-${arg_CATEGORY};${arg_LABELS}")
+  if(arg_PROCESSORS)
+    set_tests_properties(${arg_NAME} PROPERTIES PROCESSORS ${arg_PROCESSORS})
+  endif()
+  if(arg_SERIAL)
+    set_tests_properties(${arg_NAME} PROPERTIES RUN_SERIAL TRUE)
+  endif()
+  if(arg_TIMEOUT)
+    set_tests_properties(${arg_NAME} PROPERTIES TIMEOUT ${arg_TIMEOUT})
+  endif()
+  if(NOT "${arg_SKIP_RETURN_CODE}" STREQUAL "")
+    set_tests_properties(${arg_NAME} PROPERTIES SKIP_RETURN_CODE ${arg_SKIP_RETURN_CODE})
+  endif()
+endfunction()
+set(DTL_TEST_PROGRAMS)
 if(DUCKTAPE_BUILD_TESTS)
   enable_testing()
   add_executable(laya-conformance-c tests/consumers/c.c)
@@ -247,24 +346,30 @@ if(DUCKTAPE_BUILD_TESTS)
   target_link_libraries(laya-conformance-cpp PRIVATE ducktape_laya)
   add_executable(laya-control-tests tests/control.cpp)
   target_link_libraries(laya-control-tests PRIVATE ducktape_laya)
-  add_test(NAME control-errors COMMAND laya-control-tests)
+  dtl_add_test(NAME control-errors COMMAND laya-control-tests TIER generic CATEGORY native)
   add_executable(laya-control-tokenize-tests tests/control-tokenize.cpp)
   target_link_libraries(laya-control-tokenize-tests PRIVATE ducktape_laya)
   add_executable(laya-tests tests/native.cpp)
   target_link_libraries(laya-tests PRIVATE ducktape_laya)
-  add_executable(laya-feature-tests tests/features.cpp)
-  target_include_directories(laya-feature-tests PRIVATE ${UPSTREAM}/vendor)
+  # The patched JSON header first (json_io's objects are compiled with it).
+  add_executable(laya-feature-tests tests/features.cpp tests/features_overflow.cpp tests/features_structured.cpp
+    $<TARGET_OBJECTS:dtl_json_io>)
+  target_include_directories(laya-feature-tests PRIVATE ${DTL_VENDOR_INCLUDE} ${UPSTREAM}/vendor)
   target_link_libraries(laya-feature-tests PRIVATE ducktape_laya)
-  add_test(NAME feature-errors COMMAND laya-feature-tests)
-  add_test(NAME abi-errors COMMAND laya-tests)
-  add_executable(laya-decision-tests tests/decision.cpp)
+  dtl_add_test(NAME feature-errors COMMAND laya-feature-tests TIER generic CATEGORY native)
+  dtl_add_test(NAME abi-errors COMMAND laya-tests TIER generic CATEGORY native)
+  add_executable(laya-decision-tests tests/decision.cpp $<TARGET_OBJECTS:dtl_json_io>)
   target_include_directories(laya-decision-tests PRIVATE src ${DTL_VENDOR_INCLUDE})
-  add_test(NAME decision-rules COMMAND laya-decision-tests)
-  add_executable(laya-language-tests tests/language.cpp src/language.cpp)
+  dtl_add_test(NAME decision-rules COMMAND laya-decision-tests TIER generic CATEGORY native)
+  add_executable(laya-language-tests tests/language.cpp $<TARGET_OBJECTS:dtl_language>)
   target_include_directories(laya-language-tests PRIVATE src ${DTL_VENDOR_INCLUDE})
-  add_test(NAME language-routing COMMAND laya-language-tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/original-reference/routing)
-  # Special-token partition (tokenizer-linear-partition.patch): unchanged tokens and
-  # linear time, on upstream's vocabulary-only test files (no weights).
+  dtl_add_test(NAME language-routing COMMAND laya-language-tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/original-reference/routing
+    TIER generic CATEGORY native)
+  # The late-growth rules of the stress run on synthetic series (tests/stress_rule.hpp).
+  add_executable(laya-stress-rule-tests tests/stress-rule.cpp)
+  dtl_add_test(NAME stress-rule COMMAND laya-stress-rule-tests TIER generic CATEGORY native)
+  # Special-token partition (tokenizer-linear-partition.patch): unchanged tokens on upstream's
+  # vocabulary-only test files (no weights), and linear time on the vocabularies named by --time.
   add_executable(laya-tokenizer-tests tests/tokenizer.cpp)
   target_link_libraries(laya-tokenizer-tests PRIVATE llama)
   set(DTL_TOKENIZER_GOLDEN ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/tokenizer-partition.txt)
@@ -272,17 +377,22 @@ if(DUCKTAPE_BUILD_TESTS)
   foreach(name gpt-neox qwen2 llama-bpe llama-spm phi-3 bert-bge gemma-4 nomic-bert-moe)
     list(APPEND DTL_TOKENIZER_VOCABS ${UPSTREAM}/models/ggml-vocab-${name}.gguf)
   endforeach()
-  add_test(NAME tokenizer-partition COMMAND laya-tokenizer-tests ${DTL_TOKENIZER_GOLDEN} ${DTL_TOKENIZER_VOCABS})
+  dtl_add_test(NAME tokenizer-partition COMMAND laya-tokenizer-tests --time gpt-neox --time llama-spm ${DTL_TOKENIZER_GOLDEN} ${DTL_TOKENIZER_VOCABS}
+    TIER generic CATEGORY native LABELS timing SERIAL)
   # Selected decision head (laya-selected-decision-head.patch): bit-identical to the full graph.
   add_executable(laya-decision-head-tests tests/decision-head.cpp)
   target_link_libraries(laya-decision-head-tests PRIVATE llama)
+  list(APPEND DTL_TEST_PROGRAMS laya-conformance-c laya-cpu-guard-probe laya-conformance-cpp laya-control-tests
+    laya-control-tokenize-tests laya-tests laya-feature-tests laya-decision-tests laya-language-tests laya-stress-rule-tests
+    laya-tokenizer-tests laya-decision-head-tests)
   # Fault injection uses Linux process controls (prctl, rlimits); its tests are Linux-only.
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(laya-fault-tests tests/faults.cpp)
     target_link_libraries(laya-fault-tests PRIVATE ducktape_laya)
     add_executable(laya-ggml-fault-tests tests/ggml-faults.cpp)
     target_link_libraries(laya-ggml-fault-tests PRIVATE ggml ${CMAKE_DL_LIBS})
-    add_test(NAME ggml-faults COMMAND laya-ggml-fault-tests)
+    dtl_add_test(NAME ggml-faults COMMAND laya-ggml-fault-tests TIER generic CATEGORY faults)
+    list(APPEND DTL_TEST_PROGRAMS laya-fault-tests laya-ggml-fault-tests)
     # No exception leaves the llama.cpp C functions (c-api-no-throw.patch); replaces operator new,
     # which sanitizer runtimes own.
     if(NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize")
@@ -291,30 +401,34 @@ if(DUCKTAPE_BUILD_TESTS)
       # Fails allocations the sweep does not reach through these ggml functions (static libraries).
       target_link_options(laya-c-api-fault-tests PRIVATE
         -Wl,--wrap=ggml_backend_buft_alloc_buffer -Wl,--wrap=ggml_backend_reg_get_proc_address)
+      list(APPEND DTL_TEST_PROGRAMS laya-c-api-fault-tests)
     endif()
   endif()
   if(DUCKTAPE_TEST_MODEL)
-    add_test(NAME real-control COMMAND laya-control-tests ${DUCKTAPE_TEST_MODEL})
-    add_test(NAME real-control-tokenize COMMAND laya-control-tokenize-tests ${DUCKTAPE_TEST_MODEL})
-    add_test(NAME real-model COMMAND laya-tests ${DUCKTAPE_TEST_MODEL})
-    add_test(NAME real-features COMMAND laya-feature-tests ${DUCKTAPE_TEST_MODEL})
-    add_test(NAME real-tokenizer COMMAND laya-tokenizer-tests ${DTL_TOKENIZER_GOLDEN} ${DUCKTAPE_TEST_MODEL})
-    add_test(NAME real-decision-head COMMAND laya-decision-head-tests ${DUCKTAPE_TEST_MODEL})
-    set_tests_properties(real-control real-control-tokenize real-model real-features real-tokenizer real-decision-head
-      PROPERTIES TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT})
+    set(real TIER specialized TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT})
     # A check the host forbids (setting the CPU affinity in a sandbox) exits 77: reported skipped, not passed.
-    set_tests_properties(real-control PROPERTIES SKIP_RETURN_CODE 77)
+    dtl_add_test(NAME real-control COMMAND laya-control-tests ${DUCKTAPE_TEST_MODEL} ${real} CATEGORY real_model
+      LABELS timing PROCESSORS 2 SERIAL SKIP_RETURN_CODE 77)
+    dtl_add_test(NAME real-control-tokenize COMMAND laya-control-tokenize-tests ${DUCKTAPE_TEST_MODEL} ${real}
+      CATEGORY real_model LABELS timing PROCESSORS 2 SERIAL)
+    dtl_add_test(NAME real-model COMMAND laya-tests ${DUCKTAPE_TEST_MODEL} ${real} CATEGORY real_model PROCESSORS 2)
+    dtl_add_test(NAME real-features COMMAND laya-feature-tests ${DUCKTAPE_TEST_MODEL} ${real} CATEGORY real_model
+      LABELS timing PROCESSORS 2 SERIAL)
+    dtl_add_test(NAME real-tokenizer COMMAND laya-tokenizer-tests ${DTL_TOKENIZER_GOLDEN} ${DUCKTAPE_TEST_MODEL} ${real}
+      CATEGORY real_model LABELS timing SERIAL)
+    dtl_add_test(NAME real-decision-head COMMAND laya-decision-head-tests ${DUCKTAPE_TEST_MODEL} ${real}
+      CATEGORY real_model PROCESSORS 2)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-      add_test(NAME real-faults COMMAND laya-fault-tests ${DUCKTAPE_TEST_MODEL})
-      set_tests_properties(real-faults PROPERTIES TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT})
-      add_test(NAME real-runtime-faults COMMAND laya-fault-tests ${DUCKTAPE_TEST_MODEL} --runtime-faults)
+      dtl_add_test(NAME real-faults COMMAND laya-fault-tests ${DUCKTAPE_TEST_MODEL} ${real} CATEGORY faults PROCESSORS 2)
       # A check the host cannot run (RLIMIT_NPROC for root) exits 77: reported skipped, not passed.
-      set_tests_properties(real-runtime-faults PROPERTIES TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT} SKIP_RETURN_CODE 77)
+      dtl_add_test(NAME real-runtime-faults COMMAND laya-fault-tests ${DUCKTAPE_TEST_MODEL} --runtime-faults ${real}
+        CATEGORY faults PROCESSORS 4 SKIP_RETURN_CODE 77)
       if(NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize")
-        add_test(NAME real-c-faults COMMAND laya-fault-tests ${DUCKTAPE_TEST_MODEL} --c-allocations)
-        set_tests_properties(real-c-faults PROPERTIES TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT})
-        add_test(NAME real-api-faults COMMAND laya-c-api-fault-tests ${DUCKTAPE_TEST_MODEL})
-        set_tests_properties(real-api-faults PROPERTIES TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT})
+        # Four forked children at a time, two threads each: capped at 4.
+        dtl_add_test(NAME real-c-faults COMMAND laya-fault-tests ${DUCKTAPE_TEST_MODEL} --c-allocations ${real}
+          CATEGORY faults PROCESSORS 4)
+        dtl_add_test(NAME real-api-faults COMMAND laya-c-api-fault-tests ${DUCKTAPE_TEST_MODEL} ${real}
+          CATEGORY faults PROCESSORS 2)
       endif()
     endif()
     # Emulated CPUs without the required features; instrumented builds do not run under QEMU.
@@ -322,9 +436,8 @@ if(DUCKTAPE_BUILD_TESTS)
       find_program(DTL_QEMU_X86_64 qemu-x86_64)
       find_program(DTL_PYTHON3 python3)
       if(DTL_QEMU_X86_64 AND DTL_PYTHON3)
-        add_test(NAME cpu-guard COMMAND ${DTL_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu-guard.py
-          --build ${CMAKE_CURRENT_BINARY_DIR} ${DUCKTAPE_TEST_MODEL})
-        set_tests_properties(cpu-guard PROPERTIES TIMEOUT ${DUCKTAPE_REAL_TEST_TIMEOUT})
+        dtl_add_test(NAME cpu-guard COMMAND ${DTL_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu-guard.py
+          --build ${CMAKE_CURRENT_BINARY_DIR} ${DUCKTAPE_TEST_MODEL} ${real} CATEGORY real_model LABELS qemu)
       endif()
     endif()
   endif()
@@ -366,14 +479,8 @@ if(DUCKTAPE_BUILD_NODE)
   endif()
 endif()
 
-# Explicit developer-only coverage instrumentation; never enable in artifacts.
-option(DUCKTAPE_BUILD_FUZZERS "Build Linux Clang libFuzzer request/config target" OFF)
+# The libFuzzer target; the library's instrumentation is in dtl_apply_library_options.
 if(DUCKTAPE_BUILD_FUZZERS)
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR "Fuzzer builds require Linux and Clang")
-  endif()
-  target_compile_options(ducktape_laya PRIVATE -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
-  target_link_options(ducktape_laya PRIVATE -fsanitize=address,undefined)
   add_executable(laya-input-fuzzer EXCLUDE_FROM_ALL tests/input-libfuzzer.cpp)
   target_compile_options(laya-input-fuzzer PRIVATE -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer)
   target_link_options(laya-input-fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
@@ -384,14 +491,12 @@ endif()
 if(DUCKTAPE_BUILD_TESTS)
   add_executable(laya-stress EXCLUDE_FROM_ALL tests/stress.cpp)
   target_link_libraries(laya-stress PRIVATE ducktape_laya)
+  list(APPEND DTL_TEST_PROGRAMS laya-stress)
 endif()
 
 if(EMSCRIPTEN)
   if(DUCKTAPE_BUILD_NODE OR DUCKTAPE_BUILD_TESTS OR DUCKTAPE_BUILD_EXAMPLES)
     message(FATAL_ERROR "Browser build requires native Node/tests/examples options OFF")
-  endif()
-  if(GGML_WEBGPU)
-    target_compile_definitions(ducktape_laya PRIVATE DTL_BROWSER_WEBGPU)
   endif()
   add_executable(ducktape_laya_wasm bindings/browser/entry.cpp)
   target_link_libraries(ducktape_laya_wasm PRIVATE ducktape_laya)
@@ -433,6 +538,11 @@ if(EMSCRIPTEN)
   else()
     string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" webgpu_debug false)
   endif()
+  # A compiler cache is opt-in for rehearsal builds; packaging refuses a recorded launcher.
+  string(REPLACE ";" " " DTL_BROWSER_LAUNCHER "${CMAKE_CXX_COMPILER_LAUNCHER}")
+  string(REPLACE "\\" "\\\\" DTL_BROWSER_LAUNCHER "${DTL_BROWSER_LAUNCHER}")
+  string(REPLACE "\"" "\\\"" DTL_BROWSER_LAUNCHER "${DTL_BROWSER_LAUNCHER}")
+  string(JSON DTL_BROWSER_IDENTITY SET "${DTL_BROWSER_IDENTITY}" compiler_launcher "\"${DTL_BROWSER_LAUNCHER}\"")
   file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json" CONTENT "${DTL_BROWSER_IDENTITY}")
   set_property(TARGET ducktape_laya_wasm APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/generated/browser-identity.json")
   add_custom_command(TARGET ducktape_laya_wasm POST_BUILD COMMAND ${CMAKE_COMMAND}
@@ -471,3 +581,55 @@ if(DUCKTAPE_BUILD_REFERENCE_PROBE)
     endif()
   endif()
 endif()
+
+# Developer build options. -O1 cannot change results where the core has no contraction to
+# change: x86-64 (ggml's FMA flags are private to ggml-cpu) and GNU-style Clang (it contracts
+# per statement at every level); GCC on arm64 contracts differently by level, so the core keeps
+# -O3 there. Test programs compare floating-point values within tolerances, so they take -O1
+# everywhere. clang-cl reads -O1 as "minimize size" and keeps its flags; the browser build
+# ignores the options.
+if(DUCKTAPE_DEV_BUILD AND NOT EMSCRIPTEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+   AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(DTL_DEV_CORE_O1 ON)
+    set_source_files_properties(${DTL_LIBRARY_SOURCES} PROPERTIES COMPILE_OPTIONS -O1)
+    target_compile_options(dtl_json_io PRIVATE -O1)
+    target_compile_options(dtl_language PRIVATE -O1)
+  endif()
+  foreach(program IN LISTS DTL_TEST_PROGRAMS)
+    target_compile_options(${program} PRIVATE -O1)
+  endforeach()
+endif()
+# Precompiled JSON and standard headers for the core's own sources and the JSON-heavy tests;
+# the vendored runtime sources compiled into the library keep their own includes.
+if(DUCKTAPE_DEV_PCH AND NOT EMSCRIPTEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+   AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  set(DTL_PCH_TARGETS ducktape_laya dtl_language)
+  if(DUCKTAPE_BUILD_TESTS)
+    list(APPEND DTL_PCH_TARGETS laya-feature-tests laya-decision-tests)
+  endif()
+  foreach(target IN LISTS DTL_PCH_TARGETS)
+    target_precompile_headers(${target} PRIVATE <nlohmann/json.hpp> <string> <vector> <map> <memory> <algorithm> <functional>)
+    # ccache caches PCH users only with these (and sloppiness pch_defines,time_macros).
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fpch-preprocess>)
+    else()
+      target_compile_options(${target} PRIVATE "SHELL:-Xclang -fno-pch-timestamp")
+    endif()
+  endforeach()
+  # GCC refuses a precompiled header built at another -O level, so the library's (whose
+  # vendored sources keep the build type's level) is built at its users' -O1.
+  if(DTL_DEV_CORE_O1)
+    set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/ducktape_laya.dir/cmake_pch.hxx.cxx
+                                PROPERTIES COMPILE_OPTIONS -O1)
+  endif()
+  get_target_property(sources ducktape_laya SOURCES)
+  foreach(source IN LISTS sources)
+    string(FIND "${source}" "${CMAKE_CURRENT_SOURCE_DIR}/src/" at)
+    if(NOT source MATCHES "^\\$<" AND NOT at EQUAL 0)
+      set_source_files_properties(${source} TARGET_DIRECTORY ducktape_laya PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    endif()
+  endforeach()
+endif()
+
+include(cmake/launcher_guard.cmake)
