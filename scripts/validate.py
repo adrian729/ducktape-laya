@@ -364,7 +364,9 @@ class Validation:
         # The probe-only launcher exists only with the probe (CMake refuses it otherwise, cmake/launcher_guard.cmake).
         self.probe_launcher = '' if probe == 'none' or not sel['upstream_reference'] else probe
         build = self.build
-        env = dict(os.environ, LD_LIBRARY_PATH=str(build), DUCKTAPE_LAYA_LIB_DIR=str(build),
+        # LD_LIBRARY_PATH (Linux) and DYLD_LIBRARY_PATH (macOS) let the Rust and Go test programs, linked against
+        # @rpath/libducktape_laya.1.dylib without a run path on macOS, find the library in the build directory.
+        env = dict(os.environ, LD_LIBRARY_PATH=str(build), DYLD_LIBRARY_PATH=str(build), DUCKTAPE_LAYA_LIB_DIR=str(build),
                    DUCKTAPE_LAYA_ADDON=str(build / 'ducktape_laya.node'), PYTHONPATH=str(ROOT / 'bindings/python/src'),
                    DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1', GOTOOLCHAIN='local',
                    CGO_CFLAGS='-I' + str(ROOT / 'include'), CGO_LDFLAGS='-L' + str(build), **CCACHE_ENVIRONMENT)
