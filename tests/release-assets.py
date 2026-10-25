@@ -176,6 +176,7 @@ class Assets(unittest.TestCase):
                  'no targets': lambda g: g.update(targets={}),
                  'not ready': lambda g: g.update(release_ready=False),
                  'dirty checker': lambda g: g.update(checker_tree_dirty=True),
+                 'checker at another commit': lambda g: g.update(checker_commit='c' * 40),
                  'failed release gate': lambda g: g['gates']['stress'].update(status='not_run'),
                  # The gate set is the record's, not whatever gates.json lists.
                  'release gate left out': lambda g: g['gates'].pop('stress'),

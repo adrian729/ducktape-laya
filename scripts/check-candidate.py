@@ -30,7 +30,7 @@ import tarfile
 import tempfile
 import zipfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from release_support import ROOT, check_qualification, check_record, check_targets, git, read_json, security_review_problems, sha256, source_identity
+from release_support import ROOT, check_qualification, check_record, check_targets, git, read_json, security_review_problems, sha256, source_identity, versioned_doc_problems
 from release_targets import (Context, Missing, Mismatch, COMPARISON_NOTES, compare_packages, evaluate_targets, need, require_complete_validation,
                              run_gate)
 
@@ -47,13 +47,16 @@ with subprocess.Popen(['git', '-C', str(ROOT), 'archive', commit], stdout=subpro
     with tarfile.open(fileobj=archive.stdout, mode='r|') as stream:
         stream.extractall(candidate_tree, filter='data')
 record = read_json(candidate_tree / 'release/compatibility.json')
-check_record()  # the checker checkout: runtime pin, patches and package versions
+check_record(docs=False)  # the checker checkout: runtime pin, patches and package versions (the docs are the candidate's, below)
 # The candidate's own record, policy and targets (an empty required_gates list, an unknown gate or a
 # missing build workflow in a candidate whose checker checkout is newer must not pass unnoticed).
 try:
     if record.get('schema_version') != 2: raise ValueError('Unsupported compatibility record schema')
     policy = check_qualification(record, candidate_tree)
     check_targets(record, candidate_tree)
+    doc_problems = versioned_doc_problems(record, candidate_tree)
+    if doc_problems:
+        raise ValueError('Documentation names another release than ' + record['package_version'] + ': ' + '; '.join(doc_problems))
 except (ValueError, KeyError, TypeError, OSError) as error:
     raise SystemExit(f'check-candidate: the candidate {commit} has an invalid release record: {type(error).__name__}: {error}')
 manifest_model = read_json(candidate_tree / record['models'][0])
@@ -396,7 +399,11 @@ for gate, check in GATES.items():
     result['gates'][gate] = run_gate(check)
 result['targets'] = evaluate_targets(ctx, result['gates'])
 # A dirty checker's verdict is not release evidence (scripts/release-gates.jq refuses it too).
-result['release_ready'] = (not result['checker_tree_dirty'] and all(g['status'] == 'passed' for g in result['gates'].values()) and
+# The checker must be the candidate commit itself: a different checker (older or newer) may judge it by other rules.
+result['checker_is_candidate'] = result['checker_commit'] == commit
+if not result['checker_is_candidate']:
+    print(f'check-candidate: the checker is at {result["checker_commit"]}, not the candidate {commit}; the report is not release_ready (check out the candidate)', file=sys.stderr)
+result['release_ready'] = (result['checker_is_candidate'] and not result['checker_tree_dirty'] and all(g['status'] == 'passed' for g in result['gates'].values()) and
                            all(g['status'] == 'passed' for t in result['targets'].values() for g in t['gates'].values()))
 # The package inventories this report qualified; attest-release.yml checks the
 # published native-inventory.json (the CI-assembled release packages) and

@@ -82,7 +82,8 @@ def verify_model(path, manifest):
 def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
 
-def check_record(root=ROOT):
+def check_record(root=ROOT, docs=True):
+    """docs=False leaves the versioned-docs check to the caller (check-candidate.py reads the candidate's own tree)."""
     record = read_json(root / 'release/compatibility.json')
     if record['schema_version'] != 2:
         raise ValueError('Unsupported compatibility record schema')
@@ -144,7 +145,7 @@ def check_record(root=ROOT):
             raise ValueError(f'Model performance budgets not declared: {name}')
         if len(model['sha256']) != 64 or len(model['source']['revision']) != 40:
             raise ValueError(f'Model must identify immutable artifact: {name}')
-    problems = versioned_doc_problems(record, root)
+    problems = versioned_doc_problems(record, root) if docs else []
     if problems:
         raise ValueError('Documentation names another release than ' + version + ' (update it in the release commit): ' + '; '.join(problems))
     return record
