@@ -9,6 +9,7 @@ scripts/assemble-packages.py merges into the multi-platform npm, jar and NuGet
 packages. Does not publish, sign or download.
 """
 import argparse
+import importlib.util
 import sbom
 import json
 import os
@@ -19,11 +20,16 @@ import re
 import sys
 import tempfile
 from release_support import (ROOT, build_environment, host_target, check_record, sha256, git, binary_info, source_identity, native_build_identity,
-                             require_runtime_identity, require_runtime_sources, require_uninstrumented_binary, require_mapped_source_paths,
-                             pe_info, macho_info, require_elf_hardening, require_compiled_hardening, require_guard_cf)
+                             require_runtime_identity, require_runtime_sources, require_guard_cf)
 from artifact_support import write_zip, archive_tree, archive_zip, set_npm_platforms, native_payload
 import java_package
 import python_wheel
+
+# The binary constraints (instrumentation, source paths, hardening, symbol-version floors, exports, deployment target)
+# live in scripts/check-binary.py, which validate.py also runs.
+_spec = importlib.util.spec_from_file_location('check_binary', pathlib.Path(__file__).resolve().parent / 'check-binary.py')
+check_binary = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(check_binary)
 
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('--build', type=pathlib.Path, default=ROOT / 'build')
@@ -63,12 +69,11 @@ try:
         ('ducktape_laya', target.library), ('ducktape_laya_node', 'ducktape_laya.node')]}
 except ValueError as error:
     p.error(str(error))
-try:
-    for name in [target.library, 'ducktape_laya.node']:
-        require_uninstrumented_binary(build / name)
-        require_mapped_source_paths(build / name)
-except ValueError as error:
-    p.error(str(error))
+if not (build / 'ducktape_laya.node').is_file():
+    p.error('Build the Node addon before packaging')
+binary_summary = check_binary.check_binaries(build / target.library, build / 'ducktape_laya.node', target.name)
+if binary_summary['status'] != 'passed':
+    p.error('The built binaries fail the release constraints (scripts/check-binary.py): ' + '; '.join(binary_summary['problems']))
 diagnostics = binary_info(build)
 try:
     require_runtime_identity(diagnostics, record)
@@ -88,6 +93,10 @@ def refuse_non_product_build():
     problems = []
     if cache.get('CMAKE_BUILD_TYPE') != 'Release': problems.append(f'CMAKE_BUILD_TYPE is {cache.get("CMAKE_BUILD_TYPE")!r}, not Release')
     if cache.get('DUCKTAPE_LLAMA_REVISION'): problems.append('DUCKTAPE_LLAMA_REVISION is set')
+    # Development settings (precompiled headers, dev-only build changes) never reach a package.
+    for name in ('DUCKTAPE_DEV_BUILD', 'DUCKTAPE_DEV_PCH'):
+        if cache.get(name, 'OFF').upper() not in ('OFF', '0', 'FALSE', 'NO', 'N', ''):
+            problems.append(f'{name} is {cache[name]!r}, not OFF')
     approved = (ROOT / record['runtime']['path']).resolve()
     if not cache.get('DUCKTAPE_LLAMA_SOURCE') or pathlib.Path(cache['DUCKTAPE_LLAMA_SOURCE']).resolve() != approved:
         problems.append(f'DUCKTAPE_LLAMA_SOURCE is {cache.get("DUCKTAPE_LLAMA_SOURCE")!r}, not the checkout\'s {approved.as_posix()}')
@@ -105,8 +114,6 @@ try:
 except ValueError as error:
     p.error(str(error))
 out.mkdir(parents=True, exist_ok=False)
-if not (build / 'ducktape_laya.node').is_file():
-    p.error('Build the Node addon before packaging')
 # npm and Cargo run through their Windows .cmd/.exe launchers too.
 npm, cargo, dotnet = (shutil.which(name) or name for name in ('npm', 'cargo', 'dotnet'))
 with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
@@ -124,9 +131,10 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         if len(library_files) != 1: raise SystemExit(f'Expected one installed library file, found {[x.name for x in library_files]}')
         subprocess.run([sys.executable, str(ROOT / 'scripts/check-abi.py'), str(library_files[0])], check=True, capture_output=True)
         shipped_sha256 = {'ducktape_laya': sha256(library_files[0]), 'ducktape_laya_node': sha256(addon_file)}
+        # Stripping keeps the dynamic section and segments; check the hardening on the shipped bytes too.
         for path in (library_files[0], addon_file):
-            require_elf_hardening(path)
-            require_compiled_hardening(path, library=path == library_files[0])
+            problems = check_binary.hardening_problems(path, library=path == library_files[0])
+            if problems: raise SystemExit('; '.join(problems))
     elif target.os == 'win32':
         for path in (native.glob('bin/ducktape_laya.dll'), native.glob('lib*/ducktape-laya/node/ducktape_laya.node')):
             for item in path: require_guard_cf(item)
@@ -185,43 +193,22 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     isa = {key: value for key, value in cache.items() if key.startswith(prefixes)}
     toolchain = {}
     if target.os == 'linux':
-        symbols = subprocess.check_output(['readelf', '--version-info', str(build / target.library)], text=True)
-        requirements = sorted(set(re.findall(r'Name: ((?:GLIBC|GLIBCXX|CXXABI)_[0-9.]+)', symbols)))
-        # The wheel tag and the declared floors must cover what the library actually needs.
-        def newest(prefix):
-            return max((tuple(map(int, r[len(prefix):].split('.'))) for r in requirements if r.startswith(prefix)), default=())
-        platform = json.loads((ROOT / 'release/qualification.json').read_text())['platforms']['native']
-        wheel_glibc = tuple(map(int, re.search(r'manylinux_(\d+)_(\d+)', target.wheel).groups()))
-        for prefix, limit in (('GLIBC_', wheel_glibc), ('GLIBC_', tuple(map(int, platform['maximum_glibc'].split('.')))),
-                              ('GLIBCXX_', tuple(map(int, platform['maximum_glibcxx'].split('.'))))):
-            if newest(prefix) > limit:
-                raise SystemExit(f'Library needs {prefix}{".".join(map(str, newest(prefix)))}, above the declared {".".join(map(str, limit))}')
-        toolchain['required_runtime_symbol_versions'] = requirements
+        # check-binary.py checked these against the wheel tag and the declared floors.
+        toolchain['required_runtime_symbol_versions'] = binary_summary['required_runtime_symbol_versions']
         toolchain['strip'] = {'command': 'strip --strip-unneeded', 'tool': subprocess.check_output(['strip', '--version'], text=True).splitlines()[0],
                               'shipped_sha256': shipped_sha256}
         toolchain['hardening'] = ('full RELRO (BIND_NOW) and the stack protector verified on the shipped library and addon, _FORTIFY_SOURCE '
                                   'on the library' + ('; return-address signing (PAC)' if target.name.endswith('arm64') else ''))
     elif target.os == 'darwin':
-        info = {name: macho_info(build / name) for name in [target.library, 'ducktape_laya.node']}
-        # The wheel tag (macosx_14_0) promises the deployment target the library was linked for.
-        wheel_macos = tuple(map(int, re.search(r'macosx_(\d+)_(\d+)', target.wheel).groups()))
-        for name, item in info.items():
-            if not item['minimum_os'] or tuple(map(int, item['minimum_os'].split('.'))) > wheel_macos:
-                raise SystemExit(f'{name} targets macOS {item["minimum_os"]}, above the wheel tag {target.wheel}')
-        toolchain['minimum_macos'] = info[target.library]['minimum_os']
-        toolchain['linked_libraries'] = {name: item['dylibs'] for name, item in info.items()}
+        # check-binary.py checked the deployment target against the wheel tag (macosx_14_0).
+        toolchain['minimum_macos'] = binary_summary['minimum_macos']
+        toolchain['linked_libraries'] = binary_summary['linked_libraries']
     else:
-        info = {name: pe_info(build / name) for name in [target.library, 'ducktape_laya.node']}
-        for name, item in info.items():
-            if item['machine'] != 0x8664: raise SystemExit(f'{name} is not an x64 image')
-        exports = info[target.library]['exports']
-        expected = sorted(line.strip().lstrip('_') for line in (ROOT / 'src/exports.macos').read_text().splitlines() if line.strip())
-        if exports != expected:
-            raise SystemExit(f'{target.library} exports {exports}, expected exactly {expected}')
+        # check-binary.py checked the machine, Control Flow Guard and the exports.
         # The C++ runtime is the Visual C++ Redistributable (/MD); applications provide it.
         toolchain['hardening'] = 'Control Flow Guard (GUARD_CF) verified on the DLL and addon'
-        toolchain['linked_libraries'] = {name: sorted(item['imports']) for name, item in info.items()}
-        toolchain['delay_loaded_libraries'] = {name: sorted(item['delay_imports']) for name, item in info.items()}
+        toolchain['linked_libraries'] = binary_summary['linked_libraries']
+        toolchain['delay_loaded_libraries'] = binary_summary['delay_loaded_libraries']
     compiler = subprocess.check_output([cache['CMAKE_CXX_COMPILER'], '--version'], text=True).splitlines()[0]
     # The runner image and, on Windows, the MSVC toolset and SDK whose libraries the DLL links.
     if build_environment(): toolchain['build_environment'] = build_environment()

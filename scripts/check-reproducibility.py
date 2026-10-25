@@ -13,11 +13,11 @@ import re
 import shutil
 import subprocess
 import tarfile
-from release_support import ROOT, build_environment, check_record, git, host_target, sha256
+from release_support import ROOT, build_environment, check_record, default_jobs, generator_arguments, git, host_target, sha256
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=pathlib.Path, required=True)
-p.add_argument('--jobs', type=int, default=2)
+p.add_argument('--jobs', type=int, help='build jobs (default: DUCKTAPE_JOBS, or min(CPUs, available memory / 0.6 GB))')
 p.add_argument('--node-include', type=pathlib.Path)
 # The release library is built with gcc; name the compiler explicitly so an exported
 # CC/CXX (e.g. CC=clang in a developer shell) cannot silently build something else.
@@ -26,6 +26,10 @@ p.add_argument('--cxx', default='g++', help='C++ compiler (default g++, as the r
 p.add_argument('--cmake-arg', action='append', default=[], help='Extra configure argument for both builds, repeatable '
                '(on Windows: -GNinja, -DNODE_LIB=..., -DDTL_PATCH_EXECUTABLE=...)')
 a = p.parse_args()
+try:
+    a.jobs = a.jobs if a.jobs is not None else default_jobs()
+except ValueError as error:
+    p.error(str(error))
 if a.jobs < 1: p.error('--jobs must be positive')
 record = check_record()
 out = a.output.resolve()
@@ -62,7 +66,8 @@ report = {'schema_version': 1, 'status': 'running', 'source_commit': git(ROOT, '
           'source_tracked_dirty': bool(git(ROOT, 'diff', 'HEAD', '--name-only')),
           'snapshot_sha256': hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
           'runtime': record['runtime'], 'scope': 'installed native and Node files; same toolchain/options, different source/build/install roots',
-          'compilers': compilers, 'cmake_arguments': a.cmake_arg, 'build_environment': build_environment(),
+          'compilers': compilers, 'cmake_arguments': a.cmake_arg, 'build_environment': build_environment(), 'jobs': a.jobs,
+          'compiler_launcher': 'none',
           'source_files': manifest, 'builds': {}}
 try:
     report['target_platform'] = host_target().name
@@ -75,8 +80,13 @@ try:
     for label in ['first', 'second']:
         source, build, install = (out / label / part for part in ['source', 'build', 'install'])
         shutil.copytree(snapshot, source, symlinks=True)
+        # Ninja unless a --cmake-arg names a generator; both builds are fresh, independent and uncached (no compiler
+        # launcher, ggml's GGML_CCACHE off), with the development options off as in every evidence build.
+        generator = generator_arguments(a.cmake_arg, build)
+        report['generator'] = generator[1] if generator else 'from --cmake-arg'
         commands = [
-            ['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
+            ['cmake', '-S', str(source), '-B', str(build), *generator, '-DCMAKE_BUILD_TYPE=Release',
+             '-DDUCKTAPE_DEV_BUILD=OFF', '-DDUCKTAPE_DEV_PCH=OFF',
              '-DDUCKTAPE_BUILD_TESTS=OFF', '-DDUCKTAPE_BUILD_NODE=ON', f'-DNODE_INCLUDE_DIR={node_include}',
              f'-DDUCKTAPE_LLAMA_REVISION={record["runtime"]["commit"]}',
              '-DGGML_CCACHE=OFF', '-DCMAKE_C_COMPILER_LAUNCHER=', '-DCMAKE_CXX_COMPILER_LAUNCHER=',
