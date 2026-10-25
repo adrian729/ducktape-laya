@@ -553,8 +553,12 @@ jobs:
         if: contains(format(',{0},', env.DTL_TOOLS), ',go,')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.tool_cache }}/go/1.27.2
-          key: go-toolcache-1.27.2-${{ runner.os }}-${{ runner.arch }}
+          # On Windows setup-go keeps the files under D:\hostedtoolcache and links them from the tool
+          # cache on C:; both are cached, or the restored link dangles and setup-go fails (EEXIST).
+          path: |
+            ${{ runner.tool_cache }}/go/1.27.2
+            ${{ runner.os == 'Windows' && 'D:/hostedtoolcache/windows/go/1.27.2' || format('{0}/go/1.27.2', runner.tool_cache) }}
+          key: go-toolcache-v2-1.27.2-${{ runner.os }}-${{ runner.arch }}
       - &go
         if: contains(format(',{0},', env.DTL_TOOLS), ',go,')
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
