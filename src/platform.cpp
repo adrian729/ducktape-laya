@@ -1,8 +1,9 @@
 #include "platform.hpp"
 #include "errors.hpp"
-#include "build_config.hpp"
 #include "threads.hpp"
+#include <string>
 #include <thread>
+#include <vector>
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
 #include <sched.h>
 #include <fstream>
@@ -143,36 +144,20 @@ void ensure_cpu_supported() {
         if (!feature.supported) throw failure(DTL_UNSUPPORTED_PLATFORM, std::string("CPU lacks required feature: ") + feature.name);
     }
 }
-json runtime_info() {
-    json required = json::array(), missing = json::array();
-    for (const auto &feature : required_features()) { required.push_back(feature.name); if (!feature.supported) missing.push_back(feature.name); }
+cpu_profile current_cpu_profile() {
 #ifdef __EMSCRIPTEN__
 #ifdef DTL_BROWSER_WEBGPU
-    const char *backend = "webgpu";
+    cpu_profile out{"webgpu", {}, {}};
 #else
-    const char *backend = "wasm-cpu";
+    cpu_profile out{"wasm-cpu", {}, {}};
 #endif
 #else
-    const char *backend = "native-cpu";
+    cpu_profile out{"native-cpu", {}, {}};
 #endif
-    std::string profile = backend;
-    if (!required.empty()) {
-        profile += ":";
-        for (size_t i = 0; i < required.size(); ++i) {
-            if (i) profile += "+";
-            profile += required[i].get<std::string>();
-        }
+    for (const auto &feature : required_features()) {
+        out.required.push_back(feature.name);
+        if (!feature.supported) out.missing.push_back(feature.name);
     }
-    return {{"schema_version", 1}, {"package_version", DTL_PACKAGE_VERSION}, {"abi_version", DTL_ABI_VERSION},
-        {"runtime_patches", json::parse(DTL_RUNTIME_PATCHES)}, {"llama_cpp_commit", DTL_RUNTIME_COMMIT}, {"backend", backend}, {"compiler", DTL_COMPILER},
-        {"numerical_profile", {{"id", profile}, {"cross_profile_equivalence", false}}},
-        {"required_cpu_features", required}, {"missing_cpu_features", missing}, {"cpu_supported", missing.empty()},
-        {"decision_types", {"choice", "noul", "score"}},
-        {"features", {"structured_decisions", "sequential_batches", "routing", "language_routing", "overflow_policies",
-                      "observers", "cooperative_cancellation", "deadlines"}},
-        {"overflow_policies", {"reject", "truncate_end", "truncate_start", "scan"}},
-        {"limits", {{"request_bytes", 1048576}, {"object_members", 1024}, {"questions_per_request", 32}, {"requests_per_batch", 32},
-                    {"questions_per_batch", 128}, {"default_context_tokens", 512}, {"minimum_context_tokens", 32},
-                    {"scan_windows", 1024}, {"windows_per_call", 4096}, {"routes", 16}, {"loaded_models", 4}}}};
+    return out;
 }
 }

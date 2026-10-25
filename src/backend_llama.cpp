@@ -6,6 +6,7 @@
 #include "decision.hpp"
 #include "errors.hpp"
 #include "execution.hpp"
+#include "json_io.hpp"
 #include "platform.hpp"
 #include "threads.hpp"
 #include "llama.h"
@@ -241,7 +242,7 @@ struct backend::impl {
         // so the text to tokenize is bounded like the rendered prompt, not only the request.
         require(state_text.size() <= max_request * 2, "Serialized state is too large");
         jinja::context jc(source);
-        jinja::global_from_json(jc, common_json::parse(input.dump()), false);
+        jinja::global_from_json(jc, common_json::parse(dump_json(input)), false);
         jinja::runtime runtime(jc);
         auto rendered = jinja::runtime::gather_string_parts(runtime.execute(program))->as_string().str();
         require(rendered.size() <= max_request * 2, "Rendered prompt is too large");
