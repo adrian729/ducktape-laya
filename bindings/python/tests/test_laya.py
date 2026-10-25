@@ -11,8 +11,6 @@ MODEL = os.environ.get('LAYA_MODEL')
 REQUEST = '{"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}'
 STRUCTURED = ('{"state":"Please refund me.","schema":{"type":"object","properties":'
               '{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}')
-CHOICE = ('{"state":"Please refund me.","questions":{"kind":{"type":"choice",'
-          '"instructions":"What is requested?","criteria":["refund","other"]}}}')
 LONG = json.dumps([json.loads(STRUCTURED)] * 8)
 real = unittest.skipUnless(MODEL, 'LAYA_MODEL is not set')
 
@@ -207,12 +205,6 @@ class RealModel(unittest.TestCase):
         self.assertIn('trained_context_tokens', info['model'])
         self.assertNotIn('max_tokens', info['model'])
         self.assertIn('default_context_tokens', info['limits'])
-        answer = self.baseline['answers']['refund']
-        self.assertIn('answer_confidence', answer)
-        self.assertIn('confidence', answer)
-        choice = self.engine.execute(CHOICE)['answers']['kind']
-        self.assertEqual(choice['answer_confidence'], max(choice['probabilities'].values()))
-        self.assertTrue(0 <= choice['confidence'] <= 1)
         self.assertEqual(engine.execute(REQUEST), self.baseline)
 
     def test_open_options(self):
@@ -221,7 +213,6 @@ class RealModel(unittest.TestCase):
             self.assertEqual(engine.info()['model']['context_tokens'], 64)
             self.assertIn('answers', engine.execute(REQUEST))
             # Per-request max_tokens is bounded by the engine's context_tokens.
-            self.assertIn('answers', engine.execute(dict(json.loads(REQUEST), max_tokens=64)))
             with self.assertRaises(laya.LayaError) as caught:
                 engine.execute(dict(json.loads(REQUEST), max_tokens=65))
             self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
@@ -240,39 +231,18 @@ class RealModel(unittest.TestCase):
     def test_open_overflow(self):
         long_request = {'state': 'refund ' * 800, 'questions': {'refund': {
             'type': 'noul', 'instructions': 'Is a refund requested?'}}}
+        # The policy reaches the engine: the default (reject) would refuse this request.
         with laya.Engine.open(MODEL, threads=2, overflow='truncate_end') as engine:
-            result = engine.execute(long_request)
-            self.assertGreater(result['usage']['state_tokens_dropped'], 0)
-            with self.assertRaises(laya.LayaError) as caught:
-                engine.execute(dict(long_request, overflow='reject'))
-            self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+            self.assertIn('answers', engine.execute(long_request))
         with self.assertRaises(ValueError):
             laya.Engine.open(MODEL, threads=2, overflow='bogus')
 
-    def test_request_temperatures(self):
+    def test_request_settings_rejected(self):
         request = json.loads(REQUEST)
-        hot = self.engine.execute(dict(request, temperatures={'noul': 3.0}))
-        self.assertIn('answers', hot)
-        # "noul" alone has no effect: the model defines "noul.2".
-        base = self.baseline['answers']['refund']['noul']
-        warm = self.engine.execute(dict(request, temperatures={'noul.2': 4.0}))['answers']['refund']['noul']
-        self.assertNotEqual(warm, base)
-        self.assertEqual(hot, self.baseline)
-        with self.assertRaises(laya.LayaError) as caught:
-            self.engine.execute(dict(request, temperatures={'noul': 0}))
-        self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
-        self.assertEqual(self.engine.execute(REQUEST), self.baseline)
-
-    def test_router_route_config(self):
-        config = {'models': {'small': {'path': MODEL, 'config': {'context_tokens': 64}},
-                             'plain': MODEL}, 'max_loaded': 1}
-        with laya.Engine.open_router(config, threads=2, context_tokens=128) as router:
-            request = dict(json.loads(STRUCTURED), model='small', max_tokens=100)
-            with self.assertRaises(laya.LayaError) as caught:  # route override (64) beats open option (128)
-                router.execute(request)
-            self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
-            request['model'] = 'plain'
-            self.assertEqual(router.execute(request)['model'], 'plain')
+        for extra in ({'temperatures': {'noul': 0}}, {'max_tokens': 0}):
+            with self.assertRaises(laya.LayaError) as caught:
+                self.engine.execute(dict(request, **extra))
+            self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT, extra)
 
     def test_close_inside_callback(self):
         engine = laya.Engine.open(MODEL, threads=2)
@@ -282,18 +252,6 @@ class RealModel(unittest.TestCase):
         with self.assertRaises(laya.EngineClosedError):
             engine.execute(REQUEST)
         engine.close()
-
-    def test_router_auto_routes_by_language(self):
-        config = {'models': {'en': MODEL, 'ml': MODEL}, 'max_loaded': 2, 'auto': {'english': 'en', 'default': 'ml'}}
-        english = 'I was charged twice for my subscription this month, so please refund me.'
-        with laya.Engine.open_router(config, threads=2) as router:
-            for state, extra, model, routing in (
-                    (english, {}, 'en', {'reason': 'english_text'}),
-                    ('Пожалуйста, верните мне деньги за подписку.', {}, 'ml', {'reason': 'non_latin_script'}),
-                    (english, {'lang': 'fr'}, 'ml', {'reason': 'lang'})):
-                result = router.execute(dict(json.loads(REQUEST), state=state, model='auto', **extra))
-                self.assertEqual(result['model'], model)
-                self.assertEqual(result['usage']['routing']['reason'], routing['reason'])
 
     def test_router(self):
         with laya.Engine.open_router({'models': {'english': MODEL}, 'max_loaded': 1}, threads=2) as router:

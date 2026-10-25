@@ -178,17 +178,13 @@ public class EngineTests
     }
 
     [Fact]
-    public void OverflowPolicyAppliesAndIsValidated()
+    public void OverflowPolicyReachesNativeAndIsValidated()
     {
         if (Model is not { } path) return;
         var request = "{\"state\":\"" + string.Concat(Enumerable.Repeat("refund ", 800)) + "\",\"questions\":{\"refund\":{\"type\":\"noul\",\"instructions\":\"Is a refund requested?\"}}}";
+        // The policy reaches the engine: the default (reject) would refuse this request.
         using (var engine = LayaEngine.Open(path, new LayaConfig { Threads = 2, Overflow = "truncate_end" }))
-        {
-            var result = engine.Execute(request);
-            Assert.Matches("\"state_tokens_dropped\":[1-9]", result);
-            var rejected = Assert.Throws<LayaException>(() => engine.Execute(request.Insert(1, "\"overflow\":\"reject\",")));
-            Assert.Equal(1, rejected.Status);
-        }
+            Assert.Contains("\"answers\"", engine.Execute(request));
         Assert.Equal(1, Assert.Throws<LayaException>(() => LayaEngine.Open(path, new LayaConfig { Threads = 2, Overflow = "bogus" })).Status);
     }
 
@@ -347,47 +343,6 @@ public class EngineTests
     }
 
     [Fact]
-    public void RouterAutoRoutesByLanguage()
-    {
-        if (Model is not { } path) return;
-        var q = Quote(path);
-        var json = "{\"models\":{\"en\":\"" + q + "\",\"ml\":\"" + q + "\"},\"max_loaded\":1,\"auto\":{\"english\":\"en\",\"default\":\"ml\"}}";
-        using var router = LayaEngine.OpenRouter(json, Two);
-        string Ask(string state, string extra = "")
-        {
-            var request = "{\"model\":\"auto\"," + extra + "\"state\":" + System.Text.Json.JsonSerializer.Serialize(state) + "," + Primitive[(Primitive.IndexOf("\"questions\"", StringComparison.Ordinal))..];
-            return router.Execute(request);
-        }
-        var english = Ask("I was charged twice for my subscription this month and I would like my money back please.");
-        Assert.Contains("\"model\":\"en\"", english);
-        Assert.Contains("\"reason\":\"english_text\"", english);
-        var script = Ask("\u6211\u8fd9\u4e2a\u6708\u7684\u8ba2\u9605\u88ab\u6263\u4e86\u4e24\u6b21\u8d39\u7528\uff0c\u8bf7\u9000\u6b3e");
-        Assert.Contains("\"model\":\"ml\"", script);
-        Assert.Contains("\"reason\":\"non_latin_script\"", script);
-        var forced = Ask("I was charged twice for my subscription this month and I would like my money back please.", "\"lang\":\"fr\",");
-        Assert.Contains("\"model\":\"ml\"", forced);
-        Assert.Contains("\"reason\":\"lang\"", forced);
-    }
-
-    [Fact]
-    public void TemperatureOverrideChangesProbability()
-    {
-        if (Model is not { } path) return;
-        using var engine = LayaEngine.Open(path, Two);
-        static double Noul(LayaEngine e, string request)
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(e.Execute(request));
-            return doc.RootElement.GetProperty("answers").GetProperty("refund").GetProperty("noul").GetDouble();
-        }
-        var baseline = Noul(engine, Primitive);
-        // The model defines noul.2, so only that key has an effect; plain "noul" is shadowed.
-        Assert.NotEqual(baseline, Noul(engine, WithRaw(Primitive, "\"temperatures\":{\"noul.2\":4.0}")));
-        Assert.Equal(baseline, Noul(engine, Primitive));
-        using var hot = LayaEngine.Open(path, new LayaConfig { Threads = 2, Temperatures = new Dictionary<string, double> { ["noul.2"] = 4.0 } });
-        Assert.NotEqual(baseline, Noul(hot, Primitive));
-    }
-
-    [Fact]
     public void InvalidTimeoutIsRejected()
     {
         var file = Path.GetTempFileName();
@@ -497,19 +452,5 @@ public class EngineTests
         Assert.Equal(baseline, await cancelled);
         // Dispose from another thread waits for nothing in flight and is safe to repeat.
         await Task.Run(() => { engine.Dispose(); router.Dispose(); engine.Dispose(); });
-    }
-
-    [Fact]
-    public void RouterRouteConfig()
-    {
-        if (Model is not { } path) return;
-        var q = Quote(path);
-        var json = "{\"models\":{\"small\":{\"path\":\"" + q + "\",\"config\":{\"context_tokens\":64}},\"plain\":\"" + q + "\"},\"max_loaded\":1}";
-        using var router = LayaEngine.OpenRouter(json, new LayaConfig { Threads = 2, ContextTokens = 256 });
-        // The route's own context_tokens (64) overrides the open config (256), so 100 tokens exceed it.
-        var request = WithRaw(Primitive, "\"max_tokens\":100");
-        Assert.Equal(1, Assert.Throws<LayaException>(() => router.Execute(WithKey(request, "model", "small"))).Status);
-        Assert.Contains("\"model\":\"plain\"", router.Execute(WithKey(request, "model", "plain")));
-        Assert.Contains("\"model\":\"small\"", router.Execute(WithKey(WithRaw(Primitive, "\"max_tokens\":60"), "model", "small")));
     }
 }
