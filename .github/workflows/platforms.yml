@@ -1,7 +1,7 @@
 name: Other platforms
-# Platform plan phases 1 to 3 for macOS arm64: native build, model-free tests and
-# the macOS packages, and the real-model checks on dispatch. Not a release gate
-# yet. Linux and Windows are in native.yml.
+# macOS arm64: native build, model-free tests and the macOS packages, and the
+# real-model checks on dispatch. Not a release target (docs/PLATFORMS.md).
+# Linux and Windows are in native.yml.
 on:
   push:
   pull_request:

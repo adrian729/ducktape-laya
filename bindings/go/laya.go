@@ -196,7 +196,7 @@ func newEngine(handle unsafe.Pointer) *Engine {
 // Config holds open-time settings. A nil *Config or zero fields select the
 // engine defaults; only set fields are sent to the native library.
 type Config struct {
-	// Threads is 0 (automatic, capped at 4) or 1..256.
+	// Threads is 0 (automatic: at most 4 and at most the CPUs the process may use) or 1..256.
 	Threads uint32
 	// ContextTokens is the capacity reserved for one prompt (32 up to the
 	// model's trained length; default 512). 0 keeps the default.

@@ -13,7 +13,7 @@ One native library does the work; thin bindings expose it to C/C++, Rust, Node.j
 
 ## Status
 
-- **Current release: 0.2.0** (2026-10-22), on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), npm, crates.io, PyPI, NuGet, Maven Central and the Go module proxy. Every release file is attested ([verify a download](SECURITY.md#verify-a-download)). Its packages run on **Linux x86-64**; the browser package is experimental.
+- **Current release: 0.2.0** (2026-10-22), on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), npm, crates.io, PyPI, NuGet, Maven Central and the Go module proxy. Its package files are attested and listed in `SHA256SUMS` ([verify a download](SECURITY.md#verify-a-download)). Its packages run on **Linux x86-64**; the browser package is experimental.
 - **Platforms:** Linux x86-64 is tier 1 (passes every release check); Linux arm64 and Windows x64 are tier 2 (tested in CI with the English model) from the next release; macOS on Apple silicon builds from source. Details: [docs/PLATFORMS.md](docs/PLATFORMS.md).
 - **Unreleased on main:** Linux arm64 and Windows x64 packages and the fixes listed in the [changelog](CHANGELOG.md#unreleased). Until the next release, they are available by [building from source](docs/BUILDING.md).
 
@@ -21,7 +21,7 @@ One native library does the work; thin bindings expose it to C/C++, Rust, Node.j
 
 | Platform | CPU | System |
 | --- | --- | --- |
-| Linux x86-64 | AVX2, FMA, F16C, BMI2, SSE4.2 (Intel Haswell, AMD Excavator/Zen or newer) | glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29` (Ubuntu 24.04+); not musl/Alpine |
+| Linux x86-64 | AVX, AVX2, FMA, F16C, BMI2, SSE4.2 (Intel Haswell, AMD Excavator/Zen or newer) | glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29` (Ubuntu 24.04+); not musl/Alpine |
 | Linux arm64 (next release) | Armv8.2-A with dot product and FP16 (Graviton2+, Ampere Altra, Raspberry Pi 5) | as Linux x86-64 |
 | Windows x64 (next release) | as Linux x86-64 | Microsoft Visual C++ Redistributable |
 
@@ -99,22 +99,9 @@ let result_json = engine.execute(
 
 Every answer also carries `answer_confidence` (the probability of the reported answer) and `confidence` (how decided the model is). C, C++, Go, Java, .NET and the browser take the same request JSON; see their package READMEs, the ready-made requests in [examples/](examples/README.md) and the [API guide](docs/API.md) for structured decisions, batches, long input and routing between models.
 
-## Performance
+## Performance and accuracy
 
-Native Linux x86-64 build, Intel Core i7-1165G7 (4 cores), 4 threads, default 512-token context. Ranges span three benchmark runs.
-
-| | English Q8_0 | Multilingual F16 | Typed decisions Q8_0 |
-| --- | --- | --- | --- |
-| Open the model | 0.11–0.14 s | 0.58–0.72 s | 0.10–0.14 s |
-| Request with 3 short questions (median) | 1.5–1.8 s | 0.4–0.6 s | 1.5 s |
-| One question near the 512-token limit (median) | 6.6–7.9 s | 2.0–2.2 s | 6.2–6.4 s |
-| Memory of one open engine | 0.6 GiB | 1.2 GiB | 0.6 GiB |
-
-Each question is one model pass, so time grows with the number of questions and the length of the text. Method, more measurements and how to reproduce them: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
-
-## Accuracy
-
-Each model is checked against results recorded with the original Laya implementation (29 answers per model): input token counts must match exactly and probabilities must stay within 0.05. In the 0.2.0 qualification run on Linux x86-64, the largest probability difference was 0.037 for the English model (mean 0.007), 0.003 for the multilingual model (mean 0.0004) and 0.046 for the typed-decisions model (mean 0.006). Other platforms: [docs/PLATFORMS.md](docs/PLATFORMS.md#numerical-results-across-platforms).
+On a 4-core laptop CPU (Intel Core i7-1165G7, 4 threads), a request with three short questions took 1.5 to 1.8 s with the English model and 0.4 to 0.6 s with the multilingual one (0.2.0-era builds); each question is one model pass, so time grows with the number of questions and the length of the text ([performance](docs/PERFORMANCE.md)). Every release checks each model against results recorded with the original Laya implementation, with probabilities within 0.05 ([accuracy](docs/PERFORMANCE.md#accuracy-against-the-original-laya)).
 
 ## Documentation
 
@@ -128,9 +115,3 @@ Each model is checked against results recorded with the original Laya implementa
 ## Licence and security
 
 The code is MIT. The packages also carry Apache-2.0 components, and the Laya models are Apache-2.0; see [third-party notices](THIRD_PARTY_NOTICES.md). Treat model files as trusted code and report vulnerabilities privately: [SECURITY.md](SECURITY.md). This project is independent of the upstream Laya authors.
-
-## Alternatives
-
-- [Official Laya / laya-ts](https://github.com/NandhaKishorM/laya/tree/main/laya-ts): richer TypeScript workflows and an ONNX browser path.
-- [LibLayaX](https://github.com/DaragonTech/LibLayaX), [RLaya](https://github.com/DaragonTech/RLaya), [laya.cpp](https://github.com/lkarlslund/laya.cpp): native C, Rust and C++ runtimes.
-- [laya-rust (Candle)](https://github.com/aovestdipaperino/laya-rust), [laya-rust (GGUF)](https://github.com/zerodegress/laya-rust), [receptron/laya](https://github.com/receptron/laya): Rust inference and another Node/ONNX integration.

@@ -10,7 +10,7 @@ Fixes go into the next release; released files are never replaced. Before 1.0 on
 
 ## Verify a download
 
-Every file of a GitHub release is listed in its `SHA256SUMS` and has a GitHub (Sigstore) attestation that binds it to the release and its qualification report. Verify a file with the GitHub CLI, pinning the workflow that signs releases:
+Every other file of a GitHub release is listed in its `SHA256SUMS`, and every listed file except the qualification report `gates.json` has a GitHub (Sigstore) attestation that binds it to the release and to that report (the attestation records the hash of `gates.json`). Verify a file with the GitHub CLI, pinning the workflow that signs releases:
 
 ```sh
 gh attestation verify FILE -R adrian729/ducktape-laya \

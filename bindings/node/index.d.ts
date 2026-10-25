@@ -42,7 +42,7 @@ export interface StructuredRequest { state: Json; schema: DecisionSchema; boolea
 export interface StructuredResult extends Result { values: Record<string, string | number | boolean> }
 export interface ObserverEvent { event: 'start' | 'end' | 'error'; request_id: number; status: number; elapsed_ms: number }
 export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; onEvent?: (event: ObserverEvent) => void | Promise<void> }
-/** `threads`, `contextTokens`, `overflow` and `temperatures` become the native open config; `contextTokens` is the prompt capacity (default 512, max the model's trained length). */
+/** `threads` (0 automatic: at most 4 and at most the CPUs the process may use, or 1..256), `contextTokens`, `overflow` and `temperatures` become the native open config; `contextTokens` is the prompt capacity (default 512, max the model's trained length). */
 export interface OpenOptions { threads?: number; contextTokens?: number; overflow?: Overflow; temperatures?: Record<string, number>; maxPending?: number; addonPath?: string }
 /** `requestId` (non-negative safe integer) is reported as `request_id` in events; defaults to a generated id. */
 export interface ExecuteOptions extends CallOptions { requestId?: number }

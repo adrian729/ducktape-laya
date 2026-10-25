@@ -9,7 +9,7 @@ namespace Ducktape.Laya;
 /// <summary>Open-time engine settings; unset members are omitted so the native defaults apply.</summary>
 public sealed class LayaConfig
 {
-    /// <summary>0 selects automatically (capped at 4); otherwise 1..256.</summary>
+    /// <summary>0 selects automatically (at most 4 and at most the CPUs the process may use); otherwise 1..256.</summary>
     public int Threads { get; init; }
     /// <summary>Prompt capacity; must be positive here. The native range (at least 32, at most the model's trained length) is checked on open (status 1).</summary>
     public int? ContextTokens { get; init; }

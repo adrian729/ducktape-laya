@@ -56,6 +56,14 @@ Each model was trained with prompts up to its trained length (table above). Open
 
 Only the three pinned files are qualified. Another Laya-format GGUF may open, but it needs its own tokenizer, calibration and decision checks before you rely on it. A higher-precision English variant (BF16) and larger checkpoints are on the [roadmap](ROADMAP.md#higher-precision-model-variants).
 
+## Other Laya runtimes
+
+Other projects run Laya models too; they are independent of ducktape-laya and not tested here.
+
+- [Official Laya / laya-ts](https://github.com/NandhaKishorM/laya/tree/main/laya-ts): richer TypeScript workflows and an ONNX browser path.
+- [LibLayaX](https://github.com/DaragonTech/LibLayaX), [RLaya](https://github.com/DaragonTech/RLaya), [laya.cpp](https://github.com/lkarlslund/laya.cpp): native C, Rust and C++ runtimes.
+- [laya-rust (Candle)](https://github.com/aovestdipaperino/laya-rust), [laya-rust (GGUF)](https://github.com/zerodegress/laya-rust), [receptron/laya](https://github.com/receptron/laya): Rust inference and another Node/ONNX integration.
+
 ## Licences
 
 The upstream model card declares Apache-2.0 for all three checkpoints; the multilingual model is fine-tuned from mmBERT-base, which its model card declares MIT. An application that distributes a model must include the Apache-2.0 text and the attribution in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).

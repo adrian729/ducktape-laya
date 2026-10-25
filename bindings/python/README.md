@@ -8,7 +8,7 @@ Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Python: ask n
 pip install ducktape-laya
 ```
 
-Requirements: Python 3.10+. The 0.2.0 wheel is `manylinux_2_38_x86_64`: Linux x86-64 with AVX2, FMA, F16C, BMI2 and SSE4.2 and glibc 2.38+ (Ubuntu 24.04+). From the next release there are also `manylinux_2_38_aarch64` (Armv8.2-A with dot product and FP16) and `win_amd64` (needs the Microsoft Visual C++ Redistributable) wheels. Full matrix: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md).
+Requirements: Python 3.10+. The 0.2.0 wheel is `manylinux_2_38_x86_64`: Linux x86-64 with AVX, AVX2, FMA, F16C, BMI2 and SSE4.2 and glibc 2.38+ (Ubuntu 24.04+). From the next release there are also `manylinux_2_38_aarch64` (Armv8.2-A with dot product and FP16) and `win_amd64` (needs the Microsoft Visual C++ Redistributable) wheels. Full matrix: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md).
 
 Download the model separately and check its hash ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
@@ -33,7 +33,7 @@ Requests are JSON values or JSON strings (a string is sent as is); results are p
 
 Open options are keyword-only and omitted when unset: `Engine.open(path, threads=0, context_tokens=None, temperatures=None, overflow=None)`.
 
-- `threads`: 0 (automatic, at most 4) or 1–256.
+- `threads`: 0 (automatic: at most 4 and at most the CPUs the process may use) or 1–256.
 - `context_tokens`: the prompt capacity, default 512, at most the model's trained length.
 - `temperatures`: calibration overrides such as `{"choice": 1.5, "noul.2": 0.8}`; positive and finite.
 - `overflow`: the default policy for prompts over the limit: `"reject"` (default), `"truncate_end"`, `"truncate_start"` or `"scan"`; a request's own `overflow` wins.
