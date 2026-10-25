@@ -10,6 +10,7 @@ CHANGELOG.md "Unreleased" section (or its current version's) renders too.
 """
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -79,10 +80,30 @@ def main():
         output = root / 'notes.md'
         result = run(root, '--output', output)
         check(result.returncode == 0 and output.read_text() == run(root).stdout, '--output writes the same text')
-    # The repository's own text: Unreleased between releases, the version's section in the release commit.
+    # The release commit leaves an empty "## Unreleased" heading above "## X.Y.Z (date)" (the docs link to its anchor):
+    # the version's section is rendered when it exists, Unreleased only when it has content.
+    with tempfile.TemporaryDirectory() as directory:
+        root = pathlib.Path(directory)
+        (root / 'release').mkdir()
+        (root / 'release/compatibility.json').write_text(json.dumps({'package_version': '1.2.3', 'targets': [{'platform': 'linux-x64', 'tier': 1}]}))
+        (root / 'CHANGELOG.md').write_text(CHANGELOG.replace('- Preview entry.\n\n', ''))
+        result = run(root, '--version', '1.2.3')
+        check(result.returncode == 0 and 'Notes in' in result.stdout, f'renders the version beside an empty Unreleased: {result.stderr}')
+        check(run(root, '--section', 'Unreleased').returncode != 0, 'an empty Unreleased section is refused')
+        # --commit reads the tagged commit, not the working tree.
+        git = lambda *args: subprocess.run(['git', '-C', directory, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', *args], capture_output=True, text=True, check=True)
+        git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'release'); git('tag', 'v1.2.3')
+        (root / 'CHANGELOG.md').write_text(CHANGELOG.replace('Notes in', 'Edited after the tag in'))
+        result = run(root, '--commit', 'v1.2.3', '--version', '1.2.3')
+        check(result.returncode == 0 and 'Notes in' in result.stdout and 'Edited after' not in result.stdout, f'--commit reads the tag: {result.stderr}')
+        check('Edited after' in run(root).stdout, 'the working tree is read without --commit')
+        result = run(root, '--commit', 'v9.9.9')
+        check(result.returncode != 0 and 'cannot read' in result.stderr, 'an unknown commit is refused')
+    # The repository's own text: the version's section once the release commit names it, Unreleased between releases.
     changelog = (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')
     version = json.loads((ROOT / 'release/compatibility.json').read_text())['package_version']
-    args = ['--section', 'Unreleased'] if '\n## Unreleased\n' in changelog else ['--version', version]
+    versioned = re.search(rf'(?m)^## {re.escape(version)}(?: \(\d{{4}}-\d{{2}}-\d{{2}}\))?$', changelog)
+    args = ['--version', version] if versioned else ['--section', 'Unreleased']
     result = run(ROOT, *args)
     check(result.returncode == 0 and '](docs/' not in result.stdout and '](#' not in result.stdout,
           f'renders the repository CHANGELOG with absolute links: {result.stderr}')
