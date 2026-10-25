@@ -213,9 +213,9 @@ try:
     # Fault injection uses Linux process controls (prctl, rlimits); CMake registers it on Linux only.
     if linux: required.add('ggml-faults')
     else: report['skipped']['ggml-faults'] = 'fault injection uses Linux process controls (rlimits, fork); registered on Linux only'
-    if model and linux: required |= {'real-faults', 'real-c-faults', 'real-runtime-faults'}
+    if model and linux: required |= {'real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults'}
     elif model:
-        for name in ('real-faults', 'real-c-faults', 'real-runtime-faults'):
+        for name in ('real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults'):
             report['skipped'][name] = 'fault injection uses Linux process controls (prctl, rlimits); registered on Linux only'
     # The emulated-CPU guard test exercises the x86-64 AVX2 guard under QEMU user mode (Linux only).
     if model and linux and platform.machine() in ('x86_64', 'AMD64'): required |= {'cpu-guard'}
@@ -281,6 +281,10 @@ try:
         extra_gate(name, 'tokenizer', f'tokenizer-{name}',
                    [build / ('laya-tokenizer-tests' + EXE), ROOT / 'tests/fixtures/tokenizer-partition.txt', extra])
         extra_gate(name, 'decision_head', f'decision-head-{name}', [build / ('laya-decision-head-tests' + EXE), extra])
+        # A deadline or cancellation stops tokenization of newline-separated lines (every newline
+        # is a special token in the multilingual vocabulary); real-control-tokenize has only the primary.
+        extra_gate(name, 'control_tokenize', f'control-tokenize-{name}',
+                   [build / ('laya-control-tokenize-tests' + EXE), model or extra, extra])
         extra_gate(name, 'original_reference', f'original-reference-{name}',
                    [sys.executable, ROOT / 'tests/original-reference.py', extra, '--build-dir', build,
                     '--cases', ROOT / extra_manifest['original_reference_cases'], '--report', out / f'original-reference-{name}.json'])
