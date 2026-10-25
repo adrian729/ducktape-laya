@@ -108,6 +108,10 @@ CATEGORIES['browser'] = list(dict.fromkeys(CATEGORIES['browser']))
 # --------------------------------------------------------------------------------------------
 _RELEASE_SUPPORT = ['scripts/release_support.py']
 _DOCS = ['*.md', 'docs/*']
+# What scripts/validate.py loads or runs by path: a check that loads validate.py depends on them.
+_VALIDATE = ['scripts/validate.py', 'scripts/check-policy.py', 'scripts/ci_paths.py', 'scripts/check-abi.py', 'scripts/check-binary.py',
+             'scripts/check-reproducibility.py', 'scripts/package-native.py', 'scripts/download-model.py', 'scripts/artifact_support.py',
+             'scripts/java_package.py', 'scripts/python_wheel.py', 'scripts/sbom.py', 'scripts/release_targets.py']
 POLICY_CHECKS = {
     'result-comparison': ['tests/result-comparison.py', 'scripts/compare_results.py', 'tests/compare-browser.py', 'tests/compare-profiles.py',
                           'tests/compare-browser-reference.py'] + _RELEASE_SUPPORT,
@@ -125,7 +129,8 @@ POLICY_CHECKS = {
     'packaging-identities': ['tests/packaging-identity.py', 'cmake/*', 'CMakeLists.txt', 'bindings/*/pom.xml', 'bindings/*/pyproject.toml',
                              'bindings/node/*', 'bindings/browser/*', 'scripts/artifact_support.py', 'scripts/package-native.py',
                              'scripts/package-browser.py', 'scripts/build-browser.py', 'scripts/java_package.py', 'scripts/python_wheel.py',
-                             'scripts/sbom.py', 'licenses/*', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'release/*'] + _RELEASE_SUPPORT,
+                             'scripts/sbom.py', 'scripts/check-binary.py', 'licenses/*', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
+                             'release/*'] + _RELEASE_SUPPORT,
     'package-assembly': ['tests/package-assembly.py', 'scripts/assemble-packages.py', 'scripts/package-native.py', 'scripts/artifact_support.py',
                          'scripts/java_package.py', 'scripts/python_wheel.py', 'scripts/sbom.py', 'bindings/*/package.json',
                          'bindings/*/pom.xml', 'bindings/*/pyproject.toml', 'bindings/*/*.csproj', 'bindings/*/Cargo.toml',
@@ -136,7 +141,7 @@ POLICY_CHECKS = {
                         'scripts/artifact_support.py', 'scripts/assemble-packages.py', 'scripts/fetch-ci-evidence.py',
                         'scripts/compare_results.py', 'scripts/java_package.py', 'scripts/python_wheel.py', 'scripts/package-native.py',
                         'scripts/sbom.py', 'scripts/performance-budgets.py', 'tests/reference_requests.py', 'bindings/*/package.json', 'include/ducktape_laya.h', 'release/*',
-                        'models/*.json'] + _RELEASE_SUPPORT + _DOCS,
+                        'models/*.json'] + _VALIDATE + _RELEASE_SUPPORT + _DOCS,
     'release-assets': ['tests/release-assets.py', 'tests/release_world.py', 'scripts/release-assets.py', 'scripts/check-release-assets.sh',
                        'scripts/check-release-run.py', 'scripts/fetch-ci-evidence.py', 'scripts/pypi-missing-wheels.py',
                        'scripts/registry-state.py', 'scripts/release-gates.jq', 'scripts/verify-release-assets.sh',
@@ -151,16 +156,14 @@ POLICY_CHECKS = {
     'runtime-sources': ['tests/runtime-sources.py', 'cmake/*', 'CMakeLists.txt', 'release/compatibility.json'] + _RELEASE_SUPPORT,
     'merge-validation': ['tests/merge-validation.py', 'tests/merge-validation-files.json', 'scripts/merge-validation.py',
                          'scripts/release_targets.py', 'scripts/validate.py', 'scripts/artifact_support.py', 'release/*'] + _RELEASE_SUPPORT,
-    'validate': ['tests/validate.py', 'scripts/validate.py', 'scripts/check-policy.py', 'scripts/ci_paths.py',
-                 'release/*'] + _RELEASE_SUPPORT,
+    'validate': ['tests/validate.py', 'release/*'] + _VALIDATE + _RELEASE_SUPPORT,
     'check-sanitizers': ['tests/check-sanitizers.py', 'scripts/check-sanitizers.py'] + _RELEASE_SUPPORT,
     'verify': ['tests/verify.py', 'scripts/verify.py', 'scripts/ci_paths.py', 'scripts/ci-changes.py'],
     'qualify-host': ['tests/qualify-host.py', 'scripts/qualify-host.py', 'scripts/check-candidate.py', 'release/*', 'models/*.json',
                      # what check-candidate.py imports (the test reads its reuse rules)
                      'scripts/release_support.py', 'scripts/artifact_support.py', 'scripts/release_targets.py',
                      'scripts/performance-budgets.py'],
-    'ci-contracts': ['tests/ci-contracts.py', '.github/*', 'scripts/ci_paths.py', 'scripts/check-policy.py', 'scripts/validate.py',
-                     'scripts/release_targets.py'] + _RELEASE_SUPPORT,
+    'ci-contracts': ['tests/ci-contracts.py', '.github/*'] + _VALIDATE + _RELEASE_SUPPORT,
 }
 # The checks bindings-<P> runs in the candidate (`validate.py --checks policy-platform`); check-policy.py --platform-only.
 PLATFORM_POLICY_CHECKS = ('abi-layouts', 'packaging-identities', 'browser-backend-identities', 'typescript-consumers')

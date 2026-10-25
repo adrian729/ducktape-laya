@@ -137,7 +137,8 @@ class DryRun(unittest.TestCase):
 
     def test_cpu_pinning(self):
         self.assertIn('[taskset -c 3,7, background]', self.step('soak'))
-        self.assertIn('--seconds 28800', self.step('soak'))
+        budgets = json.loads((ROOT / 'release/qualification.json').read_text())['budgets']
+        self.assertIn(f"--seconds {budgets['candidate_soak_seconds']} --min-rounds {budgets['candidate_soak_rounds']}", self.step('soak'))
         for name in ('reproducibility', 'model-upgrade', 'browser', 'userspaces', 'cross-cpu'):
             self.assertIn('[taskset -c 0-2,4-6]', self.step(name))
         upgrade = self.step('model-upgrade')
