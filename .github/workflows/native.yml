@@ -2288,8 +2288,7 @@ jobs:
           print(build.name, result)
           PY
           done
-      # tests/benchmark.py measures RSS with the Unix-only resource module; the step records
-      # whatever it gets on Windows without failing the experiment.
+      # An experiment: a failing benchmark does not fail the job; the logs and any reports are kept.
       - name: Benchmark with the product flags and with /clang:-O3
         continue-on-error: true
         run: |

@@ -15,7 +15,6 @@ import json
 import os
 import pathlib
 import platform
-import resource
 import shutil
 import statistics
 import subprocess
@@ -101,22 +100,77 @@ def summary(samples, count):
             'questions_per_second': count * len(samples) / sum(samples)}
 
 MACOS = sys.platform == 'darwin'
+WINDOWS = sys.platform == 'win32'
+if not WINDOWS:
+    import resource  # Unix only
+
+if WINDOWS:
+    from ctypes import wintypes as w
+    class ProcessMemoryCounters(c.Structure):
+        _fields_ = [('cb', w.DWORD), ('PageFaultCount', w.DWORD)] + [(name, c.c_size_t) for name in (
+            'PeakWorkingSetSize', 'WorkingSetSize', 'QuotaPeakPagedPoolUsage', 'QuotaPagedPoolUsage',
+            'QuotaPeakNonPagedPoolUsage', 'QuotaNonPagedPoolUsage', 'PagefileUsage', 'PeakPagefileUsage')]
+    class ThreadEntry(c.Structure):
+        _fields_ = [('dwSize', w.DWORD), ('cntUsage', w.DWORD), ('th32ThreadID', w.DWORD), ('th32OwnerProcessID', w.DWORD),
+                    ('tpBasePri', w.LONG), ('tpDeltaPri', w.LONG), ('dwFlags', w.DWORD)]
+    kernel32 = c.WinDLL('kernel32', use_last_error=True)
+    psapi = c.WinDLL('psapi', use_last_error=True)
+    kernel32.GetCurrentProcess.restype = w.HANDLE
+    kernel32.CreateToolhelp32Snapshot.restype = w.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [w.DWORD, w.DWORD]
+    kernel32.Thread32First.argtypes = kernel32.Thread32Next.argtypes = [w.HANDLE, c.POINTER(ThreadEntry)]
+    kernel32.CloseHandle.argtypes = [w.HANDLE]
+    kernel32.GetProcessHandleCount.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
+    psapi.GetProcessMemoryInfo.argtypes = [w.HANDLE, c.POINTER(ProcessMemoryCounters), w.DWORD]
+
+    def memory_counters():
+        counters = ProcessMemoryCounters()
+        counters.cb = c.sizeof(counters)
+        if not psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), c.byref(counters), counters.cb):
+            raise c.WinError(c.get_last_error())
+        return counters
+
+    def handle_count():
+        count = w.DWORD()
+        if not kernel32.GetProcessHandleCount(kernel32.GetCurrentProcess(), c.byref(count)):
+            raise c.WinError(c.get_last_error())
+        return count.value
+
+    def thread_count():
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x4, 0)  # TH32CS_SNAPTHREAD: every thread of the system
+        if snapshot in (None, w.HANDLE(-1).value):
+            raise c.WinError(c.get_last_error())
+        try:
+            entry, count = ThreadEntry(), 0
+            entry.dwSize = c.sizeof(entry)
+            more = kernel32.Thread32First(snapshot, c.byref(entry))
+            while more:
+                count += entry.th32OwnerProcessID == os.getpid()
+                more = kernel32.Thread32Next(snapshot, c.byref(entry))
+            return count
+        finally:
+            kernel32.CloseHandle(snapshot)
 
 def ps(*args):
     return subprocess.run(['ps', *args, '-p', str(os.getpid())], check=True, capture_output=True, text=True).stdout
 
 def rss_kib():
+    if WINDOWS: return memory_counters().WorkingSetSize // 1024
     if MACOS: return int(ps('-o', 'rss=').split()[0])
     for line in pathlib.Path('/proc/self/status').read_text().splitlines():
         if line.startswith('VmRSS:'): return int(line.split()[1])
 
 def resources():
+    if WINDOWS:  # handles stand in for descriptors
+        return {'rss_kib': rss_kib(), 'descriptors': handle_count(), 'threads': thread_count()}
     if MACOS:  # /dev/fd lists this process's descriptors; `ps -M` prints one row per thread after a header
         return {'rss_kib': rss_kib(), 'descriptors': len(os.listdir('/dev/fd')), 'threads': len(ps('-M').splitlines()) - 1}
     return {'rss_kib': rss_kib(), 'descriptors': len(os.listdir('/proc/self/fd')),
             'threads': len(os.listdir('/proc/self/task'))}
 
 def cpu_model():
+    if WINDOWS:
+        return os.environ.get('PROCESSOR_IDENTIFIER') or platform.processor() or 'unknown'
     if MACOS:
         return subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True).stdout.strip() or 'unknown'
     return next((line.split(':', 1)[1].strip() for line in pathlib.Path('/proc/cpuinfo').read_text().splitlines() if line.startswith('model name')), 'unknown')
@@ -129,7 +183,7 @@ report = {'schema_version': 2, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
                         for name, r in WORKLOADS.items()},
           'threads': a.threads, 'samples': a.samples, 'system': platform.platform(), 'logical_cpus': os.cpu_count(),
           'cpu_model': cpu_model(),
-          'load_before': os.getloadavg(),
+          'load_before': os.getloadavg() if hasattr(os, 'getloadavg') else None,
           'notes': ['Fresh process; warm OS file cache after hash verification; sequential calls unless stated.',
                     'Host is not isolated; timings are a retained sample, not a service-level guarantee.',
                     'Latency includes C ABI JSON parsing/serialization; Python result decoding is excluded.']}
@@ -237,13 +291,20 @@ try:
 finally:
     shutil.rmtree(links, ignore_errors=True)
 report['resources_final'] = resources()
-# ru_maxrss is KiB on Linux and bytes on macOS
-report['peak_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // (1024 if MACOS else 1)
+# ru_maxrss is KiB on Linux and bytes on macOS; Windows reports the peak working set in bytes
+if WINDOWS:
+    report['peak_rss_kib'] = memory_counters().PeakWorkingSetSize // 1024
+else:
+    report['peak_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // (1024 if MACOS else 1)
 report['leaks'] = {key: report['resources_final'][key] - baseline[key] for key in ('descriptors', 'threads')}
-report['load_after'] = os.getloadavg()
+report['load_after'] = os.getloadavg() if hasattr(os, 'getloadavg') else None
 # macOS: the libdispatch pool behind Accelerate grows and shrinks on its own (observed 1-2 extra workers after the
 # warm-up), so thread counts there are recorded but not gated; descriptors still are.
-if MACOS:
+if WINDOWS:
+    # No Windows baseline yet (the experiment job's first runs): handle and thread counts are recorded, not gated.
+    report['skipped_checks'] = {'handle_and_thread_leaks': 'Windows: recorded for a first baseline; leaks holds the raw differences'}
+    report['status'] = 'passed'
+elif MACOS:
     report['skipped_checks'] = {'thread_leak': 'libdispatch/Accelerate worker threads vary on macOS; leaks.threads is the raw difference'}
     report['status'] = 'passed' if report['leaks']['descriptors'] == 0 else 'failed'
 else:
