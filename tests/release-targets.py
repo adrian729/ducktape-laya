@@ -20,7 +20,17 @@ matrix's included; evidence reused from an ancestor fails when one of its gate's
 own inputs changed since (fixtures for fuzz, routing references for sanitizers,
 package manifests for the security review), and stress, soak and fuzz must meet
 the candidate's budgets; an additional model without its tokenization-stop run fails the
-native contracts; an untracked module under scripts/ makes the checker dirty."""
+native contracts; an untracked module under scripts/ makes the checker dirty.
+
+Evidence profiles (M1, F2): a validation report is evidence only for its profile (host-full for this host's
+validate.py --full run, ci-full for a target's merged CI report, ci-compiler for the CI clang entry of the native
+matrix); the Profiles class refuses, for each rule, a report that breaks it (a generic run, a missing or failed
+check or policy run, dev options, a cache on the host build, an incomplete ctest run, a merge with a shard missing,
+a ci-compiler report with packages, a host report claiming ci-full, a host-full report from GitHub Actions, the
+retired installed suite). The CI qualify run's reports count only through ci-run.json qualify_run; the soak serves the
+stress gate with its rounds floor; the browser pages pass their own stage lists and agree on primitive.json.
+
+A World is built once per class (it runs the real package assembly) and cloned per test."""
 import json
 import os
 import pathlib
@@ -34,17 +44,27 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT / 'tests'))
 from release_support import git, sha256, source_identity  # noqa: E402
-from release_targets import Context, evaluate_targets, run_gate, target_gates  # noqa: E402
+from release_targets import (PLATFORM_POLICY, POLICY_LABELS, Context, Mismatch, evaluate_targets, require_complete_validation,  # noqa: E402
+                             run_gate, target_gates)
 from release_world import World, digest  # noqa: E402
 
 TIER2 = ('linux-arm64', 'windows-x64')
 
 
 class Targets(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.template_directory = tempfile.TemporaryDirectory(prefix='ducktape-targets-template-')
+        cls.template = World(cls.template_directory.name, 'a' * 40, 's' * 64)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.template_directory.cleanup()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='ducktape-targets-')
         self.addCleanup(self.temp.cleanup)
-        self.world = World(self.temp.name, 'a' * 40, 's' * 64)
+        self.world = self.template.clone(self.temp.name)
 
     def statuses(self, platform):
         ctx = Context(self.world.commit, self.world.source, self.world.record, self.world.policy, ROOT, self.world.paths)
@@ -159,6 +179,9 @@ class Targets(unittest.TestCase):
         cases = {'kind': (lambda r: r.update(kind='routine_stress'), 'below budget'),
                  'budget': (lambda r: r.update(qualification_budget_met=False), 'below budget'),
                  'seconds': (lambda r: r.update(requested_seconds=60), 'shorter than the budget'),
+                 # The candidate's own rounds floor, whatever the run was measured against.
+                 'rounds': (lambda r: r['result'].update(rounds=self.world.policy['budgets']['short_stress_rounds'] - 1), 'fewer than the budget'),
+                 'no rounds': (lambda r: r.pop('result'), 'None rounds'),
                  'platform': (lambda r: r.update(target_platform='linux-x64'), 'ran on linux-x64'),
                  'model': (lambda r: r.update(model_sha256='0' * 64), 'another model'),
                  'failed': (lambda r: r.update(status='failed'), 'below budget')}
@@ -169,29 +192,24 @@ class Targets(unittest.TestCase):
                 self.assertGate('windows-x64', 'short_stress', 'failed', message)
 
     def test_reproducibility(self):
-        self.world.edit('reproducibility-windows-x64/report.json', lambda r: r.update(differences=['bin/ducktape_laya.dll']))
-        self.assertGate('windows-x64', 'reproducibility', 'failed', 'differ')
-        self.setUp()
-        self.world.edit('reproducibility-linux-arm64/report.json', lambda r: r.update(target_platform='windows-x64'))
-        self.assertGate('linux-arm64', 'reproducibility', 'failed', 'ran on windows-x64')
-
-    def test_reproduced_addon(self):
-        # Every reproduced build must hold the validated Node addon too, not only the library.
         def other_addon(report):
             for files in report['builds'].values():
                 files['lib/ducktape-laya/node/ducktape_laya.node'] = {'sha256': 'f' * 64, 'mode': 420}
-        self.world.edit('reproducibility-windows-x64/report.json', other_addon)
-        self.assertGate('windows-x64', 'reproducibility', 'failed', 'does not contain the validated addon')
-        self.world.edit('reproducibility-linux-arm64/report.json',
-                        lambda r: r['builds']['second'].pop('lib/ducktape-laya/node/ducktape_laya.node'))
-        self.assertGate('linux-arm64', 'reproducibility', 'failed', 'reproduced second build does not contain the validated addon')
-
-    def test_reproduced_in_another_environment(self):
-        self.world.edit('evidence-windows-x64/report.json', lambda r: r.update(build_environment={'ImageVersion': '20261007.264'}))
-        self.world.edit('reproducibility-windows-x64/report.json', lambda r: r.update(build_environment={'ImageVersion': '20261021.278'}))
-        self.assertGate('windows-x64', 'reproducibility', 'failed', 'toolchain environment')
-        self.world.edit('reproducibility-windows-x64/report.json', lambda r: r.update(build_environment={'ImageVersion': '20261007.264'}))
-        self.assertGate('windows-x64', 'reproducibility', 'passed')
+        # Every reproduced build must hold the validated library and Node addon, on the validated build's runner image.
+        cases = {'differences': ('windows-x64', lambda r: r.update(differences=['bin/ducktape_laya.dll']), 'differ'),
+                 'platform': ('linux-arm64', lambda r: r.update(target_platform='windows-x64'), 'ran on windows-x64'),
+                 'addon': ('windows-x64', other_addon, 'does not contain the validated addon'),
+                 'second addon': ('linux-arm64', lambda r: r['builds']['second'].pop('lib/ducktape-laya/node/ducktape_laya.node'),
+                                  'reproduced second build does not contain the validated addon'),
+                 'environment': ('windows-x64', lambda r: r.update(build_environment={'ImageVersion': '20261021.278'}), 'toolchain environment')}
+        for label, (platform, change, message) in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                for path in (f'evidence-{platform}/report.json', f'reproducibility-{platform}/report.json'):
+                    self.world.edit(path, lambda r: r.update(build_environment={'ImageVersion': '20261007.264'}))
+                self.assertGate(platform, 'reproducibility', 'passed')
+                self.world.edit(f'reproducibility-{platform}/report.json', change)
+                self.assertGate(platform, 'reproducibility', 'failed', message)
 
     def test_deviations(self):
         self.world.edit('evidence-linux-arm64/original-reference.json', lambda r: r['summary'].update(known_deviations_used=['json_escaping/spam']))
@@ -229,11 +247,12 @@ class Targets(unittest.TestCase):
                     self.assertGate('linux-arm64', 'installed_packages', 'failed', message)
 
     def test_native_contracts_registration(self):
-        self.world.edit('evidence-linux-arm64/report.json', lambda r: r['ctest_registered'].remove('real-faults'))
+        unregister = lambda name: lambda r: (r['ctest_registered'].remove(name), r['ctest_ran'].remove(name))
+        self.world.edit('evidence-linux-arm64/report.json', unregister('real-faults'))
         self.assertGate('linux-arm64', 'native_contracts', 'failed', 'not registered')
         self.world.edit('evidence-windows-x64/report.json', lambda r: r['skipped'].pop('real-c-faults'))
         self.assertGate('windows-x64', 'native_contracts', 'failed', 'neither ran nor was reported as skipped')
-        self.world.edit('evidence-windows-x64/report.json', lambda r: r['ctest_registered'].remove('real-control'))
+        self.world.edit('evidence-windows-x64/report.json', unregister('real-control'))
         self.assertGate('windows-x64', 'native_contracts', 'failed', 'not registered')
 
     def test_skipped_required_tests_fail(self):
@@ -253,14 +272,8 @@ class Targets(unittest.TestCase):
                     self.assertIn(message, result.get('detail', ''))
 
     def test_platform_inapplicable_checks_are_not_skips(self):
-        # Checks that do not exist on a platform print NOT APPLICABLE and are not recorded; the world's Windows report
-        # (like a fixed validate.py run) has none and passes. Reports from before that fix recorded them as '(partly)'.
-        old = {'real-control (partly)': 'SKIPPED: the automatic thread count probe reads the affinity mask and /proc (Linux only)',
-               'real-features (partly)': 'SKIPPED: no-logits resident-set check (reads VmRSS; Linux only); '
-                                         'SKIPPED: allocation count of the shared state (counts operator new; Linux, not sanitized)'}
+        # Checks that do not exist on a platform print NOT APPLICABLE and are not recorded; the world's Windows report has none.
         self.assertGate('windows-x64', 'native_contracts', 'passed')
-        self.world.edit('evidence-windows-x64/report.json', lambda r: r['skipped'].update(old))
-        self.assertGate('windows-x64', 'native_contracts', 'failed', 'required tests skipped')
         # A check the host prevented still fails, on any platform.
         for platform in TIER2:
             self.setUp()
@@ -269,14 +282,15 @@ class Targets(unittest.TestCase):
             self.assertGate(platform, 'native_contracts', 'failed', 'required tests skipped')
 
     def test_incomplete_or_cached_validation(self):
-        # validate.py --bindings, --skip-native-tests and --compiler-launcher runs are not release evidence.
+        # Selected runs are not release evidence; a CI build may compile through its cache, as recorded and configured.
         cases = {'binding left out': (lambda r: r['skipped'].update(go='not selected (--bindings)'), 'left out go'),
-                 'parity left out': (lambda r: r['skipped'].update(bindings='every binding must agree'), 'left out bindings'),
-                 'native tests left out': (lambda r: r['skipped'].update(native='not run (--skip-native-tests)'), 'left out native'),
-                 'compiler cache': (lambda r: r.update(compiler_launcher='ccache'), 'compiler launcher ccache'),
+                 'parity left out': (lambda r: r['skipped'].update(bindings='not selected (--checks)'), 'left out bindings'),
+                 'native tests left out': (lambda r: r['skipped'].update(native='not selected (--checks)'), 'left out native'),
+                 'generic profile': (lambda r: r['selection'].update(profile='generic'), 'profile generic is not ci-full'),
                  # What the build directory was configured with, whatever validate.py was asked for.
-                 'configured launcher': (lambda r: r['build_options'].update(CMAKE_CXX_COMPILER_LAUNCHER='ccache'), 'configured with a compiler cache'),
-                 'ggml cache': (lambda r: r['build_options'].update(GGML_CCACHE='ON'), 'configured with a compiler cache'),
+                 'configured launcher': (lambda r: r['build_options'].update(CMAKE_CXX_COMPILER_LAUNCHER='sccache'), 'are not the recorded ccache'),
+                 'ggml cache': (lambda r: r['build_options'].update(GGML_CCACHE='ON'), 'GGML_CCACHE=ON'),
+                 'ccache base_dir': (lambda r: r['ccache_config'].update(base_dir='/home/runner'), 'base_dir'),
                  'no build options': (lambda r: r.pop('build_options'), 'no build_options recorded')}
         for label, (change, message) in cases.items():
             with self.subTest(label):
@@ -285,14 +299,148 @@ class Targets(unittest.TestCase):
                 for gate in ('native_contracts', 'abi', 'artifact_integrity'):
                     self.assertGate('linux-arm64', gate, 'failed', message)
         self.setUp()
-        self.world.edit('evidence-windows-x64/report.json', lambda r: r.update(compiler_launcher='none'))
+        self.world.edit('evidence-windows-x64/report.json', lambda r: (r.update(compiler_launcher='none'), r['build_options'].update(
+            CMAKE_C_COMPILER_LAUNCHER='', CMAKE_CXX_COMPILER_LAUNCHER='')))
         self.assertGate('windows-x64', 'native_contracts', 'passed')
+
+    def test_installed_packages_need_no_validation_gate(self):
+        # validate.py has no installed suite: the tier-2 gate reads the assembled packages' installed run only.
+        self.world.edit('evidence-linux-arm64/report.json', lambda r: r['gates']['installed_packages'].update(status='not_run'))
+        self.assertGate('linux-arm64', 'installed_packages', 'passed')
 
     def test_missing_evidence(self):
         self.world.paths.pop('linux-arm64:stress')
         self.assertGate('linux-arm64', 'short_stress', 'not_run')
         self.world.paths.pop('ci_run')
         self.assertGate('windows-x64', 'abi', 'not_run')
+
+
+class Profiles(unittest.TestCase):
+    """require_complete_validation per profile (§3.4): one mutation per rule, on the world's reports (no files)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.template_directory = tempfile.TemporaryDirectory(prefix='ducktape-profiles-')
+        cls.world = World(cls.template_directory.name, 'a' * 40, 's' * 64, platforms=('linux-x64',))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.template_directory.cleanup()
+
+    CALLS = {'host-full': ({'host-full'}, False), 'ci-full': ({'ci-full'}, True), 'ci-compiler': ({'host-full', 'ci-compiler'}, True)}
+
+    def refusal(self, profile, change, platform='linux-x64', call=None):
+        report = self.world.validation(platform, profile)
+        change(report)
+        profiles, cache_allowed = call or self.CALLS[profile]
+        try:
+            require_complete_validation(report, 'report', profiles=profiles, cache_allowed=cache_allowed)
+        except Mismatch as error:
+            return str(error)
+        return None
+
+    def test_consistent_reports_pass(self):
+        for profile in self.CALLS:
+            for platform in ('linux-x64', 'windows-x64'):
+                with self.subTest(profile=profile, platform=platform):
+                    self.assertIsNone(self.refusal(profile, lambda r: None, platform))
+
+    def test_every_rule(self):
+        def drop_runs(*labels):
+            return lambda r: [r['runs'].pop(label) for label in labels]
+        def fail_run(label):
+            return lambda r: r['runs'][label].update(exit_code=1)
+        cases = [
+            # M1: a generic or selected run, with or without passing checks, is no evidence.
+            ('ci-full', lambda r: r['selection'].update(profile='generic'), 'profile generic'),
+            ('host-full', lambda r: r['selection'].update(profile='selected'), 'profile selected'),
+            ('host-full', lambda r: r.pop('selection'), 'profile missing'),
+            ('host-full', lambda r: r.update(selected_checks='failed'), 'selected checks failed'),
+            ('ci-full', lambda r: r.update(error='bindings-a failed'), 'bindings-a failed'),
+            ('host-full', lambda r: r.update(phase='test'), 'phase test'),
+            ('ci-full', lambda r: r.update(phase='all'), 'phase all'),
+            # Missing or failed policy runs.
+            ('host-full', drop_runs('docs-links'), 'policy checks did not pass: docs-links'),
+            ('host-full', fail_run('release-targets'), 'policy checks did not pass: release-targets'),
+            ('host-full', lambda r: r['selection'].update(policy='platform'), 'without every policy check'),
+            ('ci-full', drop_runs('abi-layouts'), 'abi-layouts'),
+            ('ci-full', fail_run('packaging-identities'), 'packaging-identities (exit 1)'),
+            # F2.4: a merged ci-full report without the four platform policy runs (listed as covered by the tooling job).
+            ('ci-full', lambda r: [(r['runs'].pop(label), r['skipped'].update({f'policy:{label}': 'tooling job of the same run'}))
+                                   for label in PLATFORM_POLICY], 'did not run or pass'),
+            ('ci-full', lambda r: r['skipped'].pop('policy:docs-links'), 'neither run nor covered by the tooling job: docs-links'),
+            ('ci-full', lambda r: r['skipped'].update({'policy:docs-links': 'not selected (--policy platform)'}), 'not covered by the tooling job'),
+            # Required checks of every profile.
+            ('host-full', drop_runs('upstream-reference'), 'upstream-reference (missing)'),
+            ('host-full', fail_run('package-smoke'), 'package-smoke (exit 1)'),
+            ('ci-full', drop_runs('bindings-b'), 'bindings-b (missing)'),
+            ('ci-compiler', fail_run('go'), 'go (exit 1)'),
+            ('ci-full', lambda r: (r['runs'].pop('examples-smoke'), r['skipped'].update({'examples-smoke': 'compiles the examples with a POSIX driver'})),
+             'examples-smoke'),
+            # Merged reports missing a shard, or with shards that do not account for the checks.
+            ('ci-full', lambda r: r['checks'].remove('bindings'), 'merged checks'),
+            ('ci-full', lambda r: r['shards'].pop('native-linux-x64-bindings'), 'do not account for the checks'),
+            ('ci-full', lambda r: r['checks'].append('ctest'), 'merged checks'),
+            # F2.4: a ci-compiler report with package runs; a host report claiming ci-full; a host-full report from GitHub Actions.
+            ('ci-compiler', lambda r: r['runs'].update({'package': {'exit_code': 0}}), 'a ci-compiler report with package runs'),
+            ('ci-full', lambda r: r['host'].update(github_actions=False), 'not produced on GitHub Actions'),
+            ('host-full', lambda r: r['host'].update(github_actions=True), 'produced on GitHub Actions'),
+            ('host-full', lambda r: r.pop('host'), 'no host recorded'),
+            # The retired installed suite, as a skip or a run.
+            ('host-full', lambda r: r['skipped'].update(installed='loads the packages in every language'), 'retired suite installed'),
+            ('ci-full', lambda r: r['runs'].update(installed={'exit_code': 0}), 'retired suite installed'),
+            # Left-out suites per profile.
+            ('host-full', lambda r: r['skipped'].update(policy='not selected'), 'left out policy'),
+            ('ci-full', lambda r: r['skipped'].update(policy='not selected'), 'left out policy'),
+            ('ci-compiler', lambda r: r['skipped'].update(rust='not selected (--bindings)'), 'left out rust'),
+            ('host-full', lambda r: r['skipped'].update({'policy:verify': 'tooling job of the same run'}), 'policy checks left out'),
+            # Dev options, and their absence.
+            ('host-full', lambda r: r['build_options'].update(DUCKTAPE_DEV_BUILD='ON'), 'dev options'),
+            ('ci-full', lambda r: r['build_options'].update(DUCKTAPE_DEV_PCH='ON'), 'dev options'),
+            ('ci-compiler', lambda r: r['build_options'].pop('DUCKTAPE_DEV_PCH'), 'dev options'),
+            # ctest: every registered test ran (no -L subset), every required test is registered.
+            ('host-full', lambda r: r['ctest_ran'].remove('real-model'), 'ctest ran'),
+            ('ci-full', lambda r: r['ctest_ran'].clear(), 'ctest ran'),
+            ('ci-compiler', lambda r: (r['ctest_registered'].remove('real-features'), r['ctest_ran'].remove('real-features')),
+             'not registered'),
+            # Compiler caches: never on the host build, consistent and base_dir-free in CI, products never on the probe launcher.
+            ('host-full', lambda r: (r.update(compiler_launcher='ccache'), r['build_options'].update(
+                CMAKE_C_COMPILER_LAUNCHER='ccache', CMAKE_CXX_COMPILER_LAUNCHER='ccache')), 'compiler launcher ccache'),
+            ('host-full', lambda r: r['build_options'].update(CMAKE_CXX_COMPILER_LAUNCHER='ccache'), 'configured with a compiler cache'),
+            ('ci-full', lambda r: r['build_options'].update(GGML_CCACHE='ON'), 'GGML_CCACHE=ON'),
+            ('ci-full', lambda r: r.update(compiler_launcher='none'), 'are not the recorded none'),
+            ('ci-full', lambda r: r.update(ccache_config=None), 'base_dir'),
+            ('ci-full', lambda r: r.pop('launcher_guard'), 'no launcher guard'),
+            ('ci-full', lambda r: r['launcher_guard'].update(rule_launch='ccache'), 'no launcher guard'),
+            ('ci-full', lambda r: r['launcher_guard']['product_targets'].remove('ducktape_laya_node'), 'product targets'),
+            ('ci-full', lambda r: r['launcher_guard']['probe_targets'].update(llama='ccache'), 'probe launcher: llama'),
+        ]
+        for profile, change, message in cases:
+            with self.subTest(profile=profile, message=message):
+                refusal = self.refusal(profile, change)
+                self.assertIsNotNone(refusal)
+                self.assertIn(message, refusal)
+
+    def test_profiles_are_per_call_site(self):
+        # check-candidate.native() takes only host-full, uncached; a CI target only ci-full; the native matrix both kinds.
+        self.assertIn('profile ci-full is not host-full', self.refusal('ci-full', lambda r: None, call=({'host-full'}, False)))
+        self.assertIn('profile host-full is not ci-full', self.refusal('host-full', lambda r: None, call=({'ci-full'}, True)))
+        self.assertIn('profile ci-compiler is not ci-full', self.refusal('ci-compiler', lambda r: None, call=({'ci-full'}, True)))
+        # A CI report with a cache where the call site allows none.
+        self.assertIn('compiler launcher ccache', self.refusal('ci-full', lambda r: None, call=({'ci-full'}, False)))
+        # The Windows-only examples skip with its reason passes, on Windows only.
+        windows = lambda r: None
+        self.assertIsNone(self.refusal('ci-full', windows, 'windows-x64'))
+        self.assertIn('examples-smoke', self.refusal('ci-full', lambda r: r['skipped'].update({'examples-smoke': 'other reason'}), 'windows-x64'))
+
+    def test_hard_coded_lists_agree_with_validate(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('validate', ROOT / 'scripts/validate.py')
+        validate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validate)
+        from release_targets import HOST_FULL_RUNS
+        self.assertEqual(set(validate.FULL_CHECKS), set(HOST_FULL_RUNS))
+        self.assertEqual(set(validate.FULL_POLICY_CHECKS), set(POLICY_LABELS))
 
 
 class CheckCandidate(unittest.TestCase):
@@ -309,6 +457,7 @@ class CheckCandidate(unittest.TestCase):
             with tarfile.open(fileobj=archive.stdout, mode='r|') as stream:
                 stream.extractall(tree, filter='data')
         cls.commit, cls.source = commit, source_identity(tree)['sha256']
+        cls.template = World(directory / 'template', cls.commit, cls.source)
 
     @classmethod
     def tearDownClass(cls):
@@ -322,9 +471,7 @@ class CheckCandidate(unittest.TestCase):
         return json.loads(report.read_text())
 
     def world(self, name):
-        directory = pathlib.Path(self.temp.name) / name
-        directory.mkdir()
-        return World(directory, self.commit, self.source)
+        return self.template.clone(pathlib.Path(self.temp.name) / name)
 
     def test_targets_and_ci_reproduction(self):
         world = self.world('pass')
@@ -364,13 +511,17 @@ class CheckCandidate(unittest.TestCase):
         for gate in ('native_contracts', 'binding_conformance', 'abi', 'artifact_integrity'):
             self.assertEqual(gates[gate]['status'], 'failed', gates[gate])
             self.assertIn('native: left out native', gates[gate]['detail'])
+        # This host's build is never cached; CI's linux-x64 report is a ci-full merge, never a selected run.
+        world.paths['native'].write_text(json.dumps({**report, 'compiler_launcher': 'ccache'}))
+        self.assertIn('native: compiled through the compiler launcher ccache', self.check(world)['gates']['native_contracts']['detail'])
         world.paths['native'].write_text(json.dumps(report))
-        world.edit('evidence-linux-x64/report.json', lambda r: r.update(compiler_launcher='ccache'))
-        self.assertIn('linux-x64 validation: compiled through the compiler launcher ccache',
-                      self.check(world)['gates']['artifact_integrity']['detail'])
+        world.edit('evidence-linux-x64/report.json', lambda r: r['selection'].update(profile='selected'))
+        self.assertIn('linux-x64 validation: profile selected is not ci-full', self.check(world)['gates']['artifact_integrity']['detail'])
 
     def test_installed_release_packages(self):
+        # Assembled packages only: the host's --full report has no installed_packages gate of its own (not_run).
         world = self.world('installed')
+        self.assertEqual(json.loads(world.paths['native'].read_text())['gates']['installed_packages'], {'status': 'not_run'})
         self.assertEqual(self.check(world)['gates']['installed_packages'], {'status': 'passed'})
         value = json.loads(world.paths['installed_release'].read_text())
         world.paths['installed_release'].write_text(json.dumps({**value, 'artifact_inventory_sha256': '0' * 64}))
@@ -447,13 +598,24 @@ class CheckCandidate(unittest.TestCase):
         world = self.world('budgets')
         library = json.loads(world.paths['native'].read_text())['library_sha256']
         budgets = world.policy['budgets']
-        for name, kind, seconds in (('stress', 'routine_stress', budgets['routine_stress_seconds']), ('soak', 'candidate_soak', budgets['candidate_soak_seconds'])):
-            self.evidence(world, name, {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'kind': kind,
-                                        'qualification_budget_met': True, 'requested_seconds': seconds, 'library_sha256': library, 'model_sha256': world.model})
+        soak = {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'kind': 'candidate_soak',
+                'qualification_budget_met': True, 'requested_seconds': budgets['candidate_soak_seconds'], 'library_sha256': library,
+                'model_sha256': world.model, 'result': {'rounds': budgets['candidate_soak_rounds']}}
+        self.evidence(world, 'stress', {**soak, 'kind': 'routine_stress', 'requested_seconds': budgets['routine_stress_seconds'], 'result': {'rounds': 900}})
+        self.evidence(world, 'soak', soak)
         self.assertEqual(self.check(world)['gates']['stress'], {'status': 'passed'})
+        # One soak run serves both keys.
+        self.evidence(world, 'stress', soak)
+        self.assertEqual(self.check(world)['gates']['stress'], {'status': 'passed'})
+        # A soak below the candidate's rounds floor fails either key.
+        for name in ('stress', 'soak'):
+            with self.subTest(name):
+                self.evidence(world, 'stress', soak)
+                self.evidence(world, name, {**soak, 'result': {'rounds': budgets['candidate_soak_rounds'] - 1}})
+                self.assertIn(f'{name}: {budgets["candidate_soak_rounds"] - 1} rounds, fewer than', self.check(world)['gates']['stress']['detail'])
+        self.evidence(world, 'stress', soak)
         # A report that says it met its budget, measured against a shorter one than the candidate's.
-        value = json.loads(world.paths['soak'].read_text())
-        world.paths['soak'].write_text(json.dumps({**value, 'requested_seconds': budgets['candidate_soak_seconds'] - 1}))
+        self.evidence(world, 'soak', {**soak, 'requested_seconds': budgets['candidate_soak_seconds'] - 1})
         self.assertIn('soak: shorter than', self.check(world)['gates']['stress']['detail'])
         self.evidence(world, 'sanitizers', {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'sanitizers': {},
                                             'model_sha256': world.model})
@@ -462,16 +624,135 @@ class CheckCandidate(unittest.TestCase):
         self.assertIn("fuzz: shorter than the candidate's fuzz budget", self.check(world)['gates']['sanitizers']['detail'])
 
     def test_native_matrix_reports_are_complete(self):
+        # This host's gcc --full report and the CI linux-x64-clang merge (ci-compiler, read through ci-run.json).
         world = self.world('matrix')
         report = json.loads(world.paths['native'].read_text())
-        matrix = world.directory / 'matrix'
-        matrix.mkdir()
-        (matrix / 'cached.json').write_text(json.dumps({**report, 'compiler_launcher': 'ccache'}))
-        (matrix / 'list.json').write_text(json.dumps(['cached.json']))
-        world.paths['native_matrix'] = matrix / 'list.json'
-        self.assertIn('native matrix cached.json: compiled through the compiler launcher ccache', self.check(world)['gates']['linux_matrix']['detail'])
-        (matrix / 'cached.json').write_text(json.dumps({**report, 'build_options': {**report['build_options'], 'GGML_CCACHE': 'ON'}}))
-        self.assertIn('native matrix cached.json: configured with a compiler cache', self.check(world)['gates']['linux_matrix']['detail'])
+        clang = world.validation('linux-x64', 'ci-compiler')
+        clang['diagnostics']['compiler'], clang['node_version'] = 'Clang 22.1.8', 'v24.21.0'
+        clang_path = world.ci / 'native-x64-clang-node-24.21.0' / 'report.json'
+        clang_path.parent.mkdir()
+        clang_path.write_text(json.dumps(clang))
+        world.rehash()
+        (world.directory / 'host.json').write_text(json.dumps(report))
+        (world.directory / 'matrix.json').write_text(json.dumps(['host.json', 'ci/native-x64-clang-node-24.21.0/report.json']))
+        world.paths['native_matrix'] = world.directory / 'matrix.json'
+        # Complete: the gate goes on to the cross-CPU evidence, which the world does not have.
+        self.assertIn('cross_cpu evidence missing', self.check(world)['gates']['linux_matrix']['detail'])
+        cases = {'cached host': ('host.json', lambda r: (r.update(compiler_launcher='ccache'), r['build_options'].update(
+                     CMAKE_C_COMPILER_LAUNCHER='ccache', CMAKE_CXX_COMPILER_LAUNCHER='ccache')), 'compiled through the compiler launcher ccache'),
+                 'ggml cache': ('host.json', lambda r: r['build_options'].update(GGML_CCACHE='ON'), 'GGML_CCACHE=ON'),
+                 'generic run': ('host.json', lambda r: r['selection'].update(profile='generic'), 'profile generic'),
+                 'clang with packages': ('ci', lambda r: r['runs'].update({'package': {'exit_code': 0}, 'package-smoke': {'exit_code': 0}}),
+                                         'a ci-compiler report with package, package-smoke runs'),
+                 'clang ci-full': ('ci', lambda r: r['selection'].update(profile='ci-full'), 'profile ci-full'),
+                 'failed parity': ('ci', lambda r: r['gates']['binding_conformance'].update(status='failed'), 'required gates did not pass')}
+        for label, (name, change, message) in cases.items():
+            with self.subTest(label):
+                value = json.loads(json.dumps(report if name == 'host.json' else clang))
+                change(value)
+                if name == 'ci':
+                    world.edit('native-x64-clang-node-24.21.0/report.json', lambda r: (r.clear(), r.update(value)))
+                else:
+                    (world.directory / name).write_text(json.dumps(value))
+                self.assertIn(message, self.check(world)['gates']['linux_matrix']['detail'])
+                (world.directory / 'host.json').write_text(json.dumps(report))
+                world.edit('native-x64-clang-node-24.21.0/report.json', lambda r: (r.clear(), r.update(clang)))
+        # A CI report edited after download.
+        world.edit('native-x64-clang-node-24.21.0/report.json', lambda r: r.update(note='edited'), rehash=False)
+        self.assertIn('changed after download', self.check(world)['gates']['linux_matrix']['detail'])
+
+    def test_qualify_run_evidence(self):
+        """Sanitizer, fuzz and upgrade reports from the CI qualify run count only through ci-run.json qualify_run."""
+        world = self.world('qualify')
+        world.qualify_reports()
+        gates = self.check(world)
+        self.assertEqual(gates['gates']['sanitizers'], {'status': 'passed'})
+        self.assertEqual(gates['qualify_run']['run_id'], 8)
+        # The upgrade report is read too (the gate then needs the host's model-upgrade evidence).
+        self.assertIn('model_upgrade evidence missing', gates['gates']['upgrade_rollback']['detail'])
+        cases = {'edited': (lambda: world.edit('qualify/fuzz/report.json', lambda r: r.update(note='x'), rehash=False), 'sanitizers',
+                            'changed after download'),
+                 'unlisted': (lambda: (world.__setattr__('qualify', None), world.rehash()), 'sanitizers', 'no qualify run downloaded'),
+                 'another commit': (lambda: world.qualify_reports(head='b' * 40), 'sanitizers', 'not the candidate or its ancestor'),
+                 'not the run head': (lambda: world.edit('qualify/sanitizers/report.json', lambda r: r.update(source_commit='c' * 40)),
+                                      'sanitizers', "not the qualify run's commit"),
+                 'upgrade edited': (lambda: world.edit('qualify/upgrade/report.json', lambda r: r.update(note='x'), rehash=False),
+                                    'upgrade_rollback', 'changed after download')}
+        for label, (change, gate, message) in cases.items():
+            with self.subTest(label):
+                world.qualify_reports()
+                change()
+                result = self.check(world)['gates'][gate]
+                self.assertEqual(result['status'], 'failed', result)
+                self.assertIn(message, result['detail'])
+        # A file of the qualify run listed in the candidate run's own list does not count.
+        world.qualify_reports()
+        run = json.loads((world.ci / 'ci-run.json').read_text())
+        run['files'].update(run['qualify_run'].pop('files'))
+        run['qualify_run']['files'] = {'qualify/upgrade/report.json': run['files']['qualify/upgrade/report.json']}
+        (world.ci / 'ci-run.json').write_text(json.dumps(run))
+        self.assertIn('is not a file of the qualify run', self.check(world)['gates']['sanitizers']['detail'])
+        # A local run (this host's, today's way) is still accepted.
+        local = world.directory / 'sanitizers.json'
+        local.write_bytes(world.paths['sanitizers'].read_bytes())
+        fuzz = world.directory / 'fuzz.json'
+        fuzz.write_bytes(world.paths['fuzz'].read_bytes())
+        world.paths['sanitizers'], world.paths['fuzz'] = local, fuzz
+        self.assertEqual(self.check(world)['gates']['sanitizers'], {'status': 'passed'})
+
+    def browser_reports(self, world):
+        inventory = json.loads(world.paths['browser_package'].read_text())
+        stages = {'browser': {'wasm': ['execution', 'reference', 'controls', 'assets', 'upstream_numeric', 'memory', 'cross_profile_drift'],
+                              'webgpu': ['execution', 'reference', 'controls', 'assets', 'upstream_numeric', 'device_loss', 'gpu_memory',
+                                         'cross_profile_drift']},
+                  'browser_isolated': {'wasm': ['controls', 'isolated_execution', 'running_cancellation'], 'webgpu': ['controls', 'isolated_execution']}}
+        browser = world.policy['platforms']['browser']
+        native_outputs = sha256(world.paths['native'].parent / 'outputs.json')
+        for page, backends in stages.items():
+            report = {'source_commit': self.commit, 'source_tracked_dirty': False, 'model_sha256': world.model, 'package_dir': 'package',
+                      'isolated': page == 'browser_isolated', 'headless': False, 'launch_flags': [],
+                      'browser_version': browser['browser_versions'][0].split('-', 1)[1], 'native_report_sha256': native_outputs,
+                      'environment': {'gpu': {'vendor': 'intel', 'architecture': 'gen-12lp', 'fallback': False}},
+                      'asset_hashes': inventory['assets'], 'backends': {}}
+            for backend, names in backends.items():
+                report['backends'][backend] = {name: {'status': 'passed'} for name in names}
+                if page == 'browser':
+                    report['backends'][backend]['execution']['fixture_sha256'] = {'primitive.json': f'{backend}-primitive'}
+                else:
+                    report['backends'][backend]['isolated_execution'].update(fixture='primitive.json', result_sha256=f'{backend}-primitive')
+                    if backend == 'wasm':
+                        report['backends'][backend]['running_cancellation'].update(cancel_status=5, next_result_sha256=f'{backend}-primitive')
+            self.evidence(world, page, report)
+
+    def test_browser_pages(self):
+        world = self.world('browser')
+        self.browser_reports(world)
+        gates = self.check(world)['gates']
+        self.assertEqual((gates['browser_wasm'], gates['browser_webgpu']), ({'status': 'passed'}, {'status': 'passed'}))
+        def edit(page, change):
+            value = json.loads(world.paths[page].read_text())
+            change(value)
+            world.paths[page].write_text(json.dumps(value))
+        cases = {'isolated hash differs': ('browser_isolated', lambda r: r['backends']['webgpu']['isolated_execution'].update(result_sha256='other'),
+                                           'browser_webgpu', 'primitive.json result differs'),
+                 'isolated fixture': ('browser_isolated', lambda r: r['backends']['wasm']['isolated_execution'].update(fixture='batch.json'),
+                                      'browser_wasm', 'primitive.json result differs'),
+                 'no running cancellation': ('browser_isolated', lambda r: r['backends']['wasm'].pop('running_cancellation'),
+                                             'browser_wasm', 'wasm/running_cancellation missing'),
+                 'cancel status': ('browser_isolated', lambda r: r['backends']['wasm']['running_cancellation'].update(cancel_status=0),
+                                   'browser_wasm', 'running cancellation returned 0'),
+                 'next result changed': ('browser_isolated', lambda r: r['backends']['wasm']['running_cancellation'].update(next_result_sha256='x'),
+                                         'browser_wasm', 'changed the next result'),
+                 'non-isolated stage': ('browser', lambda r: r['backends']['webgpu'].pop('device_loss'), 'browser_webgpu', 'webgpu/device_loss missing'),
+                 'no execution hash': ('browser', lambda r: r['backends']['wasm']['execution'].pop('fixture_sha256'), 'browser_wasm',
+                                       'no primitive.json result hash')}
+        for label, (page, change, gate, message) in cases.items():
+            with self.subTest(label):
+                self.browser_reports(world)
+                edit(page, change)
+                result = self.check(world)['gates'][gate]
+                self.assertEqual(result['status'], 'failed', result)
+                self.assertIn(message, result['detail'])
 
     def test_reproduced_addon(self):
         world = self.world('reproduced')
@@ -591,16 +872,19 @@ class CheckCandidate(unittest.TestCase):
         self.assertIn('is the CI linux-x64 report', self.check(world)['gates']['installed_packages']['detail'])
 
     def test_electron_is_linux_x64_npm_package(self):
+        # The CI linux-x64 runner's Electron report (fetch-ci-evidence.py's electron key).
         world = self.world('electron')
+        self.assertEqual(world.paths['electron'], world.ci / 'installed-linux-x64-real-model/electron.json')
         self.assertIn('native_matrix evidence missing', self.check(world)['gates']['linux_matrix']['detail'])
-        path = world.paths['electron']
-        value = json.loads(path.read_text())
+        value = json.loads(world.paths['electron'].read_text())
         for label, change, message in (('platform', {'platform': 'windows-x64'}, 'did not pass on linux-x64'),
                                        ('no platform', {'platform': None}, 'did not pass on linux-x64'),
                                        ('artifact', {'artifact': f'ducktape-laya-{world.version}-linux-x64.tar.gz'}, 'not the candidate npm package')):
             with self.subTest(label):
-                path.write_text(json.dumps({**value, **change}))
+                world.edit('installed-linux-x64-real-model/electron.json', lambda r: r.update({**value, **change}))
                 self.assertIn(message, self.check(world)['gates']['linux_matrix']['detail'])
+        world.edit('installed-linux-x64-real-model/electron.json', lambda r: r.update(note='edited'), rehash=False)
+        self.assertIn('changed after download', self.check(world)['gates']['linux_matrix']['detail'])
 
 
 if __name__ == '__main__':

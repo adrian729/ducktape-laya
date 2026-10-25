@@ -8,6 +8,7 @@ scripts/assemble-packages.py, every CI report a candidate run keeps, ci-run.json
 listing every downloaded file, and the local linux-x64 validation, drift and
 browser evidence. Every report is bound to one commit, source identity, model
 and library, so a checker passes on it until a test tampers with something."""
+import copy
 import gzip
 import hashlib
 import io
@@ -22,6 +23,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from artifact_support import native_payload, set_npm_platforms, write_zip  # noqa: E402
 from release_support import read_json, sha256, target  # noqa: E402
+from release_targets import (HOST_FULL_RUNS, PLATFORM_POLICY, PLATFORM_SKIPS, POLICY_LABELS, PROFILE_CHECKS, SHARD_RUNS,  # noqa: E402
+                             TOOLING_REASON)
 import java_package  # noqa: E402
 import python_wheel  # noqa: E402
 
@@ -139,14 +142,36 @@ class World:
                     'department': {'type': 'choice', 'choice': 'billing', 'probabilities': {'billing': probability, 'sales': 1 - probability}},
                     'refund': {'type': 'noul', 'noul': probability}}, 'usage': {'input_tokens': 12}}}}}
 
-    def validation(self, platform):
+    def validation(self, platform, profile='ci-full'):
+        """A validate.py report of PROFILE: host-full (this host's --full run, phase all, uncached) or a CI merge
+        (scripts/merge-validation.py: ci-full per target, ci-compiler for the clang entry of the native matrix)."""
         item = self.targets[platform]
         linux = item['os'] == 'linux'
         tests = ['abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition',
-                 'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head']
+                 'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head', 'stress-rule']
         tests += ['real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults'] + (['cpu-guard'] if platform == 'linux-x64' else []) if linux else []
         skipped = {} if linux else {name: 'Linux only' for name in ('real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults', 'cpu-guard')}
-        return {'schema_version': 1, 'source_commit': self.commit, 'source_tracked_dirty': False, 'mode': 'real_model',
+        ci = profile != 'host-full'
+        if ci:
+            checks = list(PROFILE_CHECKS[profile])
+            labels = [label for check in checks for label in SHARD_RUNS[check]]
+            shards = {f'native-{platform}-{check.replace(":", "-")}': {'checks': [check], 'report_sha256': '0' * 64} for check in checks}
+            for label in POLICY_LABELS:
+                if profile == 'ci-compiler' or label not in PLATFORM_POLICY:
+                    skipped[f'policy:{label}'] = TOOLING_REASON
+            if profile == 'ci-compiler':
+                skipped.update({'policy': 'not selected (--checks)', 'package': 'not selected (--checks)', 'package-smoke': 'not selected (--checks)'})
+        else:
+            checks, shards = ['ctest', 'references', 'parity:full', 'bindings', 'packages', 'policy'], None
+            labels = list(HOST_FULL_RUNS) + list(POLICY_LABELS)
+        runs = {name: {'exit_code': 0} for name in ['configure', 'build'] + labels}
+        for label, (platforms, reason) in PLATFORM_SKIPS.items():
+            if platform in platforms and label in runs:
+                del runs[label]
+                skipped[label] = reason
+        launcher = ('sccache' if item['os'] == 'windows' else 'ccache') if ci else 'none'
+        value = '' if launcher == 'none' else launcher
+        report = {'schema_version': 1, 'source_commit': self.commit, 'source_tracked_dirty': False, 'mode': 'real_model',
                 'model': {'sha256': self.model}, 'platform': platform, 'node_version': 'v' + item['build']['node_headers'],
                 'library_sha256': digest(self.library(platform)), 'addon_sha256': digest(self.addon(platform)),
                 'diagnostics': {'numerical_profile': {'id': item['numerical_profile']['runtime_id'], 'cross_profile_equivalence': False},
@@ -154,11 +179,26 @@ class World:
                                 'llama_cpp_commit': self.record['runtime']['commit'], 'runtime_patches': self.record['runtime']['patches'],
                                 'package_version': self.version, 'abi_version': self.record['abi_version'], 'compiler': 'GNU 13.3.0'},
                 'gates': {gate: {'status': 'passed' if gate in ('native_contracts', 'binding_conformance', 'upstream_reference',
-                                                              'original_reference', 'abi', 'installed_packages') else 'not_run'}
+                                                              'original_reference', 'abi') else 'not_run'}
                           for gate in self.record['required_release_gates']},
-                'ctest_registered': sorted(tests), 'skipped': skipped, 'additional_model_gates': {}, 'compiler_launcher': 'none',
-                'build_options': {'CMAKE_BUILD_TYPE': 'Release', 'CMAKE_C_COMPILER_LAUNCHER': '', 'CMAKE_CXX_COMPILER_LAUNCHER': '', 'GGML_CCACHE': 'OFF'},
-                'runs': {name: {'exit_code': 0} for name in ('packaging-identities', 'browser-backend-identities', 'package', 'package-smoke')}}
+                'ctest_registered': sorted(tests), 'ctest_ran': sorted(tests), 'skipped': skipped, 'additional_model_gates': {},
+                'compiler_launcher': launcher,
+                'build_options': {'CMAKE_BUILD_TYPE': 'Release', 'CMAKE_C_COMPILER_LAUNCHER': value, 'CMAKE_CXX_COMPILER_LAUNCHER': value,
+                                  'GGML_CCACHE': 'OFF', 'DUCKTAPE_DEV_BUILD': 'OFF', 'DUCKTAPE_DEV_PCH': 'OFF',
+                                  'DUCKTAPE_REFERENCE_PROBE_LAUNCHER': value, 'CMAKE_GENERATOR': 'Ninja'},
+                'launcher_guard': {'product_targets': ['dtl_json_io', 'dtl_language', 'ducktape_laya', 'ducktape_laya_node', 'ggml', 'llama'],
+                                   'probe_targets': {'laya-reference': value} if value else {}, 'rule_launch': ''},
+                'ccache_config': {'base_dir': '', 'compiler_check': 'content', 'sloppiness': ''} if launcher == 'ccache' else None,
+                'phase': 'merged' if ci else 'all', 'checks': checks, 'selected_checks': 'passed',
+                'selection': {'profile': profile, 'bindings': ['rust', 'node', 'python', 'java', 'dotnet', 'go'], 'native_tests': True,
+                              'policy': 'all' if not ci else 'platform' if profile == 'ci-full' else 'none',
+                              'packages': profile != 'ci-compiler', 'parity_profile': 'full', 'test_jobs': 4 if ci else 1},
+                'host': {'github_actions': ci, 'hostname': f'runner-{platform}' if ci else 'release-host',
+                         'system': {'linux': 'Linux', 'windows': 'Windows'}[item['os']], 'machine': 'x86_64'},
+                'runs': runs}
+        if shards:
+            report['shards'] = shards
+        return report
 
     def reports(self, platform):
         item = self.targets[platform]
@@ -187,6 +227,8 @@ class World:
         write_json(self.ci / f'stress-{platform}' / 'report.json', {
             'schema_version': 1, 'status': 'passed', 'source_commit': self.commit, 'source_tracked_dirty': False, 'kind': 'short_stress',
             'requested_seconds': self.policy['budgets']['short_stress_seconds'], 'required_seconds': self.policy['budgets']['short_stress_seconds'],
+            'required_rounds': self.policy['budgets']['short_stress_rounds'],
+            'result': {'rounds': self.policy['budgets']['short_stress_rounds'] + 80, 'elapsed_seconds': self.policy['budgets']['short_stress_seconds']},
             'qualification_budget_met': True, 'target_platform': platform, 'library_sha256': library, 'model_sha256': self.model,
             'post_run_identity_verified': True})
         write_json(self.ci / f'reproducibility-{platform}' / 'report.json', {
@@ -198,7 +240,7 @@ class World:
     def local(self):
         """The release host's own runs: linux-x64 validation (with its packages), drift reports, browser package."""
         native = self.directory / 'native'
-        report = self.validation('linux-x64')
+        report = self.validation('linux-x64', 'host-full')
         for name in self.record.get('additional_models', []):
             report['additional_model_gates'][read_json(ROOT / name)['id']] = {'original_reference': 'passed', 'upstream_reference': 'passed',
                                                                                'tokenizer': 'passed', 'decision_head': 'passed',
@@ -223,7 +265,8 @@ class World:
         (browser / 'sbom.cdx.json').write_text(json.dumps({'bomFormat': 'CycloneDX', 'components': []}))
         write_json(browser / 'inventory.json', {
             'schema_version': 2, 'packaging_source_commit': self.commit, 'packaging_source_tracked_dirty': False,
-            'build_source': {'sha256': self.source}, 'assets': {},
+            'build_source': {'sha256': self.source}, 'assets': {f'{b}/{n}': digest(f'{b} {n}'.encode()) for b in ('wasm', 'webgpu')
+                                                                for n in ('laya.mjs', 'laya.wasm')},
             'artifacts': {path.name: sha256(path) for path in sorted(browser.iterdir()) if path.name != 'inventory.json'}})
         self.paths['browser_package'] = browser / 'inventory.json'
         native_policy = self.policy['platforms']['native']
@@ -240,14 +283,48 @@ class World:
         write_json(installed, value)
         self.paths['installed_release'] = installed
 
+    def clone(self, directory):
+        """A copy of this world in DIRECTORY (building one runs the real package assembly; tests copy one per class)."""
+        directory = pathlib.Path(directory)
+        shutil.copytree(self.directory, directory, dirs_exist_ok=True)
+        other = copy.copy(self)
+        other.directory, other.ci, other.release = directory, directory / 'ci', directory / 'ci' / 'packages-assembled'
+        other.paths = {key: directory / path.relative_to(self.directory) for key, path in self.paths.items()}
+        other.qualify = copy.deepcopy(self.qualify)
+        return other
+
+    def qualify_reports(self, head=None):
+        """Sanitizer, fuzz and upgrade reports of a CI qualify run (native.yml mode=qualify) under ci/qualify/, listed in
+        ci-run.json qualify_run as scripts/fetch-ci-evidence.py --qualify writes them."""
+        head = head or self.commit
+        budgets = self.policy['budgets']
+        reports = {'sanitizers': {'status': 'passed', 'sanitizers': {'address': {'status': 'passed'}, 'thread': {'status': 'passed'}},
+                                  'model_sha256': self.model},
+                   'fuzz': {'status': 'passed', 'qualification_budget_met': True, 'requested_seconds': budgets['fuzz_seconds_per_target']},
+                   'upgrade': {'status': 'passed', 'candidate_runtime': 'c' * 40, 'baseline_runtime': self.record['runtime']['commit'],
+                               'adapter_checks_passed': True}}
+        for name, value in reports.items():
+            write_json(self.ci / 'qualify' / name / 'report.json', {**value, 'source_commit': head, 'source_tracked_dirty': False})
+            self.paths[name] = self.ci / 'qualify' / name / 'report.json'
+        self.qualify = {'repository': 'adrian729/ducktape-laya', 'workflow_path': '.github/workflows/native.yml', 'run_id': 8, 'run_attempt': 1,
+                        'head_sha': head, 'html_url': 'https://example.invalid/runs/8'}
+        self.rehash()
+
+    qualify = None
+
     def rehash(self, event='workflow_dispatch', head=None):
-        """ci-run.json as scripts/fetch-ci-evidence.py writes it, listing the CI files as they are now."""
+        """ci-run.json as scripts/fetch-ci-evidence.py writes it, listing the CI files as they are now (the qualify run's
+        files under qualify_run, never in the candidate run's list)."""
         files = {path.relative_to(self.ci).as_posix(): sha256(path) for path in sorted(self.ci.rglob('*'))
                  if path.is_file() and path.name not in ('ci-run.json', 'evidence.json')}
-        write_json(self.ci / 'ci-run.json', {
-            'schema_version': 1, 'repository': 'adrian729/ducktape-laya', 'workflow_path': '.github/workflows/native.yml', 'run_id': 7, 'run_attempt': 1,
-            'head_sha': head or self.commit, 'event': event, 'status': 'completed', 'conclusion': 'success',
-            'html_url': 'https://example.invalid/runs/7', 'candidate_commit': self.commit, 'artifacts': {}, 'files': files})
+        qualify = {name: digest for name, digest in files.items() if name.startswith('qualify/')}
+        files = {name: digest for name, digest in files.items() if not name.startswith('qualify/')}
+        run = {'schema_version': 1, 'repository': 'adrian729/ducktape-laya', 'workflow_path': '.github/workflows/native.yml', 'run_id': 7, 'run_attempt': 1,
+               'head_sha': head or self.commit, 'event': event, 'status': 'completed', 'conclusion': 'success',
+               'html_url': 'https://example.invalid/runs/7', 'candidate_commit': self.commit, 'artifacts': {}, 'files': files}
+        if self.qualify:
+            run['qualify_run'] = {**self.qualify, 'files': qualify}
+        write_json(self.ci / 'ci-run.json', run)
         sys.path.insert(0, str(ROOT / 'scripts'))
         import importlib.util
         spec = importlib.util.spec_from_file_location('fetch_ci_evidence', ROOT / 'scripts/fetch-ci-evidence.py')

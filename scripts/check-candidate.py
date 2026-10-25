@@ -106,9 +106,10 @@ def tested_source(report, name):
     reused[name] = produced
 
 def native():
+    # This host's uncached validate.py --full run: the build CI's linux-x64 bytes are compared with.
     report = load('native')
     same_source(report, 'native')
-    require_complete_validation(report, 'native')
+    require_complete_validation(report, 'native', profiles={'host-full'}, cache_allowed=False)
     need(report.get('mode') == 'real_model' and report.get('model', {}).get('sha256') == manifest_model['sha256'], 'native: not a real-model run of the pinned model')
     return report
 def packages():
@@ -133,7 +134,9 @@ def browser_package():
 def native_gate(gate):
     def check():
         report = native()
-        need(report['gates'][gate]['status'] == 'passed', f'native: {gate} {report["gates"][gate]["status"]}')
+        # installed_packages has no validate.py gate (no installed suite): it passes on the installed release runs below.
+        if gate != 'installed_packages':
+            need(report['gates'][gate]['status'] == 'passed', f'native: {gate} {report["gates"][gate]["status"]}')
         # Every additional pinned model is qualified like the primary one: the reference gates, and
         # within the native contracts its tokenizer golden entries, selected decision head and
         # tokenization stops (real-tokenizer, real-decision-head and real-control-tokenize run on the primary model).
@@ -173,12 +176,19 @@ def native_gate(gate):
                 need(installed['model_sha256'] == manifest_model['sha256'], f'{name}: model differs')
     return check
 
+def long_gate(name):
+    """Hours-long evidence: a CI qualify-run file (only through ctx.qualify_file, listed under ci-run.json qualify_run) or a
+    local run of this host; tested_source applies the reuse rules to either."""
+    if name in paths and ctx.is_ci_path(paths[name]):
+        return json.loads(ctx.qualify_file(name).read_text())
+    return load(name)
+
 def sanitizers():
-    report = load('sanitizers')
+    report = long_gate('sanitizers')
     tested_source(report, 'sanitizers')
     need(report['status'] == 'passed' and all(s['status'] == 'passed' for s in report['sanitizers'].values()), 'sanitizers: not all passed')
     need(report['model_sha256'] == manifest_model['sha256'], 'sanitizers: model differs')
-    fuzz = load('fuzz')
+    fuzz = long_gate('fuzz')
     tested_source(fuzz, 'fuzz')
     need(fuzz['status'] == 'passed' and fuzz['qualification_budget_met'], 'fuzz: failed or below the qualification budget')
     # The budget of the candidate's own policy, not the one the (possibly reused) run was measured against.
@@ -186,12 +196,18 @@ def sanitizers():
 
 def stress():
     library = native()['library_sha256']
-    for name, kind in (('stress', 'routine_stress'), ('soak', 'candidate_soak')):
+    # The soak report also serves the routine stress gate (it is at least as long: check_qualification), so one run can be both.
+    for name, kinds in (('stress', ('routine_stress', 'candidate_soak')), ('soak', ('candidate_soak',))):
         report = load(name)
         tested_source(report, name)
-        need(report['status'] == 'passed' and report['kind'] == kind and report['qualification_budget_met'], f'{name}: failed or below budget')
+        need(report['status'] == 'passed' and report['kind'] in kinds and report['qualification_budget_met'], f'{name}: failed or below budget')
         budget = policy['budgets']['routine_stress_seconds' if name == 'stress' else 'candidate_soak_seconds']
         need(report.get('requested_seconds', 0) >= budget, f'{name}: shorter than the candidate\'s {budget} s budget')
+        if report['kind'] == 'candidate_soak':
+            # The candidate's own rounds floor (the soak RSS rule applies from 1,000 rounds), not the one the run was measured against.
+            rounds = (report.get('result') or {}).get('rounds')
+            need(isinstance(rounds, int) and rounds >= policy['budgets']['candidate_soak_rounds'],
+                 f'{name}: {rounds} rounds, fewer than the candidate\'s {policy["budgets"]["candidate_soak_rounds"]}')
         need(report['library_sha256'] == library, f'{name}: library is not the candidate library')
         need(report['model_sha256'] == manifest_model['sha256'], f'{name}: model differs')
 
@@ -204,21 +220,23 @@ def linux_matrix():
     releases = {env['os_release'].get('VERSION_ID', '').strip('"') for env in userspaces['environments'].values() if env['status'] == 'passed'}
     required = {policy['platforms']['native']['minimum_userspace'], *policy['platforms']['native']['additional_userspaces']}
     need({f'ubuntu-{v}' for v in releases} >= required, f'userspaces: {sorted(releases)} do not cover {sorted(required)}')
-    electron = load('electron')
+    # The CI linux-x64 run's Electron report (fetch-ci-evidence.py), or a local run of the same package.
+    electron = ctx.ci_json('electron') if ctx.is_ci_path(ctx.path('electron')) else load('electron')
     npm = f'ducktape-laya-{ctx.record["package_version"]}.tgz'
     need(electron['status'] == 'passed' and electron.get('platform') == 'linux-x64', 'electron: did not pass on linux-x64')
     need(electron['artifact'] == npm and electron['artifact_sha256'] == sha256(directory / npm), 'electron: not the candidate npm package')
     need({r['mode'] for r in electron['results']} == {'directory', 'asar'}, 'electron: directory and ASAR modes required')
     need({r['electron'] for r in electron['results']} <= set(policy['platforms']['native']['electron_versions']), 'electron: unlisted version')
-    # Native validation reports from every compiler/Node combination (local or CI artifacts).
+    # Native validation reports from every compiler/Node combination: this host's gcc --full report and the CI
+    # linux-x64-clang merged report (a CI file is read through ci-run.json, with its sha256).
     compilers, nodes = set(), set()
     for item in load('native_matrix'):
         path = paths['native_matrix'].parent / item
         if not path.is_file(): raise Missing(f'native matrix report {item} missing')
-        report = json.loads(path.read_text())
+        report = ctx.ci_json('native_matrix', path) if ctx.is_ci_path(path) else json.loads(path.read_text())
         same_source(report, f'native matrix {item}')
-        require_complete_validation(report, f'native matrix {item}')
-        need(all(report['gates'][g]['status'] == 'passed' for g in ('native_contracts', 'binding_conformance', 'installed_packages')),
+        require_complete_validation(report, f'native matrix {item}', profiles={'host-full', 'ci-compiler'}, cache_allowed=True)
+        need(all(report['gates'][g]['status'] == 'passed' for g in ('native_contracts', 'binding_conformance')),
              f'native matrix {item}: required gates did not pass')
         family, version = report['diagnostics']['compiler'].split()
         compilers.add({'GNU': 'gcc', 'Clang': 'clang'}.get(family, family.lower()) + '-' + version)
@@ -229,6 +247,12 @@ def linux_matrix():
     need(cross['exact'] and len({c['model name'] for c in cross['cpus']}) == 2, 'cross_cpu: outputs differ or CPUs not distinct')
     need(cross.get('bundle_sha256', {}).get('libducktape_laya.so') == native()['library_sha256'], 'cross_cpu: not the candidate library')
 
+# Stages each page must pass per backend (report['backends'][backend]); the isolated page runs the reduced list.
+BROWSER_STAGES = {
+    'browser': {'wasm': ('execution', 'reference', 'controls', 'assets', 'upstream_numeric', 'memory', 'cross_profile_drift'),
+                'webgpu': ('execution', 'reference', 'controls', 'assets', 'upstream_numeric', 'device_loss', 'gpu_memory', 'cross_profile_drift')},
+    'browser_isolated': {'wasm': ('controls', 'isolated_execution', 'running_cancellation'), 'webgpu': ('controls', 'isolated_execution')}}
+CANCELLED = 5  # LAYA_CANCELLED
 def browser_gate(backend):
     def check():
         package = browser_package()
@@ -249,9 +273,20 @@ def browser_gate(backend):
             for name in ('laya.mjs', 'laya.wasm'):
                 need(report['asset_hashes'][f'{backend}/{name}'] == package['assets'][f'{backend}/{name}'], f'{page}: {backend} assets are not the candidate package')
             gates = report['backends'][backend]
-            required = ['execution', 'reference', 'controls', 'assets', 'upstream_numeric'] + (['device_loss', 'gpu_memory'] if backend == 'webgpu' else ['memory'])
-            for name in required:
+            for name in BROWSER_STAGES[page][backend]:
                 need(gates.get(name, {}).get('status') == 'passed', f'{page}: {backend}/{name} {gates.get(name, {}).get("status", "missing")}')
+        # The isolated page's execution returned the very bytes the non-isolated page's did, and a running cancellation
+        # (wasm) left the engine returning them unchanged.
+        primitive = (load('browser')['backends'][backend]['execution'].get('fixture_sha256') or {}).get('primitive.json')
+        need(isinstance(primitive, str) and primitive, f'browser: {backend}/execution recorded no primitive.json result hash')
+        isolated = load('browser_isolated')['backends'][backend]
+        execution = isolated['isolated_execution']
+        need(execution.get('fixture') == 'primitive.json' and execution.get('result_sha256') == primitive,
+             f'browser_isolated: {backend} primitive.json result differs from the non-isolated page\'s')
+        if 'running_cancellation' in BROWSER_STAGES['browser_isolated'][backend]:
+            cancel = isolated['running_cancellation']
+            need(cancel.get('cancel_status') == CANCELLED and cancel.get('next_result_sha256') == primitive,
+                 f'browser_isolated: {backend} running cancellation returned {cancel.get("cancel_status")} or changed the next result')
     return check
 
 def cross_profile_drift():
@@ -356,7 +391,7 @@ def security_review():
     need(review.get('release_blocking_code_issues') == [], 'security review: unresolved release-blocking issues')
 
 def upgrade_rollback():
-    upgrade = load('upgrade')
+    upgrade = long_gate('upgrade')
     tested_source(upgrade, 'upgrade')
     need(upgrade['candidate_runtime'] != upgrade['baseline_runtime'] and upgrade['adapter_checks_passed'], 'upgrade: runtime axis not rehearsed')
     model = load('model_upgrade')
@@ -416,6 +451,13 @@ for label, path in (('native', paths.get('release_packages')), ('browser', paths
 try:
     run = ctx.ci_run()
     result['ci_run'] = {key: run.get(key) for key in ('repository', 'workflow_path', 'run_id', 'run_attempt', 'head_sha', 'html_url')}
+except (Missing, Mismatch, ValueError, OSError):
+    pass
+# The CI qualify run the sanitizer, fuzz and upgrade evidence came from, when it came from one.
+try:
+    qualify = ctx.qualify_run() if isinstance(ctx.load('ci_run').get('qualify_run'), dict) else None
+    if qualify is None: raise Missing('no qualify run')
+    result['qualify_run'] = {key: qualify.get(key) for key in ('repository', 'workflow_path', 'run_id', 'run_attempt', 'head_sha', 'html_url')}
 except (Missing, Mismatch, ValueError, OSError):
     pass
 result['reused_evidence'] = reused
