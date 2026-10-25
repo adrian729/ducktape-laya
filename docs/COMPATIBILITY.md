@@ -29,15 +29,19 @@ Agreement with the original Laya is checked per platform against the same limits
 
 ## Migrating from 0.2.0
 
-The next release keeps C ABI 2 and `libducktape_laya.so.1`: a program built against 0.2.0 runs with the new library without a rebuild, and the C and C++ APIs are unchanged. C, C++, Rust and Go users upgrade the native library (and the crate or Go module for their fixes); the other bindings bundle their library and are upgraded as packages. The changes below are in the bindings' error reporting and library lookup, and in the prompts of some structured values; the full list is in the [changelog](../CHANGELOG.md#unreleased).
+The next release keeps C ABI 2 and `libducktape_laya.so.1`: a program built against 0.2.0 runs with the new library without a rebuild, and the C and C++ signatures are unchanged. C, C++, Rust and Go users upgrade the native library (and the crate or Go module for their fixes); the other bindings bundle their library and are upgraded as packages. The changes below are in the bindings' error reporting and library lookup, and in the prompts of some structured values; the full list is in the [changelog](../CHANGELOG.md#unreleased).
 
 ### Node.js and browser
 
 - **Match errors on `status` and `code`.** Every error now carries `status`, and every status-7 error (a missing, unloadable or wrong-ABI addon or runtime, or a CPU without the required features) carries `code` `'ERR_LAYA_UNSUPPORTED'`. Code that recognised a load failure by its message or by a missing `status` should test `error.code === 'ERR_LAYA_UNSUPPORTED'` instead. In TypeScript, `LayaError.status` is no longer optional and `code` has one more value; an exhaustive `switch` over `code` needs a case for it.
-- **After `close()`,** `info()` rejects with `ERR_LAYA_CLOSED`, never `ERR_LAYA_WORKER_EXITED`.
-- **Pass `undefined`, not `null`, for absent options.** `null` options to `Laya.open`, `close` and, in the browser, `openRouter` and `execute` are status-1 `TypeError`s, and so is a Node `addonPath` that is not a non-empty string.
+- **After `close()`,** Node's `info()` rejects with `ERR_LAYA_CLOSED`, never `ERR_LAYA_WORKER_EXITED`.
+- **Pass `undefined`, not `null`, for absent options.** A `null` or non-object options argument to `open`, `openRouter`, `execute`, `close` and Node's `Laya.runtimeInfo` is a status-1 `TypeError` (in 0.2.0 most of these threw an untyped `TypeError`, and the browser's `openRouter(models, null)` worked), and so is a Node `addonPath` that is not a non-empty string.
 - **Browser statuses.** Handle a cancelled `open` as status 5 (not a `DOMException` named `AbortError`), a model asset that cannot be fetched or fails its `sha256` as status 2, an asset over `maxModelBytes` as status 1, a failed WebAssembly memory reservation as status 4, and running out of GPU memory while opening or while a router loads a model as status 2 (it was status 3 with `ERR_LAYA_WORKER_EXITED`; a router now stays usable). With `backend: 'auto'`, a model asset failure is no longer retried with WASM: fix the asset instead.
 - **Node on Linux** always uses the library next to the addon, even when another `libducktape_laya.so.1` is on `LD_LIBRARY_PATH`. To use another library build, build the addon too and pass it as `addonPath` (or `DUCKTAPE_LAYA_ADDON`).
+
+### C++
+
+- `ducktape::info()`, `engine::open` and `engine::open_router` throw `ducktape::error` with status 7 when the library reports another ABI, and `engine::info()` on a moved-from engine throws instead of returning runtime info.
 
 ### Python
 
@@ -51,7 +55,7 @@ The next release keeps C ABI 2 and `libducktape_laya.so.1`: a program built agai
 ### Java
 
 - On Linux the bundled library is extracted to a private directory and deleted right after loading. `-Dducktape.laya.tmpdir` selects where, for example when `/tmp` is mounted `noexec`.
-- For libraries built from source: without a bundled library, Windows no longer finds `ducktape_laya.dll` on `PATH` or in the current directory, and macOS looks only in `/opt/homebrew/lib` and `/usr/local/lib`. Set `-Dducktape.laya.library` or `DUCKTAPE_LAYA_LIB_DIR` to load a library from anywhere else.
+- Java 0.2.0 ran on Linux only. On Windows and macOS, without a bundled library it does not search `PATH` or the current directory: Windows has no system search step and macOS looks only in `/opt/homebrew/lib` and `/usr/local/lib`. Set `-Dducktape.laya.library` or `DUCKTAPE_LAYA_LIB_DIR` to load a library from anywhere else.
 
 ### Behaviour changes
 
