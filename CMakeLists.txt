@@ -432,10 +432,12 @@ if(DUCKTAPE_BUILD_TESTS)
       endif()
     endif()
     # Emulated CPUs without the required features; instrumented builds do not run under QEMU.
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize")
-      find_program(DTL_QEMU_X86_64 qemu-x86_64)
+    # Registered on every Linux x86-64 build whether or not this host has QEMU: CI builds once and
+    # runs the test in a shard that installs it; tests/cpu-guard.py finds qemu-x86_64 when it runs.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"
+       AND NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize")
       find_program(DTL_PYTHON3 python3)
-      if(DTL_QEMU_X86_64 AND DTL_PYTHON3)
+      if(DTL_PYTHON3)
         dtl_add_test(NAME cpu-guard COMMAND ${DTL_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu-guard.py
           --build ${CMAKE_CURRENT_BINARY_DIR} ${DUCKTAPE_TEST_MODEL} ${real} CATEGORY real_model LABELS qemu)
       endif()
