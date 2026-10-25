@@ -451,6 +451,12 @@ jobs:
           }
           $clang = "$vs\VC\Tools\Llvm\x64\bin\clang-cl.exe".Replace('\', '/')
           "DTL_CLANG_CL=$clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          # Bash steps put Git's /usr/bin (with its own link.exe) ahead of MSVC on PATH, and rustc
+          # in a Visual Studio environment runs the link.exe it finds there: name MSVC's linker.
+          $tools = ($lines | Where-Object { $_ -match '^VCToolsInstallDir=' }) -replace '^VCToolsInstallDir=', ''
+          $link = Join-Path $tools 'bin\Hostx64\x64\link.exe'
+          if (-not (Test-Path $link)) { Write-Error "MSVC link.exe not found at $link"; exit 1 }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$link" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - &windows-args
         name: clang-cl arguments of scripts/validate.py
         if: runner.os == 'Windows'
