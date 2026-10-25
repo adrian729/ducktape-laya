@@ -31,10 +31,12 @@ with tempfile.TemporaryDirectory(prefix='ducktape-abi-layout-') as directory:
     rust_source = tmp / 'layout.rs'; rust_source.write_text('\n'.join(rust))
     # A Windows compiler variable is one path (with spaces and backslashes), not a shell word list.
     words = (lambda value: [value]) if sys.platform == 'win32' else shlex.split
+    # The linker Cargo is told to use on Windows (CI names MSVC's, which Git Bash's link.exe shadows on PATH).
+    linker = os.environ.get('CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER') if sys.platform == 'win32' else None
     probes = {
         'C': words(os.environ.get('CC', 'cc')) + ['-std=c11', '-I', str(ROOT / 'include'), str(source)],
         'C++': words(os.environ.get('CXX', 'c++')) + ['-x', 'c++', '-std=c++17', '-I', str(ROOT / 'include'), str(source)],
-        'Rust': words(os.environ.get('RUSTC', 'rustc')) + ['--edition=2021', str(rust_source)],
+        'Rust': words(os.environ.get('RUSTC', 'rustc')) + ['--edition=2021', *(['-C', f'linker={linker}'] if linker else []), str(rust_source)],
     }
     # The C++ wrapper refuses a library of another ABI: a stub library that reports ABI 3.
     stub = tmp / 'abi-check.cpp'
