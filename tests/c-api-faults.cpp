@@ -8,10 +8,19 @@
 // status or llama_tokenize's sentinels). The functions the library calls without a failure
 // value must not allocate at all. It cannot see an exception that a C function inside
 // llama.cpp lets out and llama.cpp catches further up; the patch's audit covers those.
+// Allocations the sweep cannot reach are failed at chosen points through link-time wrappers
+// (-Wl,--wrap, CMakeLists.txt): the dummy buffer records model loading creates to ask whether a
+// buffer type supports a weight's operation (hundreds per load, after the sweep's last point),
+// whose NULL the loader must report instead of treating the type as supported, and the first
+// construction of the CPU backend's extra buffer types, which must fail the load and be retried.
+// GGUF reading must free what it has read when it returns NULL.
 // Usage: laya-c-api-fault-tests MODEL.gguf (Linux, uninstrumented builds)
 #include "llama.h"
+#include "ggml-backend.h"
+#include "gguf.h"
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <new>
@@ -21,19 +30,83 @@
 
 // Counted and failed on the calling thread only: ggml's worker threads do not allocate with new,
 // and no other thread's allocation is attributed to the call under test.
+// `live` counts this thread's allocations not yet freed.
 extern "C" void *__libc_malloc(size_t);
-static thread_local long fail_after = -1, allocations = 0, failed = 0;
+static thread_local long fail_after = -1, allocations = 0, failed = 0, live = 0;
 void *operator new(std::size_t size) {
     ++allocations;
     if (fail_after >= 0 && fail_after-- == 0) { ++failed; throw std::bad_alloc(); }
-    if (void *p = __libc_malloc(size ? size : 1)) return p;
+    if (void *p = __libc_malloc(size ? size : 1)) { ++live; return p; }
     throw std::bad_alloc();
 }
 void *operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void *p) noexcept { std::free(p); }
-void operator delete(void *p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void *p) noexcept { std::free(p); }
-void operator delete[](void *p, std::size_t) noexcept { std::free(p); }
+// ggml's nothrow allocations (buffer records, the CPU backend) are counted and failed the same way.
+void *operator new(std::size_t size, const std::nothrow_t &) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
+void *operator new[](std::size_t size, const std::nothrow_t &) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
+static void release(void *p) noexcept { if (p) { --live; std::free(p); } }
+void operator delete(void *p) noexcept { release(p); }
+void operator delete(void *p, std::size_t) noexcept { release(p); }
+void operator delete[](void *p) noexcept { release(p); }
+void operator delete[](void *p, std::size_t) noexcept { release(p); }
+void operator delete(void *p, const std::nothrow_t &) noexcept { release(p); }
+void operator delete[](void *p, const std::nothrow_t &) noexcept { release(p); }
+
+// Link-time wrappers of two ggml functions llama.cpp calls (other objects' calls only).
+extern "C" {
+ggml_backend_buffer_t __real_ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size);
+void *__real_ggml_backend_reg_get_proc_address(ggml_backend_reg_t reg, const char *name);
+}
+// Zero-size (dummy) buffers: the distinct call sites seen while watching, and the site whose next
+// dummy buffer record fails (its first allocation, the record in ggml_backend_buffer_init).
+static thread_local bool dummy_watch = false;
+static thread_local void *dummy_sites[64];
+static thread_local int dummy_site_count = 0;
+static thread_local void *dummy_fail_site = nullptr;
+extern "C" ggml_backend_buffer_t __wrap_ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    if (size == 0 && dummy_watch) {
+        void *site = __builtin_return_address(0);
+        bool known = false;
+        for (int i = 0; i < dummy_site_count; ++i) known = known || dummy_sites[i] == site;
+        if (!known && dummy_site_count < 64) dummy_sites[dummy_site_count++] = site;
+        if (site == dummy_fail_site) { dummy_fail_site = nullptr; failed = 0; fail_after = 0; }
+    }
+    return __real_ggml_backend_buft_alloc_buffer(buft, size);
+}
+// The CPU device's extra buffer types, which llama.cpp looks up through the registry and calls
+// while loading a model: the lookup returns a tracer that fails the call's allocation number
+// `extra_fail_at` (none if negative) and records what the call allocated and whether it threw.
+static ggml_backend_dev_get_extra_bufts_t real_extra_bufts = nullptr;
+static thread_local long extra_fail_at = -1, extra_calls = 0, extra_allocations = 0;
+static thread_local bool extra_threw = false;
+static ggml_backend_buffer_type_t *traced_extra_bufts(ggml_backend_dev_t device) {
+    ++extra_calls;
+    extra_threw = false;
+    const long before = allocations;
+    if (extra_fail_at >= 0) { failed = 0; fail_after = extra_fail_at; }
+    try {
+        ggml_backend_buffer_type_t *types = real_extra_bufts(device);
+        fail_after = -1;
+        extra_allocations = allocations - before;
+        return types;
+    } catch (...) {
+        fail_after = -1;
+        extra_allocations = allocations - before;
+        extra_threw = true;
+        throw;
+    }
+}
+extern "C" void *__wrap_ggml_backend_reg_get_proc_address(ggml_backend_reg_t reg, const char *name) {
+    void *fn = __real_ggml_backend_reg_get_proc_address(reg, name);
+    if (fn && name && std::strcmp(name, "ggml_backend_dev_get_extra_bufts") == 0) {
+        real_extra_bufts = reinterpret_cast<ggml_backend_dev_get_extra_bufts_t>(fn);
+        return reinterpret_cast<void *>(&traced_extra_bufts);
+    }
+    return fn;
+}
 
 namespace {
 void expect(bool ok, const std::string &message) { if (!ok) throw std::runtime_error(message); }
@@ -98,6 +171,67 @@ int main(int argc, char **argv) {
         llama_backend_init();
         auto mp = llama_model_default_params();
         mp.n_gpu_layers = 0;
+
+        // The CPU backend's extra buffer types are listed on first use, which is model loading's
+        // call to the device's extra buffer types (C++ inside the loader's try, before this
+        // process loads anything else). A failed allocation there must fail the load (NULL) and
+        // leave the list to be built by the next load; c-api-no-throw.patch first aborted (the
+        // list's readers in C, graph planning and supports_op, still abort if they build it).
+        // Each of the call's allocations is failed in turn until the call completes.
+        long extra_points = 0;
+        for (long k = 0;; ++k) {
+            extra_fail_at = k;
+            const long calls = extra_calls;
+            llama_model *m = injected("llama_model_load_from_file", -1, [&] { return llama_model_load_from_file(path, mp); });
+            extra_fail_at = -1;
+            expect(extra_calls == calls + 1, "model loading did not list the CPU extra buffer types once");
+            if (extra_allocations <= k) { // completed without reaching the failure
+                expect(m != nullptr && !extra_threw, "model load after the extra buffer types were listed");
+                llama_model_free(m);
+                break;
+            }
+            ++extra_points;
+            expect(failed == 1 && extra_threw, "a failed allocation in the extra buffer types was not reported to the loader");
+            expect(m == nullptr, "the model loaded although its extra buffer types failed");
+        }
+        expect(extra_points > 0, "the CPU extra buffer types were listed before the first model load");
+        injected("llama_model_load_from_file", -1, [&] { llama_model_free(llama_model_load_from_file(path, mp)); return 0; });
+        expect(extra_allocations == 0, "the CPU extra buffer types were listed again");
+        std::cerr << "extra buffer types: " << extra_points << " allocation failure points, load failed cleanly\n";
+
+        // A buffer type that cannot be used for a weight is skipped. Model loading asks with a
+        // dummy zero-size buffer, whose record ggml_backend_buffer_init now returns NULL when it
+        // cannot be allocated (c-api-no-throw.patch); the loader must then fail (NULL) instead of
+        // taking the type as supported (a CPU_REPACK weight without its repacked data crashed the
+        // load). Each call site's first dummy record is failed in turn.
+        dummy_watch = true;
+        injected("llama_model_load_from_file", -1, [&] { llama_model_free(llama_model_load_from_file(path, mp)); return 0; });
+        dummy_watch = false;
+        const int sites = dummy_site_count;
+        expect(sites > 0, "model loading created no dummy buffers");
+        for (int i = 0; i < sites; ++i) {
+            dummy_watch = true;
+            dummy_fail_site = dummy_sites[i];
+            llama_model *m = injected("llama_model_load_from_file", -1, [&] { return llama_model_load_from_file(path, mp); });
+            dummy_watch = false;
+            expect(dummy_fail_site == nullptr && failed == 1, "dummy buffer site " + std::to_string(i) + " was not reached");
+            dummy_fail_site = nullptr;
+            if (m) llama_model_free(m);
+            expect(m == nullptr, "the model loaded although dummy buffer site " + std::to_string(i) + " failed");
+        }
+        std::cerr << "dummy buffers: " << sites << " call sites, each failure failed the load\n";
+
+        // GGUF reading: NULL on failure, with everything it allocated freed.
+        sweep("gguf_init_from_file", [&](long n) {
+            ggml_context *tensors = nullptr;
+            const long before = live;
+            gguf_context *g = injected("gguf_init_from_file", n, [&] { return gguf_init_from_file(path, {true, &tensors}); });
+            if (g) { gguf_free(g); ggml_free(tensors); }
+            else expect(tensors == nullptr, "gguf_init_from_file failed at point " + std::to_string(n) + " but kept its tensor context");
+            const long kept = live - before; // before building the message, which allocates
+            expect(kept == 0, "gguf_init_from_file at point " + std::to_string(n) + " kept " + std::to_string(kept) + " allocation(s)");
+            return g != nullptr;
+        });
 
         // Model loading: NULL on failure (the library reports status 2).
         sweep("llama_model_load_from_file", [&](long n) {

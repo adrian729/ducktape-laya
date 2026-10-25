@@ -79,8 +79,8 @@
       },
       {
         "path": "patches/llama.cpp/c-api-no-throw.patch",
-        "sha256": "febb9e5ad08cb39eee755d77f4fa82743d5864c564bc90e669e9460e59194bbe",
-        "purpose": "No C++ exception leaves the llama.cpp, ggml and GGUF C functions the library reaches: model loading, GGUF reading, buffer and CPU backend creation return NULL on a failed allocation, logging truncates instead of throwing, and one-time registry, CPU device and scheduler records abort like ggml's other small allocations (undefined behaviour with clang-cl /EHsc otherwise); no arithmetic changes"
+        "sha256": "db92758ad2b2a6a3562cd300dad73938d9083070e2bf4f78a21b30cc4caaef92",
+        "purpose": "No C++ exception leaves the llama.cpp, ggml and GGUF C functions the library reaches: model loading, GGUF reading (freeing what it read), buffer and CPU backend creation return NULL on a failed allocation, model loading checks its dummy buffers and fails when the CPU extra buffer types cannot be listed, graph reservation and allocation return false when the split fails, logging truncates instead of throwing, and the one-time registry and CPU device records abort like ggml's other small allocations (undefined behaviour with clang-cl /EHsc otherwise); no arithmetic changes"
       }
     ]
   },

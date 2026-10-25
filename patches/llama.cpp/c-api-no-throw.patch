@@ -53,7 +53,26 @@
          /* .interface = */ iface,
          /* .buft      = */ buft,
          /* .context   = */ context,
-@@ -1208,7 +1216,7 @@
+@@ -870,7 +878,17 @@
+         total_size += ggml_backend_buffer_get_size(buffers[i]);
+     }
+ 
+-    return ggml_backend_buffer_init(buffers[0]->buft, ggml_backend_multi_buffer_i, ctx, total_size);
++    // DTL: ggml_backend_buffer_init returns NULL when it cannot allocate the buffer's record; the
++    // buffers the multi-buffer would own are then freed, as freeing the multi-buffer would
++    ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buffers[0]->buft, ggml_backend_multi_buffer_i, ctx, total_size);
++    if (buffer == NULL) {
++        for (size_t i = 0; i < n_buffers; i++) {
++            ggml_backend_buffer_free(ctx->buffers[i]);
++        }
++        free(ctx->buffers);
++        free(ctx);
++    }
++    return buffer;
+ }
+ 
+ bool ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer) {
+@@ -1208,7 +1226,7 @@
  }
  
  // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
@@ -62,17 +81,26 @@
      // reset splits
      sched->n_splits = 0;
      sched->n_graph_inputs = 0;
-@@ -1749,6 +1757,17 @@
+@@ -1749,6 +1767,26 @@
      }
  }
  
-+// DTL: no exception leaves this C function: the allocation dependencies collected while splitting
-+// are kept in a standard container (MSVC's allocates even when empty), and a failure there aborts
++// DTL: no exception leaves the C functions that split a graph: the allocation dependencies
++// collected while splitting are kept in a standard container (MSVC's allocates even when empty).
++// Reserving and allocating a graph report a failure there as a failed allocation (false), and the
++// next split starts afresh; ggml_backend_sched_split_graph itself has no failure value and aborts,
 +// as the scheduler's other small allocations do (its graph arrays are asserted)
-+void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
++static bool ggml_backend_sched_split_graph_nothrow(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
 +    try {
 +        ggml_backend_sched_split_graph_impl(sched, graph);
++        return true;
 +    } catch (...) {
++        return false;
++    }
++}
++
++void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
++    if (!ggml_backend_sched_split_graph_nothrow(sched, graph)) {
 +        GGML_ABORT("%s: failed to allocate the graph splits", __func__);
 +    }
 +}
@@ -80,7 +108,29 @@
  static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
      bool backend_ids_changed = false;
      for (int i = 0; i < sched->graph.n_nodes; i++) {
-@@ -2557,7 +2576,12 @@
+@@ -2076,7 +2114,9 @@
+ 
+     ggml_backend_sched_synchronize(sched);
+ 
+-    ggml_backend_sched_split_graph(sched, measure_graph);
++    if (!ggml_backend_sched_split_graph_nothrow(sched, measure_graph)) {
++        return false;
++    }
+ 
+     if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
+         return false;
+@@ -2095,7 +2135,9 @@
+     sched->cur_copy = sched->next_copy;
+     sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
+ 
+-    ggml_backend_sched_split_graph(sched, graph);
++    if (!ggml_backend_sched_split_graph_nothrow(sched, graph)) {
++        return false;
++    }
+ 
+     if (!ggml_backend_sched_alloc_splits(sched)) {
+         return false;
+@@ -2557,7 +2599,12 @@
          return NULL;
      }
  
@@ -96,21 +146,57 @@
  static size_t ggml_backend_cpu_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
 --- a/ggml/src/gguf.cpp
 +++ b/ggml/src/gguf.cpp
-@@ -457,7 +457,7 @@
+@@ -10,6 +10,7 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <cerrno>
++#include <exception>
+ #include <map>
+ #include <new>
+ #include <stdexcept>
+@@ -457,8 +458,26 @@
      return true;
  }
  
 -static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr, struct gguf_init_params params) {
++// DTL: frees what the reader has built when an exception leaves it (gguf_init_from_reader below
++// returns NULL then); the reader's own error returns free them as before
++struct gguf_reader_unwind_guard {
++    struct gguf_context * ctx;
++    struct ggml_context ** data = nullptr; // set once the reader has created the tensor context
++    const int exceptions = std::uncaught_exceptions();
++    ~gguf_reader_unwind_guard() {
++        if (std::uncaught_exceptions() > exceptions) {
++            if (data != nullptr && *data != nullptr) {
++                ggml_free(*data);
++                *data = nullptr;
++            }
++            gguf_free(ctx);
++        }
++    }
++};
++
 +static struct gguf_context * gguf_init_from_reader_impl(const struct gguf_reader & gr, struct gguf_init_params params) {
      struct gguf_context * ctx = new gguf_context;
++    gguf_reader_unwind_guard unwind_guard{ctx};
  
      bool ok = true;
-@@ -931,6 +931,16 @@
+ 
+@@ -867,6 +886,7 @@
+             gguf_free(ctx);
+             return nullptr;
+         }
++        unwind_guard.data = params.ctx;
+ 
+         struct ggml_context * ctx_data = *params.ctx;
+ 
+@@ -931,6 +951,17 @@
      return ctx;
  }
  
 +// DTL: no exception leaves the C functions that read a GGUF file: an allocation failure (or any
-+// other exception) outside the reader's own catch blocks returns NULL like an invalid file
++// other exception) outside the reader's own catch blocks returns NULL like an invalid file, with
++// the partly read context (and tensor context) freed by the reader's guard
 +static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr, struct gguf_init_params params) {
 +    try {
 +        return gguf_init_from_reader_impl(gr, params);
@@ -124,29 +210,43 @@
          return nullptr;
 --- a/ggml/src/ggml-cpu/ggml-cpu.cpp
 +++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
-@@ -41,7 +41,10 @@
+@@ -40,7 +40,10 @@
+ 
  // ggml-backend interface
  
- std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_get_extra_buffer_types() {
--    static std::vector<ggml_backend_buffer_type_t> bufts = []() {
-+    // DTL: no exception leaves the C functions whose first call can build this list (graph
-+    // planning, supports_op): its few small allocations abort on failure, as ggml's others do
-+    static std::vector<ggml_backend_buffer_type_t> bufts = []() noexcept {
-+      try {
+-std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_get_extra_buffer_types() {
++// DTL: a failed first construction throws std::bad_alloc and is not cached (the next call retries).
++// llama.cpp's model loading builds the list first, in C++ inside the loader's try, through the
++// device's extra buffer types below; the C functions that read it later find it built.
++static std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_extra_buffer_types_or_throw() {
+     static std::vector<ggml_backend_buffer_type_t> bufts = []() {
          std::vector<ggml_backend_buffer_type_t> bufts;
  
- #if defined(__AMX_INT8__) && defined(__AVX512VNNI__)
-@@ -69,6 +72,9 @@
- #endif
- 
-         return bufts;
-+      } catch (...) {
-+        GGML_ABORT("%s: failed to allocate the extra buffer types", __func__);
-+      }
-     }();
- 
+@@ -74,9 +77,22 @@
      return bufts;
-@@ -221,7 +227,8 @@
+ }
+ 
++std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_get_extra_buffer_types() {
++    // DTL: no exception leaves the C functions that call this (graph planning, supports_op). The
++    // list is normally built by then; if it is not (no model was loaded through llama.cpp) and its
++    // few small allocations fail here, the process aborts, as on ggml's other small allocations
++    try {
++        return ggml_backend_cpu_extra_buffer_types_or_throw();
++    } catch (...) {
++        GGML_ABORT("%s: failed to allocate the extra buffer types", __func__);
++    }
++}
++
++// DTL: reached through the registry's proc address from llama.cpp's C++ model loading, with no C
++// function in between: an allocation failure propagates to the loader (NULL model) and is retried
+ static ggml_backend_buffer_type_t * ggml_backend_cpu_device_get_extra_buffers_type(ggml_backend_dev_t device) {
+     static std::vector<ggml_backend_buffer_type_t> extra_bufts = [] {
+-        std::vector<ggml_backend_buffer_type_t> bufts = ggml_backend_cpu_get_extra_buffer_types();
++        std::vector<ggml_backend_buffer_type_t> bufts = ggml_backend_cpu_extra_buffer_types_or_throw();
+         bufts.push_back(nullptr);
+         return bufts;
+     }();
+@@ -221,7 +237,8 @@
      // initialize CPU backend now to avoid slowing the first graph computation
      ggml_cpu_init();
  
@@ -156,7 +256,7 @@
      if (ctx == NULL) {
          return NULL;
      }
-@@ -234,7 +241,7 @@
+@@ -234,7 +251,7 @@
      ctx->abort_callback_data = NULL;
      ctx->use_ref             = false;
  
@@ -165,7 +265,7 @@
          /* .guid    = */ ggml_backend_cpu_guid(),
          /* .iface   = */ ggml_backend_cpu_i,
          /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
-@@ -292,7 +299,10 @@
+@@ -292,7 +309,10 @@
  struct ggml_backend_cpu_device_context {
      std::string description = "CPU";
  
@@ -177,7 +277,7 @@
  #ifdef __APPLE__
          size_t len = 0;
          if (!sysctlbyname("machdep.cpu.brand_string", NULL, &len, NULL, 0)) {
-@@ -350,6 +360,9 @@
+@@ -350,6 +370,9 @@
              RegCloseKey(hKey);
          }
  #endif
@@ -232,3 +332,47 @@
  }
  
  struct llama_model * llama_model_load_from_splits(
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -12,6 +12,7 @@
+ #include <cstdint>
+ #include <cstring>
+ #include <future>
++#include <new>
+ #include <regex>
+ 
+ static const size_t kiB = 1024;
+@@ -1056,6 +1057,11 @@
+     // create a temporary dummy buffer for the weight so that supports_op can check the buffer type
+     GGML_ASSERT(w->buffer == nullptr);
+     w->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
++    if (w->buffer == nullptr) {
++        // DTL: NULL when the dummy buffer's record cannot be allocated (c-api-no-throw.patch); the
++        // loader reports the failure (NULL model) instead of treating the type as supported
++        throw std::bad_alloc();
++    }
+     bool op_supported = ggml_backend_dev_supports_op(dev, op_tensor);
+     ggml_backend_buffer_free(w->buffer);
+     w->buffer = nullptr;
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -33,6 +33,7 @@
+ #include <cmath>
+ #include <functional>
+ #include <map>
++#include <new>
+ #include <numeric>
+ #include <regex>
+ #include <sstream>
+@@ -2306,6 +2307,11 @@
+     }
+ 
+     ggml_backend_buffer_ptr buf { ggml_backend_buft_alloc_buffer(buft, 0) };
++    if (!buf) {
++        // DTL: NULL when the dummy buffer's record cannot be allocated (c-api-no-throw.patch); the
++        // loader reports the failure (NULL model) instead of treating the type as supported
++        throw std::bad_alloc();
++    }
+     ggml_tensor * op_tensor = fn(ctx.get());
+     for (int i = 0; i < GGML_MAX_SRC; i++) {
+         if (op_tensor->src[i] != nullptr) {
