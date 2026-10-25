@@ -1,5 +1,5 @@
-// Deadlines and cancellation during tokenization of text that special tokens split into short
-// pieces (tokenizer-stop-check.patch), and a cancellation callback that calls into the library.
+// Deadlines and cancellation during tokenization (tokenizer-stop-check.patch) of plain words and of
+// text that special tokens split into short pieces, and a cancellation callback that calls into the library.
 // Usage: laya-control-tokenize-tests MODEL [MULTILINGUAL_MODEL...]
 //
 // The English and typed-decisions vocabularies make runs of 2 to 24 spaces special tokens, and
@@ -18,33 +18,11 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#else
-#include <time.h>
-#endif
+#include "thread-cpu-time.hpp"
 
 namespace {
+using dtl_test::thread_cpu_seconds;
 void expect(bool ok, const std::string &message) { if (!ok) throw std::runtime_error(message); }
-
-double thread_cpu_seconds() {
-#ifdef _WIN32
-    FILETIME created, exited, kernel, user;
-    if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) throw std::runtime_error("GetThreadTimes");
-    auto ticks = [](FILETIME t) { return (static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
-    return static_cast<double>(ticks(kernel) + ticks(user)) / 1e7;
-#else
-    timespec t{};
-    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t) != 0) throw std::runtime_error("clock_gettime");
-    return static_cast<double>(t.tv_sec) + static_cast<double>(t.tv_nsec) / 1e9;
-#endif
-}
 
 const std::string question = R"("questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}})";
 const std::string small = R"({"state":"Please refund me.",)" + question + "}";
@@ -153,6 +131,14 @@ int main(int argc, char **argv) {
             for (int i = 0; i < 160; ++i) { seed = seed * 1103515245u + 12345u; word += char('a' + (seed >> 16) % 26); }
             return word;
         };
+        // Pseudo-random 160-letter words separated by single spaces: plain words with no special
+        // token, so the text is one piece split only by the regex pre-split (the shape real-control
+        // checked before; long words make merging, which is checked, most of the work).
+        const pieces plain_words = [](uint32_t &seed) {
+            std::string word = " ";
+            for (int i = 0; i < 160; ++i) { seed = seed * 1103515245u + 12345u; word += char('a' + (seed >> 16) % 26); }
+            return word;
+        };
         // Lines in several languages and scripts separated by newlines (JSON escapes).
         const std::string lines = "The customer asked for a refund.\\nEl cliente pidi\xc3\xb3 un reembolso.\\n"
                                   "Der Kunde bat um eine R\xc3\xbc" "ckerstattung.\\n\xd0\x9a\xd0\xbb\xd0\xb8\xd0\xb5\xd0\xbd\xd1\x82 "
@@ -163,6 +149,7 @@ int main(int argc, char **argv) {
             const auto baseline = engine.execute(small);
             stops_promptly(engine, baseline, "double-spaced English", double_spaced);
             stops_promptly(engine, baseline, "double-spaced long words", long_words);
+            stops_promptly(engine, baseline, "single-spaced long words", plain_words);
             auto other = ducktape::engine::open(argv[1], R"({"threads":2})");
             reentrant_callback(engine, other, long_words);
             expect(engine.execute(small) == baseline, "result changed after the reentrant callback");

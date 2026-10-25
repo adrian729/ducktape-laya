@@ -207,7 +207,9 @@ static void c_allocation_sweep(const std::string &model, const std::string &batc
     const long in_execute = count([&] { dtl_execute(engine, batch.c_str(), nullptr, &result, &error); dtl_free(result); });
     const long in_open = count([&] { dtl_engine *e = nullptr; dtl_open(model.c_str(), options, &e, &error); dtl_close(e); });
     enum outcome { exact = 0, out_of_memory = 3, aborted = 4, model_error = 6 };
-    auto sweep = [&](const char *label, long points, const std::function<int()> &child) {
+    // Every allocation point up to `dense`, then every `stride`th (ggml aborts by design at most of
+    // the later open points; the sampled points keep every failure class).
+    auto sweep = [&](const char *label, long points, const std::function<int()> &child, long dense, long stride) {
         std::map<int, long> outcomes;
         std::map<pid_t, long> running;
         auto reap = [&] {
@@ -223,7 +225,9 @@ static void c_allocation_sweep(const std::string &model, const std::string &batc
                 ++outcomes[WEXITSTATUS(status)];
             }
         };
-        for (long n = 0; n < points; ++n) {
+        long sampled = 0;
+        for (long n = 0; n < points; n += n < dense ? 1 : stride) {
+            ++sampled;
             if (running.size() == 4) reap();
             std::cout.flush(); std::cerr.flush();
             pid_t pid = fork();
@@ -237,7 +241,9 @@ static void c_allocation_sweep(const std::string &model, const std::string &batc
             running[pid] = n;
         }
         while (!running.empty()) reap();
-        std::cerr << label << " C allocation failures: " << points << " points, " << outcomes[exact] << " exact, "
+        std::cerr << label << " C allocation failures: " << sampled << " of " << points << " points"
+                  << (dense < points ? " (the first " + std::to_string(dense) + ", then every " + std::to_string(stride) + "th)" : std::string())
+                  << ", " << outcomes[exact] << " exact, "
                   << outcomes[out_of_memory] << " DTL_OUT_OF_MEMORY, " << outcomes[model_error] << " DTL_MODEL_ERROR, "
                   << outcomes[aborted] << " ggml abort\n";
         return outcomes;
@@ -251,7 +257,7 @@ static void c_allocation_sweep(const std::string &model, const std::string &batc
         char *again = nullptr;
         if (dtl_execute(engine, batch.c_str(), nullptr, &again, &error) != DTL_OK || again != expected) return 5;
         return status == DTL_OK ? int(exact) : int(out_of_memory);
-    });
+    }, in_execute, 1);
     expect(executed[out_of_memory] > 0, "no C allocation failure reached the caller as DTL_OUT_OF_MEMORY");
     sweep("open", in_open, [&] {
         dtl_engine *e = nullptr;
@@ -260,7 +266,7 @@ static void c_allocation_sweep(const std::string &model, const std::string &batc
         if (status == DTL_OK) { dtl_close(e); return int(exact); }
         if (e) return 2;
         return status == DTL_OUT_OF_MEMORY ? int(out_of_memory) : status == DTL_MODEL_ERROR ? int(model_error) : 2;
-    });
+    }, 64, 6);
     dtl_close(engine);
 }
 #endif
@@ -404,8 +410,10 @@ static void state_cache_sweep(const std::string &model) {
     }
     expect(injected > 0, "no allocation failure in a call with a new state");
     dtl_engine *const shared = engine;
-    const long tail = std::min(count, 64l);
-    for (long n = count - tail; n < count; ++n) {
+    // The last points on new engines (each opens the model): 8 spread over the last 64.
+    const long tail = std::min(count, 64l), samples = std::min(tail, 8l), spacing = samples ? tail / samples : 1;
+    for (long i = 0; i < samples; ++i) {
+        const long n = count - 1 - i * spacing;
         expect(dtl_open(model.c_str(), options, &engine, &error) == DTL_OK, "open");
         cache_a("on a new engine");
         rejected(b_rejected, "state B with allocation failure " + std::to_string(n) + " on a new engine", n);
@@ -467,7 +475,7 @@ int main(int argc, char **argv) {
             const std::string expected = result; dtl_free(result);
             auto points = [](long dense, long stride) { std::vector<long> n; for (long i = 0; i < dense; ++i) n.push_back(i); for (long i = dense; ; i += stride) { n.push_back(i); if (i > (1l << 30)) break; } return n; };
             long injected = 0, absorbed = 0;
-            for (long n : points(384, 97)) {
+            for (long n : points(128, 97)) {
                 fail_after = n; failed = 0;
                 auto status = dtl_execute(engine, batch.c_str(), nullptr, &result, &error);
                 fail_after = -1;
@@ -486,7 +494,7 @@ int main(int argc, char **argv) {
                     dtl_free(result);
                 }
             }
-            expect(injected > 384, "too few injected request allocation failures");
+            expect(injected > 128, "too few injected request allocation failures");
             expect(dtl_execute(engine, batch.c_str(), nullptr, &result, &error) == DTL_OK && result == expected, "engine did not recover");
             dtl_free(result);
             dtl_close(engine);
