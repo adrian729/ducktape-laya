@@ -360,7 +360,8 @@ class Validation:
         probe = a.reference_probe_launcher
         if probe == 'auto':
             probe = next((name for name in ('ccache', 'sccache') if system.which(name)), 'none')
-        self.probe_launcher = '' if probe == 'none' else probe
+        # The probe-only launcher exists only with the probe (CMake refuses it otherwise, cmake/launcher_guard.cmake).
+        self.probe_launcher = '' if probe == 'none' or not sel['upstream_reference'] else probe
         build = self.build
         env = dict(os.environ, LD_LIBRARY_PATH=str(build), DUCKTAPE_LAYA_LIB_DIR=str(build),
                    DUCKTAPE_LAYA_ADDON=str(build / 'ducktape_laya.node'), PYTHONPATH=str(ROOT / 'bindings/python/src'),

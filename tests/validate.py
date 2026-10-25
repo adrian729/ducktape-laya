@@ -358,13 +358,18 @@ class Validate(unittest.TestCase):
         self.assertIn('ctest ran', report['error'])
 
     def test_generic_run_lists_everything_not_selected(self):
-        code, report = run(FakeSystem(self.directory), '--model', self.model, '--build', self.build, '--output', self.output(), '--cmake-arg=-GNinja')
+        system = FakeSystem(self.directory)
+        code, report = run(system, '--model', self.model, '--build', self.build, '--output', self.output(), '--cmake-arg=-GNinja')
         self.assertEqual(code, 0, report.get('error'))
         self.assertEqual((report['selection']['profile'], report['checks']), ('generic', ['generic']))
         self.assertEqual(report['ctest_selection']['labels'], '^(tier-generic|cat-real_model)$')
         self.assertEqual(report['ctest_ran'], report['ctest_selection']['tests'])
         for label in ('native', 'examples-smoke', 'abi', 'check-binary'):
             self.assertEqual(report['runs'][label]['exit_code'], 0)
+        # No probe without --upstream-reference, so no probe-only launcher (CMake refuses one without the probe).
+        configure = next(command for command in system.commands if command[:1] == ['cmake'] and '-S' in command)
+        self.assertIn('-DDUCKTAPE_REFERENCE_PROBE_LAUNCHER=', configure)
+        self.assertEqual(report['reference_probe_launcher'], 'none')
         # A generic run does not prove the native contracts.
         self.assertEqual(report['gates']['native_contracts'], {'status': 'not_run'})
         for key in ('rust', 'bindings', 'original-reference', 'package', 'policy', *[f'policy:{label}' for label in POLICY_LABELS]):
