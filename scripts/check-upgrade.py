@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Build immutable baseline/candidate sources and report compatibility. Never promote."""
+"""Build immutable baseline/candidate sources and report compatibility. Never promote.
+
+Pairs with the same runtime revision share one build: a later pair reconfigures the
+first pair's build directory (keeping the first pair's extracted runtime source; only
+the test model changes, which recompiles nothing) and is recorded as reused_build.
+--compiler-launcher ccache compiles through ccache (a rehearsal build, never shipped);
+the default is none.
+"""
 import argparse
 from collections import OrderedDict
 import json
@@ -11,7 +18,8 @@ import subprocess
 import sys
 import tarfile
 import time
-from release_support import ROOT, check_record, git, read_json, sha256, verify_model
+from release_support import (CCACHE_ENVIRONMENT, ROOT, ccache_config, check_record, default_jobs, generator_arguments, git, read_json, sha256,
+                             verify_model)
 from compare_results import compare_results
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -20,11 +28,14 @@ p.add_argument('--model', required=True, type=pathlib.Path)
 p.add_argument('--candidate-model', type=pathlib.Path)
 p.add_argument('--candidate-manifest', type=pathlib.Path)
 p.add_argument('--output', required=True, type=pathlib.Path, help='New directory; existing reports are never overwritten')
-p.add_argument('--jobs', type=int, default=2)
+p.add_argument('--jobs', type=int, default=default_jobs())
 p.add_argument('--node-include', type=pathlib.Path)
+p.add_argument('--compiler-launcher', choices=('none', 'ccache'), default='none')
 a = p.parse_args()
-if not 1 <= a.jobs <= 16:
-    p.error('--jobs must be 1..16')
+if not 1 <= a.jobs <= 256:
+    p.error('--jobs must be 1..256')
+launcher = '' if a.compiler_launcher == 'none' else a.compiler_launcher
+build_env = dict(os.environ, **CCACHE_ENVIRONMENT)
 if bool(a.candidate_model) != bool(a.candidate_manifest):
     p.error('--candidate-model and --candidate-manifest must be supplied together')
 record = check_record()
@@ -49,6 +60,7 @@ report = {
     'package_version': record['package_version'], 'model': manifest, 'candidate_model': new_manifest,
     'baseline_runtime': record['runtime']['commit'], 'candidate_runtime': candidate,
     'absolute_tolerance': record['candidate_absolute_tolerance'], 'release_ready': False,
+    'compiler_launcher': a.compiler_launcher, 'reused_build': {},
     'gates': {gate: {'status': 'not_run'} for gate in record['required_release_gates']},
     'runs': {}, 'toolchain': {}, 'notes': [
         'No pins, expected results or package versions are promoted by this tool.',
@@ -58,6 +70,8 @@ report = {
 }
 for name, command in {'cmake': ['cmake', '--version'], 'cxx': ['c++', '--version'], 'node': ['node', '--version'], 'cargo': ['cargo', '--version']}.items():
     report['toolchain'][name] = subprocess.check_output(command, text=True).splitlines()[0]
+if launcher:
+    report['ccache_config'] = ccache_config(build_env)
 
 
 def save():
@@ -104,16 +118,26 @@ try:
     # When both change, retain each independent axis rather than hiding interaction effects.
     if candidate != record['runtime']['commit'] and new_manifest['sha256'] != manifest['sha256']:
         pairs += [('runtime_only', candidate, model), ('model_only', record['runtime']['commit'], new_model)]
+    builds = {}  # runtime revision -> (label, build directory, extracted runtime source) of the first pair with it
     for label, revision, weights in pairs:
-        upstream = output / (label + '-runtime')
-        archive(runtime_repo, revision, upstream)
-        build = output / (label + '-build')
-        run(label + '-configure', ['cmake', '-S', str(core), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
+        reused = builds.get(revision)
+        if reused:
+            # Same runtime revision: the first pair's build and runtime source; only the test model changes.
+            owner, build, upstream = reused
+            report['reused_build'][label] = owner
+        else:
+            owner, build, upstream = label, output / (label + '-build'), output / (label + '-runtime')
+            archive(runtime_repo, revision, upstream)
+            builds[revision] = (label, build, upstream)
+        run(label + '-configure', ['cmake', '-S', str(core), '-B', str(build), *generator_arguments([], build), '-DCMAKE_BUILD_TYPE=Release',
             f'-DDUCKTAPE_LLAMA_SOURCE={upstream}', f'-DDUCKTAPE_LLAMA_REVISION={revision}', '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_TESTS=ON',
             '-DDUCKTAPE_BUILD_NODE=ON', f'-DNODE_INCLUDE_DIR={node_headers}', f'-DDUCKTAPE_TEST_MODEL={weights}',
-            # No compiler cache: ggml's GGML_CCACHE (ON by default) would use any ccache on PATH.
-            '-DGGML_CCACHE=OFF', '-DCMAKE_C_COMPILER_LAUNCHER=', '-DCMAKE_CXX_COMPILER_LAUNCHER='], core)
-        run(label + '-build', ['cmake', '--build', str(build), '--parallel', str(a.jobs)], core)
+            '-DDUCKTAPE_DEV_BUILD=OFF', '-DDUCKTAPE_DEV_PCH=OFF',
+            # ggml's GGML_CCACHE would set a global launch rule with any ccache on PATH; the launcher is explicit.
+            '-DGGML_CCACHE=OFF', f'-DCMAKE_C_COMPILER_LAUNCHER={launcher}', f'-DCMAKE_CXX_COMPILER_LAUNCHER={launcher}'], core, build_env)
+        run(label + '-build', ['cmake', '--build', str(build), '--parallel', str(a.jobs)], core, build_env)
+        report['runs'][label + '-build']['reused_build'] = owner if reused else None
+        report['runs'][label + '-build']['runtime_source'] = upstream.name
         env = dict(os.environ, LAYA_MODEL=str(weights), LD_LIBRARY_PATH=str(build),
                    DUCKTAPE_LAYA_LIB_DIR=str(build), DUCKTAPE_LAYA_ADDON=str(build / 'ducktape_laya.node'),
                    CARGO_TARGET_DIR=str(build / 'rust-tests'))
@@ -128,7 +152,7 @@ try:
         report['runs'][label + '-build']['cmake_cache_sha256'] = sha256(build / 'CMakeCache.txt')
         report['runs'][label + '-build']['library_sha256'] = sha256(build / 'libducktape_laya.so')
         report['runs'][label + '-bindings']['outputs_sha256'] = sha256(parity)
-        selected = ['CMAKE_BUILD_TYPE', 'CMAKE_CXX_COMPILER', 'GGML_NATIVE', 'GGML_AVX2', 'GGML_FMA', 'GGML_F16C', 'GGML_BMI2', 'GGML_SSE42', 'GGML_CPU', 'GGML_WEBGPU', 'GGML_CUDA', 'GGML_METAL', 'GGML_OPENMP']
+        selected = ['CMAKE_BUILD_TYPE', 'CMAKE_CXX_COMPILER', 'CMAKE_CXX_COMPILER_LAUNCHER', 'GGML_NATIVE', 'GGML_AVX2', 'GGML_FMA', 'GGML_F16C', 'GGML_BMI2', 'GGML_SSE42', 'GGML_CPU', 'GGML_WEBGPU', 'GGML_CUDA', 'GGML_METAL', 'GGML_OPENMP']
         settings = {}
         for line in (build / 'CMakeCache.txt').read_text().splitlines():
             match = re.match(r'([^:#]+):[^=]+=(.*)', line)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Download a release candidate run's evidence from GitHub Actions and record it.
 
-The candidate run is .github/workflows/native.yml dispatched with candidate=true
+The candidate run is .github/workflows/native.yml dispatched with mode=candidate
 on the exact candidate commit (docs/RELEASE_CHECKS.md). This finds the newest
 successful such run for COMMIT (or takes --run), requires its head commit, event,
 conclusion, workflow and repository, and downloads the artifacts the candidate's
@@ -14,7 +14,19 @@ own release/compatibility.json targets need:
   stress-<platform>, reproducibility-<platform>   tier-2 targets only
 
 plus, when present, the native-x64-* validation artifacts (native matrix and
-cross-host bundle for the tier-1 gates). Each zip's sha256 must equal the
+cross-host bundle for the tier-1 gates). The evidence key electron names the
+linux-x64 runner's Electron run of the released npm package.
+
+--qualify also downloads the long-gate evidence of a native.yml mode=qualify
+run: the artifacts sanitizers, fuzz and upgrade, into OUTPUT/qualify/<artifact>/.
+Without --qualify-run it takes the newest successful workflow_dispatch run of
+the commit that carries all three unexpired; --qualify-run RUN takes that run,
+whose head may be the candidate or an ancestor of it (evidence reuse; the
+checker applies the reuse rules). The run must pass the same event,
+conclusion, workflow and repository rules, and each artifact's report.json must
+name the run's head as its source_commit. ci-run.json records the run as
+qualify_run (with its own file list), and evidence.json gains the keys
+sanitizers, fuzz and upgrade. Each zip's sha256 must equal the
 artifact digest GitHub reports; extraction refuses absolute paths, '..', drive
 or backslash names, links and duplicates. Nothing downloaded is executed or
 imported.
@@ -43,6 +55,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = '.github/workflows/native.yml'
 EVENT, CONCLUSION = 'workflow_dispatch', 'success'
 OPTIONAL_PREFIX = 'native-x64-'
+# The long-gate evidence of a mode=qualify run: artifact name -> evidence key (each artifact's report.json).
+QUALIFY_ARTIFACTS = ('sanitizers', 'fuzz', 'upgrade')
 # The only repository whose runs are candidate evidence (scripts/release_targets.py checks ci-run.json against the same name).
 REPOSITORY = 'adrian729/ducktape-laya'
 
@@ -98,12 +112,31 @@ def evidence_keys(record):
         if item['tier'] != 1:
             keys[f'{platform}:stress'] = f'stress-{platform}/report.json'
             keys[f'{platform}:reproducibility'] = f'reproducibility-{platform}/report.json'
+        if platform == 'linux-x64' and item['electron']:
+            # The tier-1 Electron gate: the released npm package in Electron on the linux-x64 runner.
+            keys['electron'] = f'installed-{platform}-real-model/electron.json'
     return keys
 
 
-def check_run(run, commit, repository):
+def qualify_keys():
+    """Evidence keys of a qualify run -> path relative to the output directory."""
+    return {name: f'qualify/{name}/report.json' for name in QUALIFY_ARTIFACTS}
+
+
+def is_ancestor(ancestor, commit):
+    """Whether ancestor is commit or one of its ancestors in this checkout."""
+    result = subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', ancestor, commit], capture_output=True, text=True)
+    if result.returncode not in (0, 1):
+        raise Refused(f'cannot relate {ancestor} to {commit}: {result.stderr.strip()}')
+    return result.returncode == 0
+
+
+def check_run(run, commit, repository, ancestor=False):
+    """The run rules; ancestor allows a head that is an ancestor of commit (a reused qualify run)."""
     problems = []
-    if run.get('head_sha') != commit: problems.append(f'head {run.get("head_sha")} is not {commit}')
+    head = run.get('head_sha')
+    if head != commit and not (ancestor and isinstance(head, str) and is_ancestor(head, commit)):
+        problems.append(f'head {head} is not {commit}' + (' or an ancestor of it' if ancestor else ''))
     if run.get('event') != EVENT: problems.append(f'event {run.get("event")}, not {EVENT}')
     if run.get('status') != 'completed' or run.get('conclusion') != CONCLUSION:
         problems.append(f'{run.get("status")}/{run.get("conclusion")}, not completed/{CONCLUSION}')
@@ -123,10 +156,10 @@ def run_artifacts(repository, run_id):
         page += 1
 
 
-def find_run(repository, commit, run_id, required):
+def find_run(repository, commit, run_id, required, kind='candidate', ancestor=False):
     if run_id:
         run = gh(f'repos/{repository}/actions/runs/{run_id}')
-        check_run(run, commit, repository)
+        check_run(run, commit, repository, ancestor)
         return run, run_artifacts(repository, run['id'])
     runs = gh(f'repos/{repository}/actions/workflows/{pathlib.PurePosixPath(WORKFLOW).name}/runs'
               f'?head_sha={commit}&event={EVENT}&status={CONCLUSION}&per_page=100')['workflow_runs']
@@ -140,8 +173,40 @@ def find_run(repository, commit, run_id, required):
         artifacts = run_artifacts(repository, run['id'])
         if set(required) <= {name for name, item in artifacts.items() if not item.get('expired')}:
             return run, artifacts
-        rejected.append(f'Run {run["id"]}: lacks {sorted(set(required) - set(artifacts))[:4]} (not a complete candidate run)')
-    raise Refused(f'No successful candidate run of {WORKFLOW} for {commit}' + (': ' + '; '.join(rejected) if rejected else ''))
+        rejected.append(f'Run {run["id"]}: lacks {sorted(set(required) - set(artifacts))[:4]} (not a complete {kind} run)')
+    raise Refused(f'No successful {kind} run of {WORKFLOW} for {commit}' + (': ' + '; '.join(rejected) if rejected else ''))
+
+
+def download(repository, artifacts, chosen, staging, prefix=''):
+    """Download, digest-check and extract the chosen artifacts into staging/prefix/<name>; returns the artifact listing."""
+    listing = {}
+    for name in chosen:
+        item = artifacts[name]
+        digest = item.get('digest') or ''
+        if not digest.startswith('sha256:'):
+            raise Refused(f'{name}: GitHub reports no sha256 digest')
+        archive = staging / f'.{name}.zip'
+        gh(f'repos/{repository}/actions/artifacts/{item["id"]}/zip', output=archive)
+        if sha256(archive) != digest.removeprefix('sha256:'):
+            raise Refused(f'{name}: download does not match the artifact digest')
+        safe_extract(archive, staging / prefix / name)
+        archive.unlink()
+        listing[name] = {'id': item['id'], 'digest': digest, 'size': item.get('size_in_bytes'), 'expires_at': item['expires_at']}
+    return listing
+
+
+def unexpired(run, artifacts, required):
+    missing = sorted(name for name in required if name not in artifacts or artifacts[name].get('expired'))
+    if missing:
+        raise Refused(f'Run {run["id"]} lacks or has expired artifacts: {", ".join(missing)}')
+
+
+def warn_expiry(artifacts, chosen):
+    now = datetime.now(timezone.utc)
+    for name in chosen:
+        expires = datetime.fromisoformat(artifacts[name]['expires_at'].replace('Z', '+00:00'))
+        if expires - now < timedelta(days=7):
+            print(f'warning: {name} expires {artifacts[name]["expires_at"]}', file=sys.stderr)
 
 
 def safe_extract(archive_path, destination):
@@ -178,7 +243,11 @@ def main():
                help=f'Only {REPOSITORY} is accepted')
     p.add_argument('--merge', type=pathlib.Path, help='Evidence manifest to add the keys to (created if missing)')
     p.add_argument('--replace', action='store_true', help='With --merge, overwrite keys that already exist')
+    p.add_argument('--qualify', action='store_true', help='Also download the sanitizers, fuzz and upgrade evidence of a mode=qualify run')
+    p.add_argument('--qualify-run', type=int, help='With --qualify, the qualify run ID (its head may be an ancestor of the candidate)')
     a = p.parse_args()
+    if a.qualify_run and not a.qualify:
+        p.error('--qualify-run needs --qualify')
     if a.repository != REPOSITORY:
         raise Refused(f'{a.repository} is not {REPOSITORY}; only its runs are release evidence')
     if a.output.exists():
@@ -188,6 +257,8 @@ def main():
     if not record.get('targets'):
         raise Refused(f'{commit} has no release targets in release/compatibility.json')
     required, keys = expected_artifacts(record), evidence_keys(record)
+    if a.qualify:
+        keys.update(qualify_keys())
     output = a.output.resolve()
     if a.merge:
         # Refuse a clash before downloading anything.
@@ -198,31 +269,20 @@ def main():
         if clashes and not a.replace:
             raise Refused(f'{manifest} already has {", ".join(clashes)} (pass --replace to overwrite)')
     run, artifacts = find_run(a.repository, commit, a.run, required)
-    missing = sorted(name for name in required if name not in artifacts or artifacts[name].get('expired'))
-    if missing:
-        raise Refused(f'Run {run["id"]} lacks or has expired artifacts: {", ".join(missing)}')
+    unexpired(run, artifacts, required)
     chosen = sorted(set(required) | {name for name, item in artifacts.items()
                                      if name.startswith(OPTIONAL_PREFIX) and not item.get('expired')})
-    now = datetime.now(timezone.utc)
-    for name in chosen:
-        expires = datetime.fromisoformat(artifacts[name]['expires_at'].replace('Z', '+00:00'))
-        if expires - now < timedelta(days=7):
-            print(f'warning: {name} expires {artifacts[name]["expires_at"]}', file=sys.stderr)
+    warn_expiry(artifacts, chosen)
+    if a.qualify:
+        qualify, qualify_artifacts = find_run(a.repository, commit, a.qualify_run, QUALIFY_ARTIFACTS, 'qualify', ancestor=True)
+        unexpired(qualify, qualify_artifacts, QUALIFY_ARTIFACTS)
+        warn_expiry(qualify_artifacts, QUALIFY_ARTIFACTS)
     staging = pathlib.Path(tempfile.mkdtemp(prefix=output.name + '.partial-', dir=output.parent))
     try:
-        files, listing = {}, {}
-        for name in chosen:
-            item = artifacts[name]
-            digest = item.get('digest') or ''
-            if not digest.startswith('sha256:'):
-                raise Refused(f'{name}: GitHub reports no sha256 digest')
-            download = staging / f'.{name}.zip'
-            gh(f'repos/{a.repository}/actions/artifacts/{item["id"]}/zip', output=download)
-            if sha256(download) != digest.removeprefix('sha256:'):
-                raise Refused(f'{name}: download does not match the artifact digest')
-            safe_extract(download, staging / name)
-            download.unlink()
-            listing[name] = {'id': item['id'], 'digest': digest, 'size': item.get('size_in_bytes'), 'expires_at': item['expires_at']}
+        listing = download(a.repository, artifacts, chosen, staging)
+        if a.qualify:
+            qualify_listing = download(a.repository, qualify_artifacts, QUALIFY_ARTIFACTS, staging, 'qualify')
+        files = {}
         for path in sorted(staging.rglob('*')):
             if path.is_symlink():
                 raise Refused(f'{path}: link in the extracted evidence')
@@ -231,10 +291,25 @@ def main():
         absent = sorted(key for key, relative in keys.items() if relative != 'ci-run.json' and relative not in files)
         if absent:
             raise Refused('The run lacks evidence files: ' + ', '.join(f'{key} ({keys[key]})' for key in absent))
+        # The qualify run's files are listed under qualify_run only, so a candidate-run accessor never accepts them.
+        qualify_files = {path: digest for path, digest in files.items() if path.startswith('qualify/')}
+        files = {path: digest for path, digest in files.items() if not path.startswith('qualify/')}
         summary = {'schema_version': 1, 'repository': a.repository, 'workflow_path': run['path'], 'run_id': run['id'],
                    'run_attempt': run.get('run_attempt'), 'head_sha': run['head_sha'], 'head_branch': run.get('head_branch'),
                    'event': run['event'], 'status': run['status'], 'conclusion': run['conclusion'], 'created_at': run.get('created_at'),
                    'html_url': run.get('html_url'), 'candidate_commit': commit, 'artifacts': listing, 'files': files}
+        if a.qualify:
+            for name in QUALIFY_ARTIFACTS:
+                try:
+                    report = json.loads((staging / qualify_keys()[name]).read_text())
+                except ValueError as error:
+                    raise Refused(f'{name}: report.json is not JSON ({error})') from None
+                if not isinstance(report, dict) or report.get('source_commit') != qualify['head_sha']:
+                    raise Refused(f'{name}: report source {report.get("source_commit") if isinstance(report, dict) else None} '
+                                  f'is not the qualify run\'s head {qualify["head_sha"]}')
+            summary['qualify_run'] = {'repository': a.repository, 'workflow_path': qualify['path'], 'run_id': qualify['id'],
+                                      'run_attempt': qualify.get('run_attempt'), 'head_sha': qualify['head_sha'],
+                                      'html_url': qualify.get('html_url'), 'artifacts': qualify_listing, 'files': qualify_files}
         (staging / 'ci-run.json').write_text(json.dumps(summary, indent=2) + '\n')
         (staging / 'evidence.json').write_text(json.dumps(keys, indent=2) + '\n')
         staging.rename(output)
@@ -246,6 +321,8 @@ def main():
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(json.dumps(current, indent=2) + '\n')
     print(f'Run {run["id"]} (attempt {run.get("run_attempt")}, {run.get("html_url")}): {len(chosen)} artifacts, {len(files)} files in {output}')
+    if a.qualify:
+        print(f'Qualify run {qualify["id"]} (head {qualify["head_sha"]}, {qualify.get("html_url")}): {len(qualify_files)} files in {output}/qualify')
     tier2 = [item['platform'] for item in record['targets'] if item['tier'] != 1]
     rel = output.as_posix()
     print('Next, on this host (see docs/RELEASE_CHECKS.md):')

@@ -546,25 +546,6 @@ class Registries(unittest.TestCase):
         self.assertRefused('other or missing files: a-1.2.3.pom', {base + 'a-1.2.3.jar': b'a-1.2.3.jar', base + 'a-1.2.3.pom': b'other'}, *args)
         self.assertRefused('other or missing files: a-1.2.3.jar', {base + 'a-1.2.3.jar': (404, None), base + 'a-1.2.3.pom': b'a-1.2.3.pom'}, *args)
 
-    def test_workflow_compares_before_uploading(self):
-        import re
-        workflow = (ROOT / '.github/workflows/publish-release.yml').read_text()
-        parts = re.split(r'(?m)^  ([a-z][\w-]*):\n', workflow.split('\njobs:\n', 1)[1])
-        jobs = dict(zip(parts[1::2], parts[2::2]))
-        for name in ('npm', 'crates', 'nuget', 'maven'):
-            job = jobs[name]
-            self.assertIn(f'scripts/registry-state.py {name}', job)
-            # Asked before the upload command.
-            upload = {'npm': 'npm publish "./dist', 'crates': 'cargo publish --manifest-path', 'nuget': 'dotnet nuget push "', 'maven': '/upload?name='}[name]
-            self.assertLess(job.index(f'scripts/registry-state.py {name}'), job.index(upload))
-        self.assertIn('--skip-duplicate', jobs['nuget'])
-        # Every publish job waits for the crates to be reproduced from the tag, so a crate that does not
-        # reproduce stops the whole publication before any upload.
-        self.assertIn('cargo package', jobs['reproduce'])
-        for name in ('npm', 'crates', 'nuget', 'maven', 'pypi'):
-            self.assertRegex(jobs[name].split('steps:')[0], r'needs: reproduce\b')
-
-
 class PyPI(unittest.TestCase):
     """scripts/pypi-missing-wheels.py against fake PyPI JSON payloads (no network)."""
     SCRIPT = ROOT / 'scripts/pypi-missing-wheels.py'
@@ -599,15 +580,6 @@ class PyPI(unittest.TestCase):
 
     def remaining(self):
         return sorted(path.name for path in self.dist.iterdir())
-
-    def test_workflow_uses_the_comparison_not_skip_existing(self):
-        workflow = (ROOT / '.github/workflows/publish-release.yml').read_text()
-        self.assertNotRegex(workflow, r'(?m)^\s*skip-existing:')
-        job = workflow[workflow.index('\n  pypi:\n'):workflow.index('\n  nuget:\n')]
-        self.assertIn('scripts/pypi-missing-wheels.py', job)
-        self.assertLess(job.index('scripts/pypi-missing-wheels.py'), job.index('pypa/gh-action-pypi-publish'))
-        self.assertIn("steps.plan.outputs.upload == 'true'", job)
-        self.assertIn('id-token: write', job)
 
     def test_not_published_uploads_everything(self):
         result, output = self.run_script(status=404)

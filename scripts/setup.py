@@ -2,7 +2,9 @@
 """Build, install, and provision a local Ducktape Laya development setup."""
 import argparse
 import json
+import os
 import platform
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -32,6 +34,29 @@ def run(command, dry_run):
     print('+ ' + shlex.join(map(str, command)), flush=True)
     if not dry_run:
         subprocess.run(command, check=True)
+
+
+def default_jobs():
+    """DUCKTAPE_JOBS if set, else min(CPUs, available memory / 0.6 GB): one compile job peaks below 0.6 GB."""
+    if os.environ.get('DUCKTAPE_JOBS', '').isdigit() and int(os.environ['DUCKTAPE_JOBS']) > 0:
+        return int(os.environ['DUCKTAPE_JOBS'])
+    cpus = os.cpu_count() or 1
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            if line.startswith('MemAvailable:'):
+                return max(1, min(cpus, int(line.split()[1]) * 1024 // int(0.6 * 1024 ** 3)))
+    except (OSError, ValueError, IndexError):
+        pass
+    return cpus
+
+
+def generator(build):
+    """['-G', 'Ninja'] when Ninja is installed, unless the build directory was already configured with another
+    generator (CMake cannot switch it; that directory keeps its own)."""
+    cache = build / 'CMakeCache.txt'
+    if cache.is_file() and re.search(r'^CMAKE_GENERATOR:INTERNAL=(?!Ninja$)', cache.read_text(errors='replace'), re.M):
+        return []
+    return ['-G', 'Ninja'] if shutil.which('ninja') else []
 
 
 def native_libdir(prefix):
@@ -109,12 +134,16 @@ def main():
     parser.add_argument('--prefix', type=Path, help='Native installation prefix (default: ~/.local)')
     parser.add_argument('--model-dir', type=Path, help='Directory for verified GGUF weights')
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build-setup')
+    parser.add_argument('--jobs', type=int, help='Build jobs (default: DUCKTAPE_JOBS, or min(CPUs, available memory / 0.6 GB))')
     parser.add_argument('--node', action='store_true', help='Build and stage a local npm package')
     parser.add_argument('--node-include-dir', type=Path, help='Directory containing node_api.h')
     parser.add_argument('--skip-model', action='store_true', help='Install without downloading the model')
     parser.add_argument('--yes', action='store_true', help='Accept defaults without prompts')
     parser.add_argument('--dry-run', action='store_true', help='Print commands and setup notes only')
     args = parser.parse_args()
+    if args.jobs is not None and args.jobs < 1:
+        parser.error('--jobs must be positive')
+    jobs = args.jobs or default_jobs()
 
     if not args.yes and not sys.stdin.isatty():
         parser.error('Interactive setup needs a terminal; pass --yes for unattended setup')
@@ -151,14 +180,14 @@ def main():
             parser.error('--node-include-dir must contain node_api.h')
 
     build = args.build_dir.expanduser().resolve()
-    configure = ['cmake', '-S', str(ROOT), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
+    configure = ['cmake', '-S', str(ROOT), '-B', str(build), *generator(build), '-DCMAKE_BUILD_TYPE=Release',
                  '-DDUCKTAPE_BUILD_TESTS=OFF', '-DDUCKTAPE_BUILD_EXAMPLES=OFF',
                  f'-DDUCKTAPE_BUILD_NODE={"ON" if with_node else "OFF"}']
     if node_include:
         configure.append(f'-DNODE_INCLUDE_DIR={node_include.expanduser().resolve()}')
     try:
         run(configure, args.dry_run)
-        run(['cmake', '--build', str(build), '--parallel', '3'], args.dry_run)
+        run(['cmake', '--build', str(build), '--parallel', str(jobs)], args.dry_run)
         run(['cmake', '--install', str(build), '--prefix', str(prefix)], args.dry_run)
         libdir = prefix / 'lib' if args.dry_run else native_libdir(prefix)
         node_package = None

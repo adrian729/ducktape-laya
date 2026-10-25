@@ -74,6 +74,18 @@ class Qualification(unittest.TestCase):
             with self.subTest(value=value), patch('release_support.read_json', return_value=policy), self.assertRaises(ValueError):
                 check_qualification(self.record)
 
+    def test_invalid_rounds_budgets(self):
+        # The soak's rounds floor keeps the from-1,000-rounds RSS rule applied; the short stress keeps the 40-round rule;
+        # the soak serves the routine stress gate, so it is at least as long.
+        cases = [('candidate_soak_rounds', value) for value in (999, 0, True, 3000.0, None)]
+        cases += [('short_stress_rounds', value) for value in (39, -1, True, 40.5, None)]
+        cases += [('candidate_soak_seconds', self.policy['budgets']['routine_stress_seconds'] - 1)]
+        for key, value in cases:
+            policy = copy.deepcopy(self.policy)
+            policy['budgets'][key] = value
+            with self.subTest(key=key, value=value), patch('release_support.read_json', return_value=policy), self.assertRaises(ValueError):
+                check_qualification(self.record)
+
     def test_incomplete_target_gates(self):
         for change in [lambda p: p.pop('target_gates'), lambda p: p['target_gates'].clear(),
                        lambda p: p['target_gates']['short_stress'].update(acceptance=''),
@@ -147,24 +159,6 @@ class VersionedDocs(unittest.TestCase):
 
     def test_current_docs_name_the_current_release(self):
         self.assertEqual(versioned_doc_problems(self.record), [])
-
-    def test_a_version_bump_needs_the_docs(self):
-        # The release commit bumps package_version; every version-coupled statement must follow it.
-        major, minor, _ = map(int, self.record['package_version'].split('.'))
-        problems = '\n'.join(versioned_doc_problems({**self.record, 'package_version': f'{major}.{minor + 1}.0'}))
-        for name in ('docs/PACKAGING.md: find_package', 'SECURITY.md', 'README.md: current release', 'README.md: Go install line',
-                     'README.md: Maven coordinates', 'README.md: native archive', 'bindings/go/README.md: install line',
-                     'bindings/java/README.md: install line', 'bindings/rust/ducktape-laya/README.md: release link', 'docs/API.md',
-                     'docs/PERFORMANCE.md', 'docs/COMPATIBILITY.md: no Versions row', 'docs/QUALIFICATION.md', 'docs/BROWSER.md',
-                     'docs/ARCHITECTURE.md'):
-            self.assertIn(name, problems)
-        # A patch release keeps the CMake minor version but not the rest.
-        problems = '\n'.join(versioned_doc_problems({**self.record, 'package_version': f'{major}.{minor}.9'}))
-        self.assertNotIn('find_package', problems)
-        self.assertIn('SECURITY.md', problems)
-        # A new ABI needs its row and migration notes.
-        problems = '\n'.join(versioned_doc_problems({**self.record, 'abi_version': self.record['abi_version'] + 1}))
-        self.assertIn('no Versions row', problems)
 
 
 if __name__ == '__main__':

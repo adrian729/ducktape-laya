@@ -1,6 +1,6 @@
 """Release-target and release-package checks for scripts/check-candidate.py.
 
-The candidate run (native.yml dispatched with candidate=true on the candidate
+The candidate run (native.yml dispatched with mode=candidate on the candidate
 commit) builds every target's fragment, assembles the release packages and
 tests them on every target's runner; scripts/fetch-ci-evidence.py downloads it
 and records every file with its sha256 in ci-run.json. These functions check
@@ -37,35 +37,167 @@ def need(condition, message):
         raise Mismatch(message)
 
 
-def require_complete_validation(report, name):
-    """A validate.py report that left suites out, or was compiled through a cache, is not release evidence."""
-    left_out = sorted(SELECTABLE_SUITES & set(report.get('skipped', {})))
-    need(not left_out, f'{name}: left out {", ".join(left_out)} (validate.py --bindings or --skip-native-tests)')
+def require_complete_validation(report, name, *, profiles, cache_allowed):
+    """A validate.py report (or merged CI report) is release evidence only for the profiles the caller names (§ PROFILE_CHECKS):
+    every check its profile requires ran and passed, nothing selectable was left out, the build was configured without the
+    dev options, and it was compiled without a compiler cache unless the caller allows one for a CI profile."""
+    profile = (report.get('selection') or {}).get('profile')
+    need(profile in profiles, f'{name}: profile {profile or "missing"} is not {" or ".join(sorted(profiles))} '
+         '(a generic or selected validate.py run is not release evidence)')
+    need(report.get('selected_checks') == 'passed' and 'error' not in report,
+         f'{name}: selected checks {report.get("selected_checks")}{": " + str(report["error"]) if "error" in report else ""}')
+    expected_phase = 'all' if profile == 'host-full' else 'merged'
+    need(report.get('phase') == expected_phase, f'{name}: phase {report.get("phase")}, not {expected_phase} for {profile}')
+    host = report.get('host')
+    need(isinstance(host, dict) and isinstance(host.get('github_actions'), bool), f'{name}: no host recorded')
+    if profile == 'host-full':
+        need(host['github_actions'] is False, f'{name}: a host-full report produced on GitHub Actions')
+    else:
+        need(host['github_actions'] is True, f'{name}: a {profile} report not produced on GitHub Actions')
+    runs, skipped = report.get('runs') or {}, report.get('skipped') or {}
+    need(isinstance(runs, dict) and isinstance(skipped, dict), f'{name}: runs or skipped malformed')
+    retired = sorted(RETIRED_SUITES & (set(runs) | set(skipped)))
+    need(not retired, f'{name}: lists the retired suite {", ".join(retired)} (installed packages are checked from the release packages)')
+
+    def ran(label):
+        return runs.get(label, {}).get('exit_code') == 0
+
+    def platform_skip(label):
+        reason = skipped.get(label)
+        allowed = PLATFORM_SKIPS.get(label)
+        return reason is not None and allowed is not None and report.get('platform') in allowed[0] and reason == allowed[1]
+
+    # The profile's row: every run label of every required check ran with exit 0 (or is a listed platform skip).
+    if profile == 'host-full':
+        required_runs = set(HOST_FULL_RUNS)
+        need((report.get('selection') or {}).get('policy') == 'all', f'{name}: host-full without every policy check')
+        missing_policy = sorted(label for label in POLICY_LABELS if not ran(label))
+        need(not missing_policy, f'{name}: policy checks did not pass: {", ".join(missing_policy)}')
+    else:
+        checks = list(report.get('checks') or [])
+        need(sorted(checks) == sorted(PROFILE_CHECKS[profile]) and len(set(checks)) == len(checks),
+             f'{name}: merged checks {sorted(checks)} are not the {profile} checks {sorted(PROFILE_CHECKS[profile])}')
+        required_runs = {label for check in PROFILE_CHECKS[profile] for label in SHARD_RUNS[check]}
+        shards = report.get('shards')
+        need(isinstance(shards, dict) and shards and sorted(c for shard in shards.values() for c in shard.get('checks', [])) == sorted(checks),
+             f'{name}: the merged shards do not account for the checks')
+    failed = sorted(label for label in required_runs if not ran(label) and not platform_skip(label))
+    need(not failed, f'{name}: required checks did not run or pass: ' +
+         ', '.join(f'{label} ({"exit " + str(runs[label].get("exit_code")) if label in runs else skipped.get(label, "missing")})' for label in failed))
+    bad_runs = sorted(label for label, run in runs.items() if run.get('exit_code') != 0)
+    need(not bad_runs, f'{name}: runs failed: {", ".join(bad_runs)}')
+    if profile == 'ci-compiler':
+        packaged = sorted({'package', 'package-smoke'} & set(runs))
+        need(not packaged, f'{name}: a ci-compiler report with {", ".join(packaged)} runs (packages come from the ci-full build)')
+
+    # The left-out rule per profile.
+    left_out = sorted(SELECTABLE_SUITES & set(skipped))
+    if profile == 'ci-compiler':
+        left_out = [key for key in left_out if key != 'policy']
+    need(not left_out, f'{name}: left out {", ".join(left_out)}')
+    policy_skips = sorted(key for key in skipped if key.startswith('policy:'))
+    if profile == 'host-full':
+        need(not policy_skips, f'{name}: policy checks left out: {", ".join(policy_skips)}')
+    else:
+        for key in policy_skips:
+            label = key.split(':', 1)[1]
+            need(label not in PLATFORM_POLICY or profile == 'ci-compiler', f'{name}: the platform policy check {label} was left out')
+            need(skipped[key] == TOOLING_REASON, f'{name}: {key} skipped ({skipped[key]}), not covered by the tooling job')
+        if profile == 'ci-full':
+            uncovered = sorted(label for label in POLICY_LABELS
+                               if label not in PLATFORM_POLICY and not ran(label) and f'policy:{label}' not in skipped)
+            need(not uncovered, f'{name}: policy checks neither run nor covered by the tooling job: {", ".join(uncovered)}')
+
     # A test that ran and reported itself skipped (CTest SKIP_RETURN_CODE, e.g. real-runtime-faults when RLIMIT_NPROC is
     # not enforced) or that skipped a check inside (a 'SKIPPED:' line, recorded as '<test> (partly)') did not prove what it
     # tests; skips of tests the platform does not register (Linux-only tests elsewhere) are not applicable and stay allowed.
     registered = set(report.get('ctest_registered', []))
-    ran_skipped = sorted(key for key in report.get('skipped', {}) if key in registered or key.endswith(' (partly)'))
-    detail = '; '.join(f'{key}: {report["skipped"][key]}' for key in ran_skipped)
+    ran_skipped = sorted(key for key in skipped if key in registered or key.endswith(' (partly)'))
+    detail = '; '.join(f'{key}: {skipped[key]}' for key in ran_skipped)
     need(not ran_skipped, f'{name}: required tests skipped ({detail}); rerun on a host where every check runs')
-    # Reports from before validate.py recorded the launcher were built without one.
-    launcher = report.get('compiler_launcher', 'none')
-    need(launcher == 'none', f'{name}: compiled through the compiler launcher {launcher}, not without one')
+    # Every registered test ran: the JUnit names of the ctest run equal the registrations (--no-tests=error, no -L filter).
+    need(sorted(report.get('ctest_ran') or []) == sorted(registered) and registered,
+         f'{name}: ctest ran {len(report.get("ctest_ran") or [])} of {len(registered)} registered tests')
+    linux = str(report.get('platform') or '').startswith('linux')
+    required = MODEL_FREE_TESTS | REAL_MODEL_TESTS | (LINUX_TESTS if linux else set())
+    need(required <= registered, f'{name}: native tests not registered: {sorted(required - registered)}')
+    for test in LINUX_TESTS - registered:
+        need(test in skipped, f'{name}: {test} neither ran nor was reported as skipped')
+
     # What the build directory was configured with, not only what validate.py was asked for
-    # (a --cmake-arg or a reused cache could set a launcher, or ggml's own GGML_CCACHE).
+    # (a --cmake-arg or a reused cache could set a launcher, the dev options, or ggml's own GGML_CCACHE).
     options = report.get('build_options')
     need(isinstance(options, dict), f'{name}: no build_options recorded')
-    configured = {key: options.get(key) for key in ('CMAKE_C_COMPILER_LAUNCHER', 'CMAKE_CXX_COMPILER_LAUNCHER', 'GGML_CCACHE')}
-    need(configured == {'CMAKE_C_COMPILER_LAUNCHER': '', 'CMAKE_CXX_COMPILER_LAUNCHER': '', 'GGML_CCACHE': 'OFF'},
-         f'{name}: configured with a compiler cache ({configured}), not without one')
+    dev = {key: options.get(key) for key in ('DUCKTAPE_DEV_BUILD', 'DUCKTAPE_DEV_PCH')}
+    need(dev == {'DUCKTAPE_DEV_BUILD': 'OFF', 'DUCKTAPE_DEV_PCH': 'OFF'}, f'{name}: dev options {dev}, not OFF (a dev build is not evidence)')
+    need(options.get('GGML_CCACHE') == 'OFF', f'{name}: configured with GGML_CCACHE={options.get("GGML_CCACHE")}, not OFF')
+    launcher = report.get('compiler_launcher', 'missing')
+    configured = {key: options.get(key) for key in ('CMAKE_C_COMPILER_LAUNCHER', 'CMAKE_CXX_COMPILER_LAUNCHER')}
+    # A host-full report is always uncached: it is the build CI's linux-x64 bytes are compared with.
+    if not cache_allowed or profile == 'host-full':
+        need(launcher == 'none', f'{name}: compiled through the compiler launcher {launcher}, not without one')
+        need(configured == {'CMAKE_C_COMPILER_LAUNCHER': '', 'CMAKE_CXX_COMPILER_LAUNCHER': ''},
+             f'{name}: configured with a compiler cache ({configured}), not without one')
+    else:
+        need(launcher in ('none', 'ccache', 'sccache'), f'{name}: unknown compiler launcher {launcher}')
+        value = '' if launcher == 'none' else launcher
+        need(configured == {'CMAKE_C_COMPILER_LAUNCHER': value, 'CMAKE_CXX_COMPILER_LAUNCHER': value},
+             f'{name}: configured launchers {configured} are not the recorded {launcher}')
+        if launcher == 'ccache':
+            config = report.get('ccache_config')
+            need(isinstance(config, dict) and config.get('base_dir') == '', f'{name}: ccache base_dir {(config or {}).get("base_dir")!r}, not empty')
+    # The product targets compile with the configured launcher only (the probe-only targets may differ):
+    # generated/launcher-guard.json, written at configure time.
+    guard = report.get('launcher_guard')
+    need(isinstance(guard, dict) and guard.get('rule_launch') == '' and isinstance(guard.get('product_targets'), list) and
+         isinstance(guard.get('probe_targets'), dict), f'{name}: no launcher guard recorded')
+    need({'ducktape_laya', 'ducktape_laya_node'} <= set(guard['product_targets']), f'{name}: the launcher guard does not cover the product targets')
+    overlap = sorted(set(guard['product_targets']) & set(guard['probe_targets']))
+    need(not overlap, f'{name}: product targets compiled with the probe launcher: {", ".join(overlap)}')
 
 
 # Native tests every target registers; the fault-injection tests are Linux-only (CMakeLists.txt).
 MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
 REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head'}
 LINUX_TESTS = {'real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults'}
-# Suites scripts/validate.py leaves out with --bindings or --skip-native-tests (listed under skipped).
-SELECTABLE_SUITES = {'native', 'rust', 'node', 'python', 'java', 'dotnet', 'go', 'bindings', 'installed'}
+# Suites a selected validate.py run leaves out (listed under skipped); a release report leaves none out (ci-compiler: policy).
+SELECTABLE_SUITES = {'native', 'rust', 'node', 'python', 'java', 'dotnet', 'go', 'bindings', 'policy'}
+# Suites that no longer exist: a report listing one comes from an old validate.py (installed packages: decision 3).
+RETIRED_SUITES = {'installed'}
+
+# Evidence profiles (selection.profile), written by their producer, never recomputed: validate.py --full writes host-full,
+# scripts/merge-validation.py the CI profile of its SHARDS entry. Hard-coded here, independent of scripts/ci_paths.py.
+PROFILE_CHECKS = {
+    'ci-full': ('ctest', 'references', 'parity:full-a', 'parity:full-b', 'bindings', 'packages', 'policy-platform'),
+    'ci-compiler': ('ctest', 'references', 'parity:full-a', 'parity:full-b', 'bindings'),
+}
+# The four policy checks every platform's evidence runs itself (the rest run in the tooling job of the same CI run).
+PLATFORM_POLICY = ('packaging-identities', 'browser-backend-identities', 'abi-layouts', 'typescript-consumers')
+# The validate.py run labels each shard check runs (and owns: the merge copies their gates from that shard).
+SHARD_RUNS = {
+    'ctest': ('native', 'examples-smoke', 'abi', 'check-binary'),
+    'references': ('original-reference', 'upstream-reference'),
+    'parity:full-a': ('bindings-a',),
+    'parity:full-b': ('bindings-b',),
+    'parity:smoke': ('bindings-smoke',),
+    'bindings': ('rust', 'node', 'python', 'java', 'dotnet', 'go'),
+    'packages': ('package', 'package-smoke'),
+    'policy-platform': PLATFORM_POLICY,
+}
+# Run labels a shard check may add besides SHARD_RUNS: the Windows Java compile steps, the additional-model labels.
+SHARD_EXTRA_RUNS = {'bindings': ('java-compile', 'java-test-compile')}
+ADDITIONAL_MODEL_RUNS = ('tokenizer-', 'decision-head-', 'control-tokenize-', 'original-reference-', 'upstream-reference-')
+# The run labels of validate.py --full (validate.FULL_CHECKS), and every policy check (scripts/check-policy.py --all).
+HOST_FULL_RUNS = ('native', 'examples-smoke', 'abi', 'check-binary', 'rust', 'node', 'python', 'java', 'dotnet', 'go', 'bindings',
+                  'original-reference', 'upstream-reference', 'package', 'package-smoke')
+POLICY_LABELS = ('result-comparison', 'qualification-policy', 'docs-links', 'docs-links-self-test', 'release-notes', 'ci-changes',
+                 'abi-layouts', 'typescript-consumers', 'packaging-identities', 'package-assembly', 'fetch-ci-evidence', 'release-targets',
+                 'release-assets', 'browser-backend-identities', 'browser-lifecycle', 'browser-binding', 'model-download',
+                 'runtime-sources', 'merge-validation', 'validate', 'check-sanitizers', 'verify', 'qualify-host', 'ci-contracts')
+# Skips a required run label may have instead of a run: {label: (platforms, the reason validate.py records)}.
+PLATFORM_SKIPS = {'examples-smoke': (('windows-x64',), 'compiles the examples with a POSIX driver')}
+# The reason the merge records for a policy check that the CI run's tooling job ran instead of the platform's shards.
+TOOLING_REASON = 'tooling job of the same run'
 # The run that may produce candidate evidence.
 CI_EVENT, CI_CONCLUSION = 'workflow_dispatch', 'success'
 # The only repository whose runs are candidate evidence (scripts/fetch-ci-evidence.py has the same constant).
@@ -203,6 +335,41 @@ class Context:
     def ci_json(self, name, path=None):
         return json.loads(self.ci_file(name, path).read_text())
 
+    # The CI qualify run (native.yml mode=qualify): sanitizer, fuzz and upgrade evidence.
+    def qualify_run(self):
+        run = self.ci_run()
+        qualify = run.get('qualify_run')
+        # Called for evidence inside the CI directory: without a downloaded qualify run it is not qualify evidence.
+        need(isinstance(qualify, dict), 'ci run: no qualify run downloaded (scripts/fetch-ci-evidence.py --qualify)')
+        need(qualify.get('repository') == RELEASE_REPOSITORY, f'qualify run: repository {qualify.get("repository")}, not {RELEASE_REPOSITORY}')
+        need(qualify.get('workflow_path') == run.get('workflow_path'), f'qualify run: workflow {qualify.get("workflow_path")}')
+        need(isinstance(qualify.get('files'), dict) and qualify['files'], 'qualify run: no file list')
+        return qualify
+
+    def is_ci_path(self, path):
+        """True when PATH lies in the downloaded CI directory (next to ci-run.json)."""
+        try:
+            base = self.path('ci_run').resolve().parent
+        except Missing:
+            return False
+        return pathlib.Path(path).resolve().is_relative_to(base)
+
+    def qualify_file(self, name):
+        """A qualify-run file: listed under ci-run.json qualify_run.files with its current sha256, and its report made
+        from the qualify run's head commit. The only accessor for qualify files (contract 12). Returns its path."""
+        qualify = self.qualify_run()
+        path = self.path(name).resolve()
+        base = self.path('ci_run').resolve().parent
+        need(path.is_relative_to(base), f'{name}: not part of the downloaded CI run')
+        relative = path.relative_to(base).as_posix()
+        listed = qualify['files'].get(relative)
+        need(listed is not None, f'{name}: {relative} is not a file of the qualify run')
+        need(listed == self.sha256(path), f'{name}: {relative} changed after download')
+        report = json.loads(path.read_text())
+        need(report.get('source_commit') == qualify.get('head_sha'), f'{name}: made from {report.get("source_commit")}, '
+             f'not the qualify run\'s commit {qualify.get("head_sha")}')
+        return path
+
     # The release packages: the CI-assembled multi-platform package directory.
     def release_packages(self):
         if self._release is None:
@@ -275,7 +442,7 @@ class Context:
         path = self.ci_file(f'{platform}:native')
         report = json.loads(path.read_text())
         self.same_source(report, f'{platform} validation')
-        require_complete_validation(report, f'{platform} validation')
+        require_complete_validation(report, f'{platform} validation', profiles={'ci-full'}, cache_allowed=True)
         need(report.get('mode') == 'real_model' and report.get('model', {}).get('sha256') == self.primary['sha256'],
              f'{platform} validation: not a real-model run of the pinned model')
         need(report.get('platform') == platform, f'{platform} validation: ran on {report.get("platform")}')
@@ -338,7 +505,7 @@ def target_gates(ctx, platform):
             need(drift <= allowed[name]['max_probability_drift'], f'{platform}: {name} drift {drift} above its cap')
 
     def installed_packages():
-        ctx.native_gate(platform, 'installed_packages')
+        # The assembled release packages only (decision 3): validate.py has no installed suite.
         directory, inventory = ctx.release_packages()
         installed = ctx.ci_json(f'{platform}:installed')
         ctx.same_source(installed, f'{platform} installed packages')
@@ -394,6 +561,9 @@ def target_gates(ctx, platform):
         need(report.get('status') == 'passed' and report.get('kind') == 'short_stress' and report.get('qualification_budget_met') is True,
              f'{platform}: short stress failed or below budget')
         need(report.get('requested_seconds', 0) >= ctx.policy['budgets']['short_stress_seconds'], f'{platform}: stress shorter than the budget')
+        rounds = (report.get('result') or {}).get('rounds')
+        need(isinstance(rounds, int) and rounds >= ctx.policy['budgets']['short_stress_rounds'],
+             f'{platform}: stress ran {rounds} rounds, fewer than the budget\'s {ctx.policy["budgets"]["short_stress_rounds"]}')
         need(report.get('target_platform') == platform, f'{platform}: stress ran on {report.get("target_platform")}')
         need(report.get('library_sha256') == native['library_sha256'], f'{platform}: stress did not run the validated library')
         need(report.get('model_sha256') == ctx.primary['sha256'], f'{platform}: stress ran another model')

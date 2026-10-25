@@ -13,6 +13,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MAX_PROBABILITY_DRIFT = 0.05
@@ -63,6 +64,28 @@ def run(request):
     return json.loads(output.stdout), None
 
 
+def run_all(requests):
+    """Results of the requests ({name: request}, one open config) as {name: (result, error)}: one consumer process
+    for all of them (--requests, one engine), the same bytes run() sends on stdin. When that launch fails (a request
+    the core refuses stops it), every request of the group runs alone through run(), so each error is its own."""
+    if not requests:
+        return {}
+    with tempfile.TemporaryDirectory(prefix='ducktape-original-') as scratch:
+        files = []
+        for index, request in enumerate(requests.values()):
+            files.append(pathlib.Path(scratch) / f'request-{index}.json')
+            files[-1].write_bytes(json.dumps(request, ensure_ascii=False).encode())
+        try:
+            output = subprocess.run([str(consumer), str(args.model.resolve()), config, '--requests', *map(str, files)],
+                                    stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=900 * len(files))
+            lines = [line for line in output.stdout.splitlines() if line.strip()]
+            if output.returncode == 0 and len(lines) == len(files):
+                return {name: (json.loads(line), None) for name, line in zip(requests, lines)}
+        except subprocess.TimeoutExpired:
+            pass
+    return {name: run(request) for name, request in requests.items()}
+
+
 def compare(expected, got):
     """Return (max drift over probabilities and confidence fields, decision changed, near tie).
 
@@ -89,13 +112,21 @@ report: dict = {'cases': {}, 'model': str(args.model), 'config': json.loads(conf
     'max_probability_drift': MAX_PROBABILITY_DRIFT, 'near_tie': NEAR_TIE,
     'known_deviations': {'/'.join(key[1:]): value for key, value in KNOWN_DEVIATIONS.items()
                          if key[0] == args.cases.resolve().name}}, 'platform': PLATFORM}
+cases = []
 for path in sorted(args.cases.glob('case_*.json')):
     case = json.loads(path.read_text())
-    name = case['name']
     request = {'state': case['state'], 'questions': case['questions']}
-    if name in TRUNCATED:
+    if case['name'] in TRUNCATED:
         request['overflow'] = 'truncate_end'
-    got, error = run(request)
+    cases.append((case, request))
+# Every case shares the one open config: the supported cases run through one consumer process; the cases the
+# core must refuse run alone, so their refusal is recorded as the core's own error.
+if len({case['name'] for case, _ in cases}) != len(cases):
+    raise SystemExit(f'{args.cases}: case names are not unique')
+outputs = run_all({case['name']: request for case, request in cases if case['name'] not in UNSUPPORTED})
+for case, request in cases:
+    name = case['name']
+    got, error = outputs[name] if name in outputs else run(request)
     if name in UNSUPPORTED:
         report['cases'][name] = {'status': 'unsupported', 'reason': UNSUPPORTED[name], 'error': error}
         if got is not None:
