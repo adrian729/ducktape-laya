@@ -1,160 +1,285 @@
 name: Other platforms
-# macOS arm64: native build, model-free tests and the macOS packages, and the
-# real-model checks on dispatch. Not a release target (docs/PLATFORMS.md).
-# Linux and Windows are in native.yml.
+# macOS arm64: scripts/validate.py's generic checks and the model-free binding suites. Not a
+# release target (docs/PLATFORMS.md), so never part of a candidate run: a macOS failure must not
+# fail release evidence. Linux and Windows are in native.yml.
+#
+# The same change detection as native.yml: the `changes` job lists the stale jobs of this workflow
+# (scripts/ci-changes.py --workflow platforms.yml) and a job runs when its name is in `run`.
+# Dispatches (scripts/verify.py when macOS is stale) take scope affected, all or a job list; with
+# real_model, generic-macos-arm64 also runs the real-model tests. Weekly: everything with the real model.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('Other platforms mode={0} scope={1} real_model={2} cache={3}', inputs.mode, inputs.scope, inputs.real_model, inputs.cache)
+      || github.event_name == 'schedule' && 'Other platforms weekly full run'
+      || '' }}
 on:
   push:
   pull_request:
+  schedule:
+    - cron: '41 4 * * 6' # weekly: scope all with the real model
   workflow_dispatch:
     inputs:
+      mode:
+        description: verify (the only mode of this workflow; candidate and qualify runs are native.yml's)
+        type: choice
+        options: [verify]
+        default: verify
+      scope:
+        description: affected (the stale jobs), all, or a comma-separated list of job names
+        type: string
+        default: affected
       real_model:
-        description: Download the pinned test model and run the real-model checks
+        description: Also the real-model tests
         type: boolean
         default: false
+      cache:
+        description: auto, or off to build without a compiler cache
+        type: choice
+        options: [auto, 'off']
+        default: auto
 permissions:
   contents: read
+  actions: read
 # As in native.yml: a newer push to the same branch cancels the older push run; runs on main,
-# pull requests and dispatches are never cancelled.
+# pull requests, dispatches and schedules are never cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
+defaults:
+  run:
+    shell: bash
+# ccache checks the compiler by content and has no base_dir or sloppiness (see native.yml).
+env:
+  CCACHE_COMPILERCHECK: content
+  CCACHE_BASEDIR: ''
+  CCACHE_SLOPPINESS: ''
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  GOTOOLCHAIN: local
 jobs:
-  # Documentation-only changes skip the build (scripts/ci-changes.py; native.yml runs the docs checks).
   changes:
-    name: Changed files
+    name: changes
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
-      docs_only: ${{ steps.classify.outputs.docs_only }}
+      run: ${{ steps.plan.outputs.run }}
+      mode: ${{ steps.inputs.outputs.mode }}
+      cache: ${{ steps.inputs.outputs.cache }}
+      real_model: ${{ steps.inputs.outputs.real_model }}
+      skip_all: ${{ steps.changes.outputs.skip_all }}
+      docs_only: ${{ steps.changes.outputs.docs_only }}
+      bindings_macos_arm64: ${{ steps.plan.outputs.bindings_macos_arm64 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - id: classify
+      - name: Mode, scope and cache of this run
+        id: inputs
         env:
           EVENT: ${{ github.event_name }}
-          REF: ${{ github.ref }}
-          BEFORE: ${{ github.event.before }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          IN_MODE: ${{ inputs.mode }}
+          IN_SCOPE: ${{ inputs.scope }}
+          IN_REAL_MODEL: ${{ inputs.real_model }}
+          IN_CACHE: ${{ inputs.cache }}
         run: |
-          base=
-          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"
-          elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then base="$BEFORE"
-          elif [ "$EVENT" = push ]; then base="$(git merge-base origin/main HEAD || true)"
-          fi
-          python3 scripts/ci-changes.py --event "$EVENT" --base "$base"
+          case "$EVENT" in
+            workflow_dispatch) mode=$IN_MODE scope=$IN_SCOPE real_model=$IN_REAL_MODEL cache=$IN_CACHE ;;
+            schedule) mode=verify scope=all real_model=true cache=auto ;;
+            *) mode=verify scope=affected real_model=false cache=auto ;;
+          esac
+          case "$mode" in verify) ;; *) echo "unknown mode $mode" >&2; exit 1 ;; esac
+          case "$cache" in auto|off) ;; *) echo "unknown cache $cache" >&2; exit 1 ;; esac
+          if ! printf '%s' "$scope" | grep -Eq '^[a-z0-9][a-z0-9,-]*$'; then echo "invalid scope $scope" >&2; exit 1; fi
+          { echo "mode=$mode"; echo "scope=$scope"; echo "real_model=$real_model"; echo "cache=$cache"; } | tee -a "$GITHUB_OUTPUT"
+      - name: Stale jobs
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          MODE: ${{ steps.inputs.outputs.mode }}
+          SCOPE: ${{ steps.inputs.outputs.scope }}
+          REAL_MODEL: ${{ steps.inputs.outputs.real_model }}
+        run: >-
+          python3 scripts/ci-changes.py --workflow platforms.yml --repository "$GITHUB_REPOSITORY"
+          --event "$EVENT" --ref "$GITHUB_REF" --head "$GITHUB_SHA"
+          --mode "$MODE" --scope "$SCOPE" --real-model "$REAL_MODEL"
+      - name: Job matrices
+        id: plan
+        env:
+          RUN: ${{ steps.changes.outputs.run }}
+          SKIP_ALL: ${{ steps.changes.outputs.skip_all }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          run = [] if os.environ.get('SKIP_ALL') == 'true' else json.loads(os.environ['RUN'] or '[]')
+          if not isinstance(run, list) or not all(isinstance(name, str) for name in run):
+              raise SystemExit(f'ci-changes: run is not a list of job names: {run!r}')
+          langs = sorted(m[1] for m in (re.fullmatch(r'binding-([a-z]+)-macos-arm64', job) for job in run) if m)
+          bindings = [{'job': f'binding-{lang}-macos-arm64', 'lang': lang} for lang in langs]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write(f'run={json.dumps(run)}\nbindings_macos_arm64={json.dumps(bindings)}\n')
+          print(f'{len(run)} jobs: {", ".join(run) or "none"}')
+          PY
 
-  macos:
-    name: macOS arm64 / ${{ inputs.real_model && 'real model' || 'model free' }}
+  generic-macos-arm64:
+    name: generic-macos-arm64
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'generic-macos-arm64') }}
     runs-on: macos-15
     timeout-minutes: 60
     env:
-      DUCKTAPE_LAYA_LIB_DIR: ${{ github.workspace }}/build
-      DYLD_LIBRARY_PATH: ${{ github.workspace }}/build
-      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-      DOTNET_NOLOGO: '1'
-      GOTOOLCHAIN: local
-      # ccache checks the compiler by content and has no base_dir (it would change the objects'
-      # bytes; see native.yml).
-      CCACHE_COMPILERCHECK: content
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_MODEL: ${{ needs.changes.outputs.real_model }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - &checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           submodules: recursive
           persist-credentials: false
+      - &ninja
+        uses: ./.github/actions/setup-ninja
       - name: Compiler cache
+        if: env.DTL_LAUNCHER != 'none'
         uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
-          key: ${{ runner.os }}-arm64-appleclang-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
-          restore-keys: ${{ runner.os }}-arm64-appleclang
+          key: macos-arm64-appleclang-validate-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+          restore-keys: |
+            macos-arm64-appleclang-validate-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+            macos-arm64-appleclang-validate
           max-size: 500M
           install: binary
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+          job-summary: ''
+      - &setup-node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.21.0
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - name: Pinned test model key
+        id: model-key
+        if: env.DTL_MODEL == 'true'
+        run: echo "sha256=$(python3 -c 'import json; print(json.load(open("models/manifest.json"))["sha256"])')" >> "$GITHUB_OUTPUT"
+      - name: Restore the pinned test model
+        if: env.DTL_MODEL == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build-model/laya.gguf
+          key: laya-model-${{ steps.model-key.outputs.sha256 }}
+          enableCrossOsArchive: true
+      - name: Download the pinned test model on a cache miss, and verify it
+        if: env.DTL_MODEL == 'true'
+        run: |
+          mkdir -p build-model
+          if [ ! -f build-model/laya.gguf ]; then
+            python3 -c "import json, urllib.request; m = json.load(open('models/manifest.json')); urllib.request.urlretrieve(m['url'], 'build-model/laya.gguf')"
+          fi
+          python3 scripts/verify-model.py build-model/laya.gguf
+      # Generic: configure, build, the tier-generic tests, examples, exports; with the real model
+      # also the real-model tests.
+      - name: Generic validation
+        run: |
+          model=()
+          [ "$DTL_MODEL" = true ] && model=(--model build-model/laya.gguf)
+          python3 scripts/validate.py "${model[@]}" --output build-ci-report --jobs 3 --compiler-launcher "$DTL_LAUNCHER"
+      - &cache-stats
+        name: Compiler cache statistics
+        if: always() && env.DTL_LAUNCHER != 'none'
+        run: |
+          { echo "### ccache -s ($GITHUB_JOB)"; echo '```'; ccache -s || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - &report
+        name: Retain the report and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: report-${{ github.job }}-${{ strategy.job-index }}
+          path: |
+            build-ci-report/
+            !build-ci-report/packages/
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+
+  binding-macos-arm64:
+    name: binding-${{ matrix.lang }}-macos-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.bindings_macos_arm64 != '[]' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.bindings_macos_arm64) }}
+    env:
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+    steps:
+      - *checkout
+      - *ninja
+      - name: Compiler cache
+        if: env.DTL_LAUNCHER != 'none'
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: macos-arm64-appleclang-validate-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+          restore-keys: |
+            macos-arm64-appleclang-validate-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
+            macos-arm64-appleclang-validate
+          max-size: 500M
+          save: false
+          install: binary
+          job-summary: ''
+      - *setup-node
+      # Only this binding's toolchain.
+      - name: Rust toolchain and crate cache
+        if: matrix.lang == 'rust'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/1.98.0-*
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: rust-1.98.0-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bindings/rust/Cargo.lock', 'tests/consumers/rust/Cargo.lock') }}
+      - name: Install pinned Rust toolchain and fetch locked dependencies
+        if: matrix.lang == 'rust'
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
+          cargo fetch --locked --manifest-path bindings/rust/Cargo.toml
+      - if: matrix.lang == 'java'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           # Exact: javadoc output changes between patch releases, and every platform's
           # javadoc and classes must be the same for scripts/assemble-packages.py.
           java-version: '25.0.4'
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - name: NuGet package cache
+        if: matrix.lang == 'dotnet'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bindings/dotnet/**/*.csproj', 'tests/consumers/dotnet/*.csproj') }}
+      - if: matrix.lang == 'dotnet'
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.402'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Go tool cache
+        if: matrix.lang == 'go'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/go/1.27.2
+          key: go-toolcache-1.27.2-${{ runner.os }}-${{ runner.arch }}
+      - if: matrix.lang == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.2'
           cache: false
-      - name: Install pinned Rust toolchain and fetch locked dependencies
-        run: |
-          rustup toolchain install 1.98.0 --profile minimal
-          rustup override set 1.98.0
-          cargo fetch --locked --manifest-path bindings/rust/Cargo.toml
-          cargo fetch --locked --manifest-path tests/consumers/rust/Cargo.toml
-      - name: Download and verify explicitly requested test model
-        if: inputs.real_model
-        run: |
-          mkdir -p build-model
-          python3 - <<'PY'
-          import json, pathlib, urllib.request
-          model = json.loads(pathlib.Path('models/manifest.json').read_text())
-          urllib.request.urlretrieve(model['url'], 'build-model/laya.gguf')
-          PY
-          python3 scripts/verify-model.py build-model/laya.gguf
-          echo "LAYA_MODEL=$PWD/build-model/laya.gguf" >> "$GITHUB_ENV"
-      - name: Build the library, Node addon and native tests
-        run: |
-          node_include="$(dirname "$(dirname "$(which node)")")/include/node"
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_NODE=ON "-DNODE_INCLUDE_DIR=$node_include" \
-            -DGGML_CCACHE=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            ${LAYA_MODEL:+"-DDUCKTAPE_TEST_MODEL=$LAYA_MODEL" -DDUCKTAPE_BUILD_REFERENCE_PROBE=ON}
-          cmake --build build --parallel 3
-      - name: Exported symbols
-        run: nm -gU build/libducktape_laya.dylib | awk '{print $3}' | sort | tee build/exports.txt && diff build/exports.txt <(sort src/exports.macos)
-      - name: Native tests
-        run: ctest --test-dir build --output-on-failure
-      - name: Agreement with the original Laya and with llama.cpp
-        if: inputs.real_model
-        run: |
-          python3 tests/original-reference.py "$LAYA_MODEL" --build-dir build --report build/original-reference.json
-          python3 tests/compare-native-reference.py "$LAYA_MODEL" --build build --report build/upstream-reference.json
-      - name: Python
-        run: PYTHONPATH=bindings/python/src python3 -m unittest discover -s bindings/python/tests
-      - name: Rust
-        run: cargo test --locked --manifest-path bindings/rust/Cargo.toml
-      - name: Go
-        run: CGO_CFLAGS="-I$PWD/include" CGO_LDFLAGS="-L$PWD/build" go -C bindings/go test -count=1 ./...
-      - name: Java
-        run: bash bindings/java/build.sh
-      - name: .NET
-        run: dotnet test bindings/dotnet/DucktapeLaya.slnx -m:1
-      - name: Node
-        run: DUCKTAPE_LAYA_ADDON="$PWD/build/ducktape_laya.node" node --test bindings/node/test.cjs
-      - name: Packages (tarball, npm, crates, wheel, jar, NuGet), loaded outside the checkout
-        run: |
-          python3 scripts/package-native.py --build build --output build/packages
-          python3 tests/package-smoke.py build/packages
-      - name: Installed packages with the real model
-        if: inputs.real_model
-        run: python3 tests/installed-packages.py build/packages "$LAYA_MODEL"
-      - name: Retain this platform's packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      # Go's build cache does not see the library's contents (golang/go#29843): the header is in the key.
+      - name: Go build cache
+        if: matrix.lang == 'go'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: packages-macos-arm64
-          path: build/packages/
-          if-no-files-found: error
-          retention-days: 14
-      - name: Retain reports
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: macos-arm64-${{ inputs.real_model && 'real-model' || 'model-free' }}
-          path: |
-            build/original-reference.json
-            build/upstream-reference.json
-            build/Testing/Temporary/LastTest.log
-          if-no-files-found: ignore
-          retention-days: 14
+          path: ~/Library/Caches/go-build
+          key: gocache-1.27.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bindings/go/go.mod', 'tests/consumers/go/go.mod', 'include/ducktape_laya.h') }}
+      - name: Model-free binding suite
+        env:
+          LANG_SUITE: ${{ matrix.lang }}
+        run: python3 scripts/validate.py --library-only --bindings "$LANG_SUITE" --output build-ci-report --jobs 3 --compiler-launcher "$DTL_LAUNCHER"
+      - *cache-stats
+      - *report
