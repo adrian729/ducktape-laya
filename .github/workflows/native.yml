@@ -28,7 +28,8 @@ name: Native checks
 # native-x64-<compiler>-node-<version>, packages-<platform>, packages-assembled,
 # installed-<platform>-real-model, stress-<platform> and reproducibility-<platform>; in a qualify
 # run sanitizers, fuzz and upgrade. Internal: build-<platform> (the build tarball) and
-# shard-<platform>-<checks>, 7 days, so a failed shard can be rerun within the week.
+# shard.<platform>.<checks>, 7 days, so a failed shard can be rerun within the week. The dots keep
+# one platform's shards apart from another's whose name extends it (linux-x64, linux-x64-clang).
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch'
       && format('Native checks mode={0} scope={1} real_model={2} cache={3}', inputs.mode, inputs.scope, inputs.real_model, inputs.cache)
@@ -1369,7 +1370,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: shard-${{ env.DTL_PLATFORM }}-${{ matrix.label }}
+          name: shard.${{ env.DTL_PLATFORM }}.${{ matrix.label }}
           path: |
             build-shard/
             !build-shard/packages/
@@ -1554,7 +1555,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: shard-${{ env.DTL_PLATFORM }}-packages
+          name: shard.${{ env.DTL_PLATFORM }}.packages
           path: |
             build-shard/
             !build-shard/packages/
@@ -1718,7 +1719,7 @@ jobs:
         name: Restore the shards
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: shard-${{ env.DTL_PLATFORM }}-*
+          pattern: shard.${{ env.DTL_PLATFORM }}.*
           path: shards
       - &tier2-stress
         name: Restore the stress report

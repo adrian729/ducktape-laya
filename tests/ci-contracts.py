@@ -450,6 +450,27 @@ def check_caches(root, read, problems):
     return len(savers)
 
 
+def check_shard_artifacts(root, shards, problems):
+    """Each platform's evidence job downloads exactly its own shards: its pattern matches none of another platform's."""
+    import fnmatch
+    text = (root / '.github/workflows/native.yml').read_text()
+    names = re.findall(r'^[ \t]+name: (shard[^ \n]*\$\{\{ env\.DTL_PLATFORM \}\}[^ \n]*)$', text, re.M)
+    patterns = re.findall(r'^[ \t]+pattern: (shard[^ \n]*\$\{\{ env\.DTL_PLATFORM \}\}[^ \n]*)$', text, re.M)
+    if not names or len(patterns) != 1:
+        problems.append(f'native.yml: expected shard uploads and one shard download pattern, found {len(names)} and {len(patterns)}')
+        return
+    platforms = sorted({platform for mode in shards.values() for platform in mode})
+    labels = ['ctest', 'packages', 'parity-full-a']
+    for platform in platforms:
+        pattern = patterns[0].replace('${{ env.DTL_PLATFORM }}', platform)
+        for other in platforms:
+            for name in names:
+                artifact = re.sub(r'\$\{\{ matrix\.label \}\}', labels[0], name.replace('${{ env.DTL_PLATFORM }}', other))
+                if fnmatch.fnmatchcase(artifact, pattern) != (other == platform):
+                    problems.append(f'native.yml: the {platform} shard pattern {pattern} '
+                                    f'{"matches" if other != platform else "misses"} {other}\'s shard {artifact}')
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--root', type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[1], help='Repository root')
@@ -468,6 +489,7 @@ def main(argv=None):
     if not workflows <= set(WORKFLOWS):
         problems.append(f'JOBS names workflows {sorted(workflows - set(WORKFLOWS))} that do not exist')
     check_shards(shards, release_targets.PROFILE_CHECKS, problems)
+    check_shard_artifacts(root, shards, problems)
 
     missing = sorted(set(validate.FULL_CHECKS) - set(ci_paths.VALIDATE_CHECKS))
     if missing:
