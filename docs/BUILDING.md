@@ -25,7 +25,7 @@ cmake --install build --prefix "$PWD/build/staging"
 
 `-DDUCKTAPE_BUILD_TESTS=OFF` leaves out the native test executables, which a checkout builds by default ([run the tests](#run-the-tests)); the library is the same either way.
 
-The default x86-64 build requires AVX, AVX2, FMA, F16C, BMI2 and SSE4.2 at run time and the arm64 build Armv8.2-A with dot product and FP16 ([platforms](PLATFORMS.md#cpu-check-at-open)). The installed prefix holds the headers, the shared library, CMake and pkg-config files, licences, the model manifest and `download-model.py`; [PACKAGING.md](PACKAGING.md) explains how applications link it. To point a binding at the build tree instead, set `DUCKTAPE_LAYA_LIB_DIR` to `build` (each package README has a "From a checkout" section).
+The default x86-64 build requires AVX, AVX2, FMA, F16C, BMI2 and SSE4.2 at run time and the arm64 build Armv8.2-A with dot product and FP16 ([platforms](PLATFORMS.md#cpu-check-at-open)). The installed prefix holds the headers, the shared library, CMake and pkg-config files, licences, the model manifest and `download-model.py`; [PACKAGING.md](PACKAGING.md) explains how applications link it. To point a binding at the build tree instead, set `DUCKTAPE_LAYA_LIB_DIR` to `build` (the Python, Go, Java, .NET and Rust package READMEs have a "From a checkout" section).
 
 Windows x64: open an x64 Native Tools Command Prompt for Visual Studio and build with its clang-cl and Ninja. CMake also needs GNU `patch`, which Git for Windows includes:
 

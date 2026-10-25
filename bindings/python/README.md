@@ -34,7 +34,7 @@ Requests are JSON values or JSON strings (a string is sent as is); results are p
 Open options are keyword-only and omitted when unset: `Engine.open(path, threads=0, context_tokens=None, temperatures=None, overflow=None)`.
 
 - `threads`: 0 (automatic: at most 4 and at most the CPUs the process may use) or 1–256.
-- `context_tokens`: the prompt capacity, default 512, at most the model's trained length.
+- `context_tokens`: the prompt capacity, default 512, at most the model's maximum (`trained_context_tokens`, 8,192 for the shipped files).
 - `temperatures`: calibration overrides such as `{"choice": 1.5, "noul.2": 0.8}`; positive and finite.
 - `overflow`: the default policy for prompts over the limit: `"reject"` (default), `"truncate_end"`, `"truncate_start"` or `"scan"`; a request's own `overflow` wins.
 

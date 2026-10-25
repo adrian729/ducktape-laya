@@ -83,4 +83,4 @@ Then pass the file's absolute path to `open`. The models, their hashes and licen
 
 ## Local packages
 
-To try a locally built npm package (from [BUILDING.md](BUILDING.md#build-the-packages)) in an application: `npm install /path/to/ducktape-laya-VERSION.tgz`. A wheel installs with `pip install /path/to/ducktape_laya-VERSION-py3-none-TAG.whl`. For Rust, depend on the crate by path and set `DUCKTAPE_LAYA_LIB_DIR` to the built library's directory; each package README has a "From a checkout" section.
+To try a locally built npm package (from [BUILDING.md](BUILDING.md#build-the-packages)) in an application: `npm install /path/to/ducktape-laya-VERSION.tgz`. A wheel installs with `pip install /path/to/ducktape_laya-VERSION-py3-none-TAG.whl`. For Rust, depend on the crate by path and set `DUCKTAPE_LAYA_LIB_DIR` to the built library's directory; the Python, Go, Java, .NET and Rust package READMEs have a "From a checkout" section.

@@ -43,7 +43,7 @@ try {
 |---|---|
 | `modelUrl`, `sha256` | `open` only: the model URL and its optional SHA-256 |
 | `backend` | `wasm` (default, single-threaded CPU), `webgpu`, or `auto` (WebGPU, then WASM if WebGPU initialization fails; a model asset failure is not retried) |
-| `contextTokens` | Prompt capacity: 32 up to the model's trained length, default 512 |
+| `contextTokens` | Prompt capacity: 32 up to the model's maximum (`trained_context_tokens`, 8,192 for the shipped files), default 512 |
 | `overflow` | Default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan` |
 | `temperatures` | Calibration overrides keyed like `choice`, `choice.3_5` or `noul.2`; finite and above 0 |
 | `maxPending` | Accepted calls, 1–1024, default 16 |

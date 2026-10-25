@@ -145,7 +145,7 @@ Published package pages (npm, PyPI, crates.io, NuGet, pkg.go.dev) are frozen at 
 
 ## Converted models
 
-The multilingual and typed-decisions GGUFs (`models/laya-multilingual.json`, `models/laya-typed-decisions.json`) have no download URL: users build them with `scripts/convert-model.py` ([MODELS.md](MODELS.md)). To make them downloadable, either ask the Laya authors or ggml-org to publish official GGUFs and switch the manifests to those files if they qualify, or upload the exact files the manifests pin (for example to a Hugging Face model repository under the maintainer's account, with the Apache-2.0 notice and a link to the source revision) and set each manifest's `url`.
+The multilingual and typed-decisions GGUFs (`models/laya-multilingual.json`, `models/laya-typed-decisions.json`) have no download URL: users build them with `scripts/convert-model.py` ([MODELS.md](MODELS.md)). To make them downloadable, either switch the manifests to official GGUFs if the Laya authors or ggml-org publish them and they qualify, or upload the exact files the manifests pin (for example to a Hugging Face model repository under the maintainer's account, with the Apache-2.0 notice and a link to the source revision) and set each manifest's `url`.
 
 ## Leftovers from 0.1.0
 

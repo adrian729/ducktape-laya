@@ -32,7 +32,7 @@ Platforms not listed (Intel Macs, musl-based Linux such as Alpine, 32-bit system
 
 ## CPU check at open
 
-The native build uses the CPU features listed above. Before loading a model, opening an engine checks that the CPU has them; if not, it fails with status 7 (`DTL_UNSUPPORTED_PLATFORM`) and names the first missing feature, and runtime info (`dtl_info` and each binding's `runtime_info`) lists all of them. No instruction from a missing feature runs first. On Windows on Arm, where the check cannot read the required features, opening fails with status 7.
+The native build uses the CPU features listed above. Before loading a model, opening an engine checks that the CPU has them (opening a router checks nothing: the check runs when a request first loads a model); if not, it fails with status 7 (`DTL_UNSUPPORTED_PLATFORM`) and names the first missing feature, and runtime info (`dtl_info` and each binding's `runtime_info`) lists all of them. No instruction from a missing feature runs first. On Windows on Arm, where the check cannot read the required features, opening fails with status 7.
 
 The check covers the release build's configuration. A custom build with other compiler ISA flags can run instructions it does not check. AVX-512 and VNNI variants are refused when CMake configures. A portable x86-64 build turns off `GGML_AVX`, `GGML_AVX2`, `GGML_FMA`, `GGML_F16C`, `GGML_BMI2` and `GGML_SSE42`; it is a different numerical profile (below) and is not qualified. The x86-64 check is tested on emulated CPUs (QEMU) only; older physical CPUs and the arm64, Windows and macOS checks have no dedicated test.
 

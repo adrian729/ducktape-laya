@@ -2,7 +2,7 @@
 
 ducktape-laya runs the three checkpoints the original [Laya](https://github.com/NandhaKishorM/laya) publishes, as GGUF files (the llama.cpp model format). The library never downloads a model: your application supplies the file path (or, in the browser, its URL). Each supported file is pinned by a manifest in `models/` with its exact size and SHA-256, and qualified against the original Laya's recorded results and against upstream llama.cpp.
 
-| Model | Manifest | File | Size | Base model, languages | Trained prompt length |
+| Model | Manifest | File | Size | Base model, languages | Prompt length the original Laya runs at |
 | --- | --- | --- | --- | --- | --- |
 | English | [models/manifest.json](../models/manifest.json) | `Laya-Q8_0.gguf` (Q8_0) | 449,397,600 B | ModernBERT-large; English | 512 tokens |
 | Multilingual | [models/laya-multilingual.json](../models/laya-multilingual.json) | `laya-multilingual-f16.gguf` (F16) | 658,414,400 B | mmBERT-base; 100+ languages | 1,024 tokens |
@@ -46,7 +46,7 @@ The pinned converter's dependencies may not install on the newest Python release
 
 ## Prompt length
 
-Each model was trained with prompts up to its trained length (table above). Open the multilingual and typed-decisions models with `context_tokens` 1024 to match the original Laya; the default is 512. The files accept up to 8,192 tokens, but longer prompts are not checked for accuracy, compute time grows faster than the prompt length, and the memory reserved grows with `context_tokens`. Text longer than the limit is rejected by default; it can instead be truncated or read in windows ([long input](API.md#long-input)).
+The original Laya runs each model at the prompt length in the table above. The files themselves allow more: `trained_context_tokens` in the model info is 8,192 for the shipped files, and that is the upper bound of `context_tokens`. Open the multilingual and typed-decisions models with `context_tokens` 1024 to match the original Laya; the default is 512. The files accept up to 8,192 tokens, but longer prompts are not checked for accuracy, compute time grows faster than the prompt length, and the memory reserved grows with `context_tokens`. Text longer than the limit is rejected by default; it can instead be truncated or read in windows ([long input](API.md#long-input)).
 
 ## Verifying a model you ship
 
