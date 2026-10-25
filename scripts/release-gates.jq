@@ -1,6 +1,6 @@
 # Whether a release's gates.json qualifies the tagged commit ($commit) under that commit's own
 # release record ($record: release/compatibility.json) and policy ($policy: release/qualification.json):
-# release ready, produced by a clean checker for that commit, every gate passed, and exactly the
+# release ready, produced by a clean checker at that commit, every gate passed, and exactly the
 # gates the record requires.
 #   - Schema 1 (0.1.0, 0.2.0 only) has release-level gates and no targets.
 #   - Schema 2 has the record's required_release_gates (the policy's qualification_gates) and
@@ -17,6 +17,7 @@ and (if .schema_version == 1 then
        (has("targets") | not) and ($record.package_version == "0.1.0" or $record.package_version == "0.2.0")
      elif .schema_version == 2 then
        $record.schema_version == 2
+       and .checker_commit == $commit
        and same($record.required_release_gates; $policy.qualification_gates | keys)
        and same(.gates | keys; $record.required_release_gates)
        and (.targets | type == "object")

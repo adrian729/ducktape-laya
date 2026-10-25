@@ -76,7 +76,7 @@ Identity-bound runners write a `report.json` with source commit, build and model
 python3 scripts/check-stress.py /path/to/Laya-Q8_0.gguf --build build-validation --output build-stress  # --seconds 28800 for soak
 python3 scripts/check-sanitizers.py /path/to/Laya-Q8_0.gguf --output build-sanitizers
 python3 tests/rollback.py LKG_PACKAGES CANDIDATE_PACKAGES /path/to/Laya-Q8_0.gguf --report build/rollback.json
-node tests/electron/run.cjs PACKAGES/ducktape-laya-0.2.0.tgz /path/to/Laya-Q8_0.gguf build/electron.json
+node tests/electron/run.cjs PACKAGES/ducktape-laya-X.Y.Z.tgz /path/to/Laya-Q8_0.gguf build/electron.json
 python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COMMIT --report build-candidate/gates.json
 ```
 

@@ -41,6 +41,13 @@ def require_complete_validation(report, name):
     """A validate.py report that left suites out, or was compiled through a cache, is not release evidence."""
     left_out = sorted(SELECTABLE_SUITES & set(report.get('skipped', {})))
     need(not left_out, f'{name}: left out {", ".join(left_out)} (validate.py --bindings or --skip-native-tests)')
+    # A test that ran and reported itself skipped (CTest SKIP_RETURN_CODE, e.g. real-runtime-faults when RLIMIT_NPROC is
+    # not enforced) or that skipped a check inside (a 'SKIPPED:' line, recorded as '<test> (partly)') did not prove what it
+    # tests; skips of tests the platform does not register (Linux-only tests elsewhere) are not applicable and stay allowed.
+    registered = set(report.get('ctest_registered', []))
+    ran_skipped = sorted(key for key in report.get('skipped', {}) if key in registered or key.endswith(' (partly)'))
+    detail = '; '.join(f'{key}: {report["skipped"][key]}' for key in ran_skipped)
+    need(not ran_skipped, f'{name}: required tests skipped ({detail}); rerun on a host where every check runs')
     # Reports from before validate.py recorded the launcher were built without one.
     launcher = report.get('compiler_launcher', 'none')
     need(launcher == 'none', f'{name}: compiled through the compiler launcher {launcher}, not without one')

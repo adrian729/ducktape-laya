@@ -12,10 +12,24 @@ async function asset(url, limit, expectedHash) {
   catch (error) { throw assetError(`Model fetch failed: ${error?.message ?? error}`, 2); }
   if (!response.ok || !response.body) throw assetError(`Model fetch failed: HTTP ${response.status}`, 2);
   // A Content-Length within the budget sizes the buffer up front, so the model is held once rather than as
-  // chunks plus their concatenation. The body may still differ from it (a compressed response reports its
-  // compressed length); then the buffer grows or is trimmed.
+  // chunks plus their concatenation. One above the budget is rejected before any byte is read (a compressed
+  // response reports its compressed length, which is a lower bound of the size). The body may still differ
+  // from the declared length; then the buffer grows or is trimmed.
   const declared = Number(response.headers.get('content-length') ?? NaN);
-  let bytes = new Uint8Array(Number.isSafeInteger(declared) && declared > 0 ? Math.min(declared, limit) : 0), size = 0;
+  const hasDeclared = Number.isSafeInteger(declared) && declared > 0;
+  if (hasDeclared && declared > limit) {
+    await response.body.cancel().catch(() => {});
+    throw assetError('Model assets exceed maxModelBytes', 1);
+  }
+  // A buffer that cannot be allocated is out of memory (status 4), not a fetch failure: never retried with another backend.
+  const allocate = length => {
+    try { return new Uint8Array(length); }
+    catch (error) {
+      if (error instanceof RangeError) throw assetError('Out of memory for the model assets', 4);
+      throw error;
+    }
+  };
+  let bytes = allocate(hasDeclared ? declared : 0), size = 0;
   const reader = response.body.getReader();
   try {
     while (true) {
@@ -23,7 +37,7 @@ async function asset(url, limit, expectedHash) {
       if (done) break;
       if (size + value.byteLength > limit) throw assetError('Model assets exceed maxModelBytes', 1);
       if (size + value.byteLength > bytes.length) {
-        const grown = new Uint8Array(Math.min(limit, Math.max(size + value.byteLength, bytes.length * 2, 1 << 20)));
+        const grown = allocate(Math.min(limit, Math.max(size + value.byteLength, bytes.length * 2, 1 << 20)));
         grown.set(bytes.subarray(0, size));
         bytes = grown;
       }
@@ -34,7 +48,9 @@ async function asset(url, limit, expectedHash) {
     await reader.cancel().catch(() => {});
     throw error?.final ? error : assetError(`Model fetch failed: ${error?.message ?? error}`, 2);
   }
-  bytes = bytes.subarray(0, size);
+  // A copy of exactly the bytes read when the buffer is larger, so the oversized one can be released and
+  // FS.writeFile(..., { canOwn: true }) keeps no more than the model.
+  if (bytes.length !== size) bytes = bytes.slice(0, size);
   if (expectedHash) {
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), v => v.toString(16).padStart(2, '0')).join('');
     if (hash !== expectedHash.toLowerCase()) throw assetError('Model SHA-256 mismatch', 2);

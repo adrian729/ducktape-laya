@@ -112,7 +112,7 @@ async function workerHarness(abi = 2, { create, fetch: fetchAsset } = {}) {
 // A fetch response whose body arrives in the given chunks, with an optional Content-Length.
 const response = (chunks, length, status = 200) => async () => ({ ok: status === 200, status,
   headers: { get: name => name === 'content-length' && length !== undefined ? String(length) : null },
-  body: { getReader: () => { let next = 0; return { read: async () => next < chunks.length ? { done: false, value: chunks[next++] } : { done: true }, cancel: async () => {} }; } } });
+  body: { cancel: async () => {}, getReader: () => { let next = 0; return { read: async () => next < chunks.length ? { done: false, value: chunks[next++] } : { done: true }, cancel: async () => {} }; } } });
 const wasm = { backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, modelUrl: 'https://example.test/m.gguf' };
 
 test('worker forwards the auto routes into the router config', async () => {
@@ -153,7 +153,9 @@ test('model assets are read into one buffer whatever Content-Length says', async
   for (const length of [5, undefined, 3, 9]) {
     const { runtime, namespace } = await workerHarness(2, { fetch: response(chunks, length) });
     await namespace.init(wasm);
-    assert.deepEqual([...runtime.FS.files.get('/model-0.gguf')], [1, 2, 3, 4, 5], `Content-Length ${length}`);
+    const written = runtime.FS.files.get('/model-0.gguf');
+    assert.deepEqual([...written], [1, 2, 3, 4, 5], `Content-Length ${length}`);
+    assert.equal(written.buffer.byteLength, 5, `the written buffer holds only the model (Content-Length ${length})`);
   }
 });
 
@@ -168,6 +170,17 @@ test('model asset failures carry their status and are final for backend auto', a
     const { namespace } = await workerHarness(2, { fetch: fetchAsset });
     await assert.rejects(namespace.init({ ...wasm, sha256: 'a'.repeat(64) }), error => error.status === status && message.test(error.message) && error.final === true);
   }
+});
+
+test('a Content-Length above maxModelBytes is rejected up front, and an allocation failure is final status 4', async () => {
+  let read = false, cancelled = false;
+  const declared = async () => ({ ok: true, headers: { get: name => name === 'content-length' ? '2048' : null },
+    body: { getReader: () => ({ read: async () => { read = true; return { done: true }; }, cancel: async () => {} }), cancel: async () => { cancelled = true; } } });
+  const { namespace } = await workerHarness(2, { fetch: declared });
+  await assert.rejects(namespace.init(wasm), error => error.status === 1 && error.final === true && /exceed maxModelBytes/.test(error.message));
+  assert.ok(!read && cancelled, 'no byte is read and the body is cancelled');
+  const huge = await workerHarness(2, { fetch: response([new Uint8Array(4)], 2 ** 40) });
+  await assert.rejects(huge.namespace.init({ ...wasm, maxModelBytes: 2 ** 41 }), error => error.status === 4 && error.final === true);
 });
 
 test('WebAssembly memory exhaustion at instantiation is status 4, other instantiation failures status 7', async () => {

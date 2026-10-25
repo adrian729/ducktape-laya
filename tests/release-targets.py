@@ -236,6 +236,22 @@ class Targets(unittest.TestCase):
         self.world.edit('evidence-windows-x64/report.json', lambda r: r['ctest_registered'].remove('real-control'))
         self.assertGate('windows-x64', 'native_contracts', 'failed', 'not registered')
 
+    def test_skipped_required_tests_fail(self):
+        # A registered test that reported itself skipped, or a check skipped inside a passing test, is no evidence.
+        cases = {'whole test': ('real-runtime-faults', 'RLIMIT_NPROC is not enforced'),
+                 'inside a passing test': ('real-tokenizer (partly)', 'SKIPPED: tokenization timing not checked')}
+        for platform in ('linux-arm64', 'windows-x64'):
+            for label, (key, reason) in cases.items():
+                with self.subTest(platform=platform, case=label):
+                    self.setUp()
+                    self.world.edit(f'evidence-{platform}/report.json', lambda r: r['skipped'].update({key: reason}))
+                    message = 'required tests skipped'
+                    if platform == 'windows-x64' and key == 'real-runtime-faults':
+                        message = ''  # not registered on Windows: not applicable
+                    result = self.statuses(platform)['native_contracts']
+                    self.assertEqual(result['status'], 'failed' if message else 'passed', result)
+                    self.assertIn(message, result.get('detail', ''))
+
     def test_incomplete_or_cached_validation(self):
         # validate.py --bindings, --skip-native-tests and --compiler-launcher runs are not release evidence.
         cases = {'binding left out': (lambda r: r['skipped'].update(go='not selected (--bindings)'), 'left out go'),
@@ -467,6 +483,13 @@ class CheckCandidate(unittest.TestCase):
                                                                        if '__pycache__/' not in n]
         if clean:
             self.assertFalse(self.check(world)['checker_tree_dirty'])
+
+    def test_checker_must_be_the_candidate_commit(self):
+        world = self.world('checker')
+        report = self.check_commit(world, self.candidate_with_files({}))
+        self.assertFalse(report['checker_is_candidate'])
+        self.assertFalse(report['release_ready'])
+        self.assertNotEqual(report['checker_commit'], report['candidate_commit'])
 
     def test_candidate_record_is_validated(self):
         world = self.world('record')
