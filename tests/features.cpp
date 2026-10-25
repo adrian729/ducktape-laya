@@ -413,7 +413,7 @@ int main(int argc, char **argv) {
         std::cout << "SKIPPED: no-logits resident-set check (sanitizer runtimes keep freed memory in quarantine)\n";
         if (false) {
 #else
-        if (resident_kib() < 0) std::cout << "SKIPPED: no-logits resident-set check (reads VmRSS; Linux only)\n";
+        if (resident_kib() < 0) std::cout << "NOT APPLICABLE: no-logits resident-set check (reads VmRSS; Linux only)\n";
         else {
 #endif
             // No logits buffer (llama-embeddings-no-logits-buffer.patch): the decision graph has no
@@ -485,8 +485,10 @@ int main(int argc, char **argv) {
             const long serialization = one - one_text, repeated_work = (four - one) - (four_text - one_text);
             std::cerr << "allocations: one serialization about " << serialization << ", added by three more questions " << repeated_work << "\n";
             expect(serialization > 1000 && std::labs(repeated_work) * 4 < serialization, "a structured state is prepared once per request");
+#elif defined(DTL_SANITIZED)
+            std::cout << "SKIPPED: allocation count of the shared state (sanitizer runtimes own operator new)\n";
 #else
-            std::cout << "SKIPPED: allocation count of the shared state (counts operator new; Linux, not sanitized)\n";
+            std::cout << "NOT APPLICABLE: allocation count of the shared state (counts operator new through ELF interposition; Linux only)\n";
 #endif
         }
         checkpoint("structured state shared by questions");

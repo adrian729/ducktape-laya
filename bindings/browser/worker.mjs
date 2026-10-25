@@ -12,12 +12,15 @@ async function asset(url, limit, expectedHash) {
   catch (error) { throw assetError(`Model fetch failed: ${error?.message ?? error}`, 2); }
   if (!response.ok || !response.body) throw assetError(`Model fetch failed: HTTP ${response.status}`, 2);
   // A Content-Length within the budget sizes the buffer up front, so the model is held once rather than as
-  // chunks plus their concatenation. One above the budget is rejected before any byte is read (a compressed
-  // response reports its compressed length, which is a lower bound of the size). The body may still differ
-  // from the declared length; then the buffer grows or is trimmed.
+  // chunks plus their concatenation. One above the budget is rejected before any byte is read, but only
+  // when the response has no Content-Encoding: with one, the length is the compressed size, which is not a
+  // lower bound of the decoded size (incompressible data grows by about 0.03%), so only the streaming
+  // check below enforces the budget. The body may also differ from the declared length; then the buffer
+  // grows or is trimmed.
   const declared = Number(response.headers.get('content-length') ?? NaN);
   const hasDeclared = Number.isSafeInteger(declared) && declared > 0;
-  if (hasDeclared && declared > limit) {
+  const encoded = !!response.headers.get('content-encoding') && response.headers.get('content-encoding').toLowerCase() !== 'identity';
+  if (hasDeclared && !encoded && declared > limit) {
     await response.body.cancel().catch(() => {});
     throw assetError('Model assets exceed maxModelBytes', 1);
   }
@@ -29,9 +32,10 @@ async function asset(url, limit, expectedHash) {
       throw error;
     }
   };
-  let bytes = allocate(hasDeclared ? declared : 0), size = 0;
+  let bytes, size = 0;
   const reader = response.body.getReader();
   try {
+    bytes = allocate(hasDeclared ? Math.min(declared, limit) : 0);
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;

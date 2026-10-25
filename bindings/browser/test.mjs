@@ -110,9 +110,9 @@ async function workerHarness(abi = 2, { create, fetch: fetchAsset } = {}) {
   return { calls, runtime, namespace: worker.namespace };
 }
 // A fetch response whose body arrives in the given chunks, with an optional Content-Length.
-const response = (chunks, length, status = 200) => async () => ({ ok: status === 200, status,
-  headers: { get: name => name === 'content-length' && length !== undefined ? String(length) : null },
-  body: { cancel: async () => {}, getReader: () => { let next = 0; return { read: async () => next < chunks.length ? { done: false, value: chunks[next++] } : { done: true }, cancel: async () => {} }; } } });
+const response = (chunks, length, status = 200, encoding = null, tracker = {}) => async () => ({ ok: status === 200, status,
+  headers: { get: name => name === 'content-length' && length !== undefined ? String(length) : name === 'content-encoding' ? encoding : null },
+  body: { cancel: async () => { tracker.cancelled = true; }, getReader: () => { let next = 0; return { read: async () => next < chunks.length ? { done: false, value: chunks[next++] } : { done: true }, cancel: async () => { tracker.cancelled = true; } }; } } });
 const wasm = { backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, modelUrl: 'https://example.test/m.gguf' };
 
 test('worker forwards the auto routes into the router config', async () => {
@@ -181,6 +181,21 @@ test('a Content-Length above maxModelBytes is rejected up front, and an allocati
   assert.ok(!read && cancelled, 'no byte is read and the body is cancelled');
   const huge = await workerHarness(2, { fetch: response([new Uint8Array(4)], 2 ** 40) });
   await assert.rejects(huge.namespace.init({ ...wasm, maxModelBytes: 2 ** 41 }), error => error.status === 4 && error.final === true);
+});
+
+test('with a Content-Encoding the declared length is no bound: the stream decides, and a failed first allocation cancels the body', async () => {
+  // Compressed length above the budget, decoded size within it (and the converse is caught while streaming).
+  const ok = await workerHarness(2, { fetch: response([new Uint8Array([1, 2, 3])], 2048, 200, 'gzip') });
+  await ok.namespace.init(wasm);
+  const tracker = {};
+  const over = await workerHarness(2, { fetch: response([new Uint8Array(1000), new Uint8Array(100)], 10, 200, 'br', tracker) });
+  await assert.rejects(over.namespace.init(wasm), error => error.status === 1 && error.final === true && /exceed maxModelBytes/.test(error.message));
+  assert.ok(tracker.cancelled, 'the body is cancelled when the stream exceeds the budget');
+  // The first allocation sits inside the try: a RangeError there cancels the body.
+  const failed = {};
+  const huge = await workerHarness(2, { fetch: response([new Uint8Array(4)], 2 ** 40, 200, null, failed) });
+  await assert.rejects(huge.namespace.init({ ...wasm, maxModelBytes: 2 ** 41 }), error => error.status === 4 && error.final === true);
+  assert.ok(failed.cancelled, 'the body is cancelled after an allocation failure');
 });
 
 test('WebAssembly memory exhaustion at instantiation is status 4, other instantiation failures status 7', async () => {

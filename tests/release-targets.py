@@ -252,6 +252,22 @@ class Targets(unittest.TestCase):
                     self.assertEqual(result['status'], 'failed' if message else 'passed', result)
                     self.assertIn(message, result.get('detail', ''))
 
+    def test_platform_inapplicable_checks_are_not_skips(self):
+        # Checks that do not exist on a platform print NOT APPLICABLE and are not recorded; the world's Windows report
+        # (like a fixed validate.py run) has none and passes. Reports from before that fix recorded them as '(partly)'.
+        old = {'real-control (partly)': 'SKIPPED: the automatic thread count probe reads the affinity mask and /proc (Linux only)',
+               'real-features (partly)': 'SKIPPED: no-logits resident-set check (reads VmRSS; Linux only); '
+                                         'SKIPPED: allocation count of the shared state (counts operator new; Linux, not sanitized)'}
+        self.assertGate('windows-x64', 'native_contracts', 'passed')
+        self.world.edit('evidence-windows-x64/report.json', lambda r: r['skipped'].update(old))
+        self.assertGate('windows-x64', 'native_contracts', 'failed', 'required tests skipped')
+        # A check the host prevented still fails, on any platform.
+        for platform in TIER2:
+            self.setUp()
+            self.world.edit(f'evidence-{platform}/report.json', lambda r: r['skipped'].update(
+                {'real-control (partly)': 'SKIPPED: the automatic thread count probe: setting the CPU affinity failed (Operation not permitted)'}))
+            self.assertGate(platform, 'native_contracts', 'failed', 'required tests skipped')
+
     def test_incomplete_or_cached_validation(self):
         # validate.py --bindings, --skip-native-tests and --compiler-launcher runs are not release evidence.
         cases = {'binding left out': (lambda r: r['skipped'].update(go='not selected (--bindings)'), 'left out go'),
