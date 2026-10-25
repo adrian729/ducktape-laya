@@ -10,7 +10,6 @@
 // llama.cpp lets out and llama.cpp catches further up; the patch's audit covers those.
 // Usage: laya-c-api-fault-tests MODEL.gguf (Linux, uninstrumented builds)
 #include "llama.h"
-#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -20,11 +19,13 @@
 #include <string>
 #include <vector>
 
+// Counted and failed on the calling thread only: ggml's worker threads do not allocate with new,
+// and no other thread's allocation is attributed to the call under test.
 extern "C" void *__libc_malloc(size_t);
-static std::atomic<long> fail_after{-1}, allocations{0}, failed{0};
+static thread_local long fail_after = -1, allocations = 0, failed = 0;
 void *operator new(std::size_t size) {
     ++allocations;
-    if (fail_after.load(std::memory_order_relaxed) >= 0 && fail_after.fetch_sub(1) == 0) { ++failed; throw std::bad_alloc(); }
+    if (fail_after >= 0 && fail_after-- == 0) { ++failed; throw std::bad_alloc(); }
     if (void *p = __libc_malloc(size ? size : 1)) return p;
     throw std::bad_alloc();
 }
@@ -73,7 +74,8 @@ template <class Call> long sweep(const char *name, Call call) {
 template <class F> auto no_allocation(const char *name, F fn) -> decltype(fn()) {
     const long before = allocations;
     auto result = injected(name, -1, fn);
-    expect(allocations == before, std::string(name) + " allocated");
+    const long made = allocations - before; // before building the message, which allocates
+    expect(made == 0, std::string(name) + " allocated " + std::to_string(made) + " time(s)");
     return result;
 }
 
