@@ -344,6 +344,9 @@ if(DUCKTAPE_BUILD_TESTS)
   target_link_libraries(laya-cpu-guard-probe PRIVATE ducktape_laya)
   add_executable(laya-conformance-cpp tests/consumers/cpp.cpp)
   target_link_libraries(laya-conformance-cpp PRIVATE ducktape_laya)
+  # The installed-package consumer compiles this source at the application's default standard
+  # (C++14 with MSVC): build it at the oldest one the C++ header supports, so a newer feature fails here.
+  set_target_properties(laya-conformance-cpp PROPERTIES CXX_STANDARD 11)
   add_executable(laya-control-tests tests/control.cpp)
   target_link_libraries(laya-control-tests PRIVATE ducktape_laya)
   dtl_add_test(NAME control-errors COMMAND laya-control-tests TIER generic CATEGORY native)

@@ -5,7 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
-#include <optional>
+#include <memory>
 #include <vector>
 int main(int argc, char **argv) {
     std::vector<std::string> args(argv + 1, argv + argc), files;
@@ -32,12 +32,13 @@ int main(int argc, char **argv) {
             std::cout << engine.execute(request) << '\n';
             return 0;
         }
-        std::optional<ducktape::engine> engine;
+        // C++11 like the header: MSVC compiles C++14 by default, where std::optional does not exist.
+        std::unique_ptr<ducktape::engine> engine;
         for (const auto &file : files) {
             std::ifstream in(file, std::ios::binary);
             if (!in) { std::cerr << file << ": unreadable\n"; return 2; }
             std::string request(std::istreambuf_iterator<char>(in), {});
-            if (!engine) engine.emplace(ducktape::engine::open(args[0], config));
+            if (!engine) engine.reset(new ducktape::engine(ducktape::engine::open(args[0], config)));
             std::cout << engine->execute(request) << '\n' << std::flush;
             if (fresh) engine.reset();
         }
