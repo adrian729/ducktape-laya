@@ -17,17 +17,23 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <new>
 #include <string_view>
 #include <thread>
 
 // Runtime patch laya-selected-decision-head.patch: the question type whose decision head
 // the next graph built on this thread evaluates, or -1 for all three (library-internal).
 extern "C" void dtl_laya_select_decision_type(int type);
-// Runtime patch tokenizer-stop-check.patch: a stop check llama_tokenize calls periodically on
-// this thread; when it returns true, tokenization throws std::runtime_error (library-internal).
-extern "C" void dtl_llama_tokenize_set_stop(bool (*stop)(void *), void *data);
+// Runtime patch tokenizer-stop-check.patch: swaps this thread's stop check, which llama_tokenize
+// calls periodically, with *stop/*data (library-internal). When the check returns true,
+// llama_tokenize returns tokenize_stopped. No exception crosses llama_tokenize: a failed
+// allocation returns tokenize_no_memory and any other exception tokenize_failed.
+extern "C" void dtl_llama_tokenize_swap_stop(bool (**stop)(void *), void **data);
 namespace dtl {
 namespace {
+constexpr int32_t tokenize_stopped = std::numeric_limits<int32_t>::min() + 1;
+constexpr int32_t tokenize_no_memory = std::numeric_limits<int32_t>::min() + 2;
+constexpr int32_t tokenize_failed = std::numeric_limits<int32_t>::min() + 3;
 std::string meta(llama_model *m, const std::string &key) {
     int n = llama_model_meta_val_str(m, key.c_str(), nullptr, 0);
     if (n < 0) throw failure(DTL_MODEL_ERROR, "Missing/invalid model metadata: " + key);
@@ -154,39 +160,39 @@ struct backend::impl {
     std::vector<llama_token> cached_state_tokens;
     void tokenize_into(std::vector<llama_token> &out, std::string_view text, const execution *control) const {
         // Cancellation and deadlines stop the BPE merges and the special-token split; the
-        // regex pre-split and symbol setup of a word are not checked.
+        // regex pre-split and symbol setup of a word are not checked. The hook is always
+        // installed (none without controls) and restores the previous one, so a callback
+        // that calls into the library again leaves this call's check in place.
         struct stop_hook {
+            bool (*stop)(void *) = nullptr;
+            void *data = nullptr;
             explicit stop_hook(const execution *control) {
-                if (control && control->enabled())
-                    dtl_llama_tokenize_set_stop([](void *p) { return static_cast<const execution *>(p)->stopped(); },
-                                                const_cast<execution *>(control));
+                if (control && control->enabled()) {
+                    stop = [](void *p) { return static_cast<const execution *>(p)->stopped(); };
+                    data = const_cast<execution *>(control);
+                }
+                dtl_llama_tokenize_swap_stop(&stop, &data); // now holds the previous hook
             }
-            ~stop_hook() { dtl_llama_tokenize_set_stop(nullptr, nullptr); }
+            ~stop_hook() { dtl_llama_tokenize_swap_stop(&stop, &data); }
+            stop_hook(const stop_hook &) = delete;
+            stop_hook &operator=(const stop_hook &) = delete;
         } hook{control};
-        try {
-            tokenize_once(out, text);
-        } catch (const std::runtime_error &) {
-            if (control) control->check(); // the latched cancellation or deadline, if it stopped
-            throw;
-        }
-    }
-    void tokenize_once(std::vector<llama_token> &out, std::string_view text) const {
         // Each llama_tokenize call does the full work, so tokenize once into a buffer of
         // text.size() + 2 tokens (common_tokenize's estimate) and only retry with the exact
         // count when that was too small. Texts are at most 2 MiB, well within int32_t.
         const size_t at = out.size();
         const auto length = static_cast<int32_t>(text.size());
         out.resize(at + text.size() + 2);
-        int n;
-        try {
-            n = llama_tokenize(vocab, text.data(), length, out.data() + at, static_cast<int32_t>(text.size() + 2), false, true);
-            if (n < 0 && n != std::numeric_limits<int32_t>::min()) {
-                out.resize(at + static_cast<size_t>(-static_cast<int64_t>(n)));
-                n = llama_tokenize(vocab, text.data(), length, out.data() + at, -n, false, true);
-            }
-        } catch (...) { out.resize(at); throw; }
-        if (n < 0) { out.resize(at); throw failure(DTL_INFERENCE_ERROR, "Tokenization failed"); }
-        out.resize(at + static_cast<size_t>(n));
+        int32_t n = llama_tokenize(vocab, text.data(), length, out.data() + at, static_cast<int32_t>(text.size() + 2), false, true);
+        if (n < 0 && n > tokenize_failed) {
+            out.resize(at + static_cast<size_t>(-static_cast<int64_t>(n)));
+            n = llama_tokenize(vocab, text.data(), length, out.data() + at, -n, false, true);
+        }
+        if (n >= 0) { out.resize(at + static_cast<size_t>(n)); return; }
+        out.resize(at);
+        if (n == tokenize_no_memory) throw std::bad_alloc();
+        if (n == tokenize_stopped && control) control->check(); // the latched cancellation or deadline
+        throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
     }
     void prepare(question &q, request_state &request, const execution *control) {
         if (q.overflow.empty()) q.overflow = "reject";
@@ -276,11 +282,15 @@ struct backend::impl {
         head.push_back(sep);
         require(!separate_state || opts_end + 2 == tokens.size(), "Invalid decision prompt layout");
         if (separate_state && state_text != cached_state_text) {
-            // Replace the cache only once tokenization succeeded.
+            // Replace the cache only once tokenization and both copies succeeded, so text and
+            // tokens always match. The tokens are copied to their exact size: the buffer
+            // tokenize_into fills has room for text.size() + 2.
             std::vector<llama_token> fresh;
             tokenize_into(fresh, state_text, control);
-            cached_state_tokens = std::move(fresh);
-            cached_state_text = state_text;
+            std::vector<llama_token> tokens(fresh.begin(), fresh.end());
+            std::string text(state_text);
+            cached_state_tokens.swap(tokens);
+            cached_state_text.swap(text);
         }
         const std::vector<llama_token> state_tokens = separate_state ? cached_state_tokens
             : std::vector<llama_token>(tokens.begin() + opts_end + 1, tokens.end() - 1);

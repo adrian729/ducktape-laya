@@ -115,20 +115,19 @@ std::vector<feature> required_features() {
 unsigned default_threads() {
     unsigned affinity = 0, quota = 0;
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
-    // CPUs in this thread's affinity mask (inherited from the process unless the host changed
-    // it; glibc's hardware_concurrency counts online CPUs instead). A mask over 1024 CPUs is
-    // not read and leaves the limit unknown.
+    // CPUs in the affinity mask of the thread opening the engine (glibc's hardware_concurrency
+    // counts online CPUs instead). Linux has no process-wide mask: each thread has its own,
+    // inherited by the threads it creates, and ggml creates its workers from the thread that
+    // calls into the engine, which is usually the opening thread or shares its mask. A mask
+    // over 1024 CPUs is not read and leaves the limit unknown.
     cpu_set_t set;
     CPU_ZERO(&set);
     if (sched_getaffinity(0, sizeof(set), &set) == 0) affinity = static_cast<unsigned>(CPU_COUNT(&set));
-    // The CPU quota of the process's own cgroup v2 group; missing files mean no known limit.
+    // The smallest CPU quota of the process's cgroup v2 group and its ancestors; missing files
+    // mean no known limit.
     std::ifstream groups("/proc/self/cgroup");
     const std::string path = groups ? cgroup_v2_path(std::string(std::istreambuf_iterator<char>(groups), {})) : std::string();
-    if (!path.empty()) {
-        std::ifstream cpu_max("/sys/fs/cgroup" + path + "/cpu.max");
-        std::string line;
-        if (cpu_max && std::getline(cpu_max, line)) quota = cgroup_quota_cpus(line);
-    }
+    quota = cgroup_tree_quota_cpus("/sys/fs/cgroup", path);
 #elif defined(_WIN32)
     DWORD_PTR process_mask = 0, system_mask = 0;
     if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask))

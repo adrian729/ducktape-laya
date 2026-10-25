@@ -143,7 +143,7 @@ class World:
         item = self.targets[platform]
         linux = item['os'] == 'linux'
         tests = ['abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition',
-                 'real-model', 'real-features', 'real-control', 'real-tokenizer', 'real-decision-head']
+                 'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head']
         tests += ['real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults'] + (['cpu-guard'] if platform == 'linux-x64' else []) if linux else []
         skipped = {} if linux else {name: 'Linux only' for name in ('real-faults', 'real-c-faults', 'real-runtime-faults', 'ggml-faults', 'cpu-guard')}
         return {'schema_version': 1, 'source_commit': self.commit, 'source_tracked_dirty': False, 'mode': 'real_model',

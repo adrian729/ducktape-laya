@@ -208,7 +208,7 @@ try:
     registered = json.loads(subprocess.check_output(['ctest', '--test-dir', build, '--show-only=json-v1'], env=env))
     report['ctest_registered'] = sorted(test['name'] for test in registered['tests'])
     required = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
-    if model: required |= {'real-model', 'real-features', 'real-control', 'real-tokenizer', 'real-decision-head'}
+    if model: required |= {'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head'}
     linux = sys.platform.startswith('linux')
     # Fault injection uses Linux process controls (prctl, rlimits); CMake registers it on Linux only.
     if linux: required.add('ggml-faults')

@@ -368,7 +368,7 @@ template<class F> dtl_status observed(const dtl_call_options *options, char **re
     event(saved, "start", DTL_OK);
     const auto status = boundary(error, [&] {
         require(result, "result_json is required");
-        *result = copy(fn().dump());
+        *result = copy(dtl::result_json(fn()));
     });
     const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     event(saved, status == DTL_OK ? "end" : "error", status, elapsed);

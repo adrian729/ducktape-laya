@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdint>
+#include <fstream>
 #include <initializer_list>
 #include <string>
 namespace dtl {
@@ -44,6 +45,23 @@ inline std::string cgroup_v2_path(const std::string &proc_self_cgroup) {
         at = end + 1;
     }
     return {};
+}
+// The CPUs the cgroup v2 quotas allow the group at `path` (from cgroup_v2_path) of the hierarchy
+// mounted at `mount`: the smallest cpu.max quota of the group and its ancestors, which the kernel
+// enforces too; 0 when none is set or readable. The root group has no cpu.max; inside a cgroup
+// namespace the mount's top is the container's group, whose cpu.max is read.
+inline unsigned cgroup_tree_quota_cpus(const std::string &mount, std::string path) {
+    unsigned cpus = 0;
+    while (!path.empty()) {
+        std::ifstream cpu_max(mount + (path == "/" ? std::string() : path) + "/cpu.max");
+        std::string line;
+        if (cpu_max && std::getline(cpu_max, line))
+            if (const unsigned quota = cgroup_quota_cpus(line)) cpus = cpus ? std::min(cpus, quota) : quota;
+        if (path == "/") break;
+        const size_t slash = path.rfind('/');
+        path = slash == std::string::npos ? std::string() : slash == 0 ? std::string("/") : path.substr(0, slash);
+    }
+    return cpus;
 }
 // min(4, hardware threads, each known limit), at least 1; an affinity or quota of 0 is
 // unknown, and an unknown hardware thread count (0) gives 1 as before.

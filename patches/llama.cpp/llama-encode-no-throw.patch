@@ -1,0 +1,22 @@
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -4475,8 +4475,17 @@
+ // compat: llama_batch -> llama_batch_ext -> encode/decode
+ 
+ int llama_context::encode(const llama_batch & batch_inp) {
+-    llama_batch_compat compat(this, batch_inp, model.hparams.n_embd_inp_enc());
+-    return encode(*compat.batch_ext);
++    // DTL: no exception crosses the C API (llama_encode): a failed allocation returns -2, as
++    // GGML_STATUS_ALLOC_FAILED does, and any other exception -3, as GGML_STATUS_FAILED does
++    // (nothing is logged: logging allocates)
++    try {
++        llama_batch_compat compat(this, batch_inp, model.hparams.n_embd_inp_enc());
++        return encode(*compat.batch_ext);
++    } catch (const std::bad_alloc &) {
++        return -2;
++    } catch (...) {
++        return -3;
++    }
+ }
+ 
+ int llama_context::decode(const llama_batch & batch_inp) {
