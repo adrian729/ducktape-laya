@@ -5,7 +5,7 @@
     {
       "name": "dev",
       "displayName": "Development: Ninja, ccache, native tests, fast edit loop",
-      "description": "Release build with the native tests through ccache (must be on PATH): -O1 test programs and core where results cannot change, precompiled JSON headers, no relink of test programs when only the library's content changed, unmapped source paths so another worktree's build can hit the same cache (the build preset sets base_dir). Never packaged: the packaging and validation scripts refuse it.",
+      "description": "Release build with the native tests through ccache (must be on PATH): -O1 test programs and core where results cannot change, precompiled JSON headers, no relink of test programs when only the library's content changed, unmapped source paths and unity sources that include the runtime's files by relative path (CMake 4.1 or later), so another worktree's build can hit the same cache (the build preset sets base_dir). Never packaged: the packaging and validation scripts refuse it.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-dev",
       "cacheVariables": {
@@ -17,7 +17,8 @@
         "DUCKTAPE_BUILD_TESTS": "ON",
         "DUCKTAPE_DEV_BUILD": "ON",
         "DUCKTAPE_DEV_PCH": "ON",
-        "DUCKTAPE_REPRODUCIBLE_PATHS": "OFF"
+        "DUCKTAPE_REPRODUCIBLE_PATHS": "OFF",
+        "CMAKE_UNITY_BUILD_RELOCATABLE": "ON"
       }
     },
     {
