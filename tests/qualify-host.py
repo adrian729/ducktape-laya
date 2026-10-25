@@ -79,7 +79,7 @@ class Topology(unittest.TestCase):
         root = fake_sys(pathlib.Path(self.tmp.name) / 'p', '0-7', {cpu: f'{cpu % 4},{cpu % 4 + 4}' for cpu in range(8)})
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(qualify.main(['--print-cpus', '--sys-root', str(root)]), 0)
-        self.assertEqual(out.getvalue(), 'SOAK_CPUS=3,7\nOTHER_CPUS=0-2,4-6\n')
+        self.assertEqual(out.getvalue(), 'SOAK_CPUS=2-3,6-7\nOTHER_CPUS=0-1,4-5\n')  # qualify.SOAK_CORES
 
 
 class DryRun(unittest.TestCase):
@@ -107,7 +107,7 @@ class DryRun(unittest.TestCase):
 
     def test_exit_status(self):
         self.assertEqual(self.code, 0)
-        self.assertIn('soak CPUs 3,7, other CPUs 0-2,4-6', self.lines[0])
+        self.assertIn('soak CPUs 2-3,6-7, other CPUs 0-1,4-5', self.lines[0])
 
     def test_order(self):
         names = [name for _, name in self.steps]
@@ -136,11 +136,11 @@ class DryRun(unittest.TestCase):
             self.assertIn('[alone]', self.step(name))
 
     def test_cpu_pinning(self):
-        self.assertIn('[taskset -c 3,7, background]', self.step('soak'))
+        self.assertIn('[taskset -c 2-3,6-7, background]', self.step('soak'))
         budgets = json.loads((ROOT / 'release/qualification.json').read_text())['budgets']
         self.assertIn(f"--seconds {budgets['candidate_soak_seconds']} --min-rounds {budgets['candidate_soak_rounds']}", self.step('soak'))
         for name in ('reproducibility', 'model-upgrade', 'browser', 'userspaces', 'cross-cpu'):
-            self.assertIn('[taskset -c 0-2,4-6]', self.step(name))
+            self.assertIn('[taskset -c 0-1,4-5]', self.step(name))
         upgrade = self.step('model-upgrade')
         self.assertIn('--candidate-model /m/laya-typed-decisions-q8_0.gguf', upgrade)
         self.assertIn('--compiler-launcher ccache', upgrade)

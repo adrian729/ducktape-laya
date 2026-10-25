@@ -24,7 +24,13 @@ and that the check lists of the scripts agree with each other:
 - set(validate.FULL_CHECKS) <= set(ci_paths.VALIDATE_CHECKS);
 - validate.FULL_POLICY_CHECKS and release_targets.POLICY_LABELS name exactly the check-policy.py labels;
 - every label of scripts/check-policy.py has POLICY_CHECKS inputs, and packaging-identities and
-  browser-backend-identities keep their labels.
+  browser-backend-identities keep their labels;
+- compiler caches (hendrikmuhs/ccache-action, inline or through native.yml's &compiler-cache, whose
+  key is env DTL_CACHE_KEY): every job that saves has its own key per variant, no key extends
+  another (a restore prefix `KEY-` would match the other job's entries), the prefix
+  scripts/ci-cache-prune.py groups a saved key under is that job's alone (it keeps the newest two
+  per prefix and ref, so a shared prefix lets one job evict another's cache), and every
+  restore-only key and DTL_CACHE_FALLBACK line names a key some job saves.
 
 The workflows are read with PyYAML when it is installed, and otherwise with a reader for the
 job-level keys these files use (name, needs, if, env, strategy.matrix.include); with PyYAML
@@ -139,10 +145,20 @@ def read_jobs_plain(text):
                 pair = re.fullmatch(r'      ([A-Za-z_][A-Za-z0-9_]*):\s*(.*)', entry)
                 if not pair:
                     break
-                if pair[2] in ('|', '>', '>-', '|-'):
-                    raise ValueError(f'block scalar env value is not supported by the plain reader (line {index + 1})')
-                current['env'][pair[1]] = unquote(pair[2])
+                if pair[2] in ('>', '>-'):
+                    raise ValueError(f'folded env value is not supported by the plain reader (line {index + 1})')
                 index += 1
+                if pair[2] in ('|', '|-'):
+                    # A literal block: the following lines indented further than the key, joined by newlines.
+                    block = []
+                    while index < len(lines) and (lines[index].startswith('        ') or not lines[index].strip()):
+                        block.append(lines[index][8:].rstrip())
+                        index += 1
+                    while block and not block[-1]:
+                        block.pop()
+                    current['env'][pair[1]] = '\n'.join(block) + ('\n' if pair[2] == '|' else '')
+                    continue
+                current['env'][pair[1]] = unquote(pair[2])
         elif name == 'strategy':
             while index < len(lines) and (not lines[index].strip() or lines[index].startswith('      ')):
                 include = re.fullmatch(r'\s+include:\s*(.+)', strip_comment(lines[index]))
@@ -348,6 +364,92 @@ def check_shards(shards, profile_checks, problems):
                                 f'{sorted(profile_checks[profile])}')
 
 
+# ---------------------------------------------------------------- compiler caches
+
+CCACHE_ACTION = 'hendrikmuhs/ccache-action@'
+
+
+def job_blocks(text):
+    """{job id: the job's lines} of the top-level jobs: mapping."""
+    lines, blocks, current = text.splitlines(), {}, None
+    start = lines.index('jobs:')
+    for line in lines[start + 1:]:
+        if line and not line.startswith(' '):
+            break
+        job = re.fullmatch(r'  ([A-Za-z0-9_-]+):\s*', line)
+        if job:
+            current = blocks.setdefault(job[1], [])
+        elif current is not None:
+            current.append(line)
+    return blocks
+
+
+def cache_steps(path, jobs):
+    """[(job id, variant, key prefix, saves)] of each compiler-cache step of a workflow."""
+    text = path.read_text()
+    steps = []
+    for job_id, block in job_blocks(text).items():
+        env = jobs.get(job_id, {}).get('env', {})
+        joined = '\n'.join(block)
+        if re.search(r'^\s+- [&*]compiler-cache\s*$', joined, re.M):
+            variant = 'sccache' if 'sccache' in env.get('DTL_LAUNCHER', '') else 'ccache'
+            steps.append((job_id, variant, env.get('DTL_CACHE_KEY'), env.get('DTL_CACHE_SAVE') == 'true'))
+            continue
+        for at, line in enumerate(block):
+            if CCACHE_ACTION not in line:
+                continue
+            indent = len(line) - len(line.lstrip(' - '))
+            body = []
+            for following in block[at + 1:]:
+                if following.strip() and len(following) - len(following.lstrip()) <= indent - 2:
+                    break
+                body.append(following)
+            fields = dict(re.findall(r'^[ \t]+([a-z-]+):[ \t]*(.*)$', '\n'.join(body), re.M))
+            key = re.sub(r'-\$\{\{\s*hashFiles\(.*$', '', fields.get('key', '')).strip()
+            variant = unquote(fields.get('variant', 'ccache'))
+            steps.append((job_id, variant, key or None, unquote(fields.get('save', 'true')) != 'false'))
+    return steps
+
+
+def check_caches(root, read, problems):
+    """The compiler-cache keys of both workflows against each other and scripts/ci-cache-prune.py's grouping."""
+    native = (root / '.github/workflows/native.yml').read_text()
+    if "key: ${{ env.DTL_CACHE_KEY }}-" not in native or '${{ env.DTL_CACHE_FALLBACK }}' not in native:
+        problems.append('native.yml: &compiler-cache no longer keys on env.DTL_CACHE_KEY and restores env.DTL_CACHE_FALLBACK')
+    prune = load_module(root / 'scripts/ci-cache-prune.py', 'ci_cache_prune')
+    steps, fallbacks = [], []
+    for workflow in WORKFLOWS:
+        jobs = read[workflow]
+        for job_id, variant, key, saves in cache_steps(root / '.github/workflows' / workflow, jobs):
+            if not key:
+                problems.append(f'{workflow} {job_id}: a compiler-cache step without a key')
+                continue
+            steps.append((f'{workflow} {job_id}', variant, key, saves))
+            fallback = jobs[job_id]['env'].get('DTL_CACHE_FALLBACK', '')
+            fallbacks += [(f'{workflow} {job_id}', variant, line.strip()) for line in fallback.splitlines() if line.strip()]
+    savers = {}
+    for job, variant, key, saves in steps:
+        if saves:
+            savers.setdefault((variant, key), []).append(job)
+    for (variant, key), jobs in sorted(savers.items()):
+        if len(jobs) > 1:
+            problems.append(f'{variant} cache key {key} is saved by more than one job: {", ".join(jobs)}')
+        saved = f'{variant}-{key}-{"0" * 64}-2026-10-25T05:17:46.069Z'
+        if prune.prefix(saved) != f'{variant}-{key}':
+            problems.append(f'ci-cache-prune.py groups {saved} under {prune.prefix(saved)}, not {variant}-{key}')
+        for (other_variant, other), other_jobs in savers.items():
+            if other_variant == variant and other != key and f'{other}-'.startswith(f'{key}-'):
+                problems.append(f'{variant} cache key {other} ({", ".join(other_jobs)}) extends {key} ({", ".join(jobs)}): '
+                                f'restoring {key} would match its entries')
+    for job, variant, key, saves in steps:
+        if not saves and (variant, key) not in savers:
+            problems.append(f'{job}: restores {variant} key {key}, which no job saves')
+    for job, variant, key in fallbacks:
+        if (variant, key) not in savers:
+            problems.append(f'{job}: DTL_CACHE_FALLBACK {key} is a {variant} key no job saves')
+    return len(savers)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--root', type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[1], help='Repository root')
@@ -361,6 +463,7 @@ def main(argv=None):
     jobs_table, shards = ci_paths.JOBS, ci_paths.SHARDS
 
     count = sum(check_workflow(root, workflow, jobs_table, shards, problems) for workflow in WORKFLOWS)
+    cache_keys = check_caches(root, {workflow: read_jobs(root / '.github/workflows' / workflow, problems) for workflow in WORKFLOWS}, problems)
     workflows = {entry.get('workflow') for entry in jobs_table.values()}
     if not workflows <= set(WORKFLOWS):
         problems.append(f'JOBS names workflows {sorted(workflows - set(WORKFLOWS))} that do not exist')
@@ -390,7 +493,7 @@ def main(argv=None):
     if problems:
         return 1
     print(f'ci-contracts: {count} workflow jobs and {len(jobs_table)} JOBS entries agree; SHARDS, FULL_CHECKS and '
-          f'{len(labels)} policy labels agree')
+          f'{len(labels)} policy labels agree; {cache_keys} saved cache keys are distinct')
     return 0
 
 

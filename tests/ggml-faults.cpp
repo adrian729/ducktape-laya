@@ -6,6 +6,7 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
+#include "thread-census.hpp"
 #include <dirent.h>
 #include <dlfcn.h>
 #include <pthread.h>
@@ -86,12 +87,9 @@ struct matmul {
 };
 
 static size_t live_threads() {
-    size_t n = 0;
-    DIR *dir = opendir("/proc/self/task");
-    expect(dir != nullptr, "/proc/self/task");
-    while (dirent *entry = readdir(dir)) if (entry->d_name[0] != '.') ++n;
-    closedir(dir);
-    return n;
+    const long n = dtl_test::live_threads();
+    expect(n > 0, "/proc/self/task");
+    return static_cast<size_t>(n);
 }
 
 static void in_child(const char *name, const std::function<void()> &fn) {
@@ -141,8 +139,7 @@ int main() {
             const auto status = mm.compute(4);
             fail_create_at = -1;
             expect(status == GGML_STATUS_ALLOC_FAILED, "thread " + std::to_string(at + 1) + ": expected GGML_STATUS_ALLOC_FAILED");
-            // A joined thread can stay listed for a moment while the kernel releases it.
-            for (int wait = 0; wait < 200 && live_threads() != before; ++wait) usleep(10000);
+            // live_threads leaves out joined threads the kernel has not released yet.
             expect(live_threads() == before, "thread " + std::to_string(at + 1) + ": started workers were not joined");
             expect(mm.compute(4) == GGML_STATUS_SUCCESS && mm.bytes() == expected, "computation after a failed thread differs");
         }

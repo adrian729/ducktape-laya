@@ -371,8 +371,11 @@ if(DUCKTAPE_BUILD_TESTS)
   # The late-growth rules of the stress run on synthetic series (tests/stress_rule.hpp).
   add_executable(laya-stress-rule-tests tests/stress-rule.cpp)
   dtl_add_test(NAME stress-rule COMMAND laya-stress-rule-tests TIER generic CATEGORY native)
-  # Special-token partition (tokenizer-linear-partition.patch): unchanged tokens on upstream's
-  # vocabulary-only test files (no weights), and linear time on the vocabularies named by --time.
+  # Special-token partition (tokenizer-linear-partition.patch) on upstream's vocabulary-only test
+  # files (no weights): tokenizer-partition checks that tokens are unchanged (the golden record,
+  # up to four vocabularies at once); tokenizer-scaling times the partition on two vocabularies
+  # and requires linear, not quadratic, growth. Timing is a CPU-time check, not a dev-loop test:
+  # it is specialized, which validate.py's ctest check (every evidence profile) runs.
   add_executable(laya-tokenizer-tests tests/tokenizer.cpp)
   target_link_libraries(laya-tokenizer-tests PRIVATE llama)
   set(DTL_TOKENIZER_GOLDEN ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/tokenizer-partition.txt)
@@ -380,8 +383,11 @@ if(DUCKTAPE_BUILD_TESTS)
   foreach(name gpt-neox qwen2 llama-bpe llama-spm phi-3 bert-bge gemma-4 nomic-bert-moe)
     list(APPEND DTL_TOKENIZER_VOCABS ${UPSTREAM}/models/ggml-vocab-${name}.gguf)
   endforeach()
-  dtl_add_test(NAME tokenizer-partition COMMAND laya-tokenizer-tests --time gpt-neox --time llama-spm ${DTL_TOKENIZER_GOLDEN} ${DTL_TOKENIZER_VOCABS}
-    TIER generic CATEGORY native LABELS timing SERIAL)
+  dtl_add_test(NAME tokenizer-partition COMMAND laya-tokenizer-tests --golden-only ${DTL_TOKENIZER_GOLDEN} ${DTL_TOKENIZER_VOCABS}
+    TIER generic CATEGORY native PROCESSORS 4)
+  dtl_add_test(NAME tokenizer-scaling COMMAND laya-tokenizer-tests --timing-only --time gpt-neox --time llama-spm ${DTL_TOKENIZER_GOLDEN}
+    ${UPSTREAM}/models/ggml-vocab-gpt-neox.gguf ${UPSTREAM}/models/ggml-vocab-llama-spm.gguf
+    TIER specialized CATEGORY native LABELS timing SERIAL)
   # Selected decision head (laya-selected-decision-head.patch): bit-identical to the full graph.
   add_executable(laya-decision-head-tests tests/decision-head.cpp)
   target_link_libraries(laya-decision-head-tests PRIVATE llama)

@@ -203,7 +203,8 @@ jobs:
           # Toolchains per check; an unknown check gets all of them.
           everything = ['rust', 'java', 'dotnet', 'go', 'typescript']
           tools = {'ctest': [], 'references': [], 'parity:smoke': ['rust', 'java', 'dotnet', 'go'], 'parity:full-a': ['rust'],
-                   'parity:full-b': ['java', 'dotnet', 'go'], 'bindings': ['rust', 'java', 'dotnet', 'go'],
+                   'parity:full-b': ['java', 'dotnet', 'go'], 'parity:smoke-a': ['rust'], 'parity:smoke-b': ['java', 'dotnet', 'go'],
+                   'bindings': ['rust', 'java', 'dotnet', 'go'], 'bindings:a': ['rust'], 'bindings:b': ['java', 'dotnet', 'go'],
                    'packages': ['rust', 'java', 'dotnet', 'go'], 'policy-platform': ['typescript']}
           shard_mode = 'candidate' if mode == 'candidate' else 'real_model'
           for platform in ('linux-x64', 'linux-x64-clang', 'linux-arm64', 'windows-x64'):
@@ -306,7 +307,9 @@ jobs:
       DTL_JOB: generic-linux-x64
       DTL_NODE: 26.7.0
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_KEY: linux-x64-gcc-generic
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-gcc-warm
       DTL_CACHE_SAVE: 'true'
       CC: gcc
       CXX: g++
@@ -324,12 +327,17 @@ jobs:
         uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
           variant: ${{ env.DTL_LAUNCHER }}
-          # ccache-<os>-<arch>-<compiler>-<config>-<pin hash>-<timestamp>; restored by prefix.
-          # scripts/ci-cache-prune.py keeps the newest two per prefix and ref.
+          # ccache-<os>-<arch>-<compiler>-<config>-<role>-<pin hash>-<timestamp>; restored by prefix.
+          # scripts/ci-cache-prune.py keeps the newest two per prefix and ref, so every job that
+          # saves has its own DTL_CACHE_KEY (role generic, build, warm or push; no key extends
+          # another, tests/ci-contracts.py): one job's saves never evict another's. A job first
+          # restores its own key, then each DTL_CACHE_FALLBACK prefix (one per line) in order:
+          # restore-only jobs name the producer of their configuration there.
           key: ${{ env.DTL_CACHE_KEY }}-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
           restore-keys: |
             ${{ env.DTL_CACHE_KEY }}-${{ hashFiles('release/compatibility.json', '.gitmodules') }}
             ${{ env.DTL_CACHE_KEY }}
+            ${{ env.DTL_CACHE_FALLBACK }}
           max-size: 500M
           save: ${{ env.DTL_CACHE_SAVE }}
           install: binary
@@ -357,7 +365,9 @@ jobs:
       DTL_JOB: generic-linux-x64-clang
       DTL_NODE: 24.21.0
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-validate
+      DTL_CACHE_KEY: linux-x64-clang-generic
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-clang-warm
       DTL_CACHE_SAVE: 'true'
     steps:
       - *checkout
@@ -385,7 +395,9 @@ jobs:
       DTL_JOB: generic-linux-arm64
       DTL_NODE: 24.21.0
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-arm64-gcc-validate
+      DTL_CACHE_KEY: linux-arm64-gcc-generic
+      DTL_CACHE_FALLBACK: |-
+        linux-arm64-gcc-warm
       DTL_CACHE_SAVE: 'true'
       CC: gcc
       CXX: g++
@@ -409,7 +421,9 @@ jobs:
       DTL_JOB: generic-windows-x64
       DTL_NODE: 24.21.0
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
-      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_KEY: windows-x64-clang-cl-generic
+      DTL_CACHE_FALLBACK: |-
+        windows-x64-clang-cl-warm
       DTL_CACHE_SAVE: 'true'
       PY: python
     steps:
@@ -499,7 +513,10 @@ jobs:
       DTL_NODE: 26.7.0
       DTL_TOOLS: ${{ matrix.lang }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_KEY: linux-x64-gcc-generic
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-gcc-build
+        linux-x64-gcc-warm
       DTL_CACHE_SAVE: 'false'
       CC: gcc
       CXX: g++
@@ -606,7 +623,10 @@ jobs:
       DTL_NODE: 24.21.0
       DTL_TOOLS: ${{ matrix.lang }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
-      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_KEY: windows-x64-clang-cl-generic
+      DTL_CACHE_FALLBACK: |-
+        windows-x64-clang-cl-build
+        windows-x64-clang-cl-warm
       DTL_CACHE_SAVE: 'false'
       PY: python
     steps:
@@ -649,7 +669,10 @@ jobs:
       DTL_NODE: 26.7.0
       DTL_TOOLS: rust,java,dotnet,go
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_KEY: linux-x64-gcc-generic
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-gcc-build
+        linux-x64-gcc-warm
       DTL_CACHE_SAVE: 'false'
       CC: gcc
       CXX: g++
@@ -698,7 +721,10 @@ jobs:
       DTL_NODE: 24.21.0
       DTL_TOOLS: rust,java,dotnet,go
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-arm64-gcc-validate
+      DTL_CACHE_KEY: linux-arm64-gcc-generic
+      DTL_CACHE_FALLBACK: |-
+        linux-arm64-gcc-build
+        linux-arm64-gcc-warm
       DTL_CACHE_SAVE: 'false'
       CC: gcc
       CXX: g++
@@ -733,7 +759,10 @@ jobs:
       DTL_NODE: 24.21.0
       DTL_TOOLS: rust,java,dotnet,go
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
-      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_KEY: windows-x64-clang-cl-generic
+      DTL_CACHE_FALLBACK: |-
+        windows-x64-clang-cl-build
+        windows-x64-clang-cl-warm
       DTL_CACHE_SAVE: 'false'
       PY: python
     steps:
@@ -940,7 +969,9 @@ jobs:
     env:
       DTL_JOB: sanitizers
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-asan
+      DTL_CACHE_KEY: linux-x64-clang-asan-push
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-clang-asan-warm
       DTL_CACHE_SAVE: 'true'
       ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
@@ -977,7 +1008,9 @@ jobs:
     env:
       DTL_JOB: fuzzer
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-fuzz
+      DTL_CACHE_KEY: linux-x64-clang-fuzz-push
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-clang-fuzz-warm
       DTL_CACHE_SAVE: 'true'
       ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
@@ -1116,7 +1149,9 @@ jobs:
       DTL_MODEL: 'true'
       DTL_MODE: ${{ needs.changes.outputs.mode }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_KEY: linux-x64-gcc-build
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-gcc-warm
       DTL_CACHE_SAVE: 'true'
       CC: gcc
       CXX: g++
@@ -1171,7 +1206,9 @@ jobs:
       DTL_MODEL: 'true'
       DTL_MODE: ${{ needs.changes.outputs.mode }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-validate
+      DTL_CACHE_KEY: linux-x64-clang-build
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-clang-warm
       DTL_CACHE_SAVE: 'true'
     steps:
       - *checkout
@@ -1201,7 +1238,9 @@ jobs:
       DTL_MODEL: 'true'
       DTL_MODE: ${{ needs.changes.outputs.mode }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-arm64-gcc-validate
+      DTL_CACHE_KEY: linux-arm64-gcc-build
+      DTL_CACHE_FALLBACK: |-
+        linux-arm64-gcc-warm
       DTL_CACHE_SAVE: 'true'
       CC: gcc
       CXX: g++
@@ -1232,7 +1271,9 @@ jobs:
       DTL_MODEL: 'true'
       DTL_MODE: ${{ needs.changes.outputs.mode }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
-      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_KEY: windows-x64-clang-cl-build
+      DTL_CACHE_FALLBACK: |-
+        windows-x64-clang-cl-warm
       DTL_CACHE_SAVE: 'true'
       PY: python
     steps:
@@ -1825,7 +1866,9 @@ jobs:
       DTL_JOB: qualify-sanitizers-address
       DTL_MODEL: 'true'
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-asan
+      DTL_CACHE_KEY: linux-x64-clang-asan-warm
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-clang-asan-push
       DTL_CACHE_SAVE: 'false'
     steps:
       - *checkout
@@ -1861,7 +1904,7 @@ jobs:
       DTL_JOB: qualify-sanitizers-thread
       DTL_MODEL: 'true'
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-tsan
+      DTL_CACHE_KEY: linux-x64-clang-tsan-warm
       DTL_CACHE_SAVE: 'false'
     steps:
       - *checkout
@@ -1923,7 +1966,9 @@ jobs:
     env:
       DTL_JOB: qualify-fuzz
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-fuzz
+      DTL_CACHE_KEY: linux-x64-clang-fuzz-warm
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-clang-fuzz-push
       DTL_CACHE_SAVE: 'false'
       FUZZ_SECONDS: ${{ inputs.fuzz_seconds }}
     steps:
@@ -1961,7 +2006,9 @@ jobs:
       DTL_TOOLS: rust,java,dotnet,go
       DTL_MODEL: 'true'
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_KEY: linux-x64-gcc-build
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-gcc-warm
       DTL_CACHE_SAVE: 'false'
       RUNTIME: ${{ needs.changes.outputs.runtime }}
       CC: gcc
@@ -2023,7 +2070,9 @@ jobs:
       DTL_MODEL: 'true'
       DTL_MODE: ${{ needs.changes.outputs.mode }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-gcc-validate
+      DTL_CACHE_KEY: linux-x64-gcc-warm
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-gcc-build
       DTL_CACHE_SAVE: 'true'
       CC: gcc
       CXX: g++
@@ -2057,7 +2106,9 @@ jobs:
       DTL_MODEL: 'true'
       DTL_MODE: ${{ needs.changes.outputs.mode }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-validate
+      DTL_CACHE_KEY: linux-x64-clang-warm
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-clang-build
       DTL_CACHE_SAVE: 'true'
     steps:
       - *checkout
@@ -2086,7 +2137,9 @@ jobs:
       DTL_MODEL: 'true'
       DTL_MODE: ${{ needs.changes.outputs.mode }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-arm64-gcc-validate
+      DTL_CACHE_KEY: linux-arm64-gcc-warm
+      DTL_CACHE_FALLBACK: |-
+        linux-arm64-gcc-build
       DTL_CACHE_SAVE: 'true'
       CC: gcc
       CXX: g++
@@ -2113,7 +2166,9 @@ jobs:
       DTL_MODEL: 'true'
       DTL_MODE: ${{ needs.changes.outputs.mode }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
-      DTL_CACHE_KEY: windows-x64-clang-cl-validate
+      DTL_CACHE_KEY: windows-x64-clang-cl-warm
+      DTL_CACHE_FALLBACK: |-
+        windows-x64-clang-cl-build
       DTL_CACHE_SAVE: 'true'
       PY: python
     steps:
@@ -2140,7 +2195,9 @@ jobs:
     env:
       DTL_JOB: warm-asan
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-asan
+      DTL_CACHE_KEY: linux-x64-clang-asan-warm
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-clang-asan-push
       DTL_CACHE_SAVE: 'true'
       DTL_PRESET: sanitize
       DTL_TARGET: all
@@ -2167,7 +2224,7 @@ jobs:
     env:
       DTL_JOB: warm-tsan
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-tsan
+      DTL_CACHE_KEY: linux-x64-clang-tsan-warm
       DTL_CACHE_SAVE: 'true'
       DTL_PRESET: sanitize-thread
       DTL_TARGET: all
@@ -2188,7 +2245,9 @@ jobs:
     env:
       DTL_JOB: warm-fuzz
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
-      DTL_CACHE_KEY: linux-x64-clang-fuzz
+      DTL_CACHE_KEY: linux-x64-clang-fuzz-warm
+      DTL_CACHE_FALLBACK: |-
+        linux-x64-clang-fuzz-push
       DTL_CACHE_SAVE: 'true'
       DTL_PRESET: fuzz
       DTL_TARGET: laya-input-fuzzer
@@ -2223,9 +2282,12 @@ jobs:
 
   # ---------------------------------------------------------------- experiment (V1)
 
-  # Windows inference speed: tests/benchmark.py with the product flags and with /clang:-O3, and the
-  # page faults of opening the model. Data for a follow-up; a flag change is adopted only if
-  # faster with byte-identical outputs.
+  # Windows inference speed: tests/benchmark.py with the product flags and with /clang:-O2, and the
+  # page faults of opening the model. clang-cl turns the product's /O2 into cc1 -O3 (so /clang:-O3
+  # compiled the very same bytes: V1 C7, DLL 12c4b6897a3a for both); /clang:-O2 is the variant that
+  # differs. Each variant records the cc1 flags of a ggml source and the job fails if both libraries
+  # are identical. Data for a follow-up; a flag change is adopted only if faster with byte-identical
+  # outputs.
   bench-windows-x64:
     name: bench-windows-x64
     needs: changes
@@ -2244,20 +2306,43 @@ jobs:
       - *model-key
       - *model-restore
       - *model-fetch
-      - name: Library builds with the product flags and with /clang:-O3
+      - name: Library builds with the product flags and with /clang:-O2
         run: |
-          for variant in product o3; do
+          mkdir -p build-bench
+          for variant in product o2; do
             flags=()
-            [ "$variant" = o3 ] && flags=('-DCMAKE_C_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /clang:-O3' '-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /clang:-O3')
-            cmake -S . -B "build-bench/$variant" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            [ "$variant" = o2 ] && flags=('-DCMAKE_C_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /clang:-O2' '-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /clang:-O2')
+            cmake -S . -B "build-bench/$variant" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
               "-DCMAKE_C_COMPILER=$DTL_CLANG_CL" "-DCMAKE_CXX_COMPILER=$DTL_CLANG_CL" \
               '-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe' \
               -DDUCKTAPE_BUILD_NODE=OFF -DDUCKTAPE_BUILD_TESTS=OFF -DDUCKTAPE_BUILD_EXAMPLES=OFF "${flags[@]}"
             cmake --build "build-bench/$variant" --parallel 4
           done
+      - name: The variants differ (cc1 flags and library bytes)
+        run: |
+          "$PY" - build-bench <<'PY'
+          import hashlib, json, pathlib, subprocess, sys
+          out, digests = pathlib.Path(sys.argv[1]), {}
+          for variant in ('product', 'o2'):
+              build = out / variant
+              entry = next(e for e in json.loads((build / 'compile_commands.json').read_text())
+                           if e['file'].replace('\\', '/').endswith('ggml-cpu/ggml-cpu.c'))
+              # The driver's -### prints the cc1 command it would run; the optimization level is what cc1 gets.
+              driver = subprocess.run(entry['command'] + ' -###', cwd=entry['directory'], capture_output=True, text=True)
+              cc1 = [line for line in driver.stderr.splitlines() if '"-cc1"' in line]
+              if driver.returncode or not cc1:
+                  sys.exit(f'{variant}: no cc1 command from the driver:\n{driver.stderr}')
+              levels = sorted({arg.strip('"') for arg in cc1[-1].split() if arg.strip('"')[:2] == '-O'})
+              digests[variant] = hashlib.sha256((build / 'ducktape_laya.dll').read_bytes()).hexdigest()
+              record = {'source': entry['file'], 'cc1_optimization': levels, 'dll_sha256': digests[variant]}
+              (out / f'flags-{variant}.json').write_text(json.dumps(record, indent=2) + '\n')
+              print(variant, record)
+          if digests['product'] == digests['o2']:
+              sys.exit('The o2 variant compiled the same library as the product: its flags did not reach the compiler')
+          PY
       - name: Page faults and time of opening the model
         run: |
-          for variant in product o3; do
+          for variant in product o2; do
             "$PY" - "build-bench/$variant" build-model/laya.gguf "build-bench/open-$variant.json" <<'PY'
           import ctypes as c, ctypes.wintypes as w, json, os, pathlib, sys, time
           class Counters(c.Structure):
@@ -2289,10 +2374,10 @@ jobs:
           PY
           done
       # An experiment: a failing benchmark does not fail the job; the logs and any reports are kept.
-      - name: Benchmark with the product flags and with /clang:-O3
+      - name: Benchmark with the product flags and with /clang:-O2
         continue-on-error: true
         run: |
-          for variant in product o3; do
+          for variant in product o2; do
             "$PY" tests/benchmark.py build-model/laya.gguf --build "build-bench/$variant" --report "build-bench/benchmark-$variant.json" \
               2>&1 | tee "build-bench/benchmark-$variant.log"
           done

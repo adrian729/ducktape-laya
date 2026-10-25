@@ -13,6 +13,7 @@
 #include <sched.h>
 #endif
 #include "thread-cpu-time.hpp"
+#include "thread-census.hpp"
 #define CHECK(v) do { if (!(v)) { std::cerr << "Failed: " #v << " at " << __LINE__ << '\n'; return 1; } } while (0)
 static const std::string request = R"({"state":"Please refund me.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
 int main(int argc, char **argv) {
@@ -270,12 +271,9 @@ int main(int argc, char **argv) {
         // workers for each pass, so the process's thread count in the middle of the graph,
         // less its count at the call's first poll, is the engine's thread count - 1.
         struct census { std::atomic<unsigned> polls{0}; unsigned at = 0; long before = -1, during = -1; };
-        const auto tasks = []() -> long {
-            long n = 0;
-            for (const auto &entry : std::filesystem::directory_iterator("/proc/self/task")) { (void)entry; ++n; }
-            return n;
-        };
-        static long (*count_tasks)() = +tasks;
+        // Live threads only: the previous pass's worker, joined just before this call, can still be
+        // listed in /proc/self/task while the kernel releases it (tests/thread-census.hpp).
+        static long (*count_tasks)() = dtl_test::live_threads;
         // Returns -100 when the call does not match the layout measured above.
         const auto workers = [&](ducktape::engine &target) -> long {
             if (target.execute(single) != single_result) return -100; // the poll layout above holds once the state is cached

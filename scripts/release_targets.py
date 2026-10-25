@@ -157,7 +157,8 @@ def require_complete_validation(report, name, *, profiles, cache_allowed):
 
 
 # Native tests every target registers; the fault-injection tests are Linux-only (CMakeLists.txt).
-MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
+MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition',
+                    'tokenizer-scaling'}
 REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head'}
 LINUX_TESTS = {'real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults'}
 # Suites a selected validate.py run leaves out (listed under skipped); a release report leaves none out (ci-compiler: policy).
@@ -180,12 +181,16 @@ SHARD_RUNS = {
     'parity:full-a': ('bindings-a',),
     'parity:full-b': ('bindings-b',),
     'parity:smoke': ('bindings-smoke',),
+    'parity:smoke-a': ('bindings-smoke-a',),
+    'parity:smoke-b': ('bindings-smoke-b',),
     'bindings': ('rust', 'node', 'python', 'java', 'dotnet', 'go'),
+    'bindings:a': ('rust', 'node', 'python'),
+    'bindings:b': ('java', 'dotnet', 'go'),
     'packages': ('package', 'package-smoke'),
     'policy-platform': PLATFORM_POLICY,
 }
 # Run labels a shard check may add besides SHARD_RUNS: the Windows Java compile steps, the additional-model labels.
-SHARD_EXTRA_RUNS = {'bindings': ('java-compile', 'java-test-compile')}
+SHARD_EXTRA_RUNS = {'bindings': ('java-compile', 'java-test-compile'), 'bindings:b': ('java-compile', 'java-test-compile')}
 ADDITIONAL_MODEL_RUNS = ('tokenizer-', 'decision-head-', 'control-tokenize-', 'original-reference-', 'upstream-reference-')
 # The run labels of validate.py --full (validate.FULL_CHECKS), and every policy check (scripts/check-policy.py --all).
 HOST_FULL_RUNS = ('native', 'examples-smoke', 'abi', 'check-binary', 'rust', 'node', 'python', 'java', 'dotnet', 'go', 'bindings',

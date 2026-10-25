@@ -163,7 +163,7 @@ POLICY_CHECKS = {
                      # what check-candidate.py imports (the test reads its reuse rules)
                      'scripts/release_support.py', 'scripts/artifact_support.py', 'scripts/release_targets.py',
                      'scripts/performance-budgets.py'],
-    'ci-contracts': ['tests/ci-contracts.py', '.github/*'] + _VALIDATE + _RELEASE_SUPPORT,
+    'ci-contracts': ['tests/ci-contracts.py', '.github/*', 'scripts/ci-cache-prune.py'] + _VALIDATE + _RELEASE_SUPPORT,
 }
 # The checks bindings-<P> runs in the candidate (`validate.py --checks policy-platform`); check-policy.py --platform-only.
 PLATFORM_POLICY_CHECKS = ('abi-layouts', 'packaging-identities', 'browser-backend-identities', 'typescript-consumers')
@@ -187,12 +187,16 @@ VALIDATE_CHECKS = {
     **{lang: [f'binding_{lang}'] for lang in LANGUAGES},
     'java-compile': ['binding_java'], 'java-test-compile': ['binding_java'],
     'bindings': [f'binding_{lang}' for lang in LANGUAGES] + ['real_model'],
+    'bindings:a': [f'binding_{lang}' for lang in ('rust', 'node', 'python')] + ['real_model'],
+    'bindings:b': [f'binding_{lang}' for lang in ('java', 'dotnet', 'go')] + ['real_model'],
     'bindings-a': ['real_model'], 'bindings-b': ['real_model'], 'bindings-smoke': ['real_model'],
+    'bindings-smoke-a': ['real_model'], 'bindings-smoke-b': ['real_model'],
     'original-reference': ['real_model'], 'upstream-reference': ['real_model'],
     'package': ['packaging'], 'package-smoke': ['packaging'], 'package-assembly-real': ['packaging'], 'assembled-smoke': ['packaging'],
     'reproducibility': ['reproducibility'],
     # Shard checks (SHARDS) and the policy selection.
-    'ctest': ['native'], 'references': ['real_model'], 'parity:smoke': ['real_model'], 'parity:full-a': ['real_model'],
+    'ctest': ['native'], 'references': ['real_model'], 'parity:smoke': ['real_model'], 'parity:smoke-a': ['real_model'],
+    'parity:smoke-b': ['real_model'], 'parity:full-a': ['real_model'],
     'parity:full-b': ['real_model'], 'packages': ['packaging'], 'policy-platform': ['policy'], 'policy': ['policy'],
     **{label: ['policy'] for label in POLICY_CHECKS},
     **{f'policy:{label}': ['policy'] for label in POLICY_CHECKS},
@@ -211,12 +215,18 @@ SHARDS = {
     'real_model': {
         'linux-x64': {'jobs': {'native-linux-x64': ['ctest', 'references'], 'parity-linux-x64': ['parity:smoke'],
                                'bindings-real-linux-x64': ['bindings']}, 'side_outputs': {}},
-        # Decision 4: the clang leg runs only its native checks in plain dispatches.
-        'linux-x64-clang': {'jobs': {'native-linux-x64-clang': ['ctest', 'references']}, 'side_outputs': {}},
+        # Decision 4: the clang leg runs only its native checks in plain dispatches; ctest and the references in
+        # parallel jobs, as on Windows (together they took 272 s, one after the other).
+        'linux-x64-clang': {'jobs': {'native-linux-x64-clang': ['ctest'], 'references-linux-x64-clang': ['references']},
+                            'side_outputs': {}},
         'linux-arm64': {'jobs': {'native-linux-arm64': ['ctest', 'references'], 'parity-linux-arm64': ['parity:smoke'],
                                  'bindings-real-linux-arm64': ['bindings']}, 'side_outputs': {}},
+        # Windows' parity and binding suites in the halves of tests/parity.py: run together on one runner, each took
+        # about 260 s after the build and set the dispatch's wall (run 40218330855: 513 s).
         'windows-x64': {'jobs': {'ctest-windows-x64': ['ctest'], 'references-windows-x64': ['references'],
-                                 'parity-windows-x64': ['parity:smoke'], 'bindings-real-windows-x64': ['bindings']}, 'side_outputs': {}},
+                                 'parity-a-windows-x64': ['parity:smoke-a'], 'parity-b-windows-x64': ['parity:smoke-b'],
+                                 'bindings-real-a-windows-x64': ['bindings:a'], 'bindings-real-b-windows-x64': ['bindings:b']},
+                        'side_outputs': {}},
     },
     'candidate': {
         'linux-x64': {'profile': 'ci-full',
@@ -225,7 +235,8 @@ SHARDS = {
                                'bindings-linux-x64': ['bindings', 'policy-platform']},
                       'side_outputs': {'native-linux-x64': ['cross-host']}},
         'linux-x64-clang': {'profile': 'ci-compiler',
-                            'jobs': {'native-linux-x64-clang': ['ctest', 'references'], 'parity-a-linux-x64-clang': ['parity:full-a'],
+                            'jobs': {'native-linux-x64-clang': ['ctest'], 'references-linux-x64-clang': ['references'],
+                                     'parity-a-linux-x64-clang': ['parity:full-a'],
                                      'parity-b-linux-x64-clang': ['parity:full-b'], 'bindings-linux-x64-clang': ['bindings']},
                             'side_outputs': {}},
         # arm64's parity is one shard (137 s today), so the platform has four shard jobs.
@@ -300,6 +311,8 @@ for _mode, _profile in (('real_model', 'real_model'), ('candidate', 'candidate')
                 continue  # added above with its two profiles
             if _checks == ['bindings']:
                 _categories = [f'binding_{lang}' for lang in LANGUAGES]  # the real-model binding suites, when a binding is stale
+            elif len(_checks) == 1 and _checks[0].startswith('bindings:'):
+                _categories = [c for c in VALIDATE_CHECKS[_checks[0]] if c.startswith('binding_')]  # its half's suites
             elif set(_checks) <= {'ctest', 'references'}:
                 _categories = ['real_model_native'] + PLATFORM_CATEGORIES[_platform]
             else:
@@ -371,8 +384,15 @@ JOB_BUDGETS = {
     'generic-linux-x64': 80, 'generic-linux-x64-clang': 80, 'generic-linux-arm64': 90, 'generic-windows-x64': 130,
     'generic-macos-arm64': 120,
     **{f'binding-{lang}-{p}': 90 for lang in LANGUAGES for p in ('linux-x64', 'windows-x64')},
+    # Windows setup (Defender, checkout, Node SDK, VS environment, the language's SDK) and the CMake
+    # configure take about 75 s before any suite; warm run 40218330855 measured the suites on top of it:
+    'binding-java-windows-x64': 115,    # 104 s warm (suite 47 s)
+    'binding-rust-windows-x64': 115,    # 103 s warm (suite 44 s, toolchain install 5 s)
+    'binding-go-windows-x64': 135,      # 121 s warm (suite 56 s, Go tool cache and setup 10 s)
+    'binding-dotnet-windows-x64': 150,  # 137 s warm (suite 77 s; dotnet test alone 26 s)
     **{f'binding-{lang}-macos-arm64': 120 for lang in LANGUAGES},
     **{f'packages-{p}': 120 for p in PACKAGE_PLATFORMS}, 'assemble': 60,
+    'packages-windows-x64': 150,  # 128 s warm (40218330855): four SDK setups and Windows configure before the 60 s packaging
     **{f'assembled-{p}': 180 for p in PACKAGE_PLATFORMS}, 'musl': 180,
     'sanitizers': 150, 'fuzzer': 120, 'reproducibility-windows-x64': 240, 'reproducibility-linux-arm64': 300,
     **{f'build-{p}': 210 for p in BUILD_PLATFORMS},

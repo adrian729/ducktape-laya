@@ -7,9 +7,9 @@ step 2), in this order:
 
 1. the gcc evidence build and `validate.py --full` (`--test-jobs 1`), nothing else on the machine;
 2. performance (`tests/benchmark.py` per model, checked against its budget) on the idle machine;
-3. the soak (`check-stress.py` at the candidate soak budget), pinned with taskset to the threads
-   of the highest-numbered physical core; meanwhile, on the other physical cores (never the soak
-   core's SMT sibling), one after another: (a) `check-reproducibility.py` (tier 1: two uncached
+3. the soak (`check-stress.py` at the candidate soak budget), pinned with taskset to all threads
+   of the SOAK_CORES highest-numbered physical cores; meanwhile, on the other physical cores (never
+   a soak core's SMT sibling), one after another: (a) `check-reproducibility.py` (tier 1: two uncached
    builds that must contain step 1's library and addon); (b) `model_upgrade` alone, since its
    real-model ctest has the CPU-time ratio tests; (c) the browser builds, package and both page
    runs, `installed_release`, `userspaces`, `rollback` and the cross-CPU compare;
@@ -66,7 +66,16 @@ def format_cpu_list(cpus):
     return ','.join(f'{low}' if low == high else f'{low}-{high}' for low, high in parts)
 
 
-def cpu_sets(sys_root='/sys', soak_cores=1):
+# The soak's physical cores. A stress round runs one engine at {"threads":2}, and every fifth round a
+# second engine beside it: two cores give each of the first engine's two threads a core of its own and
+# all four threads a CPU, where one core put the two on SMT siblings (V1 H10: 12.3 s per round; on
+# the two cores' threads 13.1 s, on one thread of each of two cores 11.1 s, against 13.4-13.9 s on one
+# core) and oversubscribed its two CPUs during the second engine's rounds. The other two cores still
+# finish their gates (about 1.5 h) well inside the soak.
+SOAK_CORES = 2
+
+
+def cpu_sets(sys_root='/sys', soak_cores=SOAK_CORES):
     """(soak CPUs, other CPUs): the threads of the highest-numbered physical core(s), and every other online CPU."""
     base = pathlib.Path(sys_root) / 'devices/system/cpu'
     online = parse_cpu_list((base / 'online').read_text())
@@ -299,7 +308,7 @@ def main(argv=None):
     p.add_argument('--upgrade-model', type=pathlib.Path, help='model_upgrade candidate model (default: the typed-decisions model)')
     p.add_argument('--upgrade-manifest', type=pathlib.Path, default=ROOT / 'models/laya-typed-decisions.json')
     p.add_argument('--reuse', type=pathlib.Path, help='A previous evidence.json whose hours-long reports may stand (candidate reuse rules)')
-    p.add_argument('--soak-cores', type=int, default=1, help='Physical cores the soak is pinned to (default 1)')
+    p.add_argument('--soak-cores', type=int, default=SOAK_CORES, help=f'Physical cores the soak is pinned to (default {SOAK_CORES})')
     p.add_argument('--print-cpus', action='store_true', help='Print SOAK_CPUS and OTHER_CPUS and exit')
     p.add_argument('--dry-run', action='store_true', help='Print the steps, CPU sets and evidence keys; run nothing')
     p.add_argument('--sys-root', default='/sys', help=argparse.SUPPRESS)

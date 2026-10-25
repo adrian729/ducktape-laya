@@ -198,7 +198,7 @@ class Categories(Base):
         for platform, shards in ci_paths.SHARDS['real_model'].items():
             self.assertNotIn('profile', shards)
             self.assertEqual(shards['side_outputs'], {})
-        self.assertEqual(list(ci_paths.SHARDS['real_model']['linux-x64-clang']['jobs']), ['native-linux-x64-clang'])
+        self.assertEqual(list(ci_paths.SHARDS['real_model']['linux-x64-clang']['jobs']), ['native-linux-x64-clang', 'references-linux-x64-clang'])
 
     def test_packages_have_per_profile_needs(self):
         job = ci_paths.JOBS['packages-linux-x64']

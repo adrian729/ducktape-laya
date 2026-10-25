@@ -13,7 +13,8 @@ routine stress gate; --budget short against the tier-2 targets' short_stress_sec
 (release/qualification.json). The soak and the short run also have a rounds floor
 (candidate_soak_rounds, short_stress_rounds), passed to laya-stress as --min-rounds:
 the run continues past its seconds until the floor is reached, and the budget is met
-only when both are. --prebuilt uses the --build directory's laya-stress as it is, without
+only when both are. The run is killed after max(seconds, rounds floor x ROUND_SECONDS) + 1800 s, or as soon as
+laya-stress has written no progress for STALL_SECONDS (a hang). --prebuilt uses the --build directory's laya-stress as it is, without
 building (a restored CI build; its identities are still checked).
 
 A failed run that completed at least one round still prints its result line
@@ -25,6 +26,7 @@ import json
 import os
 import pathlib
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -59,8 +61,12 @@ if a.min_rounds is None:
     a.min_rounds = required_rounds
 if a.min_rounds is not None and not 1 <= a.min_rounds <= 1000000:
     p.error('--min-rounds must be 1..1000000')
-# A rounds floor that outlasts the seconds budget is not cut off (laya-stress rounds take 2-3 s; 6 s is the margin).
-timeout = max(a.seconds, (a.min_rounds or 0) * 6) + 1800
+# A rounds floor that outlasts the seconds budget is not cut off. A round takes 2.2-3.0 s on the CI runners but
+# 11-14 s on the release host's pinned soak cores under the overlapping gates (V1 H10: 12.3 s on average, 13.9 s at
+# worst); 20 s is the margin. A hang is caught sooner by the stall limit: laya-stress reports progress on stderr
+# after the first round that ends 60 s after the last report, so STALL_SECONDS without any output is a hang.
+ROUND_SECONDS, STALL_SECONDS = 20, 900
+timeout = max(a.seconds, (a.min_rounds or 0) * ROUND_SECONDS) + 1800
 record = check_record()
 manifest = read_json(ROOT / record['models'][0])
 if a.prebuilt and not a.build:
@@ -92,6 +98,27 @@ def last_result_line(path):
         if isinstance(value, dict):
             return value
     return None
+def run_watched(command, cwd, env, stdout, stderr, log_path):
+    """(exit code, None) when laya-stress exits by itself; (124, reason) when it is killed at the overall timeout or
+    after STALL_SECONDS without output on stderr."""
+    process = subprocess.Popen(command, cwd=cwd, env=env, stdout=stdout, stderr=stderr)
+    started = last_output = time.monotonic()
+    size = 0
+    while True:
+        try:
+            return process.wait(timeout=10), None
+        except subprocess.TimeoutExpired:
+            pass
+        now = time.monotonic()
+        grown = log_path.stat().st_size
+        if grown != size:
+            size, last_output = grown, now
+        reason = (f'timeout after {timeout} s' if now - started >= timeout else
+                  f'stalled: no progress for {STALL_SECONDS} s' if now - last_output >= STALL_SECONDS else None)
+        if reason:
+            process.kill()
+            process.wait()
+            return 124, reason
 save()
 try:
     commands = [] if a.prebuilt else [['cmake', '--build', str(build), '--target', 'ducktape_laya', 'laya-stress', '--parallel', str(a.jobs)]]
@@ -117,19 +144,20 @@ try:
     env = dict(os.environ, PATH=str(build) + os.pathsep + os.environ.get('PATH', '')) if sys.platform == 'win32' \
         else dict(os.environ, LD_LIBRARY_PATH=str(build))
     with (out / 'stress.log').open('w') as log, (out / 'result.json').open('w') as result:
-        try:
-            run = subprocess.run(command, cwd=out, env=env, stdout=result, stderr=log, timeout=timeout)
-            report['exit_code'] = run.returncode
-        except subprocess.TimeoutExpired:
-            report['exit_code'] = 124
+        report['exit_code'], report['stopped'] = run_watched(command, out, env, result, log, out / 'stress.log')
     report['elapsed_seconds'] = time.monotonic() - started
+    if report['stopped']:
+        # A killed laya-stress leaves its router hard links behind (its cleanup runs only on a normal exit).
+        for links in out.glob('stress-router-*'):
+            shutil.rmtree(links, ignore_errors=True)
     if report['exit_code']:
         # A failure after the first completed round still prints the result line (status failed, the failure and
         # the series so far); keep it for analysis. The report stays failed.
         failed = last_result_line(out / 'result.json')
         if failed is not None:
             report['result'] = failed
-        detail = f": {failed['failure']}" if isinstance(failed, dict) and failed.get('failure') else ''
+        detail = f": {failed['failure']}" if isinstance(failed, dict) and failed.get('failure') else \
+            f" ({report['stopped']})" if report['stopped'] else ''
         raise RuntimeError(f'Stress run failed with exit code {report["exit_code"]}{detail}; inspect stress.log and result.json')
     report['result'] = json.loads((out / 'result.json').read_text())
     if sha256(binary) != report['test_sha256'] or sha256(library) != report['library_sha256']:

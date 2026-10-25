@@ -41,7 +41,7 @@ def registration(linux=True, model=True, tiers=True, x86=True):
     """`ctest --show-only=json-v1` of a build: the tests and labels CMakeLists.txt registers with dtl_add_test."""
     tests = [('abi-errors', 'generic', 'native'), ('feature-errors', 'generic', 'native'), ('control-errors', 'generic', 'native'),
              ('decision-rules', 'generic', 'native'), ('language-routing', 'generic', 'native'), ('tokenizer-partition', 'generic', 'native'),
-             ('stress-rule', 'generic', 'native')]
+             ('tokenizer-scaling', 'specialized', 'native'), ('stress-rule', 'generic', 'native')]
     if linux:
         tests.append(('ggml-faults', 'generic', 'faults'))
     if model:
@@ -290,6 +290,14 @@ class Validate(unittest.TestCase):
         self.assertEqual(selection['checks'], ['generic', 'references', 'parity:smoke', 'bindings', 'policy-platform'])
         self.assertEqual(selection['bindings'], ['rust', 'go'])
         self.assertEqual(select('--library-only', '--bindings', 'all')['checks'], ['bindings'])
+        # The Windows real-model shards' halves: each selects the suites of tests/parity.py's half.
+        self.assertEqual(select('--library-only', '--checks', 'bindings:a')['bindings'], ['rust', 'node', 'python'])
+        self.assertEqual(select('--library-only', '--checks', 'bindings:b')['bindings'], ['java', 'dotnet', 'go'])
+        self.assertEqual(select('--model', self.model, '--checks', 'parity:smoke-b')['parity_profile'], 'smoke')
+        for argv in (['--checks', 'bindings,bindings:a'], ['--checks', 'bindings:a,bindings:b'], ['--checks', 'bindings:a', '--bindings', 'go'],
+                     ['--checks', 'parity:smoke-a,parity:smoke-b', '--model', self.model], ['--checks', 'parity:smoke-a']):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                select('--library-only' if 'parity' not in argv[1] else '--upstream-reference', *argv)
         self.assertEqual(select('--model', self.model, '--full')['checks'], list(validate.FULL_SELECTION))
         self.assertEqual(select('--model', self.model, '--full')['profile'], 'host-full')
 

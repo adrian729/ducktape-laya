@@ -14,7 +14,9 @@ Checks (--checks, or the flags that add them):
   parity:smoke     tests/parity.py --profile smoke (--parity smoke)
   parity:full      tests/parity.py --profile full, every binding: the binding_conformance gate (--parity full)
   parity:full-a/b  one half of the full matrix each (CI shards; scripts/merge-validation.py joins them)
+  parity:smoke-a/b one half of the smoke matrix each (the Windows real-model shards)
   bindings         the binding suites (--bindings LIST|all), concurrently
+  bindings:a/b     the suites of one half: rust, node, python (a) or java, dotnet, go (b) (the Windows real-model shards)
   packages         scripts/package-native.py and tests/package-smoke.py (--packages)
   policy           scripts/check-policy.py --all (--policy all); policy-platform: --platform-only (--policy platform)
 
@@ -71,17 +73,22 @@ FULL_POLICY_CHECKS = ('result-comparison', 'qualification-policy', 'docs-links',
 FULL_ALLOWED_SKIPS = {'examples-smoke': (('win32',), 'compiles the examples with a POSIX driver'),
                       'policy:release-targets': (('win32',), None), 'policy:release-assets': (('win32',), None)}
 PLATFORM_POLICY = ('packaging-identities', 'browser-backend-identities', 'abi-layouts', 'typescript-consumers')
-CHECKS = ('ctest', 'generic', 'references', 'parity:smoke', 'parity:full', 'parity:full-a', 'parity:full-b', 'bindings', 'packages',
-          'policy', 'policy-platform')
+CHECKS = ('ctest', 'generic', 'references', 'parity:smoke', 'parity:smoke-a', 'parity:smoke-b', 'parity:full', 'parity:full-a',
+          'parity:full-b', 'bindings', 'bindings:a', 'bindings:b', 'packages', 'policy', 'policy-platform')
 FULL_SELECTION = ('ctest', 'references', 'parity:full', 'bindings', 'packages', 'policy')
 PARITY = {'parity:smoke': ('bindings-smoke', 'smoke', 'all', None), 'parity:full': ('bindings', 'full', 'all', 'binding_conformance'),
-          'parity:full-a': ('bindings-a', 'full', 'a', None), 'parity:full-b': ('bindings-b', 'full', 'b', None)}
-NEEDS_TESTS = ('ctest', 'generic', 'references', 'parity:smoke', 'parity:full', 'parity:full-a', 'parity:full-b')
-NEEDS_MODEL = ('references', 'parity:smoke', 'parity:full', 'parity:full-a', 'parity:full-b')
+          'parity:full-a': ('bindings-a', 'full', 'a', None), 'parity:full-b': ('bindings-b', 'full', 'b', None),
+          'parity:smoke-a': ('bindings-smoke-a', 'smoke', 'a', None), 'parity:smoke-b': ('bindings-smoke-b', 'smoke', 'b', None)}
+# The binding suites of each half, as tests/parity.py splits the consumers (the slow-starting Java, .NET and Go in b).
+BINDING_HALVES = {'bindings:a': ('rust', 'node', 'python'), 'bindings:b': ('java', 'dotnet', 'go')}
+NEEDS_TESTS = ('ctest', 'generic', 'references', 'parity:smoke', 'parity:smoke-a', 'parity:smoke-b', 'parity:full', 'parity:full-a',
+               'parity:full-b')
+NEEDS_MODEL = ('references', 'parity:smoke', 'parity:smoke-a', 'parity:smoke-b', 'parity:full', 'parity:full-a', 'parity:full-b')
 # What --full without a model cannot run.
 REAL_MODEL_LABELS = ('native', 'bindings', 'original-reference', 'upstream-reference')
 # Native tests every target registers (also in scripts/release_targets.py); the fault-injection tests are Linux-only.
-MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition'}
+MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition',
+                    'tokenizer-scaling'}
 REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head'}
 LINUX_REAL_MODEL_TESTS = ('real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults')
 ADDITIONAL_MODEL_GATES = ('tokenizer', 'decision_head', 'control_tokenize', 'original_reference', 'upstream_reference')
@@ -244,6 +251,11 @@ def select(p, a, system):
         p.error('one parity check per run, or the two halves parity:full-a and parity:full-b: ' + ', '.join(parity))
     if 'generic' in checks and 'ctest' in checks:
         p.error('generic runs a subset of ctest: select one')
+    halves = [name for name in checks if name in BINDING_HALVES]
+    if len(halves) + ('bindings' in checks) > 1:
+        p.error('select bindings or one of its halves (bindings:a, bindings:b)')
+    if halves and a.bindings is not None:
+        p.error(f'{halves[0]} selects its own suites: no --bindings')
     if len({'policy', 'policy-platform'} & set(checks)) > 1:
         p.error('select policy or policy-platform')
     if a.library_only:
@@ -262,9 +274,11 @@ def select(p, a, system):
         if not bindings or set(bindings) - set(BINDINGS):
             p.error('--bindings takes a comma-separated subset of ' + ','.join(BINDINGS) + ', or all')
         bindings = [name for name in BINDINGS if name in bindings]
+    if halves:
+        bindings = [name for name in BINDINGS if name in BINDING_HALVES[halves[0]]]
     default = a.checks is None and checks == ['generic']
     policy = 'all' if 'policy' in checks else 'platform' if 'policy-platform' in checks else 'none'
-    return {'profile': 'generic' if default else 'selected', 'checks': checks, 'bindings': bindings if 'bindings' in checks else [],
+    return {'profile': 'generic' if default else 'selected', 'checks': checks, 'bindings': bindings if 'bindings' in checks or halves else [],
             'policy': policy, 'packages': 'packages' in checks, 'parity_profile': PARITY[parity[0]][1] if parity else None,
             'upstream_reference': bool(a.upstream_reference)}
 
@@ -631,7 +645,7 @@ class Validation:
         label, profile, half, gate = PARITY[check]
         # A half writes outputs-<half>.json and parity-timing-<half>.json (scripts/merge-validation.py joins them into
         # outputs.json); smoke and full write outputs.json and parity-timing.json.
-        suffix = f'-{half}' if check in ('parity:full-a', 'parity:full-b') else ''
+        suffix = f'-{half}' if half != 'all' else ''
         self.run(label, [sys.executable, ROOT / 'tests/parity.py', self.model, '--build-dir', self.build, '--profile', profile,
                          '--bindings', half, '--report', self.out / f'outputs{suffix}.json',
                          '--timing', self.out / f'parity-timing{suffix}.json'], gate)
@@ -715,7 +729,7 @@ class Validation:
                 self.references()
             elif check in PARITY:
                 self.parity(check)
-            elif check == 'bindings':
+            elif check == 'bindings' or check in BINDING_HALVES:
                 self.bindings()
             elif check == 'packages':
                 self.packages()

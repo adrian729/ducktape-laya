@@ -1,6 +1,7 @@
 // Sustained public-ABI lifecycle/concurrency check; no model downloads.
 #include "ducktape_laya.hpp"
 #include "stress_rule.hpp"
+#include "thread-census.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -11,6 +12,34 @@
 #include <string>
 #include <thread>
 #include <vector>
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+#if (defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)) && !defined(_MSC_VER)
+#define DTL_STRESS_ASAN 1
+#include <sanitizer/allocator_interface.h>
+#elif defined(__GLIBC__)
+#include <malloc.h>
+#endif
+// Memory is read after close to bound what the library retains, so each reading first returns
+// the allocator's free memory to the OS: the closed RSS then measures live memory, not what
+// the allocator happens to keep, while every round still runs with the allocator as it is.
+// - AddressSanitizer: freed chunks wait in its quarantine (256 MiB by default) so that
+//   use-after-free is caught, and stay resident: the closed RSS grew with the quarantine, not
+//   with the program (about 97 MiB of a 10-round run's growth). The purge drains the
+//   quarantine. LeakSanitizer is unaffected (it reports at exit).
+// - glibc: each thread that allocates gets an arena, and free memory stays in the arenas the
+//   round's threads happened to use; the closed RSS moved between plateaus about 2.4 MiB
+//   apart from round to round (a 3 MiB step in a pinned 631-round run), larger than the soak
+//   rule's 2 MiB median limit. malloc_trim(0) returns every arena's free pages.
+// Other allocators (Windows' PrivateUsage, macOS, musl) are read as they are.
+static void release_free_memory() {
+#if defined(DTL_STRESS_ASAN)
+    __sanitizer_purge_allocator();
+#elif defined(__GLIBC__)
+    malloc_trim(0);
+#endif
+}
 #ifdef _WIN32
 // Windows: committed private bytes for memory (the working set is trimmed by the OS and
 // would hide or fake growth), the handle count for descriptors, threads from a snapshot.
@@ -91,7 +120,7 @@ static void stable_baseline() {
 #include <sys/resource.h>
 #include <unistd.h>
 static const char *const memory_metric = "VmRSS";
-static const char *const thread_metric = "threads (/proc/self/task)";
+static const char *const thread_metric = "live threads (/proc/self/task, exiting threads excluded)";
 static long rss_kib() {
     std::ifstream file("/proc/self/status"); std::string name;
     while (file >> name) { if (name == "VmRSS:") { long value; file >> value; return value; } std::getline(file, name); }
@@ -102,7 +131,8 @@ static size_t entries(const char *path) {
     size_t n = 0; for (const auto &entry : std::filesystem::directory_iterator(path)) { (void) entry; ++n; } return n;
 }
 static long descriptor_count() { return (long) entries("/proc/self/fd"); }
-static long thread_count() { return (long) entries("/proc/self/task"); }
+// Joined threads the kernel has not released yet are not counted (tests/thread-census.hpp).
+static long thread_count() { return dtl_test::live_threads(); }
 static unsigned long process_id() { return (unsigned long) ::getpid(); }
 static const unsigned settle_waits = 0;
 static bool settled(long fds, long threads) { return descriptor_count() == fds && thread_count() == threads; }
@@ -212,6 +242,7 @@ int main(int argc, char **argv) {
         const auto routed = [&](const char *id) { return request.substr(0, request.size() - 1) + ",\"model\":\"" + id + "\"}"; };
         const auto routed_expected = [&](const char *id) { return expected.substr(0, expected.size() - 1) + ",\"model\":\"" + id + "\"}"; };
         stable_baseline();
+        release_free_memory();
         const auto baseline_rss = rss_kib(), baseline_fds = descriptor_count(), baseline_threads = thread_count();
         if (baseline_rss < 0 || baseline_fds < 0 || baseline_threads < 0) throw std::runtime_error("Could not measure baseline resources");
         report.baseline_rss_kib = baseline_rss;
@@ -264,6 +295,7 @@ int main(int argc, char **argv) {
           }
           // Measure after destruction so a temporarily resident model is not a leak.
           const bool counts = settled(baseline_fds, baseline_threads);
+          release_free_memory();
           const long current_rss = rss_kib();
           if (current_rss < 0 || current_rss > baseline_rss + 128 * 1024 || !counts)
               throw std::runtime_error("Post-close resource growth exceeded the declared bound after round " + std::to_string(completed) +
@@ -302,6 +334,7 @@ int main(int argc, char **argv) {
         report.late_median_closed_rss_kib = late_median;
         if (const auto broken = stress_rule::violation(growth); !broken.empty()) throw std::runtime_error(broken);
         settled(baseline_fds, baseline_threads);
+        release_free_memory();
         const auto final_rss = rss_kib(), final_fds = descriptor_count(), final_threads = thread_count();
         report.final_rss_kib = final_rss;
         report.fds = final_fds;

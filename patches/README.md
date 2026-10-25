@@ -36,7 +36,7 @@ Removal condition: upstream checks these allocations and `real-faults` passes un
 
 Before tokenizing, llama.cpp splits text at every control, user-defined and unknown token (`tokenizer_st_partition`). For each match it found the fragment's position with `std::distance` from the list's start and erased it with `std::next` from the start again, so the split took time quadratic in the number of matches. The Laya vocabularies make ordinary text match often: the English and typed-decisions vocabularies have user-defined tokens for runs of 2 to 24 spaces, and the multilingual one for every newline. 64 KiB of `"x  "` took about 31 s, 1 MiB of log lines on the multilingual model minutes, and tokenization cannot be cancelled. The patch keeps the list element before the current fragment, so each split erases in constant time; the order of operations and the resulting fragments are the same. `tests/tokenizer.cpp` checks that token sequences equal those recorded with the unpatched runtime (`tests/fixtures/tokenizer-partition.txt`; upstream's vocabulary-only test files and the Laya models) and that time grows linearly. No arithmetic or output changes.
 
-Removal condition: upstream makes the partition linear; `tokenizer-partition` and `real-tokenizer` pass unchanged.
+Removal condition: upstream makes the partition linear; `tokenizer-partition`, `tokenizer-scaling` and `real-tokenizer` pass unchanged.
 
 ## ggml-cpu-work-buffer.patch
 

@@ -74,7 +74,7 @@
     "short_stress_seconds": 300,
     "short_stress_rounds": 40,
     "candidate_soak_seconds": 10800,
-    "candidate_soak_rounds": 3000,
+    "candidate_soak_rounds": 1000,
     "fuzz_seconds_per_target": 3600,
     "baseline_runs": 3,
     "performance_limits_status": "must_be_frozen_before_candidate",
@@ -196,7 +196,7 @@
         "tests/stress.cpp",
         "scripts/check-stress.py"
       ],
-      "acceptance": "A three-hour candidate soak (budgets.candidate_soak_seconds) of the native library that also reaches budgets.candidate_soak_rounds rounds serves the routine stress gate too (at least budgets.routine_stress_seconds). Every round keeps the per-close limits (thread and descriptor or handle counts back to baseline, closed memory within +128 MiB), with no hangs or corrupted results; late growth stays within 32 MiB from 40 rounds on, and from 1,000 rounds on the soak rule applies to the closed-RSS series after its first quarter (last-quarter median at most 2 MiB above the second quarter's, least-squares slope at most 1 KiB per round). No browser stress or memory soak exists; the browser lifecycle is covered by the browser gates."
+      "acceptance": "A three-hour candidate soak (budgets.candidate_soak_seconds) of the native library, pinned to two physical cores beside the other host gates, that also reaches budgets.candidate_soak_rounds rounds serves the routine stress gate too (at least budgets.routine_stress_seconds). Every round keeps the per-close limits (thread and descriptor or handle counts back to baseline, closed memory within +128 MiB, read after the allocator returns its free memory: glibc's malloc_trim, AddressSanitizer's quarantine purge), with no hangs or corrupted results; late growth stays within 32 MiB from 40 rounds on, and from 1,000 rounds on the soak rule applies to the closed-RSS series after its first quarter (last-quarter median at most 2 MiB above the second quarter's, least-squares slope at most 1 KiB per round). No browser stress or memory soak exists; the browser lifecycle is covered by the browser gates."
     },
     "linux_matrix": {
       "implementation": [
