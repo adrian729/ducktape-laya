@@ -1164,6 +1164,18 @@ jobs:
       - *model-key
       - *model-restore
       - *model-fetch
+      # On a miss (the cache is branch-scoped; warm-linux-x64 seeds it) the build saves the model, so
+      # this run's real-model jobs restore it instead of each downloading 431 MB (263-265 s when the
+      # download is slow: runs 40245479206 and 40250081027). One key for every OS; a concurrent
+      # save of the same key by another build job only warns.
+      - &model-save
+        name: Save the pinned test model
+        if: env.DTL_MODEL == 'true' && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build-model/laya.gguf
+          key: laya-model-${{ steps.model-key.outputs.sha256 }}
+          enableCrossOsArchive: true
       - &build-phase
         name: Build phase
         run: |
@@ -1224,6 +1236,7 @@ jobs:
       - *model-key
       - *model-restore
       - *model-fetch
+      - *model-save
       - *build-phase
       - *build-tarball
       - *build-upload
@@ -1257,6 +1270,7 @@ jobs:
       - *model-key
       - *model-restore
       - *model-fetch
+      - *model-save
       - *build-phase
       - *build-tarball
       - *build-upload
@@ -1293,6 +1307,7 @@ jobs:
       - *model-key
       - *model-restore
       - *model-fetch
+      - *model-save
       - *build-phase
       - *build-tarball
       - *build-upload
@@ -2089,13 +2104,7 @@ jobs:
       - *model-key
       - *model-restore
       - *model-fetch
-      - name: Save the pinned test model
-        if: env.DTL_MODEL == 'true' && steps.model-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: build-model/laya.gguf
-          key: laya-model-${{ steps.model-key.outputs.sha256 }}
-          enableCrossOsArchive: true
+      - *model-save
       - *build-phase
       - *cache-stats
 
@@ -2127,6 +2136,7 @@ jobs:
       - *model-key
       - *model-restore
       - *model-fetch
+      - *model-save
       - *build-phase
       - *cache-stats
 
@@ -2156,6 +2166,7 @@ jobs:
       - *model-key
       - *model-restore
       - *model-fetch
+      - *model-save
       - *build-phase
       - *cache-stats
 
@@ -2188,6 +2199,7 @@ jobs:
       - *model-key
       - *model-restore
       - *model-fetch
+      - *model-save
       - *build-phase
       - *cache-stats
 
