@@ -19,7 +19,11 @@ What runs, by event:
 - push to main, or a commit with more than one parent: every push-profile job, never
   diff-based, unless a commit P among HEAD's parents and first-parent ancestors has HEAD's tree
   and every push-profile job is not stale at P, or every push-profile job is verified at HEAD
-  itself (identical-tree skip: skip_all=true, nothing runs).
+  itself (identical-tree skip: skip_all=true, nothing runs), or HEAD differs from a fully
+  verified P (among its parents and their first FAST_PATH_ANCESTORS first-parent ancestors) only by
+  documentation that no job but the policy checks reads (ci_paths.is_inert): then only the jobs
+  that difference makes stale run (the policy checks of the docs). Any other path, an unclassified
+  one, a workflow or classifier change, or an API or git failure keeps the full profile.
 - pull_request: as a branch push, unconditionally (its runs are never records).
 - workflow_dispatch: --mode verify with --scope affected (the stale jobs of the push profile, and
   of the real-model profile with --real-model; on a merge commit a job counts as verified only
@@ -261,6 +265,24 @@ def identical_tree_skip(git, records, head, jobs):
     return None
 
 
+FAST_PATH_ANCESTORS = 5  # parents and first-parent ancestors tried as the fully verified tree of the docs-only fast path
+
+
+def inert_difference(git, records, head, jobs):
+    """(P, paths, deleted) when HEAD differs from a fully verified tree P only by inert paths (ci_paths.is_inert), else None.
+
+    P is among HEAD's parents and its first FAST_PATH_ANCESTORS first-parent ancestors, and every job of `jobs` is verified at P
+    or not stale at P by its own record (the rule of identical_tree_skip). Any other path, an unclassified one, a workflow or
+    classifier change included, returns None: the full profile."""
+    for commit in git.walk(head, FAST_PATH_ANCESTORS)[1:]:
+        paths, deleted = git.diff(commit, head)
+        if not all(ci_paths.is_inert(path) for path in paths):
+            continue
+        if not any(state['stale'] for state in stale_at(git, records, commit, jobs).values()):
+            return commit, paths, deleted
+    return None
+
+
 def close(run, profiles, workflow):
     """The run set closed under rebuild_with (downstream) and artifact_needs (upstream), in the active profiles."""
     def profile_of(name):
@@ -309,9 +331,22 @@ def decide(*, git, records, workflow, event, ref, head, mode='verify', scope='af
             except Unavailable as error:
                 decision['notes'].append(f'fail open ({error})')
                 skip = None
+            inert = None
+            if not skip:
+                try:
+                    inert = inert_difference(git, records, head, push_jobs)
+                except Unavailable as error:
+                    decision['notes'].append(f'fail open ({error})')
             if skip:
                 decision['skip_all'] = True
                 decision['notes'].append(f'identical tree: every push-profile job is verified at {skip[:12]}')
+            elif inert:
+                base, paths, deleted = inert
+                touched = ci_paths.touched_categories(paths)
+                decision['notes'].append(f'docs-only difference from the fully verified {base[:12]}: only the jobs whose inputs it touches run')
+                states = {job: {'stale': ci_paths.job_stale_by(ci_paths.JOBS[job]['categories'], touched), 'base': base,
+                                'reason': f'only documentation changed since the fully verified {base[:12]}', 'touched': touched,
+                                'paths': paths, 'deleted': deleted} for job in push_jobs}
             else:
                 states = {job: {'stale': True, 'base': None, 'reason': 'main push or merge commit', 'touched': {ci_paths.EVERYTHING},
                                 'paths': None, 'deleted': []} for job in push_jobs}

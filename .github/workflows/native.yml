@@ -12,7 +12,8 @@ name: Native checks
 #
 # - Branch push: `changes`, `policy` with the stale policy checks and `generic-linux-x64` when stale.
 # - Push to main or a merge commit: the whole push profile, unless the tree is identical to a fully
-#   verified one (skip_all).
+#   verified one (skip_all), or differs from one only by documentation that no job but the policy
+#   checks reads (then only `policy`, with the checks of those docs).
 # - Dispatch (scripts/verify.py, a release): mode verify (scope affected, all or a job list; with
 #   real_model the real-model profile too), candidate (everything, the release evidence that
 #   scripts/fetch-ci-evidence.py downloads), qualify (sanitizers, the fuzz campaign and the runtime

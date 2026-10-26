@@ -8,6 +8,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 import tempfile
 
@@ -135,6 +136,93 @@ def verify_model(path, manifest):
     path = pathlib.Path(path)
     if path.stat().st_size != manifest['size_bytes'] or sha256(path) != manifest['sha256']:
         raise ValueError(f'Model does not match immutable manifest: {manifest["id"]}')
+
+def _read_int(path):
+    try:
+        return int(pathlib.Path(path).read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+def host_state(sys_root='/sys'):
+    """The CPU's thermal and frequency context now, so a performance miss can be told from a hot or throttled host.
+
+    load_average (1, 5, 15 minutes); on Linux also thermal_c (every thermal zone by type, x86_pkg_temp is the CPU
+    package), cpu_khz (scaling_cur_freq of each online CPU, with min/max/mean) and throttle_counts (the kernel's
+    cumulative package and core thermal-throttle events, whose growth between two samples proves throttling).
+    A value the host does not expose is left out, never guessed."""
+    state = {'time_unix': time.time(), 'load_average': list(os.getloadavg()) if hasattr(os, 'getloadavg') else None}
+    root = pathlib.Path(sys_root)
+    zones = {}
+    for zone in sorted(root.glob('class/thermal/thermal_zone*')):
+        try:
+            kind = (zone / 'type').read_text().strip()
+        except OSError:
+            continue
+        milli = _read_int(zone / 'temp')
+        if milli is not None:
+            zones[kind] = milli / 1000
+    if zones:
+        state['thermal_c'] = zones
+    freqs = {}
+    for cpu in sorted(root.glob('devices/system/cpu/cpu[0-9]*'), key=lambda path: int(path.name[3:])):
+        khz = _read_int(cpu / 'cpufreq/scaling_cur_freq')
+        if khz is not None:
+            freqs[cpu.name] = khz
+    if freqs:
+        values = list(freqs.values())
+        state['cpu_khz'] = {**freqs, 'min': min(values), 'max': max(values), 'mean': round(sum(values) / len(values))}
+    throttles = {}
+    for cpu in sorted(root.glob('devices/system/cpu/cpu[0-9]*/thermal_throttle')):
+        for kind in ('core', 'package'):
+            count = _read_int(cpu / f'{kind}_throttle_count')
+            if count is not None:
+                throttles[f'{cpu.parent.name}_{kind}'] = count
+    if throttles:
+        state['throttle_counts'] = throttles
+    return state
+
+def package_temperature_c(state):
+    """The CPU package temperature of a host_state() sample: x86_pkg_temp, else the hottest thermal zone (None: no sensor)."""
+    zones = state.get('thermal_c') or {}
+    return zones.get('x86_pkg_temp', max(zones.values(), default=None))
+
+def wait_settled(max_temp_c, max_load, timeout, poll=5.0, sample=host_state, sleep=time.sleep, clock=time.monotonic):
+    """Wait until the CPU package is at most max_temp_c and the 1-minute load average at most max_load (None: no limit), for at most
+    timeout seconds, and return what happened (the record that goes into the benchmark report). It never raises and
+    never skips anything: after the timeout the measurement still runs, with settled=false, so a miss can be read
+    against the temperature it started at. A host without a temperature sensor waits on the load only."""
+    start, state = clock(), sample()
+    first = state
+    while True:
+        temp, load = package_temperature_c(state), (state.get('load_average') or [None])[0]
+        hot = max_temp_c is not None and temp is not None and temp > max_temp_c
+        busy = max_load is not None and load is not None and load > max_load
+        waited = clock() - start
+        if not hot and not busy:
+            break
+        if waited >= timeout:
+            break
+        sleep(min(poll, timeout - waited))
+        state = sample()
+    return {'max_temp_c': max_temp_c, 'max_load': max_load, 'timeout_seconds': timeout, 'waited_seconds': round(clock() - start, 1),
+            'settled': not hot and not busy, 'temperature_sensor': package_temperature_c(first) is not None,
+            'start': first, 'end': state}
+
+def host_summary(report):
+    """The environment of a benchmark report in a few numbers (None when it recorded none): hottest CPU package
+    temperature, lowest mean CPU frequency, highest load and the growth of the kernel's throttle counters between the
+    first and last sample. For attributing a failed budget to the host; it never decides a verdict."""
+    state = report.get('host_state')
+    if not state:
+        return None
+    samples = [state['before'], *state.get('after_workload', {}).values(), state.get('after_cancellation'), state.get('after')]
+    samples = [sample for sample in samples if sample]
+    temps = [sample['thermal_c']['x86_pkg_temp'] for sample in samples if 'x86_pkg_temp' in sample.get('thermal_c', {})]
+    means = [sample['cpu_khz']['mean'] for sample in samples if 'cpu_khz' in sample]
+    loads = [sample['load_average'][0] for sample in samples if sample.get('load_average')]
+    first, last = samples[0].get('throttle_counts', {}), samples[-1].get('throttle_counts', {})
+    return {'samples': len(samples), 'max_package_temp_c': max(temps, default=None), 'min_mean_cpu_mhz': min(means) / 1000 if means else None,
+            'max_load_1m': max(loads, default=None), 'throttle_events': sum(last.get(key, 0) - first.get(key, 0) for key in last)}
 
 def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()

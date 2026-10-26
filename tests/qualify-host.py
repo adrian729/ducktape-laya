@@ -23,13 +23,62 @@ GIT_ENV = {'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.invalid', 'GIT
 def fake_sys(root, online, siblings):
     """A /sys/devices/system/cpu tree: `online` list and each CPU's thread_siblings_list."""
     base = pathlib.Path(root) / 'devices/system/cpu'
-    base.mkdir(parents=True)
+    base.mkdir(parents=True, exist_ok=True)
     (base / 'online').write_text(online + '\n')
     for cpu, group in siblings.items():
         topology = base / f'cpu{cpu}/topology'
-        topology.mkdir(parents=True)
+        topology.mkdir(parents=True, exist_ok=True)
         (topology / 'thread_siblings_list').write_text(group + '\n')
     return root
+
+
+def fake_inputs(base):
+    """Every path the preflight validates, as files and directories in `base`."""
+    base = pathlib.Path(base)
+    paths = {name: base / 'in' / name for name in ('model', 'laya-multilingual-f16.gguf', 'laya-typed-decisions-q8_0.gguf')}
+    for path in paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'x')
+    lkg, rootfs, ci = base / 'in/lkg', base / 'in/rootfs', base / 'candidate/ci'
+    (lkg).mkdir()
+    (lkg / 'inventory.json').write_text('{}')
+    (rootfs / 'etc').mkdir(parents=True)
+    (rootfs / 'etc/os-release').write_text('ID=ubuntu\n')
+    (ci / 'packages-assembled').mkdir(parents=True)
+    emsdk = base / 'in/emsdk'
+    emsdk.mkdir()
+    return {'model': paths['model'], 'multilingual': paths['laya-multilingual-f16.gguf'], 'typed': paths['laya-typed-decisions-q8_0.gguf'],
+            'lkg': lkg, 'rootfs': rootfs, 'emsdk': emsdk}
+
+
+def inputs_argv(inputs):
+    return ['--model', str(inputs['model']), '--extra-model', str(inputs['multilingual']), '--extra-model', str(inputs['typed']),
+            '--emsdk', str(inputs['emsdk']), '--lkg-packages', str(inputs['lkg']), '--rootfs', str(inputs['rootfs'])]
+
+
+def patch_checkout(module):
+    """Replace the checks of this checkout (the submodule, the emsdk pin) with passing ones; returns the undo."""
+    saved = module.runtime_problem, module.emsdk_pin, module.subprocess.run
+    module.runtime_problem = lambda record: None
+    module.emsdk_pin = lambda: 'fake'
+    real = module.subprocess.run
+
+    def run(command, *args, **kwargs):  # the emsdk's git HEAD
+        if isinstance(command, list) and command[:2] == ['git', '-C'] and command[3:] == ['rev-parse', 'HEAD'] \
+                and pathlib.Path(command[2]).name == 'emsdk':
+            return subprocess.CompletedProcess(command, 0, 'fake\n', '')
+        return real(command, *args, **kwargs)
+    module.subprocess.run = run
+
+    def undo():
+        module.runtime_problem, module.emsdk_pin, module.subprocess.run = saved
+    return undo
+
+
+def dry_run(argv):
+    with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+        code = qualify.main(argv)
+    return code, out.getvalue().splitlines(), err.getvalue()
 
 
 class Topology(unittest.TestCase):
@@ -88,18 +137,18 @@ class DryRun(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        root = fake_sys(pathlib.Path(cls.tmp.name) / 'sys', '0-7', {cpu: f'{cpu % 4},{cpu % 4 + 4}' for cpu in range(8)})
-        cls.out = pathlib.Path(cls.tmp.name) / 'candidate'
-        argv = ['--dry-run', '--candidate', 'HEAD', '--sys-root', str(root), '--output', str(cls.out), '--model', '/m/primary.gguf',
-                '--extra-model', '/m/laya-multilingual-f16.gguf', '--extra-model', '/m/laya-typed-decisions-q8_0.gguf',
-                '--emsdk', '/emsdk', '--lkg-packages', '/lkg', '--rootfs', '/rootfs']
-        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
-            cls.code = qualify.main(argv)
-        cls.lines = out.getvalue().splitlines()
+        cls.base = pathlib.Path(cls.tmp.name)
+        root = fake_sys(cls.base / 'sys', '0-7', {cpu: f'{cpu % 4},{cpu % 4 + 4}' for cpu in range(8)})
+        cls.out = cls.base / 'candidate'
+        cls.inputs = fake_inputs(cls.base)
+        cls.argv = ['--dry-run', '--candidate', 'HEAD', '--sys-root', str(root), '--output', str(cls.out), *inputs_argv(cls.inputs)]
+        cls.patches = patch_checkout(qualify)
+        cls.code, cls.lines, cls.err = dry_run(cls.argv)
         cls.steps = [[part.rstrip(':') for part in line.split()[1:3]] for line in cls.lines if line.startswith('  step ')]
 
     @classmethod
     def tearDownClass(cls):
+        cls.patches()
         cls.tmp.cleanup()
 
     def step(self, name):
@@ -130,7 +179,7 @@ class DryRun(unittest.TestCase):
         self.assertIn('[alone]', line)
         self.assertIn('CC=gcc CXX=g++ python3 scripts/validate.py --full', line)
         self.assertIn('--test-jobs 1', line)
-        self.assertIn('--model /m/primary.gguf --extra-model /m/laya-multilingual-f16.gguf', line)
+        self.assertIn(f'--model {self.inputs["model"]} --extra-model {self.inputs["multilingual"]}', line)
         self.assertIn('--upstream-reference', line)
         for name, _ in [(n, p) for p, n in self.steps if p == '2']:
             self.assertIn('[alone]', self.step(name))
@@ -142,7 +191,7 @@ class DryRun(unittest.TestCase):
         for name in ('reproducibility', 'model-upgrade', 'browser', 'userspaces', 'cross-cpu'):
             self.assertIn('[taskset -c 0-1,4-5]', self.step(name))
         upgrade = self.step('model-upgrade')
-        self.assertIn('--candidate-model /m/laya-typed-decisions-q8_0.gguf', upgrade)
+        self.assertIn(f'--candidate-model {self.inputs["typed"]}', upgrade)
         self.assertIn('--compiler-launcher ccache', upgrade)
 
     def test_evidence_keys(self):
@@ -158,6 +207,7 @@ class Plan(unittest.TestCase):
         class Args:
             model, extra_model = pathlib.Path('/m.gguf'), []
             upgrade_model, upgrade_manifest, emsdk, rootfs, lkg_packages = '/u.gguf', '/u.json', None, None, None
+            settle_temp_c, settle_load, settle_timeout = 75.0, 1.0, 900.0
         record = {'models': ['models/manifest.json'], 'runtime': {'commit': 'abc'}}
         policy = {'budgets': {'candidate_soak_seconds': 60, 'candidate_soak_rounds': 3}}
         out = pathlib.Path('/out')
@@ -179,6 +229,192 @@ class Plan(unittest.TestCase):
         self.assertNotIn('model-upgrade', names)
         self.assertFalse([name for name in names if name.startswith('performance')])
         self.assertIn('reproducibility', names)
+
+
+class Preflight(unittest.TestCase):
+    """The preflight fails in seconds, with a message naming the flag, before any step runs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = pathlib.Path(self.tmp.name)
+        self.inputs = fake_inputs(self.base)
+        self.out = self.base / 'candidate'
+        self.undo = patch_checkout(qualify)
+
+    def tearDown(self):
+        self.undo()
+        self.tmp.cleanup()
+
+    def run_dry(self, *extra, drop=()):
+        argv = ['--dry-run', '--candidate', 'HEAD', '--sys-root', str(fake_sys(self.base / 'sys', '0-7', {c: f'{c % 4},{c % 4 + 4}' for c in range(8)})),
+                '--output', str(self.out), *inputs_argv(self.inputs)]
+        for flag in drop:  # a flag and its values
+            while flag in argv:
+                at = argv.index(flag)
+                del argv[at:at + 2]
+        return dry_run(argv + list(extra))
+
+    def test_passes_with_everything_present(self):
+        code, lines, err = self.run_dry()
+        self.assertEqual(code, 0)
+        self.assertNotIn('preflight failed', err)
+        self.assertIn('qualify-host: preflight passed', lines)
+
+    def test_missing_paths_are_errors_not_fallbacks(self):
+        for flag in ('--emsdk', '--lkg-packages', '--rootfs'):
+            code, _, err = self.run_dry(drop=(flag,))
+            self.assertEqual(code, 2, flag)
+            self.assertIn(f'{flag} is required', err)
+
+    def test_nonexistent_paths_are_named(self):
+        missing = self.base / 'nowhere'
+        code, _, err = self.run_dry('--emsdk', str(missing), '--lkg-packages', str(missing), '--rootfs', str(missing), drop=('--emsdk', '--lkg-packages', '--rootfs'))
+        self.assertEqual(code, 2)
+        for flag in ('--emsdk', '--lkg-packages', '--rootfs'):
+            self.assertIn(f'{flag} {missing} is not an existing directory', err)
+
+    def test_relative_paths_are_resolved(self):
+        cwd = os.getcwd()
+        try:
+            os.chdir(self.base)
+            code, lines, err = self.run_dry('--rootfs', 'in/rootfs', drop=('--rootfs',))
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(code, 0, err)
+        self.assertIn(f'{self.inputs["rootfs"]} ', ' '.join(lines))
+
+    def test_incomplete_directories_and_missing_models(self):
+        (self.inputs['lkg'] / 'inventory.json').unlink()
+        (self.inputs['rootfs'] / 'etc/os-release').unlink()
+        self.inputs['typed'].unlink()
+        code, _, err = self.run_dry()
+        self.assertEqual(code, 2)
+        self.assertIn('has no inventory.json', err)
+        self.assertIn('has no etc/os-release', err)
+        self.assertIn('--extra-model', err)
+
+    def test_emsdk_must_match_the_pin(self):
+        qualify.emsdk_pin = lambda: 'other'
+        code, _, err = self.run_dry()
+        self.assertEqual(code, 2)
+        self.assertIn('release/browser-toolchain.json pins', err)
+
+    def test_no_ci_evidence(self):
+        (self.out / 'ci/packages-assembled').rmdir()
+        code, _, err = self.run_dry()
+        self.assertEqual(code, 2)
+        self.assertIn('no CI evidence', err)
+
+    def test_existing_outputs_need_replace(self):
+        (self.out / 'performance').mkdir()
+        (self.out / 'performance/laya-english-q8_0.json').write_text('{}')
+        code, _, err = self.run_dry()
+        self.assertEqual(code, 2)
+        self.assertIn('outputs exist (nothing is overwritten', err)
+        code, lines, err = self.run_dry('--replace')
+        self.assertEqual(code, 0, err)
+        self.assertTrue((self.out / 'performance/laya-english-q8_0.json').is_file())  # a dry run moves nothing
+
+    def test_archive_keeps_the_evidence(self):
+        (self.out / 'performance').mkdir()
+        report = self.out / 'performance/a.json'
+        report.write_text('evidence')
+        destination = qualify.archive_outputs([report], self.out, '20260101T000000')
+        self.assertFalse(report.exists())
+        self.assertEqual((destination / 'performance/a.json').read_text(), 'evidence')
+
+    def test_benchmarks_settle_first(self):
+        _, lines, _ = self.run_dry('--settle-temp-c', '70', '--settle-timeout', '30')
+        line = next(l for l in lines if l.startswith('  step 2 performance-laya-english'))
+        self.assertIn('--settle-temp-c 70.0 --settle-load 1.0 --settle-timeout 30.0', line)
+
+    def test_runtime_submodule_must_match_the_record(self):
+        undo_all = self.undo
+        self.undo = lambda: None
+        undo_all()  # the real runtime_problem, against a throwaway repository
+        env = dict(os.environ, **GIT_ENV)
+        repo = self.base / 'repo'
+        (repo / 'third_party/llama.cpp').mkdir(parents=True)
+        subprocess.run(['git', 'init', '-q', str(repo)], check=True, env=env)
+        record = {'runtime': {'path': 'third_party/llama.cpp', 'commit': 'a' * 40}}
+        saved = qualify.ROOT
+        qualify.ROOT = repo
+        try:
+            self.assertIn('git submodule update --init', qualify.runtime_problem(record))  # empty directory inside the parent repo
+            inner = repo / 'third_party/llama.cpp'
+            subprocess.run(['git', 'init', '-q', str(inner)], check=True, env=env)
+            subprocess.run(['git', '-C', str(inner), 'commit', '-q', '--allow-empty', '-m', 'x'], check=True, env=env)
+            head = subprocess.run(['git', '-C', str(inner), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+            self.assertIn('compatibility record pins', qualify.runtime_problem(record))
+            self.assertIsNone(qualify.runtime_problem({'runtime': {'path': 'third_party/llama.cpp', 'commit': head}}))
+        finally:
+            qualify.ROOT = saved
+            self.undo = patch_checkout(qualify)
+
+
+class NpmTrees(unittest.TestCase):
+    def test_dry_run_only_reports_and_a_current_tree_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = pathlib.Path(tmp)
+            (tree / 'package-lock.json').write_text('{}')
+            saved = qualify.ROOT
+            qualify.ROOT = tree.parent
+            try:
+                problems, notes = qualify.ensure_npm([tree], install=False)
+                self.assertEqual((problems, len(notes)), ([], 1))
+                (tree / 'node_modules').mkdir()
+                (tree / 'node_modules/.package-lock.json').write_text('{}')
+                self.assertTrue(qualify.npm_tree_current(tree))
+                self.assertEqual(qualify.ensure_npm([tree], install=True), ([], []))  # idempotent: no npm run
+                os.utime(tree / 'package-lock.json', (4e9, 4e9))  # the lockfile changed after the install
+                self.assertFalse(qualify.npm_tree_current(tree))
+            finally:
+                qualify.ROOT = saved
+
+
+class HostState(unittest.TestCase):
+    def fake(self, root, temp, khz, throttles=0):
+        zone = pathlib.Path(root) / 'class/thermal/thermal_zone0'
+        zone.mkdir(parents=True, exist_ok=True)
+        (zone / 'type').write_text('x86_pkg_temp\n')
+        (zone / 'temp').write_text(f'{temp}\n')
+        for cpu, value in enumerate(khz):
+            base = pathlib.Path(root) / f'devices/system/cpu/cpu{cpu}'
+            (base / 'cpufreq').mkdir(parents=True, exist_ok=True)
+            (base / 'cpufreq/scaling_cur_freq').write_text(f'{value}\n')
+            (base / 'thermal_throttle').mkdir(exist_ok=True)
+            (base / 'thermal_throttle/package_throttle_count').write_text(f'{throttles}\n')
+
+    def test_sample_and_summary(self):
+        import sys
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        import release_support as rs
+        with tempfile.TemporaryDirectory() as tmp:
+            self.fake(tmp, 91000, [1200000, 1500000], throttles=3)
+            hot = rs.host_state(tmp)
+            self.fake(tmp, 70000, [3000000, 3000000], throttles=9)
+            cool = rs.host_state(tmp)
+            self.assertEqual(hot['thermal_c'], {'x86_pkg_temp': 91.0})
+            self.assertEqual(hot['cpu_khz']['mean'], 1350000)
+            self.assertEqual(rs.host_state(tmp + '/missing').keys(), {'time_unix', 'load_average'})  # nothing guessed
+            summary = rs.host_summary({'host_state': {'before': hot, 'after': cool}})
+            self.assertEqual((summary['max_package_temp_c'], summary['min_mean_cpu_mhz'], summary['throttle_events']), (91.0, 1350.0, 12))
+            self.assertIsNone(rs.host_summary({}))
+
+    def test_settle_waits_and_never_skips(self):
+        import sys
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        import release_support as rs
+        temps = iter([90.0, 82.0, 74.0])
+        now = [0.0]
+        sample = lambda: {'load_average': [0.1], 'thermal_c': {'x86_pkg_temp': next(temps)}}  # noqa: E731
+        sleep = lambda seconds: now.__setitem__(0, now[0] + seconds)  # noqa: E731
+        record = rs.wait_settled(75, 1, 600, poll=5, sample=sample, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual((record['settled'], record['waited_seconds'], record['start']['thermal_c']['x86_pkg_temp']), (True, 10.0, 90.0))
+        now[0] = 0.0
+        hot = lambda: {'load_average': [5.0], 'thermal_c': {'x86_pkg_temp': 95.0}}  # noqa: E731
+        record = rs.wait_settled(75, 1, 12, poll=5, sample=hot, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual((record['settled'], record['waited_seconds']), (False, 12.0))  # timed out: recorded, measurement still runs
 
 
 class Reuse(unittest.TestCase):

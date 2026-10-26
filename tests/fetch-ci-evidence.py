@@ -17,6 +17,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -280,6 +281,40 @@ class Fetch(unittest.TestCase):
     def test_qualify_run_needs_qualify(self):
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             self.fetch('--qualify-run', '8')
+
+    def test_output_parent_is_created(self):
+        self.output = self.directory / 'new' / 'nested' / 'ci'
+        self.fetch()
+        self.assertTrue((self.output / 'ci-run.json').is_file())
+
+    def bundle_zip(self, listing):
+        """What tests/cross-host.py bundle writes beside the executable, as a zip (which keeps no modes)."""
+        return zip_bytes({**contents('native-x64-clang-node-24.21.0'), 'cross-host/bundle/laya-conformance-c': b'\x7fELF',
+                          'cross-host/bundle/libducktape_laya.so': b'lib', 'cross-host/bundle/file-modes.json': listing})
+
+    def test_executables_are_restored_from_the_bundle_list(self):
+        self.github.set_zip('native-x64-clang-node-24.21.0', self.bundle_zip(json.dumps({'laya-conformance-c': '755'}).encode()))
+        self.fetch()
+        bundle = self.output / 'native-x64-clang-node-24.21.0/cross-host/bundle'
+        self.assertTrue(os.access(bundle / 'laya-conformance-c', os.X_OK))
+        self.assertFalse(os.access(bundle / 'libducktape_laya.so', os.X_OK))
+
+    def test_unsafe_mode_lists_are_refused(self):
+        for listing in ({'../x': '755'}, {'missing': '755'}, {'laya-conformance-c': '4755'}, {'/etc/passwd': '755'}, ['755']):
+            self.github.set_zip('native-x64-clang-node-24.21.0', self.bundle_zip(json.dumps(listing).encode()))
+            self.refused('file-modes.json')
+        self.github.set_zip('native-x64-clang-node-24.21.0', self.bundle_zip(b'not json'))
+        self.refused('file-modes.json')
+
+    def test_bundle_lists_its_executables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build, bundle = pathlib.Path(tmp) / 'build', pathlib.Path(tmp) / 'bundle'
+            build.mkdir()
+            (build / 'libducktape_laya.so').write_bytes(b'lib')
+            (build / 'laya-conformance-c').write_bytes(b'bin')
+            (build / 'laya-conformance-c').chmod(0o755)
+            subprocess.run([sys.executable, '-I', str(ROOT / 'tests/cross-host.py'), 'bundle', '--build', str(build), '--output', str(bundle)], check=True)
+            self.assertEqual(json.loads((bundle / 'file-modes.json').read_text()), {'laya-conformance-c': '755'})
 
     def test_existing_output(self):
         self.output.mkdir()

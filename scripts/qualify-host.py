@@ -20,6 +20,16 @@ step 2), in this order:
    report), model_upgrade, browser_package, browser, browser_isolated, installed_release,
    userspaces, rollback, cross_cpu.
 
+Before any step, a preflight checks in seconds everything the hours-long steps need: the runtime submodule at
+the compatibility record's commit, the models, the pinned emsdk, the last-known-good packages, the root filesystems
+and the CI evidence, all resolved to absolute paths and validated (never defaulted to a path that may not exist), and
+both npm test trees (tests/typescript, tests/browser-automation), which it installs with `npm ci --ignore-scripts`
+when missing or older than their lockfile. --dry-run runs the same preflight (reporting a stale npm tree, not
+installing it) and fails the same way. Output that exists is never overwritten: a rerun needs --replace, which moves
+it, with the evidence it holds, to OUTPUT/superseded/STAMP/. Before each benchmark the host settles (package
+temperature and load below --settle-temp-c and --settle-load, for at most --settle-timeout); tests/benchmark.py
+records what it did and the CPU's thermal and frequency state throughout, and the budget check always runs.
+
 Steps 1 and 2 never share the machine. The candidate's own reuse rules (check-candidate.py
 LIBRARY_INPUTS, COMMON_HARNESS, HARNESS) decide which hours-long evidence of --reuse EVIDENCE
 can stand instead of a new run. --print-cpus prints the soak and other CPU sets; --dry-run prints
@@ -32,6 +42,7 @@ import glob
 import json
 import os
 import pathlib
+import shutil
 import shlex
 import subprocess
 import sys
@@ -73,6 +84,12 @@ def format_cpu_list(cpus):
 # core) and oversubscribed its two CPUs during the second engine's rounds. The other two cores still
 # finish their gates (about 1.5 h) well inside the soak.
 SOAK_CORES = 2
+
+# Each benchmark first waits for the CPU to cool and the machine to go quiet. The budgets are p90s of runs on this host;
+# one run at 90-93 C, throttled to 1.2-1.5 GHz, missed one by 30% and passed when rerun idle. A package at or below 75 C
+# (the idle floor of this host is about 68 C) and a 1-minute load of at most 1 (the native build just ended) are the
+# starting state the budgets were measured from. On timeout the benchmark still runs and its report says it was not settled.
+SETTLE_TEMP_C, SETTLE_LOAD, SETTLE_TIMEOUT = 75.0, 1.0, 900.0
 
 
 def cpu_sets(sys_root='/sys', soak_cores=SOAK_CORES):
@@ -207,7 +224,9 @@ def plan(a, record, policy, out, ci, reused):
             gguf = model if key == 'performance' else next((m for m in extra if pathlib.Path(m).name == manifest['filename']),
                                                           f'<{manifest["filename"]}>')
             report = out / 'performance' / f'{manifest["id"]}.json'
-            steps.append(Step(f'performance-{manifest["id"]}', 2, [PY, 'tests/benchmark.py', gguf, '--build', build, '--report', report],
+            steps.append(Step(f'performance-{manifest["id"]}', 2, [PY, 'tests/benchmark.py', gguf, '--build', build, '--report', report,
+                                                                   '--settle-temp-c', a.settle_temp_c, '--settle-load', a.settle_load,
+                                                                   '--settle-timeout', a.settle_timeout],
                               outputs=[report], evidence={key: rel(report)}))
             steps.append(Step(f'performance-budget-{manifest["id"]}', 2, [PY, 'scripts/performance-budgets.py', 'check', report,
                                                                           '--budgets', budgets]))
@@ -272,6 +291,95 @@ def plan(a, record, policy, out, ci, reused):
     return steps
 
 
+NPM_TREES = ('tests/typescript', 'tests/browser-automation')
+
+
+def npm_tree_current(tree):
+    """Whether `npm ci` has installed this tree's current lockfile (npm's hidden lockfile is newer than package-lock.json)."""
+    installed = tree / 'node_modules/.package-lock.json'
+    return installed.is_file() and installed.stat().st_mtime >= (tree / 'package-lock.json').stat().st_mtime
+
+
+def ensure_npm(trees, install):
+    """([problems], [notes]): install every stale tree with `npm ci --ignore-scripts` (idempotent: a current tree is left
+    alone), or with install=False only say which are stale."""
+    problems, notes = [], []
+    for tree in trees:
+        if npm_tree_current(tree):
+            continue
+        if not install:
+            notes.append(f'{tree.relative_to(ROOT)}: dependencies missing or stale; a real run installs them (npm ci --ignore-scripts)')
+        elif not shutil.which('npm'):
+            problems.append(f'{tree.relative_to(ROOT)} needs `npm ci --ignore-scripts --prefix {tree.relative_to(ROOT)}` but npm is not on PATH')
+        else:
+            result = subprocess.run(['npm', 'ci', '--ignore-scripts', '--prefix', str(tree)], capture_output=True, text=True)
+            if result.returncode:
+                problems.append(f'npm ci --ignore-scripts --prefix {tree.relative_to(ROOT)} failed: {result.stderr.strip()[-400:]}')
+            else:
+                notes.append(f'{tree.relative_to(ROOT)}: dependencies installed (npm ci --ignore-scripts)')
+    return problems, notes
+
+
+def emsdk_pin():
+    return json.loads((ROOT / 'release/browser-toolchain.json').read_text())['emsdk_commit']
+
+
+def runtime_problem(record):
+    """Why the runtime submodule is not at the compatibility record's commit (None when it is)."""
+    path, want = ROOT / record['runtime']['path'], record['runtime']['commit']
+    toplevel = subprocess.run(['git', '-C', str(path), 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+    # An uninitialised submodule is an empty directory, in which git finds the enclosing repository.
+    if not path.is_dir() or toplevel.returncode or pathlib.Path(toplevel.stdout.strip()).resolve() != path.resolve():
+        return f'{record["runtime"]["path"]} is not checked out: run `git submodule update --init` (not --reference: it fails against a shallow checkout)'
+    head = subprocess.run(['git', '-C', str(path), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    if head != want:
+        return f'{record["runtime"]["path"]} is at {head[:12]}, the compatibility record pins {want[:12]}: run `git submodule update --init`'
+    return None
+
+
+def require_path(problems, flag, path, kind, hint, inside=None):
+    """Append a clear problem unless `path` (resolved by the caller) is an existing file or directory; `inside` must exist in it."""
+    if path is None:
+        problems.append(f'{flag} is required: {hint}')
+    elif not (path.is_dir() if kind == 'dir' else path.is_file()):
+        problems.append(f'{flag} {path} is not an existing {"directory" if kind == "dir" else "file"}: {hint}')
+    elif inside and not (path / inside).exists():
+        problems.append(f'{flag} {path} has no {inside}: {hint}')
+
+
+def preflight(a, record, candidate_pin, ci, install):
+    """Everything the hours-long steps need, checked in seconds before the first one: (problems, notes)."""
+    problems, notes = [], []
+    if (problem := runtime_problem(record)):
+        problems.append(problem)
+    found, found_notes = ensure_npm([ROOT / tree for tree in NPM_TREES], install)
+    problems += found
+    notes += found_notes
+    require_path(problems, '--model', a.model, 'file', 'pass --model or set DUCKTAPE_TEST_MODEL')
+    expected = len(record.get('additional_models', []))
+    if len(a.extra_model) != expected:
+        problems.append('missing additional models: pass --extra-model for each of release/compatibility.json additional_models '
+                        f'({expected}; build-models/ of this checkout or the main worktree is searched)')
+    for model in a.extra_model:
+        require_path(problems, '--extra-model', model, 'file', 'rebuild it with scripts/convert-model.py')
+    require_path(problems, '--upgrade-model', a.upgrade_model, 'file', 'pass --upgrade-model (the typed-decisions model)')
+    require_path(problems, '--upgrade-manifest', a.upgrade_manifest, 'file', 'a models/*.json manifest')
+    require_path(problems, '--emsdk', a.emsdk, 'dir', 'the pinned Emscripten SDK (docs/BUILDING.md, build the browser package)')
+    if a.emsdk and a.emsdk.is_dir() and candidate_pin:
+        head = subprocess.run(['git', '-C', str(a.emsdk), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+        if head != candidate_pin:
+            problems.append(f'--emsdk {a.emsdk} is at {head[:12] or "no git checkout"}, release/browser-toolchain.json pins {candidate_pin[:12]}')
+    require_path(problems, '--lkg-packages', a.lkg_packages, 'dir', 'the previous release\'s packages (scripts/release-assets.py retain)',
+                 'inventory.json')
+    if not a.rootfs:
+        problems.append('--rootfs is required (repeatable): the Ubuntu root filesystems (tests/download-userspaces.py --output build-platforms)')
+    for rootfs in a.rootfs or []:
+        require_path(problems, '--rootfs', rootfs, 'dir', 'a root filesystem from tests/download-userspaces.py', 'etc/os-release')
+    if not (ci / 'packages-assembled').is_dir():
+        problems.append(f'no CI evidence in {ci}: run fetch-ci-evidence.py --candidate COMMIT first')
+    return problems, notes
+
+
 def discover_model(manifest):
     """--model's default: $DUCKTAPE_TEST_MODEL, else the pinned file in the Hugging Face cache."""
     if os.environ.get('DUCKTAPE_TEST_MODEL'):
@@ -292,6 +400,16 @@ def default_extra_models(record):
     return found
 
 
+def archive_outputs(existing, out, stamp=None):
+    """Move the outputs of a previous attempt to OUT/superseded/STAMP/, keeping their layout; evidence is never deleted."""
+    destination = out / 'superseded' / (stamp or time.strftime('%Y%m%dT%H%M%S', time.gmtime()))
+    for path in map(pathlib.Path, existing):
+        target = destination / path.relative_to(out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        path.rename(target)
+    return destination
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--candidate', help='The candidate commit (it must be the clean checkout\'s HEAD)')
@@ -303,12 +421,19 @@ def main(argv=None):
     p.add_argument('--ci-dir', type=pathlib.Path, help='fetch-ci-evidence.py output (default OUTPUT/ci)')
     p.add_argument('--emsdk', type=pathlib.Path, help='The pinned emsdk (release/browser-toolchain.json)')
     p.add_argument('--lkg-packages', type=pathlib.Path, help='Last-known-good packages (scripts/release-assets.py retain)')
-    p.add_argument('--rootfs', type=pathlib.Path, action='append', help='Ubuntu root filesystem for userspaces, repeatable '
-                   '(default build-platforms/*/rootfs)')
+    p.add_argument('--rootfs', type=pathlib.Path, action='append', help='Ubuntu root filesystem for userspaces, repeatable, required '
+                   '(tests/download-userspaces.py --output build-platforms; no default, so a missing path is never used silently)')
     p.add_argument('--upgrade-model', type=pathlib.Path, help='model_upgrade candidate model (default: the typed-decisions model)')
     p.add_argument('--upgrade-manifest', type=pathlib.Path, default=ROOT / 'models/laya-typed-decisions.json')
     p.add_argument('--reuse', type=pathlib.Path, help='A previous evidence.json whose hours-long reports may stand (candidate reuse rules)')
     p.add_argument('--soak-cores', type=int, default=SOAK_CORES, help=f'Physical cores the soak is pinned to (default {SOAK_CORES})')
+    p.add_argument('--replace', action='store_true', help='Rerun over existing outputs: move them, with their evidence, to '
+                   'OUTPUT/superseded/STAMP/ first (without it, existing outputs are an error; nothing is overwritten)')
+    p.add_argument('--settle-temp-c', type=float, default=SETTLE_TEMP_C, help='Each benchmark first waits until the CPU package is at most '
+                   f'this hot (default {SETTLE_TEMP_C:g})')
+    p.add_argument('--settle-load', type=float, default=SETTLE_LOAD, help=f'... and the 1-minute load average at most this (default {SETTLE_LOAD:g})')
+    p.add_argument('--settle-timeout', type=float, default=SETTLE_TIMEOUT, help='Longest wait in seconds; the benchmark then runs anyway and '
+                   f'its report records it as not settled (default {SETTLE_TIMEOUT:g})')
     p.add_argument('--print-cpus', action='store_true', help='Print SOAK_CPUS and OTHER_CPUS and exit')
     p.add_argument('--dry-run', action='store_true', help='Print the steps, CPU sets and evidence keys; run nothing')
     p.add_argument('--sys-root', default='/sys', help=argparse.SUPPRESS)
@@ -326,25 +451,27 @@ def main(argv=None):
     candidate = git('rev-parse', '--verify', '--end-of-options', f'{a.candidate}^{{commit}}').stdout.strip()
     if not candidate:
         p.error(f'--candidate {a.candidate} is not a commit')
-    problems = []
+    # The checkout's own state: fatal in a real run; a dry run may preview a candidate from any checkout, so it only warns.
+    problems, state_problems = [], []
     if candidate != head:
-        problems.append(f'the candidate {candidate[:12]} is not this checkout\'s HEAD {head[:12]}')
+        state_problems.append(f'the candidate {candidate[:12]} is not this checkout\'s HEAD {head[:12]}')
     if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
-        problems.append('the checkout has tracked changes')
+        state_problems.append('the checkout has tracked changes')
     record = json.loads(git('show', f'{candidate}:release/compatibility.json').stdout or (ROOT / 'release/compatibility.json').read_text())
     policy = json.loads(git('show', f'{candidate}:release/qualification.json').stdout or (ROOT / 'release/qualification.json').read_text())
     rules = reuse_rules(git('show', f'{candidate}:scripts/check-candidate.py').stdout or (ROOT / 'scripts/check-candidate.py').read_text())
     manifest = json.loads((ROOT / record['models'][0]).read_text())
-    a.model = a.model or discover_model(manifest)
-    if not a.extra_model:
-        a.extra_model = [m for m in default_extra_models(record) if m] if not a.dry_run else \
-            [m or pathlib.Path(f'<{json.loads((ROOT / path).read_text())["filename"]}>')
-             for m, path in zip(default_extra_models(record), record.get('additional_models', []))]
+    resolve = lambda path: pathlib.Path(os.path.abspath(pathlib.Path(path).expanduser())) if path else None  # noqa: E731, keeps symlink names
+    a.model = resolve(a.model or discover_model(manifest))
+    found_extra = a.extra_model or default_extra_models(record)
+    a.extra_model = [resolve(m) for m in found_extra if m]
+    a.upgrade_manifest = resolve(a.upgrade_manifest)
+    a.upgrade_model = resolve(a.upgrade_model)
     if not a.upgrade_model:
-        upgrade_name = json.loads(pathlib.Path(a.upgrade_manifest).read_text())['filename']
-        a.upgrade_model = next((m for m in a.extra_model if pathlib.Path(m).name == upgrade_name), None)
-    if not a.rootfs:
-        a.rootfs = [pathlib.Path(path) for path in sorted(glob.glob(str(ROOT / 'build-platforms/*/rootfs')))]
+        upgrade_name = json.loads(a.upgrade_manifest.read_text())['filename']
+        a.upgrade_model = next((m for m in a.extra_model if m.name == upgrade_name), None)
+    a.emsdk, a.lkg_packages = resolve(a.emsdk), resolve(a.lkg_packages)
+    a.rootfs = [resolve(path) for path in a.rootfs or []]
     out = a.output.resolve()
     ci = (a.ci_dir or out / 'ci').resolve()
     evidence_path = (a.evidence or out / 'evidence.json').resolve()
@@ -360,24 +487,25 @@ def main(argv=None):
             if keys and all(reasons):
                 reused[step] = reasons[0]
                 reuse_keys.update({key: os.path.relpath((a.reuse.parent / previous[key]).resolve(), evidence_path.parent) for key in keys})
-    if not a.model and not a.dry_run:
-        problems.append('no model: pass --model or set DUCKTAPE_TEST_MODEL')
-    a.model = a.model or pathlib.Path('<MODEL>')
-    a.upgrade_model = a.upgrade_model or pathlib.Path('<UPGRADE_MODEL>')
-    steps = plan(a, record, policy, out, ci, reused)
-    if not a.dry_run:
-        if len(a.extra_model) != len(record.get('additional_models', [])):
-            problems.append('missing additional models: pass --extra-model for each of release/compatibility.json additional_models')
-        for name, value in (('--emsdk', a.emsdk), ('--lkg-packages', a.lkg_packages)):
-            if not value:
-                problems.append(f'{name} is required')
-        if not a.rootfs:
-            problems.append('no userspace root filesystems: pass --rootfs (tests/download-userspaces.py --output build-platforms)')
-        if not (ci / 'packages-assembled').is_dir():
-            problems.append(f'no CI evidence in {ci}: run fetch-ci-evidence.py --candidate {candidate[:12]} first')
-        existing = [str(path) for step in steps for path in step.outputs if pathlib.Path(path).exists()]
-        if existing:
-            problems.append('outputs exist (move them away): ' + ', '.join(existing))
+    found, notes = preflight(a, record, emsdk_pin(), ci,
+                             install=not a.dry_run)
+    problems += found
+    # The plan below is printed even when the preflight failed, with placeholders for what is missing.
+    plan_args = argparse.Namespace(**vars(a))
+    plan_args.model = a.model or pathlib.Path('<MODEL>')
+    plan_args.extra_model = [pathlib.Path(m) for m in a.extra_model] + [
+        pathlib.Path(f'<{json.loads((ROOT / path).read_text())["filename"]}>') for path in record.get('additional_models', [])[len(a.extra_model):]]
+    plan_args.upgrade_model = a.upgrade_model or pathlib.Path('<UPGRADE_MODEL>')
+    plan_args.emsdk = a.emsdk or pathlib.Path('<EMSDK>')
+    plan_args.lkg_packages = a.lkg_packages or pathlib.Path('<LKG_PACKAGES>')
+    plan_args.rootfs = a.rootfs or [pathlib.Path('<ROOTFS>')]
+    steps = plan(plan_args, record, policy, out, ci, reused)
+    existing = [path for step in steps for path in step.outputs if pathlib.Path(path).exists()]
+    if existing and not a.replace:
+        problems.append('outputs exist (nothing is overwritten; move them away or pass --replace to move them to '
+                        + str(out / 'superseded') + '): ' + ', '.join(map(str, existing)))
+    elif existing:
+        notes.append(f'--replace: {len(existing)} existing outputs move to {out / "superseded"}/STAMP/')
     cpus = {'soak': format_cpu_list(soak_cpus), 'other': format_cpu_list(other_cpus if 'soak' not in reused else soak_cpus | other_cpus),
             'all': None}
     evidence = dict(reuse_keys)
@@ -399,13 +527,22 @@ def main(argv=None):
             print(f'  step {step.phase} {step.name}: (no command)')
     print(f'  then merge the evidence keys into {evidence_path}')
     print('  evidence keys: ' + ', '.join(evidence))
+    for note in notes:
+        print(f'qualify-host: preflight: {note}')
+    if a.dry_run:
+        for warning in state_problems:
+            print(f'qualify-host: preflight warning (fatal in a real run): {warning}', file=sys.stderr)
+    else:
+        problems = state_problems + problems
     if problems:
         for problem in problems:
-            print(f'qualify-host: {problem}', file=sys.stderr)
-        if not a.dry_run:
-            return 2
+            print(f'qualify-host: preflight failed: {problem}', file=sys.stderr)
+        return 2
+    print('qualify-host: preflight passed')
     if a.dry_run:
         return 0
+    if existing:
+        archive_outputs(existing, out)
     keys = {step.name: [key for key in step.evidence if key not in reuse_keys] for step in steps}
     return run(steps, cpus, out, evidence, evidence_path, keys)
 

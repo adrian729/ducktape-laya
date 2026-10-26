@@ -402,13 +402,71 @@ class BranchPush(Base):
 
 
 class MainAndMerges(Base):
-    def test_main_push_runs_everything_even_for_docs(self):
-        self.verify_all(self.root)
+    def test_main_push_runs_everything_for_a_unverified_parent(self):
         head = self.repo.commit([self.root], {'docs/API.md': '# 2\n'})
+        self.api.record(self.root, ['generic-linux-x64'])  # the parent is not fully verified
         decision = self.decide(head, ref='refs/heads/main')
         self.assertEqual(decision['run'], ci_changes.ordered(PUSH))
         self.assertFalse(decision['skip_all'])
-        self.assertEqual(decision['policy_checks'], list(ci_paths.POLICY_CHECKS))
+
+    def test_docs_only_main_push_runs_only_the_policy_checks(self):
+        """Commit 350171b: docs and AGENTS.md on a fully verified tree ran the whole push profile (4.9 min)."""
+        self.verify_all(self.root)
+        head = self.repo.commit([self.root], {'docs/API.md': '# 2\n', 'AGENTS.md': 'x\n', 'docs/NEW.md': 'n\n'})
+        decision = self.decide(head, ref='refs/heads/main')
+        self.assertEqual(decision['run'], ['policy'])
+        self.assertFalse(decision['skip_all'])
+        self.assertEqual(decision['policy_checks'], ci_paths.policy_checks_touched(['docs/API.md', 'AGENTS.md', 'docs/NEW.md']))
+        self.assertNotEqual(decision['policy_checks'], list(ci_paths.POLICY_CHECKS))
+        self.assertEqual(decision['bases']['policy'], self.root)
+
+    def test_docs_only_fast_path_through_a_staleness_chain(self):
+        """The parent was itself a docs-only fast path (only `policy` ran there): the tree is still fully verified."""
+        self.verify_all(self.root)
+        first = self.repo.commit([self.root], {'docs/API.md': '# 2\n'})
+        self.api.record(first, ['policy'])
+        second = self.repo.commit([first], {'docs/API.md': '# 3\n'})
+        decision = self.decide(second, ref='refs/heads/main')
+        self.assertEqual(decision['run'], ['policy'])
+
+    def test_docs_only_fast_path_with_a_merge_commit(self):
+        self.verify_all(self.root)
+        side = self.repo.commit([self.root], {'docs/SIDE.md': 's\n'})
+        merge = self.repo.commit([self.root, side], {'docs/SIDE.md': 's\n'})
+        self.assertEqual(self.decide(merge, ref='refs/heads/main')['run'], ['policy'])
+
+    def test_fast_path_deleted_docs_select_docs_links(self):
+        self.verify_all(self.root)
+        head = self.repo.commit([self.root], {'docs/API.md': None})
+        decision = self.decide(head, ref='refs/heads/main')
+        self.assertEqual(decision['run'], ['policy'])
+        self.assertIn('docs-links', decision['policy_checks'])
+
+    def test_fast_path_is_fail_safe(self):
+        """One path beyond documentation (source, an unclassified file, a workflow, the classifier, a package README) keeps the full profile."""
+        self.verify_all(self.root)
+        for path in ('src/laya.cpp', 'unclassified/thing.xyz', '.github/workflows/native.yml', 'scripts/ci_paths.py',
+                     'scripts/ci-changes.py', 'bindings/node/README.md', 'release/compatibility.json'):
+            with self.subTest(path=path):
+                head = self.repo.commit([self.root], {'docs/API.md': '# 2\n', path: 'changed\n'})
+                decision = self.decide(head, ref='refs/heads/main')
+                self.assertEqual(decision['run'], ci_changes.ordered(PUSH))
+                self.assertFalse(decision['skip_all'])
+                self.assertEqual(decision['policy_checks'], list(ci_paths.POLICY_CHECKS))
+
+    def test_fast_path_api_failure_runs_everything(self):
+        self.verify_all(self.root)
+        head = self.repo.commit([self.root], {'docs/API.md': '# 2\n'})
+        self.api.fail = True
+        decision = self.decide(head, ref='refs/heads/main')
+        self.assertEqual(decision['run'], ci_changes.ordered(PUSH))
+
+    def test_inert_paths(self):
+        for path in ('docs/RELEASING.md', 'AGENTS.md', 'README.md', 'CHANGELOG.md'):
+            self.assertTrue(ci_paths.is_inert(path), path)
+        for path in ('src/laya.cpp', 'unclassified', 'scripts/verify.py', 'bindings/node/README.md', '.github/workflows/native.yml',
+                     'scripts/ci_paths.py', 'release/qualification.json'):
+            self.assertFalse(ci_paths.is_inert(path), path)
 
     def test_merge_of_verified_parents_with_a_new_tree_runs_everything(self):
         left = self.repo.commit([self.root], {'src/laya.cpp': 'int left;\n'})
@@ -423,10 +481,10 @@ class MainAndMerges(Base):
                 self.assertFalse(decision['skip_all'])
 
     def test_octopus_merge(self):
-        parents = [self.repo.commit([self.root], {f'docs/{index}.md': 'x\n'}) for index in range(3)]
+        parents = [self.repo.commit([self.root], {f'src/{index}.cpp': 'x\n'}) for index in range(3)]
         for parent in parents:
             self.verify_all(parent)
-        merge = self.repo.commit(parents, {'docs/0.md': 'x\n', 'docs/1.md': 'x\n', 'docs/2.md': 'x\n'})
+        merge = self.repo.commit(parents, {'src/0.cpp': 'x\n', 'src/1.cpp': 'x\n', 'src/2.cpp': 'x\n'})
         self.assertEqual(len(self.git.parents(merge)), 3)
         self.assertEqual(self.decide(merge, ref='refs/heads/main')['run'], ci_changes.ordered(PUSH))
 

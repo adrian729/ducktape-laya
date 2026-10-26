@@ -26,7 +26,9 @@ checker applies the reuse rules). The run must pass the same event,
 conclusion, workflow and repository rules, and each artifact's report.json must
 name the run's head as its source_commit. ci-run.json records the run as
 qualify_run (with its own file list), and evidence.json gains the keys
-sanitizers, fuzz and upgrade. Each zip's sha256 must equal the
+sanitizers, fuzz and upgrade. An Actions artifact zip drops file modes: a directory that holds an executable (the cross-host bundle) lists it in
+a file-modes.json ({relative path: "755"}, written by its producer), and the extraction restores those modes, only to
+files that exist beside the list and only as 755 or 644. Each zip's sha256 must equal the
 artifact digest GitHub reports; extraction refuses absolute paths, '..', drive
 or backslash names, links and duplicates. Nothing downloaded is executed or
 imported.
@@ -197,6 +199,7 @@ def download(repository, artifacts, chosen, staging, prefix=''):
         if sha256(archive) != digest.removeprefix('sha256:'):
             raise Refused(f'{name}: download does not match the artifact digest')
         safe_extract(archive, staging / prefix / name)
+        restore_modes(staging / prefix / name)
         archive.unlink()
         listing[name] = {'id': item['id'], 'digest': digest, 'size': item.get('size_in_bytes'), 'expires_at': item['expires_at']}
     return listing
@@ -239,6 +242,28 @@ def safe_extract(archive_path, destination):
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as source, open(target, 'xb') as stream:
                 shutil.copyfileobj(source, stream)
+
+
+MODES_FILE = 'file-modes.json'
+RESTORABLE_MODES = {'755': 0o755, '644': 0o644}
+
+
+def restore_modes(root):
+    """Apply every file-modes.json under root: {relative path: '755' or '644'} for files beside it (zips keep no modes)."""
+    for listing in sorted(root.rglob(MODES_FILE)):
+        try:
+            modes = json.loads(listing.read_text())
+        except ValueError as error:
+            raise Refused(f'{listing}: not JSON ({error})') from None
+        if not isinstance(modes, dict):
+            raise Refused(f'{listing}: not an object')
+        for name, mode in modes.items():
+            parts = name.split('/') if isinstance(name, str) else []
+            target = listing.parent.joinpath(*parts)
+            if not parts or any(part in ('', '.', '..') for part in parts) or '\\' in name or mode not in RESTORABLE_MODES \
+                    or target.is_symlink() or not target.is_file():
+                raise Refused(f'{listing}: cannot restore {name!r} to {mode!r}')
+            target.chmod(RESTORABLE_MODES[mode])
 
 
 def qualify_summary(staging, qualify, qualify_listing, qualify_files, repository):
@@ -380,6 +405,7 @@ def main():
         qualify, qualify_artifacts = find_run(a.repository, commit, a.qualify_run, QUALIFY_ARTIFACTS, 'qualify', ancestor=True)
         unexpired(qualify, qualify_artifacts, QUALIFY_ARTIFACTS)
         warn_expiry(qualify_artifacts, QUALIFY_ARTIFACTS)
+    output.parent.mkdir(parents=True, exist_ok=True)
     staging = pathlib.Path(tempfile.mkdtemp(prefix=output.name + '.partial-', dir=output.parent))
     try:
         listing = download(a.repository, artifacts, chosen, staging)

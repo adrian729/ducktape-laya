@@ -23,7 +23,7 @@ import tempfile
 import threading
 import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
-from release_support import LIBRARY, ROOT, binary_info, check_record, find_manifest, git, read_json, sha256
+from release_support import LIBRARY, ROOT, binary_info, check_record, find_manifest, git, host_state, read_json, sha256, wait_settled
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('model', type=pathlib.Path)
@@ -31,9 +31,15 @@ p.add_argument('--build', type=pathlib.Path, default=ROOT / 'build')
 p.add_argument('--samples', type=int, default=20, help='Warm samples per single-request workload')
 p.add_argument('--threads', type=int, default=4)
 p.add_argument('--report', type=pathlib.Path, required=True)
+p.add_argument('--settle-temp-c', type=float, help='Before measuring, wait until the CPU package is at most this hot (Linux; recorded in the report)')
+p.add_argument('--settle-load', type=float, help='Before measuring, wait until the 1-minute load average is at most this')
+p.add_argument('--settle-timeout', type=float, default=900, help='Longest wait in seconds; the run then measures anyway, recorded as not settled (default 900)')
 a = p.parse_args()
 if not 3 <= a.samples <= 1000 or not 1 <= a.threads <= 256: p.error('samples 3..1000; threads 1..256')
 if a.report.exists(): p.error('Report exists; choose a new path')
+a.report.parent.mkdir(parents=True, exist_ok=True)  # before the minutes of measuring, never after
+settle = (wait_settled(a.settle_temp_c, a.settle_load, a.settle_timeout)
+          if a.settle_temp_c is not None or a.settle_load is not None else None)
 model, build = a.model.resolve(), a.build.resolve()
 manifest = find_manifest(model, check_record())  # the primary or an additional pinned model
 library = c.CDLL(str(build / LIBRARY))
@@ -184,6 +190,8 @@ report = {'schema_version': 2, 'source_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'threads': a.threads, 'samples': a.samples, 'system': platform.platform(), 'logical_cpus': os.cpu_count(),
           'cpu_model': cpu_model(),
           'load_before': os.getloadavg() if hasattr(os, 'getloadavg') else None,
+          # Thermal and frequency context (release_support.host_state): before, after each workload, after the run.
+          'host_state': {'before': host_state(), 'after_workload': {}}, 'settle': settle,
           'notes': ['Fresh process; warm OS file cache after hash verification; sequential calls unless stated.',
                     'Host is not isolated; timings are a retained sample, not a service-level guarantee.',
                     'Latency includes C ABI JSON parsing/serialization; Python result decoding is excluded.']}
@@ -203,6 +211,7 @@ try:
             if status or output != expected: raise AssertionError(f'{name}: repeated output changed or failed: {error}')
             samples.append(elapsed)
         measured[name] = {'first_seconds': first, **summary(samples, questions(request))}
+        report['host_state']['after_workload'][name] = host_state()
     report['latency'] = measured
 
     # Cancellation and deadline response on the near-limit request.
@@ -233,6 +242,7 @@ try:
     expected = call(library.dtl_execute, engine, body)[2]
     if call(library.dtl_execute, engine, body)[2] != expected: raise AssertionError('result changed after cancellation')
     report['resources_steady'] = resources()
+    report['host_state']['after_cancellation'] = host_state()
 finally:
     started = time.perf_counter()
     library.dtl_close(engine)
@@ -298,6 +308,7 @@ else:
     report['peak_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // (1024 if MACOS else 1)
 report['leaks'] = {key: report['resources_final'][key] - baseline[key] for key in ('descriptors', 'threads')}
 report['load_after'] = os.getloadavg() if hasattr(os, 'getloadavg') else None
+report['host_state']['after'] = host_state()
 # macOS: the libdispatch pool behind Accelerate grows and shrinks on its own (observed 1-2 extra workers after the
 # warm-up), so thread counts there are recorded but not gated; descriptors still are.
 if WINDOWS:

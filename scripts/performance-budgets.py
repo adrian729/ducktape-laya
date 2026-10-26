@@ -15,7 +15,7 @@ import json
 import pathlib
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from release_support import ROOT, read_json
+from release_support import ROOT, host_summary, read_json
 
 HEADROOM = {'latency': 1.5, 'memory': 1.25}
 def metrics(report):
@@ -68,7 +68,8 @@ def check(args):
     for name, limit in budget['limits'].items():
         if name not in measured: failures.append(f'{name} missing')
         elif measured[name][1] > limit['limit']: failures.append(f'{name} {measured[name][1]:.4g} exceeds {limit["limit"]:.4g}')
-    print(json.dumps({'status': 'failed' if failures else 'passed', 'failures': failures}, indent=2))
+    # The host's thermal and frequency context, so a miss can be attributed to the environment or the code; never part of the verdict.
+    print(json.dumps({'status': 'failed' if failures else 'passed', 'failures': failures, 'host': host_summary(report)}, indent=2))
     raise SystemExit(bool(failures))
 
 parser = argparse.ArgumentParser(description=__doc__)

@@ -459,6 +459,19 @@ def touched_categories(paths):
     return touched
 
 
+# Categories whose only consumer is the `policy` job's checks (docs links, versioned docs): a path that is in `docs`, and in no category
+# beyond these, is an input to no build, test or packaging job. A main push whose difference from a fully verified tree is such paths
+# runs only the stale policy checks (scripts/ci-changes.py), as a branch push would. Anything else (an unclassified path, a workflow or
+# the classifier, a docs file that a job also reads, such as a package README) keeps the full profile.
+INERT_CATEGORIES = frozenset({'docs', 'policy'})
+
+
+def is_inert(path):
+    """Whether a changed path is documentation that no job but the policy checks reads (fail-safe: unknown paths are not)."""
+    found = categories_of(path)
+    return 'docs' in found and found <= INERT_CATEGORIES
+
+
 def job_stale_by(categories, touched):
     """Whether a job of these categories is stale for these touched categories."""
     return EVERYTHING in touched or bool(set(categories) & touched)

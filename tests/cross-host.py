@@ -20,6 +20,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FILES = ('libducktape_laya.so', 'laya-conformance-c')
 SONAME = 'libducktape_laya.so.1'
+MODES = 'file-modes.json'  # the executables of a bundle, for a download that lost the modes
 
 def sha256(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -47,6 +48,9 @@ def bundle(args):
         shutil.copy2(args.build / name, args.output / name)
     # The consumer loads the library by its SONAME; keep both names identical.
     shutil.copy2(args.build / 'libducktape_laya.so', args.output / SONAME)
+    # CI artifact zips drop file modes; scripts/fetch-ci-evidence.py restores the executables listed here.
+    modes = {name: '755' for name in FILES if os.access(args.output / name, os.X_OK)}
+    (args.output / MODES).write_text(json.dumps(modes, indent=2) + '\n')
 
 def record(args):
     files = {name: sha256(args.bundle / name) for name in FILES}
@@ -55,6 +59,10 @@ def record(args):
     if sha256(args.bundle / SONAME) != files['libducktape_laya.so']:
         raise SystemExit(f'{SONAME} differs from libducktape_laya.so')
     fixtures = sorted((ROOT / 'tests/fixtures').glob('*.json'))
+    consumer = args.bundle / 'laya-conformance-c'
+    if not os.access(consumer, os.X_OK):
+        raise SystemExit(f'{consumer} is not executable: an Actions artifact download drops file modes; '
+                         f'scripts/fetch-ci-evidence.py restores them from {MODES}, so fetch the bundle with it')
     env = dict(os.environ, LD_LIBRARY_PATH=str(args.bundle.resolve()))
     outputs = {}
     for fixture in fixtures:
