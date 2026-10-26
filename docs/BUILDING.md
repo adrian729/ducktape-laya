@@ -1,6 +1,6 @@
 # Building from source
 
-Build from a checkout to use unreleased changes, a platform without released packages (macOS on Apple silicon, or Linux arm64 and Windows x64 until the next release), or to work on the project. Applications that use a release do not need any of this; see the [README](../README.md#install).
+Build from a checkout to use unreleased changes, a platform without released packages (macOS on Apple silicon), or to work on the project. Applications that use a release do not need any of this; see the [README](../README.md#install).
 
 ## Get the source
 

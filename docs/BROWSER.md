@@ -2,7 +2,7 @@
 
 The browser uses the same C++ core, llama.cpp pin, GGUF, request planning, calibration, routing, batching and structured projection as native bindings. It runs in a private module worker. JavaScript owns asset fetching, queueing, shutdown and platform errors; it does not implement a second classifier.
 
-**Status: experimental.** 0.1.0 and 0.2.0 passed the browser release checks on Chromium 152 with one GPU (Intel Gen12LP); the next release's browser checks run on Chrome 156.0.8078.47 with the same GPU. Other browsers and GPUs are untested. The WebAssembly and WebGPU builds compute slightly different probabilities from each other and from native builds, and a close decision can change between them ([numerical profiles](PLATFORMS.md#numerical-results-across-platforms)); each still matches upstream llama.cpp running on the same backend.
+**Status: experimental.** 0.1.0 and 0.2.0 passed the browser release checks on Chromium 152 with one GPU (Intel Gen12LP), and 0.3.0 on Chrome 156.0.8078.47 with the same GPU. Other browsers and GPUs are untested. The WebAssembly and WebGPU builds compute slightly different probabilities from each other and from native builds, and a close decision can change between them ([numerical profiles](PLATFORMS.md#numerical-results-across-platforms)); each still matches upstream llama.cpp running on the same backend.
 
 ## Requirements
 

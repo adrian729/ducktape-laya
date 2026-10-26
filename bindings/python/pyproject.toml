@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ducktape-laya"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local Laya GGUF decisions (choice, noul, score) through the ducktape-laya native library"
 readme = "README.md"
 # As the released wheels (scripts/python_wheel.py), which bundle the library with its Apache-2.0 language data;

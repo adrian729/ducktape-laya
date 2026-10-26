@@ -1,6 +1,6 @@
 # Shared decision API
 
-The request and result format, configuration and error behaviour shared by every binding. It describes `main`; the [changelog](../CHANGELOG.md#unreleased) lists what changed since the 0.2.0 release (new error codes and load-failure reporting, stricter library lookup and a few stricter limits, a removed limit on runs of spaces, packages for two more platforms, and fixes). Language-specific details (installation, types, threading) are in each package README.
+The request and result format, configuration and error behaviour shared by every binding. It describes `main`; the [changelog](../CHANGELOG.md#unreleased) lists what changed since the 0.3.0 release. Language-specific details (installation, types, threading) are in each package README.
 
 ## Terms
 

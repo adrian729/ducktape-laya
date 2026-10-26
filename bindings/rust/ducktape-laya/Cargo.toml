@@ -1,6 +1,6 @@
 [package]
 name = "ducktape-laya"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.98"
 repository = "https://github.com/adrian729/ducktape-laya"
@@ -9,7 +9,7 @@ license = "MIT"
 description = "Embedded Laya GGUF decisions through a shared native C ABI"
 include = ["src/**", "Cargo.toml", "LICENSE", "README.md"]
 [dependencies]
-ducktape-laya-sys = { path = "../ducktape-laya-sys", version = "0.2.0" }
+ducktape-laya-sys = { path = "../ducktape-laya-sys", version = "0.3.0" }
 
 [dev-dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }

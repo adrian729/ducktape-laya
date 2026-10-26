@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <PackageId>DucktapeLaya</PackageId>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <RootNamespace>Ducktape.Laya</RootNamespace>
     <AssemblyName>DucktapeLaya</AssemblyName>
     <Nullable>enable</Nullable>

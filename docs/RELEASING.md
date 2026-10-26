@@ -4,18 +4,18 @@ The one release procedure, from version bump to verified registries. A release a
 
 ## Channels
 
-| Package | Channel | 0.1.0 | 0.2.0 |
-| --- | --- | --- | --- |
-| Native archive, SBOMs, inventories, `gates.json`, `SHA256SUMS` | GitHub Releases | Published, attested (all but `gates.json` and `SHA256SUMS`) | Published, attested (all but `gates.json` and `SHA256SUMS`) |
-| `ducktape-laya` (Node.js) | npm | Published | Published |
-| `ducktape-laya-browser` | npm | Published | Published |
-| `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Published |
-| `ducktape-laya` (Python wheel) | PyPI | — | Published |
-| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | Published |
-| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Published |
-| `DucktapeLaya` (.NET) | NuGet | — | Published |
+| Package | Channel | 0.1.0 | 0.2.0 | 0.3.0 |
+| --- | --- | --- | --- | --- |
+| Native archive, SBOMs, inventories, `gates.json`, `SHA256SUMS` | GitHub Releases | Published, attested (all but `gates.json` and `SHA256SUMS`) | Published, attested (all but `gates.json` and `SHA256SUMS`) | Published, attested (all but `gates.json` and `SHA256SUMS`) |
+| `ducktape-laya` (Node.js) | npm | Published | Published | Published |
+| `ducktape-laya-browser` | npm | Published | Published | Published |
+| `ducktape-laya`, `ducktape-laya-sys` | crates.io | Published | Published | Published |
+| `ducktape-laya` (Python wheel) | PyPI | — | Published | Published |
+| `github.com/adrian729/ducktape-laya/bindings/go` | Go module proxy | — | Published | Published |
+| `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Published | Published |
+| `DucktapeLaya` (.NET) | NuGet | — | Published | Published |
 
-0.1.0 and 0.2.0 carry Linux x86-64 only. From the next release every release target in `release/compatibility.json` is published (Linux x86-64 tier 1; Linux arm64 and Windows x64 tier 2); macOS arm64 is built in CI but not released.
+0.1.0 and 0.2.0 carry Linux x86-64 only. From 0.3.0 every release target in `release/compatibility.json` is published (Linux x86-64 tier 1; Linux arm64 and Windows x64 tier 2); macOS arm64 is built in CI but not released.
 
 | Channel | Linux x86-64 | Linux arm64 | Windows x64 |
 | --- | --- | --- | --- |
@@ -155,7 +155,7 @@ A failed run can be rerun with the same tag (`gh run rerun RUN --failed`, or a n
 
 The attestation predicate (`release-qualification/v1`) records the release, the tag commit, the hash of `gates.json` and each target's tier. A valid attestation, signed by `attest-release.yml` as it is on `main`, proves that this workflow found, for this tag: every asset listed once in `SHA256SUMS` with matching bytes; a `gates.json` for the tag commit, from a clean checker, that reports as passed exactly the gates and targets which that commit's `release/compatibility.json` and `release/qualification.json` require; the published inventories to be the ones `gates.json` names, packaged from the tag commit, listing every other asset; and, from 0.3.0, the native inventory to be the `packages-assembled` inventory of the successful `native.yml` candidate run on the tag commit that `gates.json` names. It does not prove that the gates ran or that their evidence holds: `gates.json` is written by `scripts/check-candidate.py` on the maintainer's release host from the evidence there, and the workflow takes its gate results as written. Nor is it build provenance ([roadmap](ROADMAP.md#more-release-targets-and-release-provenance)).
 
-The native files of 0.1.0 and 0.2.0 were built on the maintainer's release host, qualified there and attested as the qualified files. From the next release, every target's files are built on GitHub-hosted runners in the candidate run, and the release host qualifies those exact files: for Linux x86-64 the candidate run's library and Node addon must be byte-identical to the release host's validated build, which binds the shipped bytes to the local qualification. Linux arm64 and Windows x64 are qualified by the CI run alone, with fewer gates.
+The native files of 0.1.0 and 0.2.0 were built on the maintainer's release host, qualified there and attested as the qualified files. From 0.3.0, every target's files are built on GitHub-hosted runners in the candidate run, and the release host qualifies those exact files: for Linux x86-64 the candidate run's library and Node addon must be byte-identical to the release host's validated build, which binds the shipped bytes to the local qualification. Linux arm64 and Windows x64 are qualified by the CI run alone, with fewer gates.
 
 The `release` environment admits deployments from `main` only (a repository setting, not enforced by the workflow files). It has no required reviewer by the maintainer's choice: a release runs end to end once the maintainer asks for it. What stops unqualified bytes is then the checks `attest-release` makes before signing (which bind the published files to the qualification report and, for the native packages, to the CI candidate run, but take the report's gate results as written), the exact signer pin `publish-release` verifies before every upload, and the `main`-only environment; whoever can change `main` or produce a `gates.json` on the release host can pass them. The npm tarballs are uploaded exactly as attested. crates.io holds the released `.crate` files byte for byte: `publish-release` repackages them from the tag and requires byte-identical files before `cargo publish` (the 0.1.0 and 0.2.0 crates.io checksums also equal the released files).
 
@@ -186,5 +186,5 @@ The multilingual and typed-decisions GGUFs (`models/laya-multilingual.json`, `mo
 
 ## Leftovers from 0.1.0
 
-- npm staged publishing left a `0.0.0-stage` placeholder on both npm packages. It is harmless (`latest` is 0.2.0); hide it with `npm deprecate`.
+- npm staged publishing left a `0.0.0-stage` placeholder on both npm packages. It is harmless (`latest` points at the newest release); hide it with `npm deprecate`.
 - The 0.1.0 artifacts include `release/compatibility.json` with `"status": "development"`. The field was removed afterwards; released files stay unchanged.

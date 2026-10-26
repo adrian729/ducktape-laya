@@ -15,9 +15,9 @@ The exact check list per tier is in [QUALIFICATION.md](QUALIFICATION.md#release-
 
 | Platform | Tier | Released packages | CPU | System | Tested on |
 | --- | --- | --- | --- | --- | --- |
-| Linux x86-64 | 1 | 0.1.0, 0.2.0 and later | AVX, AVX2, FMA, F16C, BMI2, SSE4.2 | glibc 2.38+, libstdc++ with `GLIBCXX_3.4.29` | Ubuntu 24.04 and 26.04 userspaces; Node 24 and 26; Electron 44; Chromium 152 for 0.1.0 and 0.2.0, Chrome 156 from the next release (browser package) |
-| Linux arm64 | 2 | from the next release | Armv8.2-A with dot product and FP16 (`asimddp`, `fphp`, `asimdhp`) | as Linux x86-64 | GitHub `ubuntu-24.04-arm`; Node 24; Electron 44 |
-| Windows x64 | 2 | from the next release | as Linux x86-64 | Microsoft Visual C++ Redistributable | GitHub `windows-2025` (Windows Server 2025); Node 24; Electron 44 |
+| Linux x86-64 | 1 | 0.1.0 and later | AVX, AVX2, FMA, F16C, BMI2, SSE4.2 | glibc 2.38+, libstdc++ with `GLIBCXX_3.4.29` | Ubuntu 24.04 and 26.04 userspaces; Node 24 and 26; Electron 44; Chromium 152 for 0.1.0 and 0.2.0, Chrome 156 from 0.3.0 (browser package) |
+| Linux arm64 | 2 | 0.3.0 and later | Armv8.2-A with dot product and FP16 (`asimddp`, `fphp`, `asimdhp`) | as Linux x86-64 | GitHub `ubuntu-24.04-arm`; Node 24; Electron 44 |
+| Windows x64 | 2 | 0.3.0 and later | as Linux x86-64 | Microsoft Visual C++ Redistributable | GitHub `windows-2025` (Windows Server 2025); Node 24; Electron 44 |
 | macOS arm64 (Apple silicon) | none | not released | Armv8.2-A with dot product and FP16 | macOS 14+ | GitHub macOS 15 runners, with and without the real model |
 
 Platforms not listed (Intel Macs, musl-based Linux such as Alpine, 32-bit systems, Windows on Arm) are not supported, even where the source compiles.
@@ -28,7 +28,7 @@ Platforms not listed (Intel Macs, musl-based Linux such as Alpine, 32-bit system
 
 **macOS.** Apple silicon builds from a checkout ([BUILDING.md](BUILDING.md)) and is tested in CI, and its packages are built (minimum macOS 14), but no release includes them yet; it is the next tier-2 candidate ([roadmap](ROADMAP.md#more-release-targets-and-release-provenance)). Point the bindings at `libducktape_laya.dylib` with `DUCKTAPE_LAYA_LIB_DIR`. Intel Macs are not planned.
 
-**Browser.** The browser package is experimental: 0.1.0 and 0.2.0 passed its release checks on Chromium 152 with one GPU (Intel Gen12LP integrated graphics), and the next release's checks run on Chrome 156.0.8078.47 with the same GPU; other browsers are untested. Requirements: [BROWSER.md](BROWSER.md).
+**Browser.** The browser package is experimental: 0.1.0 and 0.2.0 passed its release checks on Chromium 152 with one GPU (Intel Gen12LP integrated graphics), and 0.3.0 passed them on Chrome 156.0.8078.47 with the same GPU; other browsers are untested. Requirements: [BROWSER.md](BROWSER.md).
 
 ## CPU check at open
 
@@ -55,7 +55,7 @@ The older declared minimums (Node 20, Python 3.10, Go 1.22, Java 22) are not tes
 
 Each build has a numerical profile: the backend and CPU features it computes with, reported as `numerical_profile.id` by runtime and model info. Within one profile, results are deterministic, and every binding of the same native library returns identical results for the same request text. Between profiles, probabilities differ slightly and a close decision could change, so qualify application thresholds on the platforms you deploy. Results with different `threads` values are not compared by any check.
 
-Measured differences from Linux x86-64, English model, on the shared fixture corpus (CI candidate run for the next release):
+Measured differences from Linux x86-64, English model, on the shared fixture corpus (CI candidate run for 0.3.0):
 
 | Platform | Largest probability difference | Changed decisions |
 | --- | --- | --- |

@@ -7,7 +7,7 @@ Nothing in this project downloads at run time: the library, the language package
 ## Package artifacts
 
 <a id="npm-rust-and-python-artifacts"></a>
-Each release publishes these files on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases) (0.1.0 and 0.2.0: Linux x86-64 only; from the next release also Linux arm64 and Windows x64), and the registries serve the same npm, Python, Maven and NuGet files:
+Each release publishes these files on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases) (0.1.0 and 0.2.0: Linux x86-64 only; from 0.3.0 also Linux arm64 and Windows x64), and the registries serve the same npm, Python, Maven and NuGet files:
 
 | File | Contents |
 | --- | --- |
@@ -27,11 +27,11 @@ Every file except `gates.json` and `SHA256SUMS` is attested, and the attestation
 From the native archive (or an installation from source, [BUILDING.md](BUILDING.md#build-the-library)), set `CMAKE_PREFIX_PATH` to the extracted directory and link the target:
 
 ```cmake
-find_package(ducktape_laya 0.2 CONFIG REQUIRED)
+find_package(ducktape_laya 0.3 CONFIG REQUIRED)
 target_link_libraries(my_application PRIVATE ducktape::laya)
 ```
 
-The CMake package accepts only the same minor version, so a 0.1.0 installation (ABI 1) does not satisfy `0.2`. Other build systems use `pkg-config --cflags --libs ducktape-laya` with the archive's `lib/pkgconfig` in `PKG_CONFIG_PATH`.
+The CMake package accepts only the same minor version, so a 0.2.0 installation does not satisfy `0.3`, although its ABI is the same. Other build systems use `pkg-config --cflags --libs ducktape-laya` with the archive's `lib/pkgconfig` in `PKG_CONFIG_PATH`.
 
 ```cpp
 #include <ducktape_laya.hpp>

@@ -6,7 +6,7 @@ Local [Laya](https://github.com/NandhaKishorM/laya) decisions from .NET: ask nam
 dotnet add package DucktapeLaya
 ```
 
-Requires .NET 10. The package targets `net10.0`, uses source-generated P/Invoke, and is trim/AOT compatible. It bundles the native library for Linux x86-64 (0.2.0), and from the next release also Linux arm64 and Windows x64 (`linux-x64`, `linux-arm64`, `win-x64`; Windows needs the Microsoft Visual C++ Redistributable); NuGet picks the running platform's runtime identifier ([platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md)). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
+Requires .NET 10. The package targets `net10.0`, uses source-generated P/Invoke, and is trim/AOT compatible. It bundles the native library for Linux x86-64, Linux arm64 and Windows x64 (`linux-x64`, `linux-arm64`, `win-x64`; 0.2.0: Linux x86-64 only; Windows needs the Microsoft Visual C++ Redistributable); NuGet picks the running platform's runtime identifier ([platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md)). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
 ## Library resolution
 

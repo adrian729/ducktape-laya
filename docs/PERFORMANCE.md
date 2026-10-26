@@ -71,17 +71,18 @@ One benchmark gate is not enforced on macOS: the thread-leak check, because the 
 
 ## Package sizes
 
-The 0.2.0 release files (from the [GitHub release](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), Linux x86-64 only):
+The 0.3.0 release files (from the [GitHub release](https://github.com/adrian729/ducktape-laya/releases/tag/v0.3.0); measured on the packages built from the commit before the release commit, which differ only in the version string):
 
 | File | Size |
 | --- | --- |
-| Native archive `ducktape-laya-0.2.0-linux-x64.tar.gz` | 3.0 MB |
-| npm `ducktape-laya-0.2.0.tgz` | 5.7 MB (15.6 MB unpacked) |
-| npm `ducktape-laya-browser-0.2.0.tgz` | 3.2 MB (13.1 MB unpacked) |
-| Python wheel, Maven jar, NuGet package | 2.9 MB each |
+| Native archives `ducktape-laya-0.3.0-linux-x64.tar.gz`, `-linux-arm64.tar.gz`, `-windows-x64.zip` | 2.7, 2.5 and 2.4 MB |
+| npm `ducktape-laya-0.3.0.tgz` (every platform) | 7.5 MB (19.2 MB unpacked) |
+| npm `ducktape-laya-browser-0.3.0.tgz` | 3.2 MB (12.9 MB unpacked) |
+| Python wheels (`manylinux_2_38_x86_64`, `manylinux_2_38_aarch64`, `win_amd64`) | 2.7, 2.5 and 2.4 MB |
+| Maven jar, NuGet package (every platform) | 7.5 MB each |
 | Rust crates | 12 KB and 3 KB (source only; they link the native archive's library) |
 
-Models are separate downloads ([models](MODELS.md)). The next release's npm package, jar and NuGet package carry the libraries of every release platform, so they are larger.
+Models are separate downloads ([models](MODELS.md)). The npm package, jar and NuGet package carry the libraries of every release platform, so they are larger than the 0.2.0 ones (5.7, 2.9 and 2.9 MB, Linux x86-64 only).
 
 ## Accuracy against the original Laya
 

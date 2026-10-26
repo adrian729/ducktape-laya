@@ -8,6 +8,7 @@ What stays stable between versions, how breaking changes are versioned, and how 
 | --- | --- | --- | --- |
 | 0.1.0 | 1 | `libducktape_laya.so.0` | GitHub Releases, npm, crates.io |
 | 0.2.0 | 2 | `libducktape_laya.so.1` | GitHub Releases, npm, crates.io, PyPI, NuGet, Maven Central, Go module proxy |
+| 0.3.0 | 2 | `libducktape_laya.so.1` | GitHub Releases, npm, crates.io, PyPI, NuGet, Maven Central, Go module proxy |
 
 Released files are never replaced: a fix is a new version. Before 1.0, a breaking change bumps the minor version (0.1.0 to 0.2.0) and comes with migration notes below, also when the C ABI stays the same; after 1.0, the major version.
 
@@ -25,11 +26,11 @@ Agreement with the original Laya is checked per platform against the same limits
 
 | Platform | Model | Answer | Drift | Cap | Cause |
 | --- | --- | --- | --- | --- | --- |
-| Windows x64 (clang-cl; released from the next version) | English Q8_0 | `json_escaping/spam` | 0.0541 (Linux x86-64: 0.0373) | 0.06 | The Windows C runtime's `erff` (GEGLU-erf) and `sinf`/`cosf` (RoPE cache) round some last bits differently from glibc. Upstream llama.cpp calls the platform math library on CPU, so this is upstream behaviour; the ggml kernels are the same as on Linux, and agreement with upstream llama.cpp is exact. Q8_0 activation quantization amplifies the difference on this answer. |
+| Windows x64 (clang-cl; released from 0.3.0) | English Q8_0 | `json_escaping/spam` | 0.0541 (Linux x86-64: 0.0373) | 0.06 | The Windows C runtime's `erff` (GEGLU-erf) and `sinf`/`cosf` (RoPE cache) round some last bits differently from glibc. Upstream llama.cpp calls the platform math library on CPU, so this is upstream behaviour; the ggml kernels are the same as on Linux, and agreement with upstream llama.cpp is exact. Q8_0 activation quantization amplifies the difference on this answer. |
 
-## Migrating from 0.2.0
+## Migrating from 0.2.0 to 0.3.0
 
-The next release keeps C ABI 2 and `libducktape_laya.so.1`: a program built against 0.2.0 runs with the new library without a rebuild, and the C and C++ signatures are unchanged. C, C++, Rust and Go users upgrade the native library (and the crate or Go module for their fixes); the other bindings bundle their library and are upgraded as packages. The changes below are in the bindings' error reporting and library lookup, and in the prompts of some structured values; the full list is in the [changelog](../CHANGELOG.md#unreleased).
+0.3.0 keeps C ABI 2 and `libducktape_laya.so.1`: a program built against 0.2.0 runs with the new library without a rebuild, and the C and C++ signatures are unchanged. C, C++, Rust and Go users upgrade the native library (and the crate or Go module for their fixes); the other bindings bundle their library and are upgraded as packages. The changes below are in the bindings' error reporting and library lookup, and in the prompts of some structured values; the full list is in the [changelog](../CHANGELOG.md#030-2026-10-26).
 
 ### C and CMake
 

@@ -6,7 +6,7 @@ Report suspected vulnerabilities in the library or its packages privately throug
 
 ## Supported versions
 
-Fixes go into the next release; released files are never replaced. Before 1.0 only the latest release (currently 0.2.0) receives fixes, and an affected release is named in the [changelog](CHANGELOG.md) with the version that fixes it.
+Fixes go into the next release; released files are never replaced. Before 1.0 only the latest release (currently 0.3.0) receives fixes, and an affected release is named in the [changelog](CHANGELOG.md) with the version that fixes it.
 
 ## Verify a download
 

@@ -3,10 +3,10 @@
 Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Java and Kotlin: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get calibrated probabilities. The binding calls the shared native library through the Foreign Function & Memory API, with no JNI, JNA or third-party dependencies; requests and results are JSON `String`s.
 
 ```text
-io.github.adrian729:ducktape-laya:0.2.0
+io.github.adrian729:ducktape-laya:0.3.0
 ```
 
-Requirements: Java 22 or newer (CI tests 25). The jar bundles the native library: Linux x86-64 in 0.2.0, and from the next release also Linux arm64 and Windows x64 ([platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md)). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
+Requirements: Java 22 or newer (CI tests 25). The jar bundles the native library for Linux x86-64, Linux arm64 and Windows x64 (0.2.0: Linux x86-64 only) ([platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md)). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
 The library is located in this order:
 

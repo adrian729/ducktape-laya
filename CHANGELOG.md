@@ -4,7 +4,9 @@ User-facing changes per release. Each section lists breaking changes first; "Rel
 
 ## Unreleased
 
-Packages for Linux arm64 and Windows x64 (tier 2) next to Linux x86-64 (tier 1) ([platforms](docs/PLATFORMS.md)). The C ABI stays 2 (`libducktape_laya.so.1`): code built against 0.2.0 keeps working, but the bindings report load failures and some errors differently, look up the native library more strictly, and prompts change for some structured values. `find_package(ducktape_laya 0.2 ...)` no longer finds the library (CMake package versions match the same minor version): request `0.3` or drop the version. Migration notes are in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#migrating-from-020).
+## 0.3.0 (2026-10-26)
+
+Packages for Linux arm64 and Windows x64 (tier 2) next to Linux x86-64 (tier 1) ([platforms](docs/PLATFORMS.md)). The C ABI stays 2 (`libducktape_laya.so.1`): code built against 0.2.0 keeps working, but the bindings report load failures and some errors differently, look up the native library more strictly, and prompts change for some structured values. `find_package(ducktape_laya 0.2 ...)` no longer finds the library (CMake package versions match the same minor version): request `0.3` or drop the version. Migration notes are in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#migrating-from-020-to-030).
 
 ### Breaking changes
 

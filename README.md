@@ -13,17 +13,16 @@ One native library does the work; thin bindings expose it to C/C++, Rust, Node.j
 
 ## Status
 
-- **Current release: 0.2.0** (2026-10-22), on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0), npm, crates.io, PyPI, NuGet, Maven Central and the Go module proxy. Its package files are attested and listed in `SHA256SUMS` ([verify a download](SECURITY.md#verify-a-download)). Its packages run on **Linux x86-64**; the browser package is experimental.
-- **Platforms:** Linux x86-64 is tier 1 (passes every release check); Linux arm64 and Windows x64 are tier 2 (tested in CI with the English model) from the next release; macOS on Apple silicon builds from source. Details: [docs/PLATFORMS.md](docs/PLATFORMS.md).
-- **Unreleased on main:** Linux arm64 and Windows x64 packages and the fixes listed in the [changelog](CHANGELOG.md#unreleased). Until the next release, they are available by [building from source](docs/BUILDING.md).
+- **Current release: 0.3.0** (2026-10-26), on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.3.0), npm, crates.io, PyPI, NuGet, Maven Central and the Go module proxy. Its package files are attested and listed in `SHA256SUMS` ([verify a download](SECURITY.md#verify-a-download)). Its packages run on **Linux x86-64, Linux arm64 and Windows x64**; the browser package is experimental.
+- **Platforms:** Linux x86-64 is tier 1 (passes every release check); Linux arm64 and Windows x64 are tier 2 (tested in CI with the English model); macOS on Apple silicon builds from source. Details: [docs/PLATFORMS.md](docs/PLATFORMS.md).
 
 ## Requirements
 
 | Platform | CPU | System |
 | --- | --- | --- |
 | Linux x86-64 | AVX, AVX2, FMA, F16C, BMI2, SSE4.2 (Intel Haswell, AMD Excavator/Zen or newer) | glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29` (Ubuntu 24.04+); not musl/Alpine |
-| Linux arm64 (next release) | Armv8.2-A with dot product and FP16 (Graviton2+, Ampere Altra, Raspberry Pi 5) | as Linux x86-64 |
-| Windows x64 (next release) | as Linux x86-64 | Microsoft Visual C++ Redistributable |
+| Linux arm64 | Armv8.2-A with dot product and FP16 (Graviton2+, Ampere Altra, Raspberry Pi 5) | as Linux x86-64 |
+| Windows x64 | as Linux x86-64 | Microsoft Visual C++ Redistributable |
 
 On a CPU without the required features, opening an engine fails with status 7 and names the missing feature (a router checks when its first request loads a model). Plan for about 0.6 GiB of memory per open engine with the English model (1.2 GiB with the multilingual one) and 449 MB of disk for the English model. Language runtimes, tested versions and macOS: [docs/PLATFORMS.md](docs/PLATFORMS.md).
 
@@ -34,10 +33,10 @@ On a CPU without the required features, opening an engine fails with status 7 an
 | Node.js, Electron | `npm install ducktape-laya` | Node 20+; prebuilt addon. [Package README](bindings/node/README.md) |
 | Python | `pip install ducktape-laya` | Python 3.10+; the wheel bundles the library. [Package README](bindings/python/README.md) |
 | Rust | `cargo add ducktape-laya` | Links the native library from the release archive. [Crate README](bindings/rust/ducktape-laya/README.md) |
-| Go | `go get github.com/adrian729/ducktape-laya/bindings/go@v0.2.0` | cgo; links the native library from the release archive. [Package README](bindings/go/README.md) |
-| Java, Kotlin | `io.github.adrian729:ducktape-laya:0.2.0` | Java 22+, run with `--enable-native-access`; the jar bundles the library. [Package README](bindings/java/README.md) |
+| Go | `go get github.com/adrian729/ducktape-laya/bindings/go@v0.3.0` | cgo; links the native library from the release archive. [Package README](bindings/go/README.md) |
+| Java, Kotlin | `io.github.adrian729:ducktape-laya:0.3.0` | Java 22+, run with `--enable-native-access`; the jar bundles the library. [Package README](bindings/java/README.md) |
 | .NET | `dotnet add package DucktapeLaya` | .NET 10; the package bundles the library. [Package README](bindings/dotnet/README.md) |
-| C, C++ | [`ducktape-laya-0.2.0-linux-x64.tar.gz`](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) | Headers, library, CMake and pkg-config files. [Linking guide](docs/PACKAGING.md) |
+| C, C++ | [`ducktape-laya-0.3.0-linux-x64.tar.gz`](https://github.com/adrian729/ducktape-laya/releases/tag/v0.3.0) (also `-linux-arm64.tar.gz` and `-windows-x64.zip`) | Headers, library, CMake and pkg-config files. [Linking guide](docs/PACKAGING.md) |
 | Browser | `npm install ducktape-laya-browser` | Experimental, tested on Chromium only. [Browser guide](docs/BROWSER.md) |
 
 ## Get the model

@@ -8,7 +8,7 @@ Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Python: ask n
 pip install ducktape-laya
 ```
 
-Requirements: Python 3.10+. The 0.2.0 wheel is `manylinux_2_38_x86_64`: Linux x86-64 with AVX, AVX2, FMA, F16C, BMI2 and SSE4.2 and glibc 2.38+ (Ubuntu 24.04+). From the next release there are also `manylinux_2_38_aarch64` (Armv8.2-A with dot product and FP16) and `win_amd64` (needs the Microsoft Visual C++ Redistributable) wheels. Full matrix: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md).
+Requirements: Python 3.10+. The wheels are `manylinux_2_38_x86_64`: Linux x86-64 with AVX, AVX2, FMA, F16C, BMI2 and SSE4.2 and glibc 2.38+ (Ubuntu 24.04+), and from 0.3.0 also `manylinux_2_38_aarch64` (Armv8.2-A with dot product and FP16) and `win_amd64` (needs the Microsoft Visual C++ Redistributable). Full matrix: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md).
 
 Download the model separately and check its hash ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 

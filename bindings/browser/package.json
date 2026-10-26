@@ -1,6 +1,6 @@
 {
   "name": "ducktape-laya-browser",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Embedded Laya decision engine for browsers (WebAssembly and WebGPU)",
   "type": "module",
   "main": "index.mjs",

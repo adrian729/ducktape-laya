@@ -3,10 +3,10 @@
 Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Go: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get calibrated probabilities, computed on the CPU by the shared native library through cgo.
 
 ```sh
-go get github.com/adrian729/ducktape-laya/bindings/go@v0.2.0
+go get github.com/adrian729/ducktape-laya/bindings/go@v0.3.0
 ```
 
-Requires Go 1.22+ (CI tests 1.27), a C compiler, and the native library and header from the [v0.2.0 release archive](https://github.com/adrian729/ducktape-laya/releases/tag/v0.2.0) (Linux x86-64; the v0.1.0 archive has ABI 1 and does not work with this binding). From the next release, Linux arm64 and Windows x64 archives are published too ([Windows](#windows)); other platforms build the library [from a checkout](#from-a-checkout). Platform requirements: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
+Requires Go 1.22+ (CI tests 1.27), a C compiler, and the native library and header from the [v0.3.0 release archive](https://github.com/adrian729/ducktape-laya/releases/tag/v0.3.0) for Linux x86-64, Linux arm64 or Windows x64 ([Windows](#windows); the v0.1.0 archive has ABI 1 and does not work with this binding); other platforms build the library [from a checkout](#from-a-checkout). Platform requirements: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
 The package links `-lducktape_laya` and includes `<ducktape_laya.h>`, so tell cgo where they are:
 
@@ -73,7 +73,7 @@ To run the binding's own tests, use the same variables in `bindings/go` and set 
 
 ## Windows
 
-Windows x64 is a tier-2 platform, tested in CI (Go 1.27 with the runner image's MinGW-w64 gcc, which is not pinned). From the next release use the `ducktape-laya-V-windows-x64.zip` release asset: its `lib` directory holds the import library `ducktape_laya.lib`, `bin` the DLL and `include` the header. Before that, build the library from a checkout with clang-cl ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md#build-the-library)); it produces `ducktape_laya.dll` and `ducktape_laya.lib` in the build directory.
+Windows x64 is a tier-2 platform, tested in CI (Go 1.27 with the runner image's MinGW-w64 gcc, which is not pinned). Use the `ducktape-laya-V-windows-x64.zip` release asset (from 0.3.0): its `lib` directory holds the import library `ducktape_laya.lib`, `bin` the DLL and `include` the header. Or build the library from a checkout with clang-cl ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md#build-the-library)); it produces `ducktape_laya.dll` and `ducktape_laya.lib` in the build directory.
 
 cgo on Windows needs a MinGW-w64 gcc on `PATH` (for example from [MinGW-Builds](https://github.com/niXman/mingw-builds-binaries) or MSYS2). With `-L<build>`, its linker finds `ducktape_laya.lib` for `-lducktape_laya`; no per-OS flags are needed in your code. At run time Windows looks for `ducktape_laya.dll` next to the executable or on `PATH`, so ship the DLL beside your program. In PowerShell:
 
