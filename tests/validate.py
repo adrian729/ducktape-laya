@@ -120,7 +120,8 @@ class FakeSystem(validate.System):
         elif command[0] == 'cmake' and '--build' in command:
             build = pathlib.Path(argument(command, '--build'))
             (build / LIBRARY).write_bytes(self.library)
-            (build / 'ducktape_laya.node').write_bytes(self.library + b' addon')
+            if 'DUCKTAPE_BUILD_NODE:UNINITIALIZED=ON' in (build / 'CMakeCache.txt').read_text().splitlines():
+                (build / 'ducktape_laya.node').write_bytes(self.library + b' addon')
         elif command[0] == 'ctest':
             build = pathlib.Path(argument(command, '--test-dir'))
             show = self.show(build)
@@ -178,8 +179,8 @@ class FakeSystem(validate.System):
                 'llama_cpp_commit': RECORD['runtime']['commit'], 'runtime_patches': RECORD['runtime']['patches'], 'compiler': self.compiler,
                 'numerical_profile': {'id': 'native-cpu:x86_64'}}
 
-    def require_build(self, build, runtime):
-        pass
+    def require_build(self, build, runtime, addon=True):
+        self.addon_checked = addon
 
     def platform(self):
         return self.target
@@ -312,6 +313,49 @@ class Validate(unittest.TestCase):
                 select('--library-only' if 'parity' not in argv[1] else '--upstream-reference', *argv)
         self.assertEqual(select('--model', self.model, '--full')['checks'], list(validate.FULL_SELECTION))
         self.assertEqual(select('--model', self.model, '--full')['profile'], 'host-full')
+
+    def test_binding_suites_build_the_addon_only_where_node_needs_it(self):
+        """A library-only run of suites other than node's builds no Node addon and needs no Node: the report says so."""
+        p = validate.parser()
+        addon = lambda *argv: validate.select(p, p.parse_args([*map(str, argv), '--output', 'x']), FakeSystem(self.directory))['addon']
+        self.assertFalse(addon('--library-only', '--bindings', 'python'))
+        self.assertFalse(addon('--library-only', '--bindings', 'rust,java,dotnet,go,python'))
+        for argv in (('--library-only', '--bindings', 'node'), ('--library-only', '--bindings', 'all'), ('--library-only', '--bindings', 'node,go'),
+                     ('--library-only', '--checks', 'bindings:a'), ('--library-only', '--checks', 'bindings:b'),
+                     ('--library-only', '--packages'), ('--library-only', '--bindings', 'go', '--packages'), ('--bindings', 'go'),
+                     ('--library-only', '--bindings', 'go', '--reproducibility'), ('--phase', 'build', '--library-only')):
+            with self.subTest(argv=argv):
+                self.assertTrue(addon(*argv))
+        for lang in (name for name in validate.BINDINGS if name != 'node'):
+            with self.subTest(lang=lang):
+                system = FakeSystem(self.directory)
+                system.headers = self.directory / 'no-node-headers'  # absent: only a run that builds the addon needs them
+                code, report = run(system, '--library-only', '--bindings', lang, '--build', self.directory / f'build-{lang}',
+                                   '--output', self.output(), '--cmake-arg=-GNinja')
+                self.assertEqual(code, 0, report.get('error'))
+                configure = next(command for command in system.commands if command[:1] == ['cmake'] and '-S' in command)
+                self.assertEqual(report['selection']['bindings'], [lang])
+                self.assertEqual(report['runs'][lang]['exit_code'], 0)
+                self.assertIn('-DDUCKTAPE_BUILD_NODE=OFF', configure)
+                self.assertFalse(any(arg.startswith('-DNODE_') for arg in configure))
+                self.assertIs(report['selection']['node_addon'], False)
+                self.assertIsNone(report['addon_sha256'])
+                self.assertIsNone(report['node_version'])
+                self.assertEqual(len(report['library_sha256']), 64)
+                self.assertFalse((self.directory / f'build-{lang}/ducktape_laya.node').exists())
+                self.assertIs(system.addon_checked, False)
+        # The node suite keeps the addon: built, hashed, checked and recorded with the Node version.
+        system = FakeSystem(self.directory)
+        code, report = run(system, '--library-only', '--bindings', 'node', '--build', self.directory / 'build-node', '--output', self.output(),
+                           '--cmake-arg=-GNinja')
+        self.assertEqual(code, 0, report.get('error'))
+        configure = next(command for command in system.commands if command[:1] == ['cmake'] and '-S' in command)
+        self.assertIn('-DDUCKTAPE_BUILD_NODE=ON', configure)
+        self.assertTrue(any(arg.startswith('-DNODE_INCLUDE_DIR=') for arg in configure))
+        self.assertIs(report['selection']['node_addon'], True)
+        self.assertEqual(len(report['addon_sha256']), 64)
+        self.assertEqual(report['node_version'], 'v26.7.0')
+        self.assertIs(system.addon_checked, True)
 
     def test_full_refuses_before_configuring_without_models(self):
         system = FakeSystem(self.directory)

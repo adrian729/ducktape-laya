@@ -167,7 +167,7 @@ python3 scripts/validate.py --library-only --bindings rust,node --output build-c
 python3 scripts/validate.py --library-only --policy all --packages --output build-check-policy
 ```
 
-`--bindings LIST|all` adds the binding suites (concurrently), `--packages` the packages and `tests/package-smoke.py`, `--policy all|platform` the policy checks (through `scripts/check-policy.py`), `--parity smoke|full` the cross-binding comparison, `--upstream-reference` the reference probe, `--checks LIST` names checks directly, and `--full` runs every check for release evidence ([RELEASE_CHECKS.md](RELEASE_CHECKS.md#native-validation)). Build jobs default to `DUCKTAPE_JOBS`, else as many as the CPUs and the available memory (0.6 GB per job) allow. A report that is not `--full` is never release evidence.
+`--bindings LIST|all` adds the binding suites (concurrently; with `--library-only` and no `node` in the list the run builds no Node addon and needs no Node: the report has `selection.node_addon` false, `addon_sha256` and `node_version` null), `--packages` the packages and `tests/package-smoke.py`, `--policy all|platform` the policy checks (through `scripts/check-policy.py`), `--parity smoke|full` the cross-binding comparison, `--upstream-reference` the reference probe, `--checks LIST` names checks directly, and `--full` runs every check for release evidence ([RELEASE_CHECKS.md](RELEASE_CHECKS.md#native-validation)). Build jobs default to `DUCKTAPE_JOBS`, else as many as the CPUs and the available memory (0.6 GB per job) allow. A report that is not `--full` is never release evidence.
 
 ### Verify a batch
 

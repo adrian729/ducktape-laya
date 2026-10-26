@@ -147,10 +147,10 @@ class System:
     def binary_info(self, build):
         return binary_info(build)
 
-    def require_build(self, build, runtime):
+    def require_build(self, build, runtime, addon=True):
         """The library was linked from this tree's runtime sources, and no unmapped source path reached a binary."""
         require_runtime_sources(build, runtime)
-        for binary in (LIBRARY, 'ducktape_laya.node'):
+        for binary in (LIBRARY, *(['ducktape_laya.node'] if addon else [])):
             require_mapped_source_paths(build / binary)
 
     def platform(self):
@@ -212,7 +212,7 @@ def parser():
                    'every real-model fixture request (adds the references check)')
     p.add_argument('--extra-model', type=pathlib.Path, action='append', default=[], help='GGUF of an additional pinned model '
                    '(release/compatibility.json additional_models) to qualify against the original Laya and upstream; repeatable')
-    p.add_argument('--library-only', action='store_true', help='Build the library and Node addon without the native tests')
+    p.add_argument('--library-only', action='store_true', help='Build the library and Node addon without the native tests (the addon only where a selected check needs it: not for binding suites other than node)')
     p.add_argument('--phase', choices=['all', 'build', 'test'], default='all')
     p.add_argument('--from', dest='from_build', type=pathlib.Path, help='--phase test: the build directory of a --phase build run')
     p.add_argument('--reproducibility', action='store_true', help='Also compile two independent source snapshots')
@@ -223,6 +223,12 @@ def parser():
     p.add_argument('--reference-probe-launcher', choices=['auto', 'none', 'ccache', 'sccache'], default='auto',
                    help='Compiler cache of the probe-only targets (DUCKTAPE_REFERENCE_PROBE_LAUNCHER; default: ccache or sccache when on PATH)')
     return p
+
+
+def addon_needed(a, checks, bindings):
+    """Whether the run builds the Node addon: always, except a library-only run of binding suites other than node's. Only the node
+    suite loads the addon; the packages, the parity runs and the native checks of every other run need it (and its Node headers)."""
+    return not (a.library_only and a.phase == 'all' and checks == ['bindings'] and 'node' not in bindings and not a.reproducibility)
 
 
 def select(p, a, system):
@@ -236,9 +242,10 @@ def select(p, a, system):
         if a.phase == 'build':
             # The build of a full run (the reference probe included) for CI shards: no checks, so no evidence profile.
             return {'profile': 'selected', 'checks': [], 'bindings': [], 'policy': 'none', 'packages': False, 'parity_profile': None,
-                    'upstream_reference': True}
+                    'upstream_reference': True, 'addon': True}
         return {'profile': 'host-full', 'checks': list(FULL_SELECTION), 'bindings': list(BINDINGS), 'policy': 'all', 'packages': True,
-                'parity_profile': 'full', 'upstream_reference': True}
+                'parity_profile': 'full', 'upstream_reference': True,
+                'addon': True}
     if a.checks is not None:
         if a.phase == 'build':
             p.error('--phase build runs no checks')
@@ -295,7 +302,7 @@ def select(p, a, system):
     policy = 'all' if 'policy' in checks else 'platform' if 'policy-platform' in checks else 'none'
     return {'profile': 'generic' if default else 'selected', 'checks': checks, 'bindings': bindings if 'bindings' in checks or halves else [],
             'policy': policy, 'packages': 'packages' in checks, 'parity_profile': PARITY[parity[0]][1] if parity else None,
-            'upstream_reference': bool(a.upstream_reference)}
+            'upstream_reference': bool(a.upstream_reference), 'addon': addon_needed(a, checks, bindings)}
 
 
 def select_tests(show, model):
@@ -419,10 +426,10 @@ class Validation:
             'selection': {'profile': sel['profile'], 'bindings': sel['bindings'], 'native_tests': bool({'ctest', 'generic'} & set(sel['checks'])),
                           'policy': sel['policy'], 'packages': sel['packages'], 'parity_profile': sel['parity_profile'],
                           'test_jobs': self.test_jobs, 'checks': list(sel['checks']), 'upstream_reference': sel['upstream_reference'],
-                          'library_only': bool(a.library_only)},
+                          'library_only': bool(a.library_only), 'node_addon': sel['addon']},
             'host': system.host(), 'skipped': {}, 'compiler_launcher': a.compiler_launcher,
             'reference_probe_launcher': self.probe_launcher or 'none',
-            'build_environment': system.build_environment(), 'node_version': system.node_version(),
+            'build_environment': system.build_environment(), 'node_version': system.node_version() if sel['addon'] else None,
             'toolchains': system.toolchains([self.launcher] if self.launcher else []),
             'source_files_sha256': source['source_files_sha256'],
             'gates': {key: {'status': 'not_run'} for key in record['required_release_gates']}, 'runs': {},
@@ -462,10 +469,11 @@ class Validation:
     def configure_and_build(self):
         a, build, record = self.a, self.build, self.record
         shutil.rmtree(build / BUILD_PHASE, ignore_errors=True)
-        headers = a.node_include or self.system.node_headers()
-        if not headers or not (headers / 'node_api.h').is_file():
+        addon = self.sel['addon']
+        headers = (a.node_include or self.system.node_headers()) if addon else None
+        if addon and (not headers or not (headers / 'node_api.h').is_file()):
             raise Refused('Supply --node-include pointing to node_api.h')
-        if self.windows and not (a.node_lib and a.node_lib.is_file()):
+        if addon and self.windows and not (a.node_lib and a.node_lib.is_file()):
             raise Refused('Supply --node-lib with node.lib on Windows')
         build.mkdir(parents=True, exist_ok=True)
         try:
@@ -478,10 +486,11 @@ class Validation:
             # Validation is for the approved checkout, even if this cache previously built a candidate runtime.
             f'-DDUCKTAPE_LLAMA_SOURCE={(ROOT / record["runtime"]["path"]).as_posix()}', '-DDUCKTAPE_LLAMA_REVISION=',
             '-DDUCKTAPE_BUILD_FUZZERS=OFF', '-DDUCKTAPE_BUILD_TESTS=' + ('OFF' if a.library_only else 'ON'),
-            '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_NODE=ON',
+            '-DDUCKTAPE_BUILD_EXAMPLES=OFF', '-DDUCKTAPE_BUILD_NODE=' + ('ON' if addon else 'OFF'),
             '-DDUCKTAPE_BUILD_REFERENCE_PROBE=' + ('ON' if upstream else 'OFF'),
-            f'-DNODE_INCLUDE_DIR={headers.as_posix()}', f'-DDUCKTAPE_TEST_MODEL={self.model.as_posix() if self.model else ""}',
-            *([f'-DNODE_LIB={a.node_lib.resolve().as_posix()}'] if a.node_lib else []), *a.cmake_arg,
+            *([f'-DNODE_INCLUDE_DIR={headers.as_posix()}'] if addon else []),
+            f'-DDUCKTAPE_TEST_MODEL={self.model.as_posix() if self.model else ""}',
+            *([f'-DNODE_LIB={a.node_lib.resolve().as_posix()}'] if addon and a.node_lib else []), *a.cmake_arg,
             # Last, so that nothing before overrides them (the last -D of a name wins): no dev options (they are never
             # evidence), the product launcher, the probe-only launcher, and never ggml's global launch rule.
             '-DDUCKTAPE_DEV_BUILD=OFF', '-DDUCKTAPE_DEV_PCH=OFF',
@@ -510,11 +519,12 @@ class Validation:
     def identity(self):
         build = self.build
         self.report['library_sha256'] = sha256(build / LIBRARY)
-        self.report['addon_sha256'] = sha256(build / 'ducktape_laya.node')
+        # None when this run built no addon (selection.node_addon is false): the report then states there is none.
+        self.report['addon_sha256'] = sha256(build / 'ducktape_laya.node') if self.sel['addon'] else None
         self.report['cmake_cache_sha256'] = sha256(build / 'CMakeCache.txt')
         self.report['diagnostics'] = self.system.binary_info(build)
         require_runtime_identity(self.report['diagnostics'], self.record)
-        self.system.require_build(build, ROOT / self.record['runtime']['path'])
+        self.system.require_build(build, ROOT / self.record['runtime']['path'], self.sel['addon'])
 
     def registration(self):
         """Assert the required tests are registered; an empty green suite is not evidence."""
@@ -571,6 +581,8 @@ class Validation:
         for key in ('source_commit', 'source_tracked_dirty', 'source_files_sha256', 'fixtures_sha256'):
             if built.get(key) != self.report[key]:
                 raise Refused(f'{path}: {key} differs from this checkout\'s')
+        # A test phase on a build without the addon cannot select the addon's checks (the binding job never splits phases).
+        self.sel['addon'] = self.report['selection']['node_addon'] = built['selection'].get('node_addon', True)
         self.identity()
         for key in ('library_sha256', 'addon_sha256', 'cmake_cache_sha256'):
             if built.get(key) != self.report[key]:

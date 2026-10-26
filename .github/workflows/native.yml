@@ -444,7 +444,7 @@ jobs:
       - *setup-node
       - &node-sdk
         name: Node-API headers and node.lib for this Node, checked against its SHASUMS256.txt
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.DTL_NODE != ''
         shell: bash
         run: python scripts/fetch-node-sdk.py build-node-sdk --lib | tr -d '\r' | tr '\134' '/' | tee -a "$GITHUB_ENV"
       # The Visual Studio x64 environment for the following steps, and the clang-cl arguments every
@@ -478,7 +478,10 @@ jobs:
         shell: bash
         run: |
           file="$(cygpath -u "$RUNNER_TEMP")/dtl-windows-args.txt"
-          printf '%s\n' "--node-include=$NODE_INCLUDE_DIR" "--node-lib=$NODE_LIB" --cmake-arg=-GNinja \
+          # The Node SDK only where the job builds the addon (a binding job of another language has none).
+          node=()
+          if [ -n "${NODE_INCLUDE_DIR:-}" ]; then node=("--node-include=$NODE_INCLUDE_DIR" "--node-lib=$NODE_LIB"); fi
+          printf '%s\n' "${node[@]}" --cmake-arg=-GNinja \
             "--cmake-arg=-DCMAKE_C_COMPILER=$DTL_CLANG_CL" "--cmake-arg=-DCMAKE_CXX_COMPILER=$DTL_CLANG_CL" \
             '--cmake-arg=-DDTL_PATCH_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe' > "$file"
           cat "$file"
@@ -511,7 +514,9 @@ jobs:
         include: ${{ fromJSON(needs.changes.outputs.bindings_linux_x64) }}
     env:
       DTL_JOB: ${{ matrix.job }}
-      DTL_NODE: 26.7.0
+      # Only the node suite loads the addon: another language's job builds none and sets up no Node
+      # (scripts/validate.py's addon_needed, tests/ci-contracts.py).
+      DTL_NODE: ${{ matrix.lang == 'node' && '26.7.0' || '' }}
       DTL_TOOLS: ${{ matrix.lang }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
       DTL_CACHE_KEY: linux-x64-gcc-generic
@@ -621,7 +626,7 @@ jobs:
         include: ${{ fromJSON(needs.changes.outputs.bindings_windows_x64) }}
     env:
       DTL_JOB: ${{ matrix.job }}
-      DTL_NODE: 24.21.0
+      DTL_NODE: ${{ matrix.lang == 'node' && '24.21.0' || '' }}
       DTL_TOOLS: ${{ matrix.lang }}
       DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'sccache' }}
       DTL_CACHE_KEY: windows-x64-clang-cl-generic

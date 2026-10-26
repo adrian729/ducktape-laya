@@ -397,10 +397,11 @@ JOB_BUDGETS = {
     'binding-python-windows-x64': 115,
     **{f'binding-{lang}-macos-arm64': 120 for lang in LANGUAGES},
     **{f'packages-{p}': 120 for p in PACKAGE_PLATFORMS}, 'assemble': 60,
-    # 150 was the one warm run 40218330855 (128 s); the last 10 runs took 139 to 221 s, p90 178 s: about 85 s of setup (four SDK
-    # setups, the Visual Studio environment), 34 s of configure and build (all 89 compiles are compiler-cache hits) and the packaging,
-    # now concurrent across the ecosystems (27 s serial). 180 until ten runs of the concurrent packaging replace it.
-    'packages-windows-x64': 180,
+    # 150 was the one warm run 40218330855 (128 s). The budget was raised to 180 from the p90 of the ten runs before the packages ran
+    # concurrently (139 to 221 s), which measured the serial packaging this job no longer does. Concurrent packaging (27 s serial) has
+    # one run so far, 40257329206: 148 s (about 85 s of setup: four SDK setups and the Visual Studio environment; 34 s of configure
+    # and build, all 89 compiles compiler-cache hits; the packaging). Back at 150 until three runs of it exist, then their p90.
+    'packages-windows-x64': 150,
     **{f'assembled-{p}': 180 for p in PACKAGE_PLATFORMS}, 'musl': 180,
     'sanitizers': 150, 'fuzzer': 120, 'reproducibility-windows-x64': 240, 'reproducibility-linux-arm64': 300,
     **{f'build-{p}': 210 for p in BUILD_PLATFORMS},

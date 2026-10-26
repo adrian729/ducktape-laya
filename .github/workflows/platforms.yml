@@ -150,8 +150,7 @@ jobs:
           max-size: 500M
           install: binary
           job-summary: ''
-      - &setup-node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.21.0
       - name: Pinned test model key
@@ -225,7 +224,12 @@ jobs:
           save: false
           install: binary
           job-summary: ''
-      - *setup-node
+      # Only the node suite loads the addon: another language's job builds none (scripts/validate.py's addon_needed).
+      - name: Node for the addon
+        if: matrix.lang == 'node'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.21.0
       # Only this binding's toolchain.
       - name: Rust toolchain and crate cache
         if: matrix.lang == 'rust'

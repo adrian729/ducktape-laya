@@ -456,6 +456,39 @@ def check_caches(root, read, problems):
     return len(savers)
 
 
+def check_binding_node(root, read, problems):
+    """A binding job sets up Node only for the node suite (scripts/validate.py builds the addon for no other language's suite).
+
+    native.yml: DTL_NODE is an expression that is empty unless matrix.lang is node, and the Node SDK step and the shared
+    &setup-node step skip on an empty DTL_NODE. platforms.yml: the job's setup-node step has `if: matrix.lang == 'node'` and no
+    unconditional one runs."""
+    count = 0
+    for workflow in WORKFLOWS:
+        text = (root / '.github/workflows' / workflow).read_text()
+        for job_id, job in read[workflow].items():
+            if not (job['name'] or '').startswith('binding-${{ matrix.lang }}-'):
+                continue
+            count += 1
+            block = '\n'.join(job_blocks(text)[job_id])
+            if workflow == 'native.yml':
+                value = job['env'].get('DTL_NODE', '')
+                if not re.fullmatch(r"\$\{\{\s*matrix\.lang == 'node' && '[0-9.]+' \|\| ''\s*\}\}", value):
+                    problems.append(f"{workflow}: binding job {job_id} sets DTL_NODE {value!r}, not an expression that is empty unless matrix.lang == 'node'")
+            else:
+                steps = re.split(r'(?m)^      - ', block)
+                for step in steps:
+                    if 'actions/setup-node@' in step and not re.search(r"(?m)^\s+if: matrix\.lang == 'node'\s*$", step):
+                        problems.append(f"{workflow}: binding job {job_id} sets up Node without `if: matrix.lang == 'node'`")
+                if re.search(r'(?m)^\s+- [*]setup-node\s*$', block):
+                    problems.append(f'{workflow}: binding job {job_id} uses the unconditional &setup-node step')
+    text = (root / '.github/workflows/native.yml').read_text()
+    for anchor, label in (('&setup-node', 'Node setup'), ('&node-sdk', 'Node SDK')):
+        match = re.search(rf'(?m)^\s+- {re.escape(anchor)}\n(.*?)(?=^      - |\Z)', text, re.S | re.M)
+        if not match or "env.DTL_NODE != ''" not in match[1]:
+            problems.append(f"native.yml: the {anchor} step ({label}) no longer skips on an empty DTL_NODE")
+    return count
+
+
 def check_shard_artifacts(root, shards, problems):
     """Each platform's evidence job downloads exactly its own shards: its pattern matches none of another platform's."""
     import fnmatch
@@ -496,6 +529,9 @@ def main(argv=None):
         problems.append(f'JOBS names workflows {sorted(workflows - set(WORKFLOWS))} that do not exist')
     check_shards(shards, release_targets.PROFILE_CHECKS, problems)
     check_shard_artifacts(root, shards, problems)
+    binding_jobs = check_binding_node(root, {workflow: read_jobs(root / '.github/workflows' / workflow, problems) for workflow in WORKFLOWS}, problems)
+    if binding_jobs != 3:
+        problems.append(f'expected 3 binding matrix jobs (linux-x64, windows-x64, macos-arm64), found {binding_jobs}')
 
     missing = sorted(set(validate.FULL_CHECKS) - set(ci_paths.VALIDATE_CHECKS))
     if missing:
