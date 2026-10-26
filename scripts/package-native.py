@@ -9,6 +9,7 @@ scripts/assemble-packages.py merges into the multi-platform npm, jar and NuGet
 packages. Does not publish, sign or download.
 """
 import argparse
+import concurrent.futures
 import importlib.util
 import sbom
 import json
@@ -163,30 +164,47 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     # avoiding symlink support differences in npm tarballs.
     for name in target.node_libraries:
         shutil.copy(installed_library, addon / name)
-    subprocess.run([npm, 'pack', '--ignore-scripts', '--pack-destination', str(out)], cwd=package, check=True, capture_output=True)
-    env = dict(os.environ, DUCKTAPE_LAYA_LIB_DIR=str(build))
-    workspace = ROOT / 'bindings/rust/Cargo.toml'
-    for name in ['ducktape-laya-sys', 'ducktape-laya']:
-        command = [cargo, 'package', '--manifest-path', str(workspace), '-p', name, '--locked', '--offline', '--allow-dirty', '--no-verify']
-        # Permit packaging the unpublished sibling locally. Cargo normalizes the
-        # actual .crate dependency to its version; no checkout path is shipped.
-        command += ['--config', f'patch.crates-io.ducktape-laya-sys.path="{(ROOT / "bindings/rust/ducktape-laya-sys").as_posix()}"']
-        subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True)
-        shutil.copy(ROOT / f'bindings/rust/target/package/{name}-{version}.crate', out)
-    python_wheel.build(out, version, installed_library, epoch, target)
-    java_package.build(out, version, installed_library, epoch, target)
-    # NuGet: the library at runtimes/<rid>/native/, packed from source like the crates. No PDB
-    # (none is shipped): its ID in the assembly hashes generated sources, whose line endings
-    # follow the host, and every platform must produce the same managed assembly. A private
-    # artifacts path: otherwise pack reuses any Release build already in the checkout's obj/
-    # (tests build one), with its own options and absolute paths.
-    nuget = directory / 'nuget'
-    subprocess.run([dotnet, 'pack', str(ROOT / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj'), '-c', 'Release', '-m:1',
-                    '--artifacts-path', str(directory / 'dotnet-build'),
-                    '-o', str(nuget), f'-p:DucktapeLayaNativeLibrary={installed_library}', '-p:DebugType=none',
-                    f'-p:DucktapeLayaRuntime={target.nuget}', '-p:ContinuousIntegrationBuild=true', '--nologo'],
-                   cwd=ROOT, env=dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1'), check=True, capture_output=True)
-    normalize_nupkg(nuget / f'DucktapeLaya.{version}.nupkg', out / f'DucktapeLaya.{version}.nupkg', epoch)
+    # The ecosystems' packages are independent (each reads installed_library or its own sources and writes its own files
+    # in out), and each is dominated by an external tool (npm, cargo, javac and javadoc, dotnet), so they are made
+    # concurrently; the first failure in this order is the one reported.
+    def pack_npm():
+        subprocess.run([npm, 'pack', '--ignore-scripts', '--pack-destination', str(out)], cwd=package, check=True, capture_output=True)
+
+    def pack_crates():
+        env = dict(os.environ, DUCKTAPE_LAYA_LIB_DIR=str(build))
+        workspace = ROOT / 'bindings/rust/Cargo.toml'
+        for name in ['ducktape-laya-sys', 'ducktape-laya']:
+            command = [cargo, 'package', '--manifest-path', str(workspace), '-p', name, '--locked', '--offline', '--allow-dirty', '--no-verify']
+            # Permit packaging the unpublished sibling locally. Cargo normalizes the
+            # actual .crate dependency to its version; no checkout path is shipped.
+            command += ['--config', f'patch.crates-io.ducktape-laya-sys.path="{(ROOT / "bindings/rust/ducktape-laya-sys").as_posix()}"']
+            subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True)
+            shutil.copy(ROOT / f'bindings/rust/target/package/{name}-{version}.crate', out)
+
+    def pack_wheel():
+        python_wheel.build(out, version, installed_library, epoch, target)
+
+    def pack_jar():
+        java_package.build(out, version, installed_library, epoch, target)
+
+    def pack_nupkg():
+        # NuGet: the library at runtimes/<rid>/native/, packed from source like the crates. No PDB
+        # (none is shipped): its ID in the assembly hashes generated sources, whose line endings
+        # follow the host, and every platform must produce the same managed assembly. A private
+        # artifacts path: otherwise pack reuses any Release build already in the checkout's obj/
+        # (tests build one), with its own options and absolute paths.
+        nuget = directory / 'nuget'
+        subprocess.run([dotnet, 'pack', str(ROOT / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj'), '-c', 'Release', '-m:1',
+                        '--artifacts-path', str(directory / 'dotnet-build'),
+                        '-o', str(nuget), f'-p:DucktapeLayaNativeLibrary={installed_library}', '-p:DebugType=none',
+                        f'-p:DucktapeLayaRuntime={target.nuget}', '-p:ContinuousIntegrationBuild=true', '--nologo'],
+                       cwd=ROOT, env=dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1'), check=True, capture_output=True)
+        normalize_nupkg(nuget / f'DucktapeLaya.{version}.nupkg', out / f'DucktapeLaya.{version}.nupkg', epoch)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [pool.submit(task) for task in (pack_npm, pack_crates, pack_wheel, pack_jar, pack_nupkg)]
+        for future in futures:
+            future.result()
     # The options that select instructions on this architecture (the other's are CMake cache defaults, not build inputs).
     prefixes = ('GGML_NATIVE',) + (('GGML_CPU_ARM_ARCH',) if target.name.endswith('arm64') else
                                    ('GGML_AVX', 'GGML_FMA', 'GGML_F16C', 'GGML_BMI', 'GGML_SSE'))

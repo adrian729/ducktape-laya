@@ -31,6 +31,13 @@ artifact digest GitHub reports; extraction refuses absolute paths, '..', drive
 or backslash names, links and duplicates. Nothing downloaded is executed or
 imported.
 
+An existing OUTPUT is refused, except with --qualify: then it must be an earlier
+download of the same candidate run (ci-run.json names the same candidate commit,
+head and, with --run, run id; every listed file still has its recorded sha256),
+and only the qualify run's files are added under OUTPUT/qualify, with qualify_run
+in ci-run.json and the qualify keys in evidence.json. Repeating it with the same
+qualify run changes nothing; a different qualify run is refused.
+
 Writes OUTPUT/ci-run.json (the run, the artifacts and the sha256 of every
 extracted file; scripts/check-candidate.py rejects a CI file that is not listed
 there or has changed) and OUTPUT/evidence.json (evidence keys for
@@ -234,6 +241,91 @@ def safe_extract(archive_path, destination):
                 shutil.copyfileobj(source, stream)
 
 
+def qualify_summary(staging, qualify, qualify_listing, qualify_files, repository):
+    """The qualify_run record, after requiring each report.json to name the run's head as its source."""
+    for name in QUALIFY_ARTIFACTS:
+        try:
+            report = json.loads((staging / qualify_keys()[name]).read_text())
+        except ValueError as error:
+            raise Refused(f'{name}: report.json is not JSON ({error})') from None
+        if not isinstance(report, dict) or report.get('source_commit') != qualify['head_sha']:
+            raise Refused(f'{name}: report source {report.get("source_commit") if isinstance(report, dict) else None} '
+                          f'is not the qualify run\'s head {qualify["head_sha"]}')
+    return {'repository': repository, 'workflow_path': qualify['path'], 'run_id': qualify['id'],
+            'run_attempt': qualify.get('run_attempt'), 'head_sha': qualify['head_sha'],
+            'html_url': qualify.get('html_url'), 'artifacts': qualify_listing, 'files': qualify_files}
+
+
+def verify_listed(output, files):
+    """Every file ci-run.json lists is still there with its recorded sha256."""
+    for relative, digest in files.items():
+        path = output / relative
+        if path.is_symlink() or not path.is_file() or sha256(path) != digest:
+            raise Refused(f'{output}: {relative} is missing or differs from ci-run.json')
+
+
+def add_qualify_keys(output):
+    evidence = json.loads((output / 'evidence.json').read_text())
+    if any(evidence.get(key) != relative for key, relative in qualify_keys().items()):
+        evidence.update(qualify_keys())
+        (output / 'evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
+
+
+def extend_download(a, output, commit, keys):
+    """Add the qualify run's files to the existing download OUTPUT of the same candidate run; returns (qualify run, summary)."""
+    try:
+        summary = json.loads((output / 'ci-run.json').read_text())
+    except (OSError, ValueError) as error:
+        raise Refused(f'{output} exists but is not a download of this tool ({error}); choose a new path') from None
+    if not isinstance(summary, dict) or summary.get('candidate_commit') != commit or summary.get('head_sha') != commit:
+        raise Refused(f'{output} holds a download of {summary.get("candidate_commit") if isinstance(summary, dict) else None} '
+                      f'(head {summary.get("head_sha") if isinstance(summary, dict) else None}), not of {commit}')
+    if a.run and summary.get('run_id') != a.run:
+        raise Refused(f'{output} holds candidate run {summary.get("run_id")}, not {a.run}')
+    verify_listed(output, summary['files'])
+    run = gh(f'repos/{a.repository}/actions/runs/{summary["run_id"]}')
+    check_run(run, commit, a.repository)
+    if run['id'] != summary['run_id'] or run['head_sha'] != summary['head_sha']:
+        raise Refused(f'{output}: ci-run.json does not match run {summary["run_id"]}')
+    qualify, qualify_artifacts = find_run(a.repository, commit, a.qualify_run, QUALIFY_ARTIFACTS, 'qualify', ancestor=True)
+    recorded = summary.get('qualify_run')
+    if recorded:
+        if recorded.get('run_id') != qualify['id']:
+            raise Refused(f'{output} already holds qualify run {recorded.get("run_id")}, not {qualify["id"]}; '
+                          f'use a new path to download a different qualify run')
+        verify_listed(output, recorded['files'])
+        add_qualify_keys(output)
+        return qualify, summary, False
+    unexpired(qualify, qualify_artifacts, QUALIFY_ARTIFACTS)
+    warn_expiry(qualify_artifacts, QUALIFY_ARTIFACTS)
+    if (output / 'qualify').exists():
+        raise Refused(f'{output}/qualify exists but ci-run.json does not list it; remove it or choose a new path')
+    staging = pathlib.Path(tempfile.mkdtemp(prefix=output.name + '.partial-', dir=output.parent))
+    created = recorded_in_json = False
+    try:
+        listing = download(a.repository, qualify_artifacts, QUALIFY_ARTIFACTS, staging, 'qualify')
+        files = {path.relative_to(staging).as_posix(): sha256(path) for path in sorted(staging.rglob('*'))
+                 if path.is_file() and not path.is_symlink()}
+        absent = sorted(name for name in QUALIFY_ARTIFACTS if qualify_keys()[name] not in files)
+        if absent:
+            raise Refused('The qualify run lacks evidence files: ' + ', '.join(f'{name} ({qualify_keys()[name]})' for name in absent))
+        summary['qualify_run'] = qualify_summary(staging, qualify, listing, files, a.repository)
+        (staging / 'qualify').rename(output / 'qualify')
+        created = True
+        add_qualify_keys(output)
+        # ci-run.json is the commit point: until it lists the qualify run, a failure removes OUTPUT/qualify again.
+        (staging / 'ci-run.json').write_text(json.dumps(summary, indent=2) + '\n')
+        os.replace(staging / 'ci-run.json', output / 'ci-run.json')
+        recorded_in_json = True
+    except BaseException:
+        if created and not recorded_in_json:
+            shutil.rmtree(output / 'qualify', ignore_errors=True)
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return qualify, summary, True
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--candidate', required=True, help='Candidate commit')
@@ -250,8 +342,9 @@ def main():
         p.error('--qualify-run needs --qualify')
     if a.repository != REPOSITORY:
         raise Refused(f'{a.repository} is not {REPOSITORY}; only its runs are release evidence')
-    if a.output.exists():
-        p.error(f'{a.output} exists; choose a new path')
+    extending = a.output.exists()
+    if extending and not a.qualify:
+        p.error(f'{a.output} exists; choose a new path (or pass --qualify to add a qualify run to a download of the same candidate run)')
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', '--verify', a.candidate + '^{commit}'], text=True).strip()
     record = json.loads(subprocess.check_output(['git', '-C', str(ROOT), 'show', f'{commit}:release/compatibility.json'], text=True))
     if not record.get('targets'):
@@ -268,6 +361,16 @@ def main():
         clashes = sorted(key for key in added if key in current and current[key] != added[key])
         if clashes and not a.replace:
             raise Refused(f'{manifest} already has {", ".join(clashes)} (pass --replace to overwrite)')
+    if extending:
+        qualify, summary, added_files = extend_download(a, output, commit, keys)
+        if a.merge:
+            current.update(added)
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps(current, indent=2) + '\n')
+        qualify_files = summary['qualify_run']['files']
+        print(f'Run {summary["run_id"]} already in {output}; qualify run {qualify["id"]} (head {qualify["head_sha"]}, {qualify.get("html_url")}): '
+              f'{len(qualify_files)} files in {output}/qualify' + ('' if added_files else ' (already present)'))
+        return
     run, artifacts = find_run(a.repository, commit, a.run, required)
     unexpired(run, artifacts, required)
     chosen = sorted(set(required) | {name for name, item in artifacts.items()
@@ -299,17 +402,7 @@ def main():
                    'event': run['event'], 'status': run['status'], 'conclusion': run['conclusion'], 'created_at': run.get('created_at'),
                    'html_url': run.get('html_url'), 'candidate_commit': commit, 'artifacts': listing, 'files': files}
         if a.qualify:
-            for name in QUALIFY_ARTIFACTS:
-                try:
-                    report = json.loads((staging / qualify_keys()[name]).read_text())
-                except ValueError as error:
-                    raise Refused(f'{name}: report.json is not JSON ({error})') from None
-                if not isinstance(report, dict) or report.get('source_commit') != qualify['head_sha']:
-                    raise Refused(f'{name}: report source {report.get("source_commit") if isinstance(report, dict) else None} '
-                                  f'is not the qualify run\'s head {qualify["head_sha"]}')
-            summary['qualify_run'] = {'repository': a.repository, 'workflow_path': qualify['path'], 'run_id': qualify['id'],
-                                      'run_attempt': qualify.get('run_attempt'), 'head_sha': qualify['head_sha'],
-                                      'html_url': qualify.get('html_url'), 'artifacts': qualify_listing, 'files': qualify_files}
+            summary['qualify_run'] = qualify_summary(staging, qualify, qualify_listing, qualify_files, a.repository)
         (staging / 'ci-run.json').write_text(json.dumps(summary, indent=2) + '\n')
         (staging / 'evidence.json').write_text(json.dumps(keys, indent=2) + '\n')
         staging.rename(output)

@@ -242,6 +242,18 @@ class Validate(unittest.TestCase):
         arguments = ['--model', self.model, *[item for path in self.extra for item in ('--extra-model', path)]]
         return run(system, '--full', *arguments, '--build', self.build, '--output', self.output(), '--cmake-arg=-GNinja', *extra)
 
+    def test_help_lists_every_accepted_check(self):
+        # --help is generated from CHECK_HELP, which is also where --checks takes its labels.
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream), self.assertRaises(SystemExit):
+            validate.main(['--help'], None)
+        words = ' '.join(stream.getvalue().split())
+        self.assertEqual(set(validate.CHECK_HELP), set(validate.CHECKS))
+        for label in validate.CHECKS:
+            self.assertIn(f' {label} ', words)
+        for label in ('parity:smoke-a', 'parity:smoke-b', 'parity:full-a', 'parity:full-b', 'bindings:a', 'bindings:b'):
+            self.assertIn(label, validate.CHECKS)
+
     def test_generic_selection_from_labels(self):
         names, regex = validate.select_tests(registration(), True)
         self.assertEqual(regex, '^(tier-generic|cat-real_model)$')

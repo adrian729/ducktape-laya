@@ -4,21 +4,8 @@
 Without --model this is a model-free smoke check, never release approval.
 No model downloads, expected-output changes, publication or pin promotion.
 
-Checks (--checks, or the flags that add them):
-  generic          the default: ctest -L '^tier-generic$' (with --model also '^cat-real_model$'), examples-smoke,
-                   the ABI check and scripts/check-binary.py
-  ctest            every registered native test (ctest --no-tests=error, the JUnit names compared with the
-                   registrations), examples-smoke, ABI, check-binary; with --model the native_contracts gate
-  references       the original Laya reference and, with the reference probe (--upstream-reference), upstream;
-                   the additional models' reference and identity runs (--extra-model)
-  parity:smoke     tests/parity.py --profile smoke (--parity smoke)
-  parity:full      tests/parity.py --profile full, every binding: the binding_conformance gate (--parity full)
-  parity:full-a/b  one half of the full matrix each (CI shards; scripts/merge-validation.py joins them)
-  parity:smoke-a/b one half of the smoke matrix each (the Windows real-model shards)
-  bindings         the binding suites (--bindings LIST|all), concurrently
-  bindings:a/b     the suites of one half: rust, node, python (a) or java, dotnet, go (b) (the Windows real-model shards)
-  packages         scripts/package-native.py and tests/package-smoke.py (--packages)
-  policy           scripts/check-policy.py --all (--policy all); policy-platform: --platform-only (--policy platform)
+Checks (--checks, or the flags that add them; the list is generated from CHECK_HELP):
+@CHECKS@
 
 --full runs every check of FULL_CHECKS and FULL_POLICY_CHECKS (with --upstream-reference) and writes
 selection.profile host-full: the release host's evidence. It refuses (exit 1, full_refusal.missing) when any of
@@ -46,6 +33,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import xml.etree.ElementTree as ElementTree
@@ -73,8 +61,35 @@ FULL_POLICY_CHECKS = ('result-comparison', 'qualification-policy', 'docs-links',
 FULL_ALLOWED_SKIPS = {'examples-smoke': (('win32',), 'compiles the examples with a POSIX driver'),
                       'policy:release-targets': (('win32',), None), 'policy:release-assets': (('win32',), None)}
 PLATFORM_POLICY = ('packaging-identities', 'browser-backend-identities', 'abi-layouts', 'typescript-consumers')
-CHECKS = ('ctest', 'generic', 'references', 'parity:smoke', 'parity:smoke-a', 'parity:smoke-b', 'parity:full', 'parity:full-a',
-          'parity:full-b', 'bindings', 'bindings:a', 'bindings:b', 'packages', 'policy', 'policy-platform')
+# Every accepted --checks label and what it runs; the --help text is generated from this table.
+CHECK_HELP = {
+    'generic': "the default: ctest -L '^tier-generic$' (with --model also '^cat-real_model$'), examples-smoke, the ABI check and scripts/check-binary.py",
+    'ctest': 'every registered native test (ctest --no-tests=error, the JUnit names compared with the registrations), examples-smoke, ABI, '
+             'check-binary; with --model the native_contracts gate',
+    'references': "the original Laya reference and, with the reference probe (--upstream-reference), upstream; the additional models' "
+                  'reference and identity runs (--extra-model)',
+    'parity:smoke': 'tests/parity.py --profile smoke (--parity smoke)',
+    'parity:smoke-a': 'the first half of the smoke matrix (the Windows real-model shards)',
+    'parity:smoke-b': 'the second half of the smoke matrix',
+    'parity:full': 'tests/parity.py --profile full, every binding: the binding_conformance gate (--parity full)',
+    'parity:full-a': 'the first half of the full matrix (CI shards; scripts/merge-validation.py joins the halves)',
+    'parity:full-b': 'the second half of the full matrix',
+    'bindings': 'the binding suites (--bindings LIST|all), concurrently',
+    'bindings:a': 'the suites rust, node and python (the Windows real-model shards)',
+    'bindings:b': 'the suites java, dotnet and go (the slow-starting ones)',
+    'packages': 'scripts/package-native.py and tests/package-smoke.py (--packages)',
+    'policy': 'scripts/check-policy.py --all (--policy all)',
+    'policy-platform': 'scripts/check-policy.py --platform-only (--policy platform)',
+}
+CHECKS = tuple(CHECK_HELP)
+
+
+def checks_help():
+    width = max(map(len, CHECK_HELP)) + 2
+    return '\n'.join(textwrap.fill(text, 118, initial_indent='  ' + label.ljust(width), subsequent_indent=' ' * (2 + width))
+                     for label, text in CHECK_HELP.items())
+
+
 FULL_SELECTION = ('ctest', 'references', 'parity:full', 'bindings', 'packages', 'policy')
 PARITY = {'parity:smoke': ('bindings-smoke', 'smoke', 'all', None), 'parity:full': ('bindings', 'full', 'all', 'binding_conformance'),
           'parity:full-a': ('bindings-a', 'full', 'a', None), 'parity:full-b': ('bindings-b', 'full', 'b', None),
@@ -175,7 +190,7 @@ class System:
 
 
 def parser():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(description=__doc__.replace('@CHECKS@', checks_help()), formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--model', type=pathlib.Path)
     p.add_argument('--build', type=pathlib.Path, help='Build directory (default build-validation; with --phase test, --from)')
     p.add_argument('--output', type=pathlib.Path, required=True)

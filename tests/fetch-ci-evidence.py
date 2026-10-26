@@ -6,7 +6,9 @@ run is downloaded, verified and recorded (ci-run.json, evidence.json, --merge);
 runs of another commit, event, conclusion, workflow or repository, missing or
 expired artifacts, a zip that does not match its digest, unsafe zip entries
 (.., absolute, backslash, links, duplicates), an existing output directory and
-evidence key collisions are refused, leaving no output behind. With --qualify,
+evidence key collisions are refused, leaving no output behind. --qualify also
+adds the qualify run to an existing download of the same candidate run (refusing
+another run, commit or edited file; repeating it changes nothing). With --qualify,
 the qualify run (found by commit, or an ancestor's run named by --qualify-run)
 is recorded as qualify_run, and its run rules, artifacts, digests and report
 sources are refused the same way."""
@@ -281,8 +283,101 @@ class Fetch(unittest.TestCase):
 
     def test_existing_output(self):
         self.output.mkdir()
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             self.fetch()
+        # Also an earlier download, unless --qualify adds to it.
+        self.output.rmdir()
+        self.fetch()
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.fetch()
+
+    def test_qualify_added_to_an_existing_download(self):
+        manifest = self.directory / 'evidence.json'
+        self.fetch('--merge', str(manifest))
+        before = json.loads((self.output / 'ci-run.json').read_text())
+        candidate_files = {path: (self.output / path).read_bytes() for path in before['files']}
+        downloads = []
+        original = self.github.__call__
+        self.github = lambda endpoint, output=None: (downloads.append(endpoint) if output else None) or original(endpoint, output)
+        self.fetch('--qualify', '--merge', str(manifest))
+        # Only the three qualify zips were downloaded; the candidate files are untouched.
+        self.assertEqual(len(downloads), len(fetch.QUALIFY_ARTIFACTS))
+        after = json.loads((self.output / 'ci-run.json').read_text())
+        self.assertEqual(after['qualify_run']['run_id'], 8)
+        self.assertEqual({k: v for k, v in after.items() if k != 'qualify_run'}, before)
+        for path, data in candidate_files.items():
+            self.assertEqual((self.output / path).read_bytes(), data)
+        keys = json.loads((self.output / 'evidence.json').read_text())
+        self.assertEqual(keys, {**fetch.evidence_keys(RECORD), **fetch.qualify_keys()})
+        merged = json.loads(manifest.read_text())
+        self.assertEqual(merged['fuzz'], 'ci/qualify/fuzz/report.json')
+        self.assertEqual(merged['release_packages'], 'ci/packages-assembled/inventory.json')
+        # Idempotent: the same qualify run again downloads nothing and changes nothing.
+        snapshot = (self.output / 'ci-run.json').read_text(), (self.output / 'evidence.json').read_text(), manifest.read_text()
+        downloads.clear()
+        self.fetch('--qualify', '--merge', str(manifest))
+        self.assertEqual(downloads, [])
+        self.assertEqual(((self.output / 'ci-run.json').read_text(), (self.output / 'evidence.json').read_text(), manifest.read_text()), snapshot)
+
+    def test_qualify_extension_refusals(self):
+        self.fetch()
+        ci_run = (self.output / 'ci-run.json').read_text()
+        record = json.loads(ci_run)
+
+        def refused(message, *extra):
+            current = (self.output / 'ci-run.json').read_text()
+            with self.assertRaises(fetch.Refused) as caught:
+                self.fetch('--qualify', *extra)
+            self.assertIn(message, str(caught.exception))
+            self.assertEqual((self.output / 'ci-run.json').read_text(), current)
+            self.assertFalse((self.output / 'qualify').exists())
+            self.assertEqual([path.name for path in self.directory.iterdir() if '.partial-' in path.name], [])
+        # Another candidate run than the one downloaded.
+        refused('holds candidate run 7, not 9', '--run', '9')
+        # ci-run.json of another commit.
+        for key in ('candidate_commit', 'head_sha'):
+            (self.output / 'ci-run.json').write_text(json.dumps(dict(record, **{key: '0' * 40})))
+            refused('not of')
+            (self.output / 'ci-run.json').write_text(ci_run)
+        # A downloaded file that changed since ci-run.json listed it.
+        (self.output / sorted(record['files'])[0]).write_text('edited')
+        refused('differs from ci-run.json')
+        # A directory that is no download at all.
+        self.output = self.directory / 'other'
+        self.output.mkdir()
+        with self.assertRaises(fetch.Refused) as caught:
+            self.fetch('--qualify')
+        self.assertIn('not a download of this tool', str(caught.exception))
+
+    def test_qualify_extension_other_qualify_run_and_failed_download(self):
+        self.fetch('--qualify')
+        ci_run = (self.output / 'ci-run.json').read_text()
+        self.github.qualify['id'] = 9
+        with self.assertRaises(fetch.Refused) as caught:
+            self.fetch('--qualify')
+        self.assertIn('already holds qualify run 8, not 9', str(caught.exception))
+        self.assertEqual((self.output / 'ci-run.json').read_text(), ci_run)
+        # A qualify download that fails leaves the existing download as it was.
+        self.setUp()
+        self.fetch()
+        ci_run = (self.output / 'ci-run.json').read_text()
+        self.github.set_zip('fuzz', self.github.qualify_zip('fuzz', source=ANCESTOR))
+        self.refused_extension("is not the qualify run's head", ci_run)
+        self.github = FakeGitHub()
+        self.github.qualify_artifacts['upgrade']['digest'] = 'sha256:' + '0' * 64
+        self.refused_extension('does not match the artifact digest', ci_run)
+        self.github = FakeGitHub()
+        self.fetch('--qualify')
+        self.assertIn('qualify_run', json.loads((self.output / 'ci-run.json').read_text()))
+
+    def refused_extension(self, message, ci_run):
+        with self.assertRaises(fetch.Refused) as caught:
+            self.fetch('--qualify')
+        self.assertIn(message, str(caught.exception))
+        self.assertEqual((self.output / 'ci-run.json').read_text(), ci_run)
+        self.assertFalse((self.output / 'qualify').exists())
+        self.assertEqual(sorted(json.loads((self.output / 'evidence.json').read_text())), sorted(fetch.evidence_keys(RECORD)))
+        self.assertEqual([path.name for path in self.directory.iterdir() if '.partial-' in path.name], [])
 
 
 if __name__ == '__main__':
