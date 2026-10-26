@@ -4,7 +4,7 @@ Build from a checkout to use unreleased changes, a platform without released pac
 
 ## Get the source
 
-You need Git, CMake 3.22+ and a C/C++17 compiler. The runtime (llama.cpp) is a submodule:
+You need Git, CMake 3.22+ and a C/C++17 compiler; the [development loop](#development-loop) also needs Ninja, ccache and, for cache hits across worktrees, CMake 4.1+. The runtime (llama.cpp) is a submodule:
 
 ```sh
 git clone --recurse-submodules https://github.com/adrian729/ducktape-laya.git
@@ -61,47 +61,136 @@ node bindings/node/decide.cjs /path/to/Laya-Q8_0.gguf < examples/request.json
 | `DUCKTAPE_BUILD_NODE` | `OFF` | The Node-API addon; supply `NODE_INCLUDE_DIR`, and on Windows `NODE_LIB` |
 | `DUCKTAPE_BUILD_FUZZERS` | `OFF` | Linux Clang libFuzzer target `laya-input-fuzzer`; instruments the library, never for artifacts |
 | `DUCKTAPE_BUILD_REFERENCE_PROBE` | `OFF` | Test-only `laya-reference` executable linking upstream decision processing; never packaged |
-| `DUCKTAPE_REPRODUCIBLE_PATHS` | `ON` | With GCC or Clang, maps source and build paths out of compiled artifacts (`-ffile-prefix-map`) |
+| `DUCKTAPE_REPRODUCIBLE_PATHS` | `ON` | With GCC or Clang, maps source and build paths out of compiled artifacts (`-ffile-prefix-map`); the `dev` preset turns it off |
+| `DUCKTAPE_DEV_BUILD` | `OFF` | Developer build: test programs, and the core where results cannot change, at `-O1` ([development loop](#development-loop)); never packaged |
+| `DUCKTAPE_DEV_PCH` | `OFF` | Developer build: precompiled JSON and standard headers for the core and its JSON-heavy tests (GCC and Clang); never packaged |
+| `DUCKTAPE_REFERENCE_PROBE_LAUNCHER` | empty | A compiler launcher (such as `ccache`) for the reference probe's own targets only; a configure-time guard fails if it would reach a target of the library or addon, and records the split in `generated/launcher-guard.json` |
 | `DUCKTAPE_LLAMA_SOURCE` | `third_party/llama.cpp` | The llama.cpp source to build; any other directory reports its runtime commit as `unverified-custom-source` unless `DUCKTAPE_LLAMA_REVISION` is set (upgrade tooling does this) |
 | `DUCKTAPE_WASM_OPTIMIZATION` | `2` | Emscripten builds only: link optimization `0`, `1`, `2`, `3`, `s` or `z`. `scripts/build-browser.py` sets `1`, the only value browser packaging accepts |
 | `DUCKTAPE_WASM_MAXIMUM_MEMORY` | `4294967296` | Emscripten builds only: WebAssembly memory ceiling in bytes, a 64 KiB multiple from 64 MiB to 4 GiB. Lower values are for memory-pressure tests; packaging accepts only 4 GiB |
 
-ggml's `GGML_CCACHE` compiles through `ccache` or `sccache` whenever one is on `PATH`; with `DUCKTAPE_REPRODUCIBLE_PATHS` (the default) this project defaults it to `OFF`. To compile through a cache, set `CMAKE_C_COMPILER_LAUNCHER` and `CMAKE_CXX_COMPILER_LAUNCHER` (the `dev` preset does). A cache does not change the compiled bytes as long as it hands the compiler the same arguments: ccache's `base_dir` (`CCACHE_BASEDIR`, or `base_dir` in a ccache configuration file) makes source paths relative, so `-ffile-prefix-map` no longer maps them and `__FILE__` strings in the library change; build with `CCACHE_BASEDIR=` (empty) to override a configured one. `validate.py` and `package-native.py` refuse a library or addon holding a source path outside the mapped directories (`./`, `./third_party/llama.cpp` and `./build`; Clang writes them without the leading `./`), such as `../src/laya.cpp` or an absolute path. The project's scripts set the launcher and `GGML_CCACHE` explicitly.
+ggml's `GGML_CCACHE` compiles through `ccache` or `sccache` whenever one is on `PATH`; with `DUCKTAPE_REPRODUCIBLE_PATHS` (the default) this project defaults it to `OFF`. To compile through a cache, set `CMAKE_C_COMPILER_LAUNCHER` and `CMAKE_CXX_COMPILER_LAUNCHER` (the `dev` preset does). A cache does not change the compiled bytes as long as it hands the compiler the same arguments: ccache's `base_dir` (`CCACHE_BASEDIR`, or `base_dir` in a ccache configuration file) makes source paths relative, so `-ffile-prefix-map` no longer maps them and `__FILE__` strings in the library change. The `dev` preset sets `base_dir` on purpose, for cache hits across worktrees, and is never packaged; the other presets set no launcher, and every script that compiles through ccache sets `CCACHE_BASEDIR` and `CCACHE_SLOPPINESS` empty (overriding a configured `base_dir`) and `CCACHE_COMPILERCHECK=content`, and records `ccache --show-config` in its report. `validate.py` and `package-native.py` refuse a library or addon holding a source path outside the mapped directories (`./`, `./third_party/llama.cpp` and `./build`; Clang writes them without the leading `./`), such as `../src/laya.cpp` or an absolute path. The project's scripts set the launcher and `GGML_CCACHE` explicitly.
 
 The GGML ISA options (`GGML_AVX2`, `GGML_FMA`, ...) select the CPU profile and are set explicitly for x86-64; AVX-512 and VNNI variants are refused. The library, ggml and llama.cpp are built with `-fstack-protector-strong`, `_FORTIFY_SOURCE=3` (optimised builds), full RELRO (`-z relro -z now`), `-mbranch-protection=standard` on Linux arm64 and Control Flow Guard (`/guard:cf`) with clang-cl. On Linux arm64 that gives return-address signing (PAC); the BTI landing pads are compiled in too, but the shipped binaries are not marked BTI-compatible, so BTI is not enforced: Ubuntu 24.04's glibc start files (`crti.o`, `crtn.o`) carry no BTI property, and the linker marks an output only when every input is marked. `package-native.py` checks the shipped Linux library and addon for full RELRO and the stack protector, the library for fortified calls, and on arm64 both for PAC instructions.
 
 ## Run the tests
 
 ```sh
-cmake -S . -B build -DDUCKTAPE_BUILD_TESTS=ON -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf
-cmake --build build -j 3
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf
+cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Without `DUCKTAPE_TEST_MODEL`, only the model-free tests run. The binding suites run from their directories ([Rust](../bindings/rust/ducktape-laya/README.md#from-a-checkout), [Node](../bindings/node/test.cjs), [Python](../bindings/python/README.md#from-a-checkout), [Go](../bindings/go/README.md#from-a-checkout), [Java](../bindings/java/README.md#from-a-checkout), [.NET](../bindings/dotnet/README.md#from-a-checkout)) with `LAYA_MODEL` set for their real-model tests. `scripts/validate.py` builds and runs all of them at once:
+Without `DUCKTAPE_TEST_MODEL`, only the model-free tests are registered. The binding suites run from their directories ([Rust](../bindings/rust/ducktape-laya/README.md#from-a-checkout), [Node](../bindings/node/test.cjs), [Python](../bindings/python/README.md#from-a-checkout), [Go](../bindings/go/README.md#from-a-checkout), [Java](../bindings/java/README.md#from-a-checkout), [.NET](../bindings/dotnet/README.md#from-a-checkout)) with `LAYA_MODEL` set for their real-model tests; `scripts/validate.py` builds and runs them together ([validation runs](#validation-runs)).
+
+The C++ conformance consumer (`tests/consumers/cpp.cpp`, target `laya-conformance-cpp`) is compiled at C++11, the oldest standard `ducktape_laya.hpp` supports: the installed-package check compiles the same file at the application's default standard (C++14 with MSVC), so a newer language feature in it fails the build here first.
+
+### Development loop
 
 ```sh
-npm ci --ignore-scripts --prefix tests/typescript   # TypeScript test tools, once
-python3 scripts/validate.py --output build-check-model-free
-python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf --output build-check
+cmake --preset dev
+cmake --build --preset dev
+ctest --preset dev
 ```
 
-The model-free run also checks the Markdown links (`tests/docs-links.py`) and that every example request is valid. For a faster loop while working on one binding or on the bindings only, `--bindings rust,node` runs only the listed binding suites (and leaves out the cross-binding checks) and `--skip-native-tests` leaves out `ctest`; `--compiler-launcher ccache` compiles through ccache. Such a report lists what it left out under `skipped` and is never release evidence. What each check covers and the options for release evidence: [RELEASE_CHECKS.md](RELEASE_CHECKS.md).
+This is the loop after every change. The `dev` preset builds in `build-dev` with Ninja, Release and every target compiled through ccache (on `PATH`); `ctest --preset dev` runs the [generic tier](#test-tiers-and-categories), model-free, in about 2 s, four tests at a time. What the preset adds, and why:
+
+- `DUCKTAPE_DEV_BUILD=ON`: the test programs are compiled at `-O1` everywhere, and the core's own sources (`src/`) at `-O1` on x86-64 and with Clang. Results cannot change there: the tests compare floating-point values within tolerances, x86-64 keeps ggml's FMA flags private to ggml, and Clang contracts per statement at every level; GCC on arm64 contracts differently by level, so the core keeps `-O3` there. clang-cl (where `-O1` means "minimize size") and the browser build ignore the option.
+- `DUCKTAPE_DEV_PCH=ON`: `nlohmann/json.hpp` and the common standard headers are precompiled for the core and the JSON-heavy tests (GCC and Clang); the vendored runtime sources compiled into the library keep their own includes. The build preset sets the ccache sloppiness (`pch_defines,time_macros,include_file_mtime,include_file_ctime`) that ccache needs to cache users of a precompiled header.
+- `CMAKE_LINK_DEPENDS_NO_SHARED=ON`: test programs are not relinked when only the library's content changed, so a library edit relinks the library alone.
+- `DUCKTAPE_REPRODUCIBLE_PATHS=OFF`, `CMAKE_UNITY_BUILD_RELOCATABLE=ON` and, in the build preset, `CCACHE_BASEDIR=${sourceParentDir}`: no `-ffile-prefix-map` of the worktree's absolute path enters the command lines, the runtime's unity sources include their files by relative path, and ccache hashes paths relative to the build directory, so a dev build in another worktree hits the same cache (seconds instead of a cold build). Relocatable unity sources need CMake 4.1 or later; an older CMake ignores the variable and a second worktree recompiles the runtime's unity sources.
+
+Together they make a one-file edit rebuild in seconds. Dev builds are never packaged or used as evidence: `validate.py`, `check-reproducibility.py`, `check-upgrade.py` and `build-browser.py` configure with `DUCKTAPE_DEV_BUILD=OFF` and `DUCKTAPE_DEV_PCH=OFF`, `package-native.py` and `package-browser.py` refuse a build with either on, `check-candidate.py` refuses such a report, and the packagers refuse the unmapped source paths a dev build compiles in.
+
+For the real-model tests, configure the same build directory with the model and run the `dev-real` preset (every registered test, one at a time unless you pass `-j`):
+
+```sh
+cmake --preset dev -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf
+cmake --build --preset dev
+ctest --preset dev-real            # or -j 4: the CPU-time tests stay serial
+```
+
+### Test tiers and categories
+
+Every native test is registered in `CMakeLists.txt` with `dtl_add_test`, which requires a tier and a category and turns them into the CTest labels `tier-<tier>` and `cat-<category>`; a missing or unknown one is a configure error:
+
+```cmake
+dtl_add_test(NAME n COMMAND ... TIER generic|specialized|release CATEGORY native|real_model|faults
+             [LABELS timing qemu] [PROCESSORS n] [SERIAL] [TIMEOUT s] [SKIP_RETURN_CODE n])
+```
+
+| Tier | Holds | Runs |
+|---|---|---|
+| `generic` | Model-free and fast: `abi-errors`, `control-errors`, `decision-rules`, `feature-errors`, `language-routing`, `stress-rule`, `tokenizer-partition`, and on Linux `ggml-faults` | After every change (`ctest --preset dev`), in every `generic-*` CI job and every `validate.py` run |
+| `specialized` | Needs the real model, a platform tool (QEMU) or a quiet machine: the `real-*` tests, `cpu-guard`, and the timing check `tokenizer-scaling` | `ctest --preset dev-real`, `validate.py --model` (the `cat-real_model` tests; `--checks ctest` and `--full` run every test), the real-model CI shards |
+| `release` | Release evidence only | None registered yet |
+
+Categories: `native` (the library without a model), `real_model` (with the model) and `faults` (fault injection, Linux only). Extra labels: `timing` (a CPU-time ratio check; registered `SERIAL`, so `ctest -j` runs it alone) and `qemu` (the emulated-CPU guard). `PROCESSORS` is the most threads an engine of the test uses, which `ctest -j` counts. Select with anchored label regexes, since a bare `-L generic` matches any label containing the word:
+
+```sh
+ctest --test-dir build-dev -L '^tier-specialized$'
+ctest --test-dir build-dev -L '^cat-faults$'
+ctest --test-dir build-dev -L '^timing$'          # on an otherwise idle machine
+ctest --test-dir build-dev -R '^tokenizer-scaling$'
+```
+
+Classifying a new test: `TIER generic` only when it needs no model and adds well under a second, because every change pays for it; anything slower, any model, and any timing or scaling measurement is `specialized`. A timing check is its own test with `LABELS timing` and `SERIAL`, never part of a correctness test (`tokenizer-partition` checks the tokens, `tokenizer-scaling` the time). A check the host prevents exits with the test's `SKIP_RETURN_CODE` (77), which CTest reports as skipped, never as passed. The required registrations stay listed in `scripts/validate.py` and `scripts/release_targets.py`, so a test that disappears fails validation.
 
 ### CMake presets
 
-`CMakePresets.json` (CMake 3.22+) names three configurations, each in its own build directory:
+`CMakePresets.json` names one configuration per purpose, each in its own build directory. Every compile flag of the product comes from `CMakeLists.txt`; the presets add no compiler flags to it.
 
 | Preset | Build directory | Configuration |
 |---|---|---|
-| `dev` | `build-dev` | Ninja, Release, native tests, compiled through `ccache` (which must be on `PATH`) |
-| `product` | `build-product` | The options of the build `validate.py` packages, without the tests it also builds: Release, library and Node addon, no compiler cache. Pass `-DNODE_INCLUDE_DIR=...`; on Linux use `CC=gcc CXX=g++` for the release compiler; on Windows `validate.py` also gets `-GNinja` and the clang-cl compilers through `--cmake-arg` (the `windows` job in `native.yml`), which the preset does not set |
-| `sanitize` | `build-sanitize` | Ninja, Clang AddressSanitizer and UndefinedBehaviorSanitizer at RelWithDebInfo, as `scripts/check-sanitizers.py` builds them, native tests; never packaged |
+| `dev` | `build-dev` | The [development loop](#development-loop): Ninja, Release, ccache, native tests, the dev options |
+| `product` | `build-product` | The options of the build `validate.py` packages, without the tests it also builds: Release, library and Node addon, no compiler launcher, no examples, fuzzers or reference probe. Pass `-DNODE_INCLUDE_DIR=...`; on Linux use `CC=gcc CXX=g++` for the release compiler; on Windows also pass `-G Ninja` and the clang-cl compilers, which the preset does not set |
+| `sanitize` | `build-sanitize` | Clang AddressSanitizer and UndefinedBehaviorSanitizer (`-fno-sanitize-recover=all`) at RelWithDebInfo, native tests; never packaged |
+| `sanitize-thread` | `build-sanitize-thread` | Clang ThreadSanitizer at RelWithDebInfo, native tests; never packaged |
+| `fuzz` | `build-fuzz` | Clang, `DUCKTAPE_BUILD_FUZZERS=ON` with ASan and UBSan, `compile_commands.json` exported; builds `laya-input-fuzzer`; never packaged |
+
+Test presets: `dev` (`^tier-generic$`, four at a time), `dev-real` (every test), `sanitize` and `sanitize-thread` (every test, with halting sanitizer options). `scripts/check-sanitizers.py`, `scripts/check-fuzz.py`, `scripts/verify.py` and CI's sanitizer and fuzz jobs configure through these presets and use these directories.
 
 ```sh
-cmake --preset dev && cmake --build --preset dev -j 4 && ctest --preset dev
-cmake --preset sanitize -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf && cmake --build --preset sanitize -j 4 && ctest --preset sanitize
+cmake --preset sanitize -DDUCKTAPE_TEST_MODEL=/path/to/Laya-Q8_0.gguf && cmake --build --preset sanitize && ctest --preset sanitize
+cmake --preset fuzz && cmake --build --preset fuzz
 ```
+
+### Validation runs
+
+`scripts/validate.py` configures and builds with Ninja and the release options, runs a selection of checks and writes `report.json` and its logs to a new `--output` directory. Without options it runs the generic checks, the same as the `generic-*` CI jobs: the `tier-generic` tests, `tests/examples-smoke.py`, the ABI export check and `scripts/check-binary.py` (glibc floor, hardening, exports):
+
+```sh
+npm ci --ignore-scripts --prefix tests/typescript   # TypeScript test tools, once
+python3 scripts/validate.py --output build-check-generic
+python3 scripts/validate.py --model /path/to/Laya-Q8_0.gguf --output build-check-model     # adds the cat-real_model tests
+python3 scripts/validate.py --library-only --bindings rust,node --output build-check-rust-node
+python3 scripts/validate.py --library-only --policy all --packages --output build-check-policy
+```
+
+`--bindings LIST|all` adds the binding suites (concurrently), `--packages` the packages and `tests/package-smoke.py`, `--policy all|platform` the policy checks (through `scripts/check-policy.py`), `--parity smoke|full` the cross-binding comparison, `--upstream-reference` the reference probe, `--checks LIST` names checks directly, and `--full` runs every check for release evidence ([RELEASE_CHECKS.md](RELEASE_CHECKS.md#native-validation)). Build jobs default to `DUCKTAPE_JOBS`, else as many as the CPUs and the available memory (0.6 GB per job) allow. A report that is not `--full` is never release evidence.
+
+### Verify a batch
+
+`scripts/verify.py` runs, once per batch of changes, the specialized checks a branch push leaves out. It works out which jobs the changes since each job's last success make stale (`scripts/ci_paths.py`), runs the stale local jobs, dispatches `native.yml` and `platforms.yml` for the stale CI jobs meanwhile, then prints one verdict and each job's time against its budget:
+
+```sh
+python3 scripts/verify.py --list        # what is stale; runs nothing
+python3 scripts/verify.py               # every stale local and CI job
+python3 scripts/verify.py --ci --all    # every CI job of both workflows, before merging to main
+python3 scripts/verify.py --rerun-failed
+```
+
+| Local job | Runs |
+|---|---|
+| `local-bindings` | `validate.py --library-only --bindings all` |
+| `local-packaging` | `validate.py --library-only --packages` |
+| `local-sanitizers` | the `sanitize` preset and `ctest --preset sanitize` (model-free) |
+| `local-fuzz` | the `fuzz` preset and `check-fuzz.py --seconds 60` |
+| `local-real-model` (with `--real-model`) | `validate.py --model MODEL --parity smoke --upstream-reference` |
+| `local-reproducibility` | `check-reproducibility.py` |
+| `local-browser-wasm`, `local-browser-webgpu` (with `--emsdk DIR`) | `build-browser.py --reference` into `build-browser-<backend>` |
+
+Outputs go to `build-verify/<job>/`; the state of each local job (the last commit it verified) is kept per worktree at `git rev-parse --git-path verify-state.json`. Windows, Linux arm64 and macOS run only in CI. Other options: `--local` or `--ci` (one side; `--ci` refuses a dirty tree or a HEAD not pushed to its branch, since a dispatch cannot target a SHA), `--all` (every job whatever is stale), `--only JOB[,JOB]`, and `--real-model` with `--model PATH` (default `DUCKTAPE_TEST_MODEL` or the pinned file in the Hugging Face cache; without one the run prints `NOT RUN: real_model` and exits 1).
 
 ## Try it
 
@@ -137,7 +226,7 @@ The result keeps each platform's archive and wheel unchanged and adds one npm pa
 
 Packaging requires complete build records. CMake records a path-independent SHA-256 manifest of the project's sources, headers, binding sources, build configuration, runtime patches and packaged metadata, and each native target's binary hash, so rebuilding only the library cannot make an old Node addon pass. Run `cmake --build` after changing any of these inputs, including when reusing an older build directory; packagers reject missing records, changed inputs and changed binaries. Upstream llama.cpp keeps its separately checked runtime pin and patch identity: packaging requires the runtime checkout at the pinned commit without modifications, and the patches' recorded hashes. Because that is the tree's state at packaging time, the build also records the runtime files it compiles (`cmake/runtime_sources.cmake`: llama.cpp's and ggml's build scripts and headers, ggml's core and CPU backend, `src`, `common`, `vendor`, and the patched copies in `runtime-patched/`): at configure time in `generated/runtime-sources.configure.json`, and each time the library links, with the library's hash, in `ducktape_laya.runtime-sources.json`. `package-native.py`, `validate.py` and `check-stress.py` refuse a library whose link-time record differs from the runtime tree as it is now, or whose patched copies changed after configure or were made from other sources, so a library built from a modified runtime tree cannot be packaged after the tree is restored; rebuild (or reconfigure and rebuild) from the pinned tree. The record describes the tree when the library last linked. A runtime file reverted with a timestamp older than that link is not recompiled, so when an unrelated change relinks the library, the library still holds the change: such a link lists the file as `stale` (it changed since the previous link but is dated before it, compared to the second), and packaging refuses the build until the file is touched and rebuilt, or the build directory is fresh. Nothing of the record reaches the library, so the library's bytes do not change. The inventory's `packaging_source_commit` and `packaging_source_tracked_dirty` identify the packaging checkout, while `build_source` identifies the verified build inputs, so documentation-only commits do not become binary provenance. Packages normalize timestamps, ordering, ownership and permissions; `SOURCE_DATE_EPOCH` defaults to the packaging commit's timestamp. The model-free identity tests run with `python3 tests/packaging-identity.py` (also part of `validate.py`).
 
-Reconfiguring a build directory recompiles only what changed. The configure step copies and patches the runtime sources in a staging directory and replaces a patched copy in `runtime-patched/`, and the normalized `ggml-version.h`, only when its content differs (`cmake/generated_files.cmake`), so unchanged copies keep their timestamps; an edited copy is restored and recompiled. `python3 tests/reconfigure.py` checks this on a fresh build of the library (`--build DIR` on an existing one); CI runs it on the clang validation build.
+Reconfiguring a build directory recompiles only what changed. The configure step copies and patches the runtime sources in a staging directory and replaces a patched copy in `runtime-patched/`, and the normalized `ggml-version.h`, only when its content differs (`cmake/generated_files.cmake`), so unchanged copies keep their timestamps; an edited copy is restored and recompiled. `python3 tests/reconfigure.py` checks this on a fresh build of the library (`--build DIR` on an existing one); CI runs it with `--edit-copy` in the `generic-linux-x64-clang` job.
 
 ## Build the browser package
 
