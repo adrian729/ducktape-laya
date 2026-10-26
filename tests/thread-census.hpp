@@ -45,4 +45,9 @@ inline long live_threads() {
     return n;
 }
 }
+#else
+namespace dtl_test {
+// No /proc/self/task: the census is unavailable (callers that need it are Linux-only).
+inline long live_threads() { return -1; }
+}
 #endif
