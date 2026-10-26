@@ -57,9 +57,11 @@ class Merge(unittest.TestCase):
         for name, platform, profile, compiler, extra in (
                 ('x64', 'linux-x64', 'ci-full', 'GNU 13.3.0', False), ('arm64', 'linux-arm64', 'ci-full', 'GNU 13.3.0', False),
                 ('clang', 'linux-x64', 'ci-compiler', 'Clang 22.1.8', False),
+                # The binding suites in two shards (bindings:a with the platform policy, bindings:b), as the Windows candidate does.
+                ('arm64-halves', 'linux-arm64', 'ci-full', 'GNU 13.3.0', False),
                 # The references shard qualifies the additional models too, as the host's --full does (for the CN1 comparison).
                 ('x64-extra', 'linux-x64', 'ci-full', 'GNU 13.3.0', True)):
-            cls.sets[name] = cls.ci_build(name, platform, profile, compiler, extra)
+            cls.sets[name] = cls.ci_build(name, platform, profile, compiler, extra, halves=name.endswith('-halves'))
         # The single --full run of the same (deterministic) build, on the release host.
         system = fake.FakeSystem(cls.directory / 'full-system')
         code, cls.full = fake.run(system, '--full', '--model', cls.model, *cls.extra_args, '--build', cls.directory / 'full-build',
@@ -67,7 +69,7 @@ class Merge(unittest.TestCase):
         assert code == 0, cls.full.get('error')
 
     @classmethod
-    def ci_build(cls, name, platform, profile, compiler, with_extra):
+    def ci_build(cls, name, platform, profile, compiler, with_extra, halves=False):
         root = cls.directory / name
         system = fake.FakeSystem(root / 'system', ci=True, platform=platform, compiler=compiler)
         build = root / 'build'
@@ -80,6 +82,9 @@ class Merge(unittest.TestCase):
         groups = [[check] for check in PROFILE_CHECKS[profile] if not (platform == 'linux-arm64' and check == 'parity:full-b')]
         if platform == 'linux-arm64':
             next(group for group in groups if group == ['parity:full-a']).append('parity:full-b')
+        if halves:
+            groups = [group for group in groups if group not in (['bindings'], ['policy-platform'])]
+            groups += [['bindings:a', 'policy-platform'], ['bindings:b']]
         for checks in groups:
             shard = root / f'shard-{platform}-{"+".join(map(slug, checks))}'
             extra = cls.extra_args if 'references' in checks and with_extra else []
@@ -184,6 +189,28 @@ class Merge(unittest.TestCase):
         self.assertTrue(report['skipped']['package'].startswith('not selected'))
         self.assertEqual(report['skipped']['policy:abi-layouts'], 'tooling job of the same run')
 
+    def test_binding_halves_cover_the_bindings(self):
+        # Both halves together are the whole bindings check: the merged evidence equals the one-shard merge's.
+        _, whole = self.merged('arm64')
+        output, halves = self.merged('arm64-halves')
+        self.assertEqual(halves['checks'], list(PROFILE_CHECKS['ci-full']))
+        self.assertEqual(halves['selection'], whole['selection'])
+        self.assertEqual(sorted(halves['runs']), sorted(whole['runs']))
+        self.assertEqual(halves['gates'], whole['gates'])
+        self.assertEqual(halves['skipped'], whole['skipped'])
+        self.assertEqual(sorted(c for shard in halves['shards'].values() for c in shard['checks']),
+                         sorted(PROFILE_CHECKS['ci-full'] + ('bindings:a', 'bindings:b')) and
+                         sorted([c for c in PROFILE_CHECKS['ci-full'] if c != 'bindings'] + ['bindings:a', 'bindings:b']))
+        for suite in ('rust', 'node', 'python', 'java', 'dotnet', 'go'):
+            self.assertTrue((output / f'{suite}.log').is_file(), suite)
+        require_complete_validation(halves, 'halves', profiles={'ci-full'}, cache_allowed=True)
+
+    def test_a_missing_binding_half_fails_the_evidence(self):
+        _, halves = self.merged('arm64-halves')
+        halves['shards'] = {name: {**shard, 'checks': [c for c in shard['checks'] if c != 'bindings:b']} for name, shard in halves['shards'].items()}
+        with self.assertRaisesRegex(Mismatch, 'do not account for the checks'):
+            require_complete_validation(halves, 'halves', profiles={'ci-full'}, cache_allowed=True)
+
     def test_file_lists(self):
         dropped, added = set(FILES['dropped']), set(FILES['added'])
         for name, platform in (('x64', 'linux-x64'), ('arm64', 'linux-arm64')):
@@ -234,7 +261,14 @@ class Merge(unittest.TestCase):
             self.edit(shard / 'report.json', lambda r: (r['runs'].pop('abi-layouts'), r['skipped'].update({'policy:abi-layouts': 'not selected'})))
             return item['shards']
 
+        def as_checks(check, *checks):
+            return change(check, 'report.json', lambda r: r.update(checks=list(checks)))
+
         cases = [
+            ('missing binding half b', 'arm64-halves', None, drop('bindings:b'), 'only one binding half'),
+            ('missing binding half a', 'arm64-halves', None, lambda item: [s for s in item['shards'] if 'bindings-a' not in s.name], 'only one binding half'),
+            ('half twice', 'arm64-halves', None, as_checks('bindings:b', 'bindings:a'), 'bindings:a ran in both'),
+            ('whole and half', 'arm64-halves', None, as_checks('bindings:b', 'bindings'), 'both whole and in halves'),
             ('missing shard', 'x64', None, drop('bindings'), 'not the ci-full checks'),
             ('failed shard', 'x64', None, change('references', 'report.json', lambda r: r.update(selected_checks='failed', error='x')),
              'selected checks failed'),

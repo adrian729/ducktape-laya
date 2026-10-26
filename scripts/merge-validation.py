@@ -7,7 +7,8 @@ BUILD_DIR is the build directory restored from the build job's tarball (its buil
 report and logs); each SHARD_DIR is a `validate.py --phase test --from BUILD_DIR --checks ...` output, with
 cross-host/ in the one shard that writes that side output. The merge refuses (exit 1, no output) unless every
 shard passed, all of them and the build agree on the source, fixtures, library, addon, CMake cache, platform and
-registered tests, their checks are disjoint and together exactly PROFILE_CHECKS[profile] (scripts/release_targets.py),
+registered tests, their checks are disjoint and together exactly PROFILE_CHECKS[profile] (scripts/release_targets.py;
+bindings:a and bindings:b, both required, together cover bindings),
 every run label of every check ran with exit 0 (or is its listed platform skip) and no shard ran a label its checks do
 not own, the C results of the two parity halves are byte-identical, and cross-host/ comes from exactly one shard for a
 linux-x64 ci-full merge (none otherwise) with the build's library in its bundle.
@@ -29,8 +30,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from release_targets import (ADDITIONAL_MODEL_RUNS, PLATFORM_SKIPS, POLICY_LABELS, PROFILE_CHECKS, SHARD_EXTRA_RUNS,  # noqa: E402
-                             SHARD_RUNS, TOOLING_REASON)
+from release_targets import (ADDITIONAL_MODEL_RUNS, BINDING_HALVES, PLATFORM_SKIPS, POLICY_LABELS, PROFILE_CHECKS, SHARD_EXTRA_RUNS,  # noqa: E402
+                             SHARD_RUNS, TOOLING_REASON, fold_binding_halves)
 
 # tests/parity.py's consumer order: outputs.json keys follow it.
 CONSUMERS = ('C', 'C++', 'Rust', 'Node', 'Python', 'Java', '.NET', 'Go')
@@ -139,7 +140,12 @@ def merge(profile, build, shard_dirs, output):
         for check in report['checks']:
             need(check not in owner, f'{check} ran in both {owner.get(check)} and {name}')
             owner[check] = name
-    need(sorted(owner) == sorted(PROFILE_CHECKS[profile]), f'the shards ran {sorted(owner)}, not the {profile} checks {sorted(PROFILE_CHECKS[profile])}')
+    # The binding suites run whole (`bindings`) or in two halves, both required: together they cover `bindings`.
+    need(not ('bindings' in owner and set(BINDING_HALVES) & set(owner)), 'bindings ran both whole and in halves')
+    need(len(set(BINDING_HALVES) & set(owner)) != 1,
+         f'only one binding half ran ({", ".join(sorted(set(BINDING_HALVES) & set(owner)))}): bindings:a and bindings:b are both required')
+    covered = fold_binding_halves(owner)
+    need(sorted(covered) == sorted(PROFILE_CHECKS[profile]), f'the shards ran {sorted(owner)}, not the {profile} checks {sorted(PROFILE_CHECKS[profile])}')
     platform = built.get('platform')
     # The runs: every label of every check with exit 0 (or its platform skip), each label owned by its shard's checks.
     runs = {label: built['runs'][label] for label in ('configure', 'build')}
@@ -186,7 +192,10 @@ def merge(profile, build, shard_dirs, output):
         report = shards[owner[check]][1]
         for field in fields:
             merged[field] = copy.deepcopy(report.get(field))
-    suites = shards[owner['bindings']][1]
+    binding_checks = [c for c in ('bindings', *BINDING_HALVES) if c in owner]
+    selected = {name for c in binding_checks for name in shards[owner[c]][1]['selection']['bindings']}
+    need(selected == set(BINDING_SUITES), f'the binding shards selected {sorted(selected)}, not {sorted(BINDING_SUITES)}')
+    binding_selection = [name for name in BINDING_SUITES if name in selected]
     passed = all(runs.get(label, {}).get('exit_code') == 0 for label in ('bindings-a', 'bindings-b', *BINDING_SUITES))
     merged['gates']['binding_conformance'] = {'status': 'passed' if passed else 'failed', 'run': ['bindings-a', 'bindings-b']}
     merged['runs'] = runs
@@ -210,7 +219,7 @@ def merge(profile, build, shard_dirs, output):
     merged['host'] = {**(built.get('host') or {}), 'github_actions': all(host.get('github_actions') is True for host in hosts)}
     ctest = shards[owner['ctest']][1]
     merged['selection'] = {**built['selection'], 'profile': profile, 'checks': list(PROFILE_CHECKS[profile]),
-                           'bindings': suites['selection']['bindings'], 'native_tests': True,
+                           'bindings': binding_selection, 'native_tests': True,
                            'policy': 'platform' if 'policy-platform' in owner else 'none', 'packages': 'packages' in owner,
                            'parity_profile': 'full', 'test_jobs': ctest['selection']['test_jobs']}
     merged.update(phase='merged', checks=list(PROFILE_CHECKS[profile]), selected_checks='passed')

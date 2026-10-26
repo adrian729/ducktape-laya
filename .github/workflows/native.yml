@@ -1176,6 +1176,9 @@ jobs:
           path: build-model/laya.gguf
           key: laya-model-${{ steps.model-key.outputs.sha256 }}
           enableCrossOsArchive: true
+      # The probe-only targets (llama.cpp's server and common code, 114 objects) use the job's own cache: `auto` found
+      # a ccache on the Windows runner that no step restores or saves, so run 40251619567 compiled them cold
+      # (415 s of 489 s compile time, 124 s of wall) while all 104 sccache requests hit.
       - &build-phase
         name: Build phase
         run: |
@@ -1184,7 +1187,8 @@ jobs:
           [ "$DTL_MODE" = candidate ] && full=(--full)
           if [ -n "${DTL_WINDOWS_ARGS:-}" ]; then mapfile -t windows < "$DTL_WINDOWS_ARGS"; fi
           "$PY" scripts/validate.py "${full[@]}" --phase build --model build-model/laya.gguf --upstream-reference \
-            --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER" "${windows[@]}"
+            --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER" --reference-probe-launcher "$DTL_LAUNCHER" \
+            "${windows[@]}"
       - &build-tarball
         name: Build tarball
         run: |

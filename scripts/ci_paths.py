@@ -244,10 +244,12 @@ SHARDS = {
                         'jobs': {'native-linux-arm64': ['ctest', 'references'], 'parity-linux-arm64': ['parity:full-a', 'parity:full-b'],
                                  'packages-linux-arm64': ['packages'], 'bindings-linux-arm64': ['bindings', 'policy-platform']},
                         'side_outputs': {}},
+        # Six real-model suites in one shard took 294 s (budget 270 s, run 40251619567): two halves, as the real-model mode's.
         'windows-x64': {'profile': 'ci-full',
                         'jobs': {'ctest-windows-x64': ['ctest'], 'references-windows-x64': ['references'],
                                  'parity-a-windows-x64': ['parity:full-a'], 'parity-b-windows-x64': ['parity:full-b'],
-                                 'packages-windows-x64': ['packages'], 'bindings-windows-x64': ['bindings', 'policy-platform']},
+                                 'packages-windows-x64': ['packages'], 'bindings-a-windows-x64': ['bindings:a', 'policy-platform'],
+                                 'bindings-b-windows-x64': ['bindings:b']},
                         'side_outputs': {}},
     },
 }
@@ -309,7 +311,7 @@ for _mode, _profile in (('real_model', 'real_model'), ('candidate', 'candidate')
         for _name, _checks in _shards['jobs'].items():
             if _name in PACKAGES:
                 continue  # added above with its two profiles
-            if _checks == ['bindings']:
+            if _checks in (['bindings'], ['bindings:a'], ['bindings:b']):
                 _categories = [f'binding_{lang}' for lang in LANGUAGES]  # the real-model binding suites, when a binding is stale
             elif len(_checks) == 1 and _checks[0].startswith('bindings:'):
                 _categories = [c for c in VALIDATE_CHECKS[_checks[0]] if c.startswith('binding_')]  # its half's suites

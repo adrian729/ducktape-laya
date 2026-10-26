@@ -19,7 +19,7 @@ and that the check lists of the scripts agree with each other:
   `!cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), '<name>')`
   (a matrix job: its matrix output `!= '[]'`);
 - the `jobs` check lists of each candidate platform in SHARDS are disjoint and together equal
-  release_targets.PROFILE_CHECKS[profile]; side_outputs is {'native-linux-x64': ['cross-host']}
+  release_targets.PROFILE_CHECKS[profile] (bindings:a and bindings:b together stand for bindings); side_outputs is {'native-linux-x64': ['cross-host']}
   for linux-x64 and empty everywhere else;
 - set(validate.FULL_CHECKS) <= set(ci_paths.VALIDATE_CHECKS);
 - validate.FULL_POLICY_CHECKS and release_targets.POLICY_LABELS name exactly the check-policy.py labels;
@@ -359,6 +359,9 @@ def check_shards(shards, profile_checks, problems):
             duplicates = sorted({check for check in checks if checks.count(check) > 1})
             if duplicates:
                 problems.append(f'SHARDS[candidate][{platform}]: checks in more than one job: {duplicates}')
+            # bindings:a + bindings:b (both, in different jobs or one) cover `bindings`; a lone half covers nothing.
+            if {'bindings:a', 'bindings:b'} <= set(checks):
+                checks = [check for check in checks if check not in ('bindings:a', 'bindings:b')] + ['bindings']
             if set(checks) != set(profile_checks[profile]):
                 problems.append(f'SHARDS[candidate][{platform}] checks {sorted(set(checks))} are not PROFILE_CHECKS[{profile!r}] '
                                 f'{sorted(profile_checks[profile])}')

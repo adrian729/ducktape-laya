@@ -192,6 +192,9 @@ class Categories(Base):
         for platform, shards in candidate.items():
             checks = [c for job in shards['jobs'].values() for c in job]
             self.assertEqual(len(checks), len(set(checks)), platform)
+            # The binding suites in one shard, or bindings:a and bindings:b (both) covering them.
+            if {'bindings:a', 'bindings:b'} <= set(checks):
+                checks = [c for c in checks if not c.startswith('bindings:')] + ['bindings']
             self.assertEqual(set(checks), full if shards['profile'] == 'ci-full' else compiler, platform)
             self.assertEqual(shards['side_outputs'], {'native-linux-x64': ['cross-host']} if platform == 'linux-x64' else {}, platform)
         self.assertEqual(candidate['linux-x64-clang']['profile'], 'ci-compiler')

@@ -79,7 +79,7 @@ def require_complete_validation(report, name, *, profiles, cache_allowed):
              f'{name}: merged checks {sorted(checks)} are not the {profile} checks {sorted(PROFILE_CHECKS[profile])}')
         required_runs = {label for check in PROFILE_CHECKS[profile] for label in SHARD_RUNS[check]}
         shards = report.get('shards')
-        need(isinstance(shards, dict) and shards and sorted(c for shard in shards.values() for c in shard.get('checks', [])) == sorted(checks),
+        need(isinstance(shards, dict) and shards and sorted(fold_binding_halves(c for shard in shards.values() for c in shard.get('checks', []))) == sorted(checks),
              f'{name}: the merged shards do not account for the checks')
     failed = sorted(label for label in required_runs if not ran(label) and not platform_skip(label))
     need(not failed, f'{name}: required checks did not run or pass: ' +
@@ -172,6 +172,18 @@ PROFILE_CHECKS = {
     'ci-full': ('ctest', 'references', 'parity:full-a', 'parity:full-b', 'bindings', 'packages', 'policy-platform'),
     'ci-compiler': ('ctest', 'references', 'parity:full-a', 'parity:full-b', 'bindings'),
 }
+# A shard may run the binding suites in two halves (bindings:a + bindings:b); together they cover `bindings`, alone neither does.
+BINDING_HALVES = ('bindings:a', 'bindings:b')
+
+
+def fold_binding_halves(checks):
+    """The checks with both binding halves replaced by `bindings`; a lone half stays (and so matches no profile)."""
+    checks = list(checks)
+    if all(half in checks for half in BINDING_HALVES):
+        checks = [c for c in checks if c not in BINDING_HALVES] + ['bindings']
+    return checks
+
+
 # The four policy checks every platform's evidence runs itself (the rest run in the tooling job of the same CI run).
 PLATFORM_POLICY = ('packaging-identities', 'browser-backend-identities', 'abi-layouts', 'typescript-consumers')
 # The validate.py run labels each shard check runs (and owns: the merge copies their gates from that shard).
