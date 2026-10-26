@@ -18,10 +18,12 @@ Run `python3 scripts/check-release.py` to verify the release record, runtime che
 ```sh
 git -C third_party/llama.cpp fetch origin COMMIT
 python3 scripts/check-upgrade.py --runtime COMMIT --model /path/to/pinned.gguf \
-  --output build-upgrade-COMMIT --jobs 2
+  --output build-upgrade-COMMIT --compiler-launcher ccache
 ```
 
-Tracked source changes must be committed first. The tool archives that exact source revision and each runtime into a new output directory. It verifies model bytes, builds both configurations, runs native/Rust/Node real-model suites and shared conformance, checks exports, and compares ordered results at the predeclared tolerance in `release/compatibility.json`. Commands, logs, build identities, relevant upstream diffs and a JSON report stay in that directory. Existing output directories are rejected; the approved checkout is untouched.
+Tracked source changes must be committed first. The tool archives that exact source revision and each runtime into a new output directory. It verifies model bytes, builds both configurations, runs native/Rust/Node real-model suites and shared conformance, checks exports, and compares ordered results at the predeclared tolerance in `release/compatibility.json`. Commands, logs, build identities, relevant upstream diffs and a JSON report stay in that directory. Existing output directories are rejected; the approved checkout is untouched. Builds use Ninja and, by default, as many jobs as the CPUs and memory allow (`--jobs`). Pairs with the same runtime revision share one build: a later pair reconfigures the first pair's build directory, which recompiles nothing, and is recorded as `reused_build`. `--compiler-launcher ccache` compiles through ccache: the rehearsal builds are never shipped (the default is none).
+
+For a release, the runtime-upgrade rehearsal runs in CI: the `qualify-upgrade` job of a `native.yml` dispatch with `mode=qualify` (`-f runtime=COMMIT`, default the pinned runtime) runs this command on a GitHub runner and keeps its report as the `upgrade` artifact ([RELEASE_CHECKS.md](RELEASE_CHECKS.md#long-and-instrumented-gates)). The model-upgrade rehearsal (`--candidate-model`) runs on the release host through `scripts/qualify-host.py`, because the typed-decisions model exists only there.
 
 Use `--runtime` equal to the approved pin to replay a baseline. For a model candidate, additionally supply `--candidate-model` and `--candidate-manifest`. When both model and runtime change, the tool also runs each independent axis. Changed model answers require upstream/reference evaluation; a previous model's answers are not universal goldens. No expected outputs are overwritten.
 

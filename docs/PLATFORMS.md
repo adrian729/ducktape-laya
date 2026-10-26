@@ -6,8 +6,8 @@ Which operating systems, CPUs and language runtimes ducktape-laya supports, how 
 
 A platform is supported when it is a release target in [`release/compatibility.json`](../release/compatibility.json). Each target has a tier that says how much testing backs it:
 
-- **Tier 1** passes every release check: all three models against the original Laya and upstream llama.cpp, every binding and installed package, sanitizers, fuzzing, a one-hour stress run and an eight-hour soak, performance budgets, older and newer Linux userspaces, the browser, and an upgrade-and-rollback rehearsal.
-- **Tier 2** is tested on GitHub's CI runners for every release: the native tests, every binding and the installed packages (Electron included) with the English model, agreement with upstream llama.cpp and the original Laya, reproducible builds, a 10-minute stress run, and the difference from tier-1 results. It has no soak, performance budgets, sanitizers or userspace matrix, and the multilingual and typed-decisions models are not tested on it.
+- **Tier 1** passes every release check: all three models against the original Laya and upstream llama.cpp, every binding and installed package, sanitizers, fuzzing, a three-hour soak (at least 1,000 rounds) that also serves as the one-hour stress run, performance budgets, older and newer Linux userspaces, the browser, and an upgrade-and-rollback rehearsal.
+- **Tier 2** is tested on GitHub's CI runners for every release: the native tests, every binding and the installed packages (Electron included) with the English model, agreement with upstream llama.cpp and the original Laya, reproducible builds, a 5-minute stress run (at least 40 rounds), and the difference from tier-1 results. It has no soak, performance budgets, sanitizers or userspace matrix, and the multilingual and typed-decisions models are not tested on it.
 
 The exact check list per tier is in [QUALIFICATION.md](QUALIFICATION.md#release-targets-and-tiers).
 

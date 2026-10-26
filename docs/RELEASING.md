@@ -42,23 +42,59 @@ The npm package, the jar and the NuGet package are one file each and carry every
 
   Then look for the remaining mentions of the previous version and of the release being prepared, and update those that describe the current release: `git grep -nE '0\.2(\.0)?\b' -- '*.md' ':!CHANGELOG.md'` and `git grep -niE 'next release|next version|unreleased' -- '*.md' ':!CHANGELOG.md'` when releasing 0.3.0. These include the README's "Unreleased on main" bullet (remove it), the Linux arm64 and Windows x64 "from the next release" wording in the README, the package READMEs, [BUILDING.md](BUILDING.md), [PLATFORMS.md](PLATFORMS.md) and [COMPATIBILITY.md](COMPATIBILITY.md), the Chrome version that "the next release's" browser checks run on ([BROWSER.md](BROWSER.md), [PLATFORMS.md](PLATFORMS.md), [ARCHITECTURE.md](ARCHITECTURE.md), the browser package README), and the estimates in [ROADMAP.md](ROADMAP.md).
   - Re-read every measured number that names a candidate from the final candidate's evidence: the tier-2 drift (`build-candidate/drift-*.json`; in the changelog, [PLATFORMS.md](PLATFORMS.md#numerical-results-across-platforms), [QUALIFICATION.md](QUALIFICATION.md#release-targets-and-tiers)), the Windows known deviation ([COMPATIBILITY.md](COMPATIBILITY.md#known-deviations)) and the package sizes ([PERFORMANCE.md](PERFORMANCE.md#package-sizes), measured on the assembled packages).
-- Run the model-free checks (`python3 scripts/validate.py --packages --output build-check-model-free`, which includes `tests/docs-links.py`).
+- Run the model-free checks: `python3 scripts/validate.py --policy all --packages --output build-check-model-free` (the generic native checks, the packages and every policy check, `tests/docs-links.py` and `tests/release-notes.py` included). Before the candidate, the tree should also have passed `python3 scripts/verify.py --ci --all` ([AGENTS.md](../AGENTS.md#development-workflow)).
 - Land these edits before the long gates start: editing `release/compatibility.json` is a library input change and invalidates reuse of hours-long evidence.
 
 Only `scripts/package-native.py` builds publishable packages. A wheel built from `bindings/python/pyproject.toml` alone (`pip wheel`, `python -m build`) or a plain `dotnet pack` without `-p:DucktapeLayaNativeLibrary=...` has no native library; never upload those.
 
 ## 2. Qualify the candidate
 
-Qualify until `scripts/check-candidate.py` reports every gate of every release target passed. The release host builds only Linux x86-64; the packages of every target, and the Linux arm64 and Windows x64 (tier 2) evidence, come from one CI candidate run on the exact candidate commit.
+Qualify until `scripts/check-candidate.py` reports every gate of every release target passed. The release host builds only Linux x86-64. Two CI dispatches on the exact candidate commit produce the rest: the candidate run (the packages of every target and the Linux arm64 and Windows x64 tier-2 evidence) and the qualify run (sanitizers, the one-hour fuzz and the runtime-upgrade rehearsal). `scripts/qualify-host.py` runs this host's gates. `COMMIT` is the candidate's full SHA, `BRANCH` a branch whose head it is, `MODEL`, `ML` and `TD` the three model files ([AGENTS.md](../AGENTS.md#this-release-host) gives their paths on the release host).
 
-1. Push the candidate: `main`'s head, or a `candidate/vX.Y.Z` branch at it (`gh workflow run` cannot target a SHA). Run `gh workflow run native.yml --ref BRANCH -f candidate=true`, wait with `gh run watch`, and rerun only failed jobs (`gh run rerun RUN --failed`), and only when the failure is environmental. Its artifacts are kept for 30 days.
-2. Download and record it: `python3 -I scripts/fetch-ci-evidence.py --candidate COMMIT --output build-candidate/ci --merge build-candidate/evidence.json` ([details](RELEASE_CHECKS.md#release-targets-and-the-ci-candidate-run)).
-3. Run the tier-1 gates on the release host ([the candidate check](RELEASE_CHECKS.md#the-candidate-check) lists every evidence name and its command). The long ones (soak, stress, sanitizers, fuzz, browser) can run while CI runs; run performance on an otherwise idle machine. The tier-1 gates need the primary model and both additional models (`--extra-model`).
-4. As soon as both exist, compare `library_sha256` and `addon_sha256` in `build-candidate/native/report.json` (this host's `validate.py`) and `build-candidate/ci/evidence-linux-x64/report.json`. They must be equal: the shipped Linux x86-64 packages are CI's, bound to the local qualification by their bytes.
-5. Run the package checks on the CI-assembled packages `build-candidate/ci/packages-assembled` (`installed_release`, `electron`, `userspaces`, `rollback`) and measure each tier-2 target's drift with `tests/compare-profiles.py` ([commands](RELEASE_CHECKS.md#release-targets-and-the-ci-candidate-run)). For the rollback rehearsal, make the last-known-good packages from the previous release: `gh release download vPREVIOUS -D build-candidate/lkg-assets` and `python3 scripts/release-assets.py retain build-candidate/lkg-assets --output build-candidate/lkg-packages`.
-6. Write the security review ([format](RELEASE_CHECKS.md#security-review)), add every report to `build-candidate/evidence.json` and run `python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COMMIT --report build-candidate/gates.json` until it is `release_ready`. Run it from a checkout of the candidate commit itself (`git checkout COMMIT`, clean): `gates.json` records `checker_commit`, and a checker at any other commit (older or newer) makes the report not `release_ready`, and `scripts/release-gates.jq` refuses it. It reads the versioned documentation from the candidate's tree, not the checkout's. A gate also fails when a required test was skipped (a registered test that reports itself skipped, or a `SKIPPED:` line inside a passing one, recorded as `<test> (partly)`, such as the non-ASCII path check of `tests/native.cpp`), for every release target; rerun on a host where every check runs.
+1. **Candidate run.** Push the candidate: `main`'s head, or a `candidate/vX.Y.Z` branch at it (`gh workflow run` cannot target a SHA). Dispatch it and find its run:
 
-Rerun steps that failed for environmental reasons (machine load, a missing test dependency) and record why. Never loosen a check, budget or timeout to make a gate pass.
+   ```sh
+   gh workflow run native.yml --ref BRANCH -f mode=candidate
+   gh run list --workflow native.yml --branch BRANCH --event workflow_dispatch --limit 1   # RUN
+   gh run view RUN --json jobs --jq '.jobs[] | select(.name | startswith("build-")) | "\(.name) \(.status) \(.conclusion)"'
+   ```
+
+   It takes about 10 to 15 minutes ([what it runs](RELEASE_CHECKS.md#release-targets-and-the-ci-candidate-run)). Rerun only failed jobs (`gh run rerun RUN --failed`), and only when the failure is environmental (an `evidence-<P>` job that reports "image changed: rerun" is: rerun the failed jobs). Its evidence artifacts are kept for 30 days, its build tarballs 7.
+2. **Qualify run.** Once the candidate's four `build-*` jobs have finished, dispatch the qualify run, so the candidate's shards get the runners first (GitHub runs at most 20 jobs at once):
+
+   ```sh
+   gh workflow run native.yml --ref BRANCH -f mode=qualify
+   ```
+
+   It takes about 70 minutes beside the host's work ([what it runs](RELEASE_CHECKS.md#long-and-instrumented-gates)). `-f runtime=COMMIT` rehearses another runtime revision; the default is the pinned one.
+3. **Prepare the host.** A clean checkout of the candidate (`git switch --detach COMMIT`, `git submodule update --init`), no `build-candidate/` directory, nothing else running. Install the test tools once per checkout (`npm ci --ignore-scripts --prefix tests/typescript`, `npm ci --ignore-scripts --prefix tests/browser-automation`), the pinned Emscripten SDK ([building](BUILDING.md#build-the-browser-package)), the Ubuntu root filesystems (`python3 tests/download-userspaces.py --output build-platforms`), and the last-known-good packages of the previous release: `gh release download vPREVIOUS -D build-candidate-lkg/assets` and `python3 scripts/release-assets.py retain build-candidate-lkg/assets --output build-candidate-lkg/packages`.
+4. **Download the candidate run** once it has succeeded: `python3 -I scripts/fetch-ci-evidence.py --candidate COMMIT --output build-candidate/ci --merge build-candidate/evidence.json` ([details](RELEASE_CHECKS.md#release-targets-and-the-ci-candidate-run)).
+5. **Run the host gates**, with the primary model and both additional models:
+
+   ```sh
+   python3 scripts/qualify-host.py --candidate COMMIT --dry-run --emsdk EMSDK --lkg-packages build-candidate-lkg/packages
+   python3 scripts/qualify-host.py --candidate COMMIT --emsdk EMSDK --lkg-packages build-candidate-lkg/packages
+   ```
+
+   It refuses to start without a clean checkout at the candidate, the models, the downloaded CI run, the root filesystems or with existing outputs. It runs, in order: the gcc evidence build and `validate.py --full` alone (about 30 minutes); performance on the idle machine (about 25 minutes); then the three-hour soak (at least 1,000 rounds) pinned to its own physical cores, and on the other cores reproducibility, `model_upgrade`, the browser builds and both browser pages, `installed_release`, `userspaces`, `rollback` and the cross-CPU comparison. On this host the soak's rounds floor binds, so the whole run takes about 4.5 to 5 hours. It writes their keys into `build-candidate/evidence.json` (`native`, `native_matrix`, `performance`, `performance_<model id>`, `soak`, `stress`, `reproducibility`, `model_upgrade`, `browser_package`, `browser`, `browser_isolated`, `installed_release`, `userspaces`, `rollback`, `cross_cpu`) and exits non-zero if any step failed; rerun a failed environmental step by hand with the command `--dry-run` printed. `--reuse EVIDENCE` lets hours-long reports of an earlier candidate stand where the reuse rules allow.
+6. **Compare the bytes** as soon as step 1 of `qualify-host.py` (`build-candidate/native/report.json`) and the CI evidence exist: `library_sha256` and `addon_sha256` in `build-candidate/native/report.json` and `build-candidate/ci/evidence-linux-x64/report.json` must be equal. The shipped Linux x86-64 packages are CI's, bound to the local qualification by their bytes. If they differ, dispatch the candidate run once more with `-f cache=off` (no compiler cache in any build): if its bytes match, the cache was at fault; record it, download that run instead (a new `--output`) and rerun `installed_release`, `userspaces`, `rollback` and the cross-CPU comparison on its packages ([commands](RELEASE_CHECKS.md#release-targets-and-the-ci-candidate-run)). If they still differ, stop ([stop rules](#stop-rules)).
+7. **Download the qualify run** once it and `qualify-host.py` have finished. Every CI file must lie in the one downloaded directory that `ci-run.json` lists, so download the candidate run again together with the qualify run, at the same path (the artifacts are the same bytes, so the host's references into it stay valid):
+
+   ```sh
+   mv build-candidate/ci build-candidate/ci-first
+   python3 -I scripts/fetch-ci-evidence.py --candidate COMMIT --qualify --output build-candidate/ci --merge build-candidate/evidence.json --replace
+   ```
+
+   It adds `sanitizers`, `fuzz` and `upgrade`, recorded under `qualify_run` in `ci-run.json`.
+8. **Drift.** Measure each tier-2 target's drift and add `linux-arm64:drift` and `windows-x64:drift` to `build-candidate/evidence.json`:
+
+   ```sh
+   python3 tests/compare-profiles.py build-candidate/native/outputs.json build-candidate/ci/evidence-linux-arm64/outputs.json --target-platform linux-arm64 --report build-candidate/drift-linux-arm64.json
+   python3 tests/compare-profiles.py build-candidate/native/outputs.json build-candidate/ci/evidence-windows-x64/outputs.json --target-platform windows-x64 --report build-candidate/drift-windows-x64.json
+   ```
+9. **Check.** Write the security review ([format](RELEASE_CHECKS.md#security-review)), add it to `build-candidate/evidence.json` as `security_review`, and run `python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COMMIT --report build-candidate/gates.json` until it is `release_ready`. Run it from the clean checkout of the candidate commit itself: `gates.json` records `checker_commit`, and a checker at any other commit (older or newer) makes the report not `release_ready`, and `scripts/release-gates.jq` refuses it. It reads the versioned documentation from the candidate's tree, not the checkout's. A gate also fails when a required test was skipped (a registered test that reports itself skipped, or a `SKIPPED:` line inside a passing one, recorded as `<test> (partly)`, such as the non-ASCII path check of `tests/native.cpp`), for every release target; rerun on a host where every check runs.
+
+Rerun steps that failed for environmental reasons (machine load, a missing test dependency, a runner image change) and record why. Never loosen a check, budget or timeout to make a gate pass.
 
 ## 3. Assemble, tag and publish
 
@@ -91,14 +127,14 @@ Rerun steps that failed for environmental reasons (machine load, a missing test 
 
 1. Download every package from its registry into a clean directory and check its bytes against `SHA256SUMS` and its attestation (`scripts/verify-release-assets.sh TAG OUTPUT_DIR ASSET...` downloads and checks the release copies). crates.io's checksum of each crate must be the released `.crate`'s sha256 (`cargo publish` repackages the crates, byte-identical to the released files after the `reproduce` check); nuget.org adds a repository signature, so compare the NuGet package entry by entry, apart from `.signature.p7s` (`scripts/registry-state.py` does all of these). PyPI must serve every target's wheel. Run a real-model consumer from the registry packages. The release host can do this for Linux x86-64 only; registry installs on the tier-2 targets are not checked yet ([roadmap](ROADMAP.md)).
 2. Report what was published, with the CI run, the `gates.json` hash, the attestation run and each registry's version.
-3. The published assets become the next release's last-known-good packages for the rollback rehearsal (step 2.5 above).
+3. The published assets become the next release's last-known-good packages for the rollback rehearsal (step 2.3 above).
 
 ## Stop rules
 
 Stop and report instead of publishing when:
 
 - a gate fails for a reason that is not clearly environmental;
-- the CI Linux x86-64 library or Node addon differs from the release host's (not environmental: a toolchain or Node header difference on one side, or a build through a compiler cache whose `base_dir` made the source paths relative; the release scripts build without a cache and refuse binaries with unmapped source paths);
+- the CI Linux x86-64 library or Node addon differs from the release host's even after one uncached redispatch of the candidate run (`-f cache=off`, step 2.6); a match in the uncached run identifies a compiler-cache fault, which is recorded and does not stop the release. A remaining difference is not environmental: a toolchain or Node header difference on one side (the scripts run ccache without `base_dir` and refuse binaries with unmapped source paths);
 - the candidate run is not on the candidate commit, or its artifacts have expired (that needs a new candidate run);
 - anything would need a decision the maintainer has not made.
 
