@@ -395,6 +395,9 @@ JOB_BUDGETS = {
     # 90 s could not be met: 55 s of setup and the configure and build (89 compiler-cache hits, 34 s) come before a 2 s suite.
     # Warm runs 70, 96, 96, 101 and 115 s (p90 115); the 159 s and 187 s runs recompiled changed sources and are cold-cache runs.
     'binding-python-windows-x64': 115,
+    # The node job is the only Windows binding job that sets up Node and fetches its SDK, like its siblings' 75 s of setup, then a 45 s
+    # suite: 90 s (the blanket value) held once; runs 40257329206 and 40259163744 took 100 s and 104 s. 110 until ten runs exist.
+    'binding-node-windows-x64': 110,
     **{f'binding-{lang}-macos-arm64': 120 for lang in LANGUAGES},
     **{f'packages-{p}': 120 for p in PACKAGE_PLATFORMS}, 'assemble': 60,
     # 150 was the one warm run 40218330855 (128 s). The budget was raised to 180 from the p90 of the ten runs before the packages ran
