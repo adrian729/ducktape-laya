@@ -12,7 +12,7 @@ and that the check lists of the scripts agree with each other:
   its name template matches, and for the shard jobs (`name: ${{ matrix.job }}`, env
   DTL_PLATFORM) the jobs of SHARDS[mode][platform] (packages-<platform> is a workflow job of
   its own);
-- every such job name has a ci_paths.JOB_BUDGETS entry (p90 seconds with a measured basis);
+- every such job name has a ci_budgets.JOB_BUDGETS entry (p90 seconds with a measured basis);
 - the `needs:` edges of each workflow job, its needed job ids mapped to the names they serve
   in the same profile, equal JOBS[name]['needs'][profile] (`changes`, which every job needs
   for its `if:`, is compared separately);
@@ -298,7 +298,7 @@ def check_workflow(root, workflow, jobs_table, shards, budgets, problems):
     for job_id, names in serving.items():
         for name, profiles in names.items():
             if name not in budgets:
-                problems.append(f'{workflow}: job {name} (job id {job_id}) has no ci_paths.JOB_BUDGETS entry')
+                problems.append(f'{workflow}: job {name} (job id {job_id}) has no ci_budgets.JOB_BUDGETS entry')
             for profile in profiles:
                 coverage.setdefault((name, profile), []).append(job_id)
     for name, entry in jobs_table.items():
@@ -518,11 +518,13 @@ def main(argv=None):
     sys.path.insert(0, str(root / 'scripts'))
     problems = []
     ci_paths = load_module(root / 'scripts/ci_paths.py', 'ci_paths')
+    ci_budgets = load_module(root / 'scripts/ci_budgets.py', 'ci_budgets')
     release_targets = load_module(root / 'scripts/release_targets.py', 'release_targets')
     validate = load_module(root / 'scripts/validate.py', 'validate_under_test')
     jobs_table, shards = ci_paths.JOBS, ci_paths.SHARDS
+    problems += ci_budgets.self_check()
 
-    count = sum(check_workflow(root, workflow, jobs_table, shards, ci_paths.JOB_BUDGETS, problems) for workflow in WORKFLOWS)
+    count = sum(check_workflow(root, workflow, jobs_table, shards, ci_budgets.JOB_BUDGETS, problems) for workflow in WORKFLOWS)
     cache_keys = check_caches(root, {workflow: read_jobs(root / '.github/workflows' / workflow, problems) for workflow in WORKFLOWS}, problems)
     workflows = {entry.get('workflow') for entry in jobs_table.values()}
     if not workflows <= set(WORKFLOWS):

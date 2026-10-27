@@ -334,6 +334,14 @@ class Output(unittest.TestCase):
             {'name': 'sanitizers', 'conclusion': 'skipped', 'startedAt': None, 'completedAt': None}]}
         self.assertEqual(verify.ci_results(view), [('changes', 'success', 20.0), ('generic-windows-x64', 'failure', 120.0)])
 
+    def test_run_wall_ends_at_the_last_job(self):
+        view = {'createdAt': '2026-10-25T05:00:00Z', 'updatedAt': '2026-10-25T05:20:00Z', 'jobs': [
+            {'name': 'changes', 'completedAt': '2026-10-25T05:00:20Z'},
+            {'name': 'generic-windows-x64', 'completedAt': '2026-10-25T05:07:00Z'},
+            {'name': 'sanitizers', 'completedAt': None}]}
+        self.assertEqual(verify.seconds_between(view['createdAt'], verify.run_end(view)), 420.0)
+        self.assertEqual(verify.run_end({'updatedAt': '2026-10-25T05:20:00Z', 'jobs': []}), '2026-10-25T05:20:00Z')
+
 
 if __name__ == '__main__':
     unittest.main()

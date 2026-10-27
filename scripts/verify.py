@@ -12,7 +12,7 @@ are stale with scripts/ci_paths.py:
   verify-state.json` (per job, the last commit it verified on this checkout; per linked worktree).
 
 The local jobs run one after another while CI runs; then it waits for CI and prints the verdict,
-each job's duration against its p90 budget (ci_paths.JOB_BUDGETS, BUDGETS) and exits 0 only when
+each job's duration against its p90 budget (scripts/ci_budgets.py) and exits 0 only when
 everything selected passed. Windows, arm64 and macOS run only in CI.
 
   --local / --ci       restrict to one side (--ci refuses a dirty tree or a HEAD not pushed to its branch)
@@ -37,6 +37,7 @@ import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import ci_budgets  # noqa: E402
 import ci_paths  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('ci_changes', HERE / 'ci-changes.py')
@@ -309,6 +310,13 @@ def wait_run(run_id):
         time.sleep(POLL_SECONDS)
 
 
+def run_end(view):
+    """When the run's last job completed. Not updatedAt: GitHub updates a finished run later (run 40520083654: its last
+    job completed at 7 minutes, updatedAt at 21), which made the wall time three times the work."""
+    ends = [job['completedAt'] for job in view.get('jobs', []) if job.get('completedAt')]
+    return max(ends) if ends else view.get('updatedAt')
+
+
 def seconds_between(start, end):
     try:
         parse = lambda value: datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))  # noqa: E731
@@ -334,12 +342,12 @@ def timing_table(rows, walls):
     """rows: [(job, where, outcome, seconds)]; walls: [(label, seconds, budget key)]."""
     lines = [f'{"job":38} {"where":6} {"result":9} {"seconds":>8} {"p90 budget":>10}']
     for job, where, outcome, seconds in rows:
-        budget = ci_paths.JOB_BUDGETS.get(job)
+        budget = ci_budgets.JOB_BUDGETS.get(job)
         over = seconds is not None and budget is not None and seconds > budget
         lines.append(f'{job:38} {where:6} {outcome:9} {"" if seconds is None else f"{seconds:.0f}":>8} {"" if budget is None else budget:>10}'
                      + ('  OVER BUDGET' if over else ''))
     for label, seconds, key in walls:
-        budget = ci_paths.BUDGETS.get(key)
+        budget = ci_budgets.BUDGETS.get(key)
         over = seconds is not None and budget is not None and seconds > budget
         lines.append(f'{label:38} {"wall":6} {"":9} {"" if seconds is None else f"{seconds:.0f}":>8} {"" if budget is None else budget:>10}'
                      + ('  OVER BUDGET' if over else ''))
@@ -461,7 +469,7 @@ def main(argv=None, root=ROOT):
                 ci_failed.setdefault(workflow, []).append(job)
         if view.get('conclusion') != 'success' and workflow not in ci_failed:
             ci_failed[workflow] = [f'run {view.get("conclusion")}']
-        walls.append((f'{workflow} run {run_id}', seconds_between(view.get('createdAt'), view.get('updatedAt')),
+        walls.append((f'{workflow} run {run_id}', seconds_between(view.get('createdAt'), run_end(view)),
                       'real-model-dispatch' if a.real_model and workflow == 'native.yml' else 'verify-ci-model-free'))
         print(f'verify: {workflow} run {run_id}: {view.get("conclusion")} ({view.get("url", "")})', flush=True)
 
