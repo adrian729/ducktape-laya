@@ -32,7 +32,7 @@ REPO = 'https://github.com/adrian729/ducktape-laya'
 PREDICATE = f'{REPO}/release-qualification/v1'
 SIGNER = f'{REPO}/.github/workflows/attest-release.yml@refs/heads/main'
 PLATFORM_NAMES = {'linux-x64': 'Linux x86-64', 'linux-arm64': 'Linux arm64', 'windows-x64': 'Windows x64',
-                  'macos-arm64': 'macOS arm64'}
+                  'macos-arm64': 'macOS arm64', 'macos-x64': 'macOS x64'}
 CODE_SPAN = re.compile(r'(`+)(?:(?!\1).)+?\1')
 INLINE_LINK = re.compile(r'(\]\(\s*<?)([^)\s>]+)')
 REFERENCE_LINK = re.compile(r'^(\s*\[[^\]]+\]:\s*<?)(\S+?)(>?(?:\s.*)?)$')

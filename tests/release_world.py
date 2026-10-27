@@ -61,7 +61,7 @@ def content_types(extension):
 
 
 class World:
-    def __init__(self, directory, commit, source, platforms=('linux-x64', 'linux-arm64', 'windows-x64')):
+    def __init__(self, directory, commit, source, platforms=('linux-x64', 'linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64')):
         self.directory, self.commit, self.source = pathlib.Path(directory), commit, source
         self.record = read_json(ROOT / 'release/compatibility.json')
         self.policy = read_json(ROOT / 'release/qualification.json')
@@ -194,7 +194,7 @@ class World:
                               'policy': 'all' if not ci else 'platform' if profile == 'ci-full' else 'none',
                               'packages': profile != 'ci-compiler', 'parity_profile': 'full', 'test_jobs': 4 if ci else 1},
                 'host': {'github_actions': ci, 'hostname': f'runner-{platform}' if ci else 'release-host',
-                         'system': {'linux': 'Linux', 'windows': 'Windows'}[item['os']], 'machine': 'x86_64'},
+                         'system': {'linux': 'Linux', 'windows': 'Windows', 'macos': 'Darwin'}[item['os']], 'machine': 'x86_64'},
                 'runs': runs}
         if shards:
             report['shards'] = shards
@@ -213,7 +213,7 @@ class World:
         write_json(installed / 'installed.json', {
             'schema_version': 1, 'status': 'passed', 'platform': platform, 'artifact_inventory_sha256': sha256(self.release / 'inventory.json'),
             'package_version': self.version, 'model_sha256': self.model, 'source_commit': self.commit, 'source_tracked_dirty': False,
-            'host': {'system': {'linux': 'Linux', 'windows': 'Windows'}[item['os']], 'machine': 'x86_64', 'hostname': f'runner-{platform}',
+            'host': {'system': {'linux': 'Linux', 'windows': 'Windows', 'macos': 'Darwin'}[item['os']], 'machine': 'x86_64', 'hostname': f'runner-{platform}',
                      'github_actions': True},
             'consumers': {name: 'c' * 64 for name in ('native', 'node', 'rust', 'python', 'java', 'dotnet', 'go')}})
         npm = f'ducktape-laya-{self.version}.tgz'

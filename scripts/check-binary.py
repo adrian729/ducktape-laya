@@ -27,7 +27,8 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from release_support import (ROOT, read_json, sha256, host_target, target as named_target, require_uninstrumented_binary,
                              require_mapped_source_paths, require_elf_hardening, require_origin_search_paths, require_compiled_hardening,
-                             require_guard_cf,
+                             require_guard_cf, require_macho_cpu, require_macho_rpaths, require_macho_hardening, require_macho_signature,
+                             require_macho_linkage,
                              pe_info, macho_info)
 
 ADDON = 'ducktape_laya.node'
@@ -57,6 +58,20 @@ def hardening_problems(path, library):
     """The hardening of one ELF binary (also applied by package-native.py to the stripped shipped files)."""
     return [problem for problem in (_problem(require_elf_hardening, path), _problem(require_origin_search_paths, path),
                                     _problem(require_compiled_hardening, path, library)) if problem]
+
+
+def macho_problems(path, package_target, library):
+    """The shipping checks of one Mach-O binary (also applied by package-native.py to the installed files): CPU type,
+    run-path entries, compiler hardening, code signature, linked libraries, and for the library its exports."""
+    extra = () if library else tuple('@rpath/' + name for name in package_target.node_libraries)
+    problems = [problem for problem in (_problem(require_macho_cpu, path, package_target.name), _problem(require_macho_rpaths, path),
+                                        _problem(require_macho_hardening, path, library), _problem(require_macho_signature, path, package_target.name),
+                                        _problem(require_macho_linkage, path, extra)) if problem]
+    if library:
+        exports = [name.lstrip('_') for name in macho_info(path)['exports']]
+        if exports != expected_exports():
+            problems.append(f'{pathlib.Path(path).name} exports {exports}, expected exactly {expected_exports()}')
+    return problems
 
 
 def _version(text):
@@ -121,6 +136,7 @@ def check_binaries(library, addon=None, platform=None, root=ROOT):
             if role == 'library':
                 summary['minimum_macos'] = info['minimum_os']
             summary.setdefault('linked_libraries', {})[path.name] = info['dylibs']
+            own += macho_problems(path, package_target, library=role == 'library')
         details[role]['problems'] = own
         problems += own
     if package_target.os == 'linux' and 'library' in details and details['library']['format'] == 'elf':

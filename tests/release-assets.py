@@ -186,7 +186,7 @@ class Assets(unittest.TestCase):
                  'tier-2 gate left out': lambda g: g['targets']['linux-arm64']['gates'].pop('reproducibility'),
                  'tier-1 gate left out': lambda g: g['targets']['linux-x64']['gates'].pop('performance'),
                  'tier changed': lambda g: g['targets']['windows-x64'].update(tier=1),
-                 'target added': lambda g: g['targets'].update({'macos-arm64': g['targets']['linux-arm64']}),
+                 'target added': lambda g: g['targets'].update({'freebsd-x64': g['targets']['linux-arm64']}),
                  'no candidate run': lambda g: g.pop('ci_run'),
                  'candidate run of another commit': lambda g: g['ci_run'].update(head_sha='b' * 40),
                  'run id not a number': lambda g: g['ci_run'].update(run_id='7'),

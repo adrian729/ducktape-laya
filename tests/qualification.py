@@ -104,7 +104,7 @@ class Targets(unittest.TestCase):
         return next(item for item in record['targets'] if item['platform'] == platform)
 
     def test_current_targets(self):
-        self.assertEqual([t['platform'] for t in check_targets(self.record)], ['linux-x64', 'linux-arm64', 'windows-x64'])
+        self.assertEqual([t['platform'] for t in check_targets(self.record)], ['linux-x64', 'linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64'])
 
     def test_invalid_targets(self):
         cases = {
@@ -124,7 +124,7 @@ class Targets(unittest.TestCase):
             'tier-2 gate dropped': lambda r: self.target(r, 'linux-arm64')['required_gates'].remove('reproducibility'),
             'duplicate platform': lambda r: r['targets'].append(copy.deepcopy(self.target(r, 'linux-arm64'))),
             'unknown platform': lambda r: self.target(r, 'linux-arm64').update(platform='freebsd-x64'),
-            'not a release platform': lambda r: self.target(r, 'linux-arm64').update(platform='macos-arm64'),
+            'not a release platform': lambda r: self.target(r, 'linux-arm64').update(platform='freebsd-x64'),
             'tier-2 models without primary': lambda r: self.target(r, 'windows-x64').update(models=['models/laya-multilingual.json']),
             'unpinned model': lambda r: self.target(r, 'windows-x64')['models'].append('models/other.json'),
             'tier 1 without every model': lambda r: self.target(r, 'linux-x64').update(models=['models/manifest.json']),

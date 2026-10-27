@@ -66,6 +66,24 @@
         "electron_versions": [
           "44.7.2"
         ]
+      },
+      "macos-arm64": {
+        "runner": "macos-15",
+        "node_versions": [
+          "24.21.0"
+        ],
+        "electron_versions": [
+          "44.7.2"
+        ]
+      },
+      "macos-x64": {
+        "runner": "macos-15-intel",
+        "node_versions": [
+          "24.21.0"
+        ],
+        "electron_versions": [
+          "44.7.2"
+        ]
       }
     }
   },
@@ -366,7 +384,7 @@
         "scripts/check-abi.py",
         "tests/abi-layout.py"
       ],
-      "acceptance": "The library exports exactly the header's dtl_* functions (ELF dynamic symbols or PE export table) and the layouts match ABI 2."
+      "acceptance": "The library exports exactly the header's dtl_* functions (ELF dynamic symbols, Mach-O exported symbols or PE export table) and the layouts match ABI 2."
     },
     "installed_packages": {
       "implementation": [
