@@ -127,6 +127,10 @@ def local_staleness(git, state, head, dirty):
                 continue
             if base not in diffs:
                 paths, _ = git.diff(base, None if dirty else head)
+                # No local job reads .github/ (CI's job definitions and actions), so a workflow-only change, which makes
+                # every CI job stale, leaves the local jobs verified; the classifier (scripts/ci_paths.py) still counts.
+                if paths is not None:
+                    paths = [path for path in paths if not path.startswith('.github/')]
                 diffs[base] = ci_paths.touched_categories(paths)
         except ci_changes.Unavailable as error:
             result[job] = {'stale': True, 'base': base, 'reason': f'fail open ({error})'}

@@ -104,6 +104,8 @@ class LocalPlans(Checkout):
                              'local-sanitizers'],
             'scripts/ci_paths.py': sorted(ci_paths.LOCAL_JOBS),
             'unknown/file.txt': sorted(ci_paths.LOCAL_JOBS),
+            '.github/workflows/native.yml': [],  # no local job reads the workflows
+            '.github/actions/setup-llvm/action.yml': [],
         }
         for path, expected in cases.items():
             with self.subTest(path=path):

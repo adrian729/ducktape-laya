@@ -190,7 +190,7 @@ python3 scripts/verify.py --rerun-failed
 | `local-reproducibility` | `check-reproducibility.py` |
 | `local-browser-wasm`, `local-browser-webgpu` (with `--emsdk DIR`) | `build-browser.py --reference` into `build-browser-<backend>` |
 
-Outputs go to `build-verify/<job>/`; the state of each local job (the last commit it verified) is kept per worktree at `git rev-parse --git-path verify-state.json`. Windows, Linux arm64 and macOS run only in CI. Other options: `--local` or `--ci` (one side; `--ci` refuses a dirty tree or a HEAD not pushed to its branch, since a dispatch cannot target a SHA), `--all` (every job whatever is stale), `--only JOB[,JOB]`, and `--real-model` with `--model PATH` (default `DUCKTAPE_TEST_MODEL` or the pinned file in the Hugging Face cache; without one the run prints `NOT RUN: real_model` and exits 1).
+Outputs go to `build-verify/<job>/`; the state of each local job (the last commit it verified) is kept per worktree at `git rev-parse --git-path verify-state.json`. A change under `.github/` makes every CI job stale but no local job, since none reads the workflows or actions; a change to the classifier does. Windows, Linux arm64 and macOS run only in CI. Other options: `--local` or `--ci` (one side; `--ci` refuses a dirty tree or a HEAD not pushed to its branch, since a dispatch cannot target a SHA), `--all` (every job whatever is stale), `--only JOB[,JOB]`, and `--real-model` with `--model PATH` (default `DUCKTAPE_TEST_MODEL` or the pinned file in the Hugging Face cache; without one the run prints `NOT RUN: real_model` and exits 1).
 
 ## Try it
 
