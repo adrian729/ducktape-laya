@@ -22,7 +22,7 @@ Released files are never replaced: a fix is a new version. Before 1.0, a breakin
 
 ## Known deviations
 
-Agreement with the original Laya is checked per platform against the same limits (probabilities within 0.05). One answer on one platform has a documented, separately capped deviation, listed under the target's `known_deviations` in `release/compatibility.json` (read by `tests/original-reference.py`); every other answer there is still held to 0.05. A platform that is not a release target has none.
+Agreement with the original Laya is checked per platform against the same limits (probabilities within 0.05). One answer on one platform has a documented, separately capped deviation, listed under the target's `known_deviations` in `release/compatibility.json` (read by `tests/original-reference.py`); every other answer there is still held to 0.05. A platform that is not a release target has none. macOS arm64 and x86-64 need none: a pre-check run stayed within 0.0285 and 0.0390 of the original Laya's probabilities over 29 answers, under the 0.05 limit.
 
 | Platform | Model | Answer | Drift | Cap | Cause |
 | --- | --- | --- | --- | --- | --- |
