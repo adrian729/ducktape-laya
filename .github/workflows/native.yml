@@ -64,9 +64,13 @@ on:
         options: [auto, 'off']
         default: auto
       runtime:
-        description: mode qualify, the runtime commit qualify-upgrade rehearses; a release needs one other than the pin (upgrade_rollback), the default pin only replays the baseline
+        description: mode qualify (required), the runtime commit qualify-upgrade rehearses; it must differ from the pin, because the upgrade_rollback gate requires a rehearsed runtime axis (the plan step refuses the pin or no value in seconds)
         type: string
         default: ''
+      replay_baseline:
+        description: mode qualify, rehearse the pin against itself (a baseline replay, never release evidence); the only way to run qualify-upgrade without a runtime other than the pin
+        type: boolean
+        default: false
       fuzz_seconds:
         description: mode qualify, length of the qualify-fuzz campaign
         type: number
@@ -174,6 +178,7 @@ jobs:
           RUN: ${{ steps.changes.outputs.run }}
           SKIP_ALL: ${{ steps.changes.outputs.skip_all }}
           RUNTIME: ${{ inputs.runtime }}
+          REPLAY_BASELINE: ${{ inputs.replay_baseline }}
         run: |
           python3 - <<'PY'
           import json, os, re, subprocess, sys
@@ -231,9 +236,21 @@ jobs:
           stale = branch_push or event == 'pull_request' or (event == 'workflow_dispatch' and scope == 'affected')
           outputs['policy'] = 'stale' if stale else 'all'
 
-          # qualify-upgrade: the requested runtime commit, or the pinned one.
+          # qualify-upgrade: the requested runtime commit. A release needs one other than the pin (check-candidate.py
+          # upgrade_rollback: candidate_runtime != baseline_runtime): the 0.3.0 qualify run rehearsed the pin against itself,
+          # found only after 61 minutes of CI and 3.5 hours of host qualification. Refuse here, in seconds.
           pinned = json.load(open('release/compatibility.json'))['runtime']['commit']
-          runtime = os.environ.get('RUNTIME') or pinned
+          runtime = os.environ.get('RUNTIME') or ''
+          replay = os.environ.get('REPLAY_BASELINE') == 'true'
+          if mode == 'qualify' and 'qualify-upgrade' in run and not replay:
+              if not runtime:
+                  raise SystemExit('mode=qualify needs -f runtime=COMMIT, the runtime commit qualify-upgrade rehearses (a recent upstream '
+                                   'llama.cpp revision past the pin on which every runtime patch applies: docs/RELEASING.md step 2). '
+                                   'To replay the pin against itself on purpose, pass -f replay_baseline=true.')
+              if runtime == pinned:
+                  raise SystemExit(f'runtime {runtime} is the pinned runtime: the upgrade_rollback gate requires a rehearsed runtime '
+                                   'other than the pin. Pass -f runtime=COMMIT past the pin, or -f replay_baseline=true to replay the baseline on purpose.')
+          runtime = runtime or pinned
           if not re.fullmatch(r'[0-9a-f]{40}', runtime):
               raise SystemExit(f'runtime must be a full commit hash, not {runtime!r}')
           outputs['runtime'] = runtime

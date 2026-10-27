@@ -6,6 +6,11 @@ first pair's build directory (keeping the first pair's extracted runtime source;
 the test model changes, which recompiles nothing) and is recorded as reused_build.
 --compiler-launcher ccache compiles through ccache (a rehearsal build, never shipped);
 the default is none.
+--configure-only stops each build after its configure step, which applies the runtime patches to
+copies of the runtime and checks that cmake/runtime_sources.cmake covers every patched file: the
+steps a new upstream revision breaks first, in about a minute instead of the hour of a rehearsal. It
+configures only the candidate runtime's pair when that differs from the baseline's (the baseline is
+the pin, which every other gate builds), builds nothing and records no gate.
 """
 import argparse
 from collections import OrderedDict
@@ -31,6 +36,7 @@ p.add_argument('--output', required=True, type=pathlib.Path, help='New directory
 p.add_argument('--jobs', type=int, default=default_jobs())
 p.add_argument('--node-include', type=pathlib.Path)
 p.add_argument('--compiler-launcher', choices=('none', 'ccache'), default='none')
+p.add_argument('--configure-only', action='store_true', help='Configure the candidate runtime (patches, source coverage) and stop')
 a = p.parse_args()
 if not 1 <= a.jobs <= 256:
     p.error('--jobs must be 1..256')
@@ -118,6 +124,9 @@ try:
     # When both change, retain each independent axis rather than hiding interaction effects.
     if candidate != record['runtime']['commit'] and new_manifest['sha256'] != manifest['sha256']:
         pairs += [('runtime_only', candidate, model), ('model_only', record['runtime']['commit'], new_model)]
+    if a.configure_only and candidate != record['runtime']['commit']:
+        pairs = [pair for pair in pairs if pair[1] == candidate][:1]
+    report['configure_only'] = a.configure_only
     builds = {}  # runtime revision -> (label, build directory, extracted runtime source) of the first pair with it
     for label, revision, weights in pairs:
         reused = builds.get(revision)
@@ -135,6 +144,8 @@ try:
             '-DDUCKTAPE_DEV_BUILD=OFF', '-DDUCKTAPE_DEV_PCH=OFF',
             # ggml's GGML_CCACHE would set a global launch rule with any ccache on PATH; the launcher is explicit.
             '-DGGML_CCACHE=OFF', f'-DCMAKE_C_COMPILER_LAUNCHER={launcher}', f'-DCMAKE_CXX_COMPILER_LAUNCHER={launcher}'], core, build_env)
+        if a.configure_only:
+            continue
         run(label + '-build', ['cmake', '--build', str(build), '--parallel', str(a.jobs)], core, build_env)
         report['runs'][label + '-build']['reused_build'] = owner if reused else None
         report['runs'][label + '-build']['runtime_source'] = upstream.name
@@ -159,26 +170,29 @@ try:
             if match and (match[1] in selected or match[1].startswith('CMAKE_CXX_FLAGS')):
                 settings[match[1]] = match[2]
         report['runs'][label + '-build']['settings'] = settings
-    expected = sorted(set(re.findall(r'\b(dtl_\w+)\s*;', (core / 'src/exports.map').read_text())))
-    if any(value != expected for value in symbols.values()):
-        raise ValueError('Public export mismatch')
-    for gate in ['native_contracts', 'binding_conformance', 'abi']:
-        report['gates'][gate] = {'status': 'passed'}
-    report['symbols'] = symbols
-    try:
-        # Runtime, library and model identities are expected to differ and are recorded per run;
-        # the inputs and settings must match and the results are compared.
-        for key in ('fixture_hashes', 'settings'):
-            if outcomes['baseline'][key] != outcomes['candidate'][key]:
-                raise ValueError(f'Value/type changed: $.{key}')
-        delta, path = compare_results(outcomes['baseline']['fixtures'], outcomes['candidate']['fixtures'],
-                                      record['candidate_absolute_tolerance'], '$.fixtures')
-        report['comparison'] = {'maximum_absolute_delta': delta, 'path': path, 'status': 'passed'}
-    except (AssertionError, ValueError) as error:
-        report['comparison'] = {'status': 'failed', 'detail': str(error)}
-    if new_manifest['sha256'] != manifest['sha256']:
-        report['comparison']['interpretation'] = 'Model changed; output drift requires reference evaluation, not blind baseline equality.'
-    report['adapter_checks_passed'] = report['comparison']['status'] == 'passed'
+    if a.configure_only:
+        report['adapter_checks_passed'] = True  # every configure passed (run() raises otherwise); no gate ran
+    else:
+        expected = sorted(set(re.findall(r'\b(dtl_\w+)\s*;', (core / 'src/exports.map').read_text())))
+        if any(value != expected for value in symbols.values()):
+            raise ValueError('Public export mismatch')
+        for gate in ['native_contracts', 'binding_conformance', 'abi']:
+            report['gates'][gate] = {'status': 'passed'}
+        report['symbols'] = symbols
+        try:
+            # Runtime, library and model identities are expected to differ and are recorded per run;
+            # the inputs and settings must match and the results are compared.
+            for key in ('fixture_hashes', 'settings'):
+                if outcomes['baseline'][key] != outcomes['candidate'][key]:
+                    raise ValueError(f'Value/type changed: $.{key}')
+            delta, path = compare_results(outcomes['baseline']['fixtures'], outcomes['candidate']['fixtures'],
+                                          record['candidate_absolute_tolerance'], '$.fixtures')
+            report['comparison'] = {'maximum_absolute_delta': delta, 'path': path, 'status': 'passed'}
+        except (AssertionError, ValueError) as error:
+            report['comparison'] = {'status': 'failed', 'detail': str(error)}
+        if new_manifest['sha256'] != manifest['sha256']:
+            report['comparison']['interpretation'] = 'Model changed; output drift requires reference evaluation, not blind baseline equality.'
+        report['adapter_checks_passed'] = report['comparison']['status'] == 'passed'
 except Exception as error:
     report['failure'] = str(error)
     report['adapter_checks_passed'] = False

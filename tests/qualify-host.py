@@ -58,8 +58,9 @@ def inputs_argv(inputs):
 
 def patch_checkout(module):
     """Replace the checks of this checkout (the submodule, the emsdk pin) with passing ones; returns the undo."""
-    saved = module.runtime_problem, module.emsdk_pin, module.subprocess.run
+    saved = module.runtime_problem, module.emsdk_pin, module.subprocess.run, module.rehearsal_stages
     module.runtime_problem = lambda record: None
+    module.rehearsal_stages = lambda *args, **kwargs: []  # the plan check and the rehearsal have their own tests
     module.emsdk_pin = lambda: 'fake'
     real = module.subprocess.run
 
@@ -71,7 +72,7 @@ def patch_checkout(module):
     module.subprocess.run = run
 
     def undo():
-        module.runtime_problem, module.emsdk_pin, module.subprocess.run = saved
+        module.runtime_problem, module.emsdk_pin, module.subprocess.run, module.rehearsal_stages = saved
     return undo
 
 
@@ -519,7 +520,7 @@ class RunEvidence(unittest.TestCase):
     def test_failed_evidence_build_writes_no_keys_for_steps_not_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = pathlib.Path(tmp)
-            steps = [qualify.Step('native', 1, ['false'], evidence={'native': 'native/report.json'}),
+            steps = [qualify.Step('native', 1, ['false'], stop=True, evidence={'native': 'native/report.json'}),
                      qualify.Step('reproducibility', '3a', ['true'], cpus='other', evidence={'reproducibility': 'r.json'}),
                      qualify.Step('evidence', 4, ['(write)'], action=lambda: self.fail('wrote the matrix'),
                                   evidence={'native_matrix': 'm.json'})]
@@ -566,6 +567,197 @@ class RunEvidence(unittest.TestCase):
                 self.assertEqual(code, expected, content)
             report.unlink()
             self.assertFalse(qualify.model_upgrade_completed(report))
+
+
+class FailureHandling(unittest.TestCase):
+    CPUS = {'other': '0', 'soak': '0', 'all': None}
+
+    def go(self, steps, evidence=None, keys=None):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.out = pathlib.Path(tmp.name)
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            code = qualify.run(steps, self.CPUS, self.out, evidence or {}, self.out / 'evidence.json', keys or {})
+        self.stdout, self.stderr = out.getvalue(), err.getvalue()
+        self.status = json.loads((self.out / 'qualify-status.json').read_text())
+        return code
+
+    def test_failure_is_loud_and_machine_readable(self):
+        code = self.go([qualify.Step('a', 1, ['true']), qualify.Step('b', 2, ['false']), qualify.Step('c', 3, ['true'])])
+        self.assertEqual(code, 1)
+        self.assertIn('***** FAILED: b', self.stdout)
+        self.assertIn('***** FAILED: b', self.stderr)
+        self.assertEqual((self.status['state'], self.status['failed']), ('failed', ['b']))
+        self.assertEqual([self.status['steps'][n]['state'] for n in 'abc'], ['passed', 'failed', 'passed'])  # no stop: all failures are collected
+        self.assertFalse((self.out / 'qualify-status.json.tmp').exists())
+
+    def test_stop_marks_the_rest_not_run(self):
+        code = self.go([qualify.Step('native', 1, ['false'], stop=True), qualify.Step('later', 2, ['true']),
+                        qualify.Step('evidence', 4, ['(w)'], action=lambda: self.fail('ran'))])
+        self.assertEqual(code, 1)
+        self.assertEqual(self.status['stopped_because'], 'native')
+        self.assertEqual([self.status['steps'][n]['state'] for n in ('later', 'evidence')], ['not_run', 'not_run'])
+
+    def test_background_failure_is_reported_while_the_foreground_runs(self):
+        qualify.POLL_SECONDS = 0.2
+        self.addCleanup(setattr, qualify, 'POLL_SECONDS', 5)
+        soak = qualify.Step('soak', 3, ['false'], cpus='soak', background=True)
+        slow = qualify.Step('slow', '3a', [qualify.PY, '-c', 'import time; time.sleep(2)'], cpus='other')
+        self.go([soak, slow])
+        self.assertLess(self.stdout.index('FAILED: soak'), self.stdout.index('slow passed'))
+
+    def remeasure_steps(self, first_ok, second_ok):
+        """A budget check that fails (or not) on the first report and again on the re-measure's."""
+        report, retry = self.out_dir / 'p.json', self.out_dir / 'p.remeasure.json'
+        write = lambda path: [qualify.PY, '-c', f'import pathlib; pathlib.Path({str(path)!r}).write_text(\'{{"library_sha256": "x"}}\')']  # noqa: E731
+        exit_code = lambda ok: [qualify.PY, '-c', f'raise SystemExit({0 if ok else 1})']  # noqa: E731
+        return [qualify.Step('performance-m', 2, write(report), evidence={'performance': 'p.json'}),
+                qualify.Step('performance-budget-m', 2, exit_code(first_ok), stop=True, outputs=[retry], remeasure={
+                    'measure': qualify.Step('performance-m-remeasure', 2, write(retry)),
+                    'check': qualify.Step('performance-budget-m-remeasure', 2, exit_code(second_ok)),
+                    'report': retry, 'first': report, 'key': 'performance'}),
+                qualify.Step('later', 3, ['true'])]
+
+    def run_remeasure(self, first_ok, second_ok):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp_dir.cleanup)
+        self.out_dir = pathlib.Path(self.tmp_dir.name)
+        steps = self.remeasure_steps(first_ok, second_ok)
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+            code = qualify.run(steps, self.CPUS, self.out_dir, {'performance': 'p.json'}, self.out_dir / 'evidence.json',
+                               {'performance-m': ['performance']})
+        self.stdout = out.getvalue()
+        return code
+
+    def test_budget_failure_gets_one_recorded_remeasure(self):
+        self.assertEqual(self.run_remeasure(False, True), 0)
+        evidence = json.loads((self.out_dir / 'evidence.json').read_text())
+        self.assertEqual(evidence['performance'], 'p.remeasure.json')  # the passing attempt is the evidence
+        retry = json.loads((self.out_dir / 'p.remeasure.json').read_text())
+        self.assertEqual(retry['remeasure']['attempt'], 2)
+        self.assertEqual(retry['remeasure']['first_attempt_report'], 'p.json')
+        self.assertTrue((self.out_dir / 'p.json').is_file())  # the failed first attempt stays
+        status = json.loads((self.out_dir / 'qualify-status.json').read_text())
+        self.assertEqual((status['state'], status['steps']['performance-budget-m']['remeasured']), ('passed', True))
+        self.assertEqual(status['steps']['later']['state'], 'passed')
+
+    def test_second_failure_fails_and_stops(self):
+        self.assertEqual(self.run_remeasure(False, False), 1)
+        status = json.loads((self.out_dir / 'qualify-status.json').read_text())
+        self.assertEqual((status['stopped_because'], status['steps']['later']['state']), ('performance-budget-m', 'not_run'))
+
+    def test_no_remeasure_after_a_pass_and_none_for_other_steps(self):
+        self.assertEqual(self.run_remeasure(True, False), 0)
+        self.assertFalse((self.out_dir / 'p.remeasure.json').exists())
+        self.assertEqual(self.go([qualify.Step('performance-x', 2, ['false'])]), 1)  # a benchmark itself failing is not re-measured
+
+
+class Rehearsal(unittest.TestCase):
+    """The preflight's rehearsal stages run cheapest first and stop at the first one that fails."""
+
+    def setUp(self):
+        self.record = json.loads((ROOT / 'release/compatibility.json').read_text())
+        self.calls = []
+        self.saved = qualify.plan_check, qualify.configure_rehearsal, qualify.subprocess.run
+        qualify.plan_check = lambda *args: self.calls.append('plan') or self.plan_problems
+        qualify.configure_rehearsal = lambda runtime, model: self.calls.append('configure') or self.configure_problem
+        self.plan_problems, self.configure_problem = [], None
+        self.args = qualify.argparse.Namespace(runtime='a' * 40, model=pathlib.Path('/m'), upgrade_manifest=None)
+        self.ci = pathlib.Path('/nonexistent/ci')
+
+    def tearDown(self):
+        qualify.plan_check, qualify.configure_rehearsal, qualify.subprocess.run = self.saved
+
+    def stages(self):
+        real = self.saved[2]
+        qualify.subprocess.run = lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, '', '') if 'rev-parse' in cmd else real(cmd, *a, **k)
+        return qualify.rehearsal_stages(self.args, self.record, 'C', self.ci, pathlib.Path('/e.json'), [], True)
+
+    def test_order_and_stop(self):
+        self.assertEqual([len(s[2]) for s in self.stages()], [0, 0, 0])
+        self.assertEqual(self.calls, ['plan', 'configure'])
+        self.calls.clear()
+        self.plan_problems = ['the rehearsal runtime is the pin']
+        self.assertEqual(len(self.stages()), 1)
+        self.assertNotIn('configure', self.calls)
+        self.calls.clear()
+        self.plan_problems, self.configure_problem = [], 'patch conflict'
+        self.assertEqual(self.stages()[-1][2], ['patch conflict'])
+
+    def test_runtime_must_be_in_the_checkout(self):
+        qualify.subprocess.run = lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 1, '', 'bad')
+        stages = qualify.rehearsal_stages(self.args, self.record, 'C', self.ci, pathlib.Path('/e.json'), [], True)
+        self.assertIn('git -C', stages[-1][2][0])
+        self.assertNotIn('configure', self.calls)
+
+    def test_downloaded_report_must_agree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = pathlib.Path(tmp) / 'qualify/upgrade/report.json'
+            report.parent.mkdir(parents=True)
+            report.write_text(json.dumps({'candidate_runtime': 'b' * 40}))
+            self.ci = pathlib.Path(tmp)
+            self.assertIn('differs from the downloaded', self.stages()[-1][2][0])
+            self.args.runtime = None
+            self.assertEqual(qualify.downloaded_runtime(self.ci), 'b' * 40)
+
+    def test_plan_check_against_the_gates(self):
+        """The real `check-candidate.py --plan` on this checkout: the pin is refused, a runtime past it and the host's keys pass."""
+        keys = ['native', 'native_matrix', 'performance', 'soak', 'stress', 'reproducibility', 'model_upgrade', 'browser_package', 'browser',
+                'browser_isolated', 'installed_release', 'userspaces', 'rollback', 'cross_cpu']
+        args = qualify.argparse.Namespace(upgrade_manifest=ROOT / 'models/laya-typed-decisions.json')
+        with tempfile.TemporaryDirectory() as tmp:
+            ci = pathlib.Path(tmp)
+            evidence = ci / 'evidence.json'
+            evidence.write_text(json.dumps({key: key for key in ('ci_run', 'electron', 'linux-x64:installed', 'release_packages')}))
+            pin = self.record['runtime']['commit']
+            self.assertTrue(any('is the pin' in p for p in self.saved[0]('HEAD', pin, args, keys, evidence, ci)))
+            self.assertEqual(self.saved[0]('HEAD', 'a' * 40, args, keys, evidence, ci), [])
+            self.assertTrue(any('nothing will produce' in p and 'rollback' in p for p in self.saved[0]('HEAD', 'a' * 40, args, [k for k in keys if k != 'rollback'], evidence, ci)))
+            self.assertTrue(any('no rehearsal runtime' in p for p in self.saved[0]('HEAD', None, args, keys, evidence, ci)))
+
+
+class GatePlan(unittest.TestCase):
+    def setUp(self):
+        import sys
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        import gate_plan
+        self.gate_plan = gate_plan
+
+    def test_keys_found_in_the_sources(self):
+        source = """
+def g():
+    load('a'); long_gate('b'); ctx.ci_json('c'); paths['d']; paths.get('e'); tested_source(r, 'f')
+    for name in ('x', 'y'):
+        load(name)
+    for name, kinds in (('z', 1),):
+        load(name)
+    load(name)
+"""
+        keys, tested = self.gate_plan.gate_sources(source)
+        self.assertEqual(keys, set('abcde') | {'x', 'y', 'z'})  # a loop variable means its literals only inside its loop
+        self.assertEqual(tested, {'f'})
+
+    def test_every_gate_key_is_accounted_for(self):
+        """The keys check-candidate.py reads are the host plan's, the CI download's, the qualify run's or the maintainer's."""
+        keys, tested = self.gate_plan.gate_sources((ROOT / 'scripts/check-candidate.py').read_text())
+        self.assertTrue({'native', 'rollback', 'upgrade', 'security_review'} <= keys)
+        self.assertTrue(tested)
+
+    def test_qualify_keys_match_the_fetcher(self):
+        spec = importlib.util.spec_from_file_location('fetch_ci_evidence', ROOT / 'scripts/fetch-ci-evidence.py')
+        fetch = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fetch)
+        self.assertEqual(tuple(self.gate_plan.QUALIFY_KEYS), tuple(fetch.QUALIFY_ARTIFACTS))
+
+    def test_problems(self):
+        record = {'targets': [{'platform': 'linux-x64', 'tier': 1}, {'platform': 'windows-x64', 'tier': 2}]}
+        source = "load('native'); load('ghost'); tested_source(r, 'nope')"
+        problems = self.gate_plan.plan_problems(record, 'p' * 40, [source], {'soak': []}, ['native'], [], 'p' * 40,
+                                                {'candidate_runtime': 'p' * 40, 'baseline_runtime': 'p' * 40}, 's', 's')
+        text = ' | '.join(problems)
+        for expected in ('nope have no HARNESS', 'ghost', 'is the pin', 'against itself', 'is the primary model'):
+            self.assertIn(expected, text)
+        self.assertEqual(self.gate_plan.plan_problems(record, 'p' * 40, ["load('native')"], {}, ['native'], [], 'q' * 40), [])
 
 
 if __name__ == '__main__':

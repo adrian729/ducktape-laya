@@ -137,7 +137,7 @@ POLICY_CHECKS = {
                          'release/*'] + _RELEASE_SUPPORT,
     'fetch-ci-evidence': ['tests/fetch-ci-evidence.py', 'scripts/fetch-ci-evidence.py', 'scripts/artifact_support.py',
                           'scripts/release_targets.py', 'release/*'] + _RELEASE_SUPPORT,
-    'release-targets': ['tests/release-targets.py', 'tests/release_world.py', 'scripts/check-candidate.py', 'scripts/release_targets.py',
+    'release-targets': ['tests/release-targets.py', 'tests/release_world.py', 'scripts/check-candidate.py', 'scripts/release_targets.py', 'scripts/gate_plan.py',
                         'scripts/artifact_support.py', 'scripts/assemble-packages.py', 'scripts/fetch-ci-evidence.py',
                         'scripts/compare_results.py', 'scripts/java_package.py', 'scripts/python_wheel.py', 'scripts/package-native.py',
                         'scripts/sbom.py', 'scripts/performance-budgets.py', 'tests/reference_requests.py', 'bindings/*/package.json', 'include/ducktape_laya.h', 'release/*',
@@ -162,7 +162,7 @@ POLICY_CHECKS = {
     'qualify-host': ['tests/qualify-host.py', 'scripts/qualify-host.py', 'scripts/check-candidate.py', 'release/*', 'models/*.json',
                      # what check-candidate.py imports (the test reads its reuse rules)
                      'scripts/release_support.py', 'scripts/artifact_support.py', 'scripts/release_targets.py',
-                     'scripts/performance-budgets.py'],
+                     'scripts/performance-budgets.py', 'scripts/gate_plan.py', 'scripts/fetch-ci-evidence.py'],
     'ci-contracts': ['tests/ci-contracts.py', '.github/*', 'scripts/ci-cache-prune.py'] + _VALIDATE + _RELEASE_SUPPORT,
 }
 # The checks bindings-<P> runs in the candidate (`validate.py --checks policy-platform`); check-policy.py --platform-only.

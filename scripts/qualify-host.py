@@ -20,15 +20,30 @@ step 2), in this order:
    report), model_upgrade, browser_package, browser, browser_isolated, installed_release,
    userspaces, rollback, cross_cpu.
 
-Before any step, a preflight checks in seconds everything the hours-long steps need: the runtime submodule at
+Before any step, a preflight checks everything the hours-long steps need, cheapest and likeliest to fail first:
+(1) in seconds, the inputs below and the plan against the gates (`check-candidate.py --plan`: the evidence keys the gates read
+are all produced, the reuse table is complete); (2) in seconds, the rehearsal runtime (--runtime, or the CI qualify run's
+upgrade report once downloaded) is a commit other than the pin and in the runtime checkout; (3) in about a minute, a
+configure-only rehearsal at that runtime (`check-upgrade.py --configure-only`: the runtime patches apply and
+cmake/runtime_sources.cmake covers every patched file; nothing is built). The inputs are: the runtime submodule at
 the compatibility record's commit, the models, the pinned emsdk, the last-known-good packages, the root filesystems
 and the CI evidence, all resolved to absolute paths and validated (never defaulted to a path that may not exist), and
 both npm test trees (tests/typescript, tests/browser-automation), which it installs with `npm ci --ignore-scripts`
-when missing or older than their lockfile. --dry-run runs the same preflight (reporting a stale npm tree, not
-installing it) and fails the same way. Output that exists is never overwritten: a rerun needs --replace, which moves
+when missing or older than their lockfile. --dry-run runs the same preflight, rehearsal included (reporting a stale npm tree, not
+installing it) and fails the same way. A failed preflight stops at its first failing stage group, so the cheap problems are
+fixed before the rehearsal's minute is spent. Output that exists is never overwritten: a rerun needs --replace, which moves
 it, with the evidence it holds, to OUTPUT/superseded/STAMP/. Before each benchmark the host settles (package
 temperature and load below --settle-temp-c and --settle-load, for at most --settle-timeout); tests/benchmark.py
 records what it did and the CPU's thermal and frequency state throughout, and the budget check always runs.
+
+Failure handling: the moment a step fails, a FAILED banner goes to stdout and stderr, and OUT/qualify-status.json (rewritten
+atomically on every change: state, per-step state and seconds, failed, stopped_because) says so for a watcher; background steps
+(the soak) are polled while the foreground steps run, so their failure is not left for the end. A performance budget check
+that fails is followed, once, by a re-measure after the same settle wait (report OUT/performance/ID.remeasure.json, marked
+`remeasure` with the first attempt's report, hash and failure text, and the evidence key points to it); the second attempt must
+pass, budgets and tolerances unchanged (docs/RELEASE_CHECKS.md). A failed `native` build or a performance budget that still
+fails stops the run: the steps not yet started are reported not_run (the soak and everything after it would be rerun anyway
+once the library or the host changes).
 
 Steps 1 and 2 never share the machine. The candidate's own reuse rules (check-candidate.py
 LIBRARY_INPUTS, COMMON_HARNESS, HARNESS) decide which hours-long evidence of --reuse EVIDENCE
@@ -39,6 +54,7 @@ import argparse
 import ast
 import fnmatch
 import glob
+import hashlib
 import json
 import os
 import pathlib
@@ -47,6 +63,7 @@ import shlex
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -157,11 +174,14 @@ def reusable(report_path, gate, candidate, rules):
 # ------------------------------------------------------------------------------------------------
 class Step:
     def __init__(self, name, phase, command=None, *, cpus='all', env=None, outputs=(), evidence=None, action=None, background=False,
-                 capture=None, judge=None):
+                 capture=None, judge=None, stop=False, remeasure=None):
         self.name, self.phase, self.command, self.cpus, self.env = name, phase, command, cpus, env or {}
         self.outputs, self.evidence, self.action, self.background, self.capture = list(outputs), evidence or {}, action, background, capture
         # judge(exit status) -> passed; by default a step passes when its command exits 0.
         self.judge = judge or (lambda code: code == 0)
+        # stop: a failure ends the run (steps not yet started are not run). remeasure: for a performance budget check, the
+        # one re-measure it gets after failing: {'measure': Step, 'check': Step, 'report': Path, 'first': Path, 'key': evidence key}.
+        self.stop, self.remeasure = stop, remeasure
 
 
 def model_upgrade_completed(report_path):
@@ -216,7 +236,7 @@ def plan(a, record, policy, out, ci, reused):
     build = ROOT / 'build-validation'
     steps = [Step('native', 1, [PY, 'scripts/validate.py', '--full', '--model', model, *sum((['--extra-model', m] for m in extra), []),
                                 '--upstream-reference', '--test-jobs', '1', '--output', out / 'native'],
-                  env={'CC': 'gcc', 'CXX': 'g++'}, outputs=[out / 'native'],
+                  env={'CC': 'gcc', 'CXX': 'g++'}, outputs=[out / 'native'], stop=True,
                   evidence={'native': rel(out / 'native/report.json')})]
     if 'performance' not in reused:
         for manifest, budgets in model_ids(record):
@@ -224,12 +244,15 @@ def plan(a, record, policy, out, ci, reused):
             gguf = model if key == 'performance' else next((m for m in extra if pathlib.Path(m).name == manifest['filename']),
                                                           f'<{manifest["filename"]}>')
             report = out / 'performance' / f'{manifest["id"]}.json'
-            steps.append(Step(f'performance-{manifest["id"]}', 2, [PY, 'tests/benchmark.py', gguf, '--build', build, '--report', report,
-                                                                   '--settle-temp-c', a.settle_temp_c, '--settle-load', a.settle_load,
-                                                                   '--settle-timeout', a.settle_timeout],
-                              outputs=[report], evidence={key: rel(report)}))
-            steps.append(Step(f'performance-budget-{manifest["id"]}', 2, [PY, 'scripts/performance-budgets.py', 'check', report,
-                                                                          '--budgets', budgets]))
+            retry = out / 'performance' / f'{manifest["id"]}.remeasure.json'
+            bench = lambda target: [PY, 'tests/benchmark.py', gguf, '--build', build, '--report', target,  # noqa: E731
+                                    '--settle-temp-c', a.settle_temp_c, '--settle-load', a.settle_load, '--settle-timeout', a.settle_timeout]
+            check = lambda target: [PY, 'scripts/performance-budgets.py', 'check', target, '--budgets', budgets]  # noqa: E731
+            steps.append(Step(f'performance-{manifest["id"]}', 2, bench(report), outputs=[report], evidence={key: rel(report)}))
+            steps.append(Step(f'performance-budget-{manifest["id"]}', 2, check(report), outputs=[retry], stop=True,
+                              remeasure={'measure': Step(f'performance-{manifest["id"]}-remeasure', 2, bench(retry), outputs=[retry]),
+                                         'check': Step(f'performance-budget-{manifest["id"]}-remeasure', 2, check(retry)),
+                                         'report': retry, 'first': report, 'key': key}))
     budgets = policy['budgets']
     if 'soak' not in reused:
         soak = [PY, 'scripts/check-stress.py', model, '--build', build, '--seconds', budgets['candidate_soak_seconds']]
@@ -380,6 +403,83 @@ def preflight(a, record, candidate_pin, ci, install):
     return problems, notes
 
 
+REHEARSAL_TIMEOUT = 600  # seconds; a configure-only rehearsal takes about a minute, so more means something is wrong
+
+
+def downloaded_runtime(ci):
+    """The runtime the downloaded CI qualify run's upgrade report rehearsed (None before that download)."""
+    try:
+        return json.loads((ci / 'qualify/upgrade/report.json').read_text()).get('candidate_runtime')
+    except (OSError, ValueError):
+        return None
+
+
+def plan_check(candidate, runtime, a, planned_keys, evidence_path, ci):
+    """Problems `check-candidate.py --plan` finds (seconds): the gates against the evidence keys this run will write, the reuse
+    table, the candidate's record and documents, and the rehearsal's runtime and model axes."""
+    evidence = evidence_path if evidence_path.is_file() else ci / 'evidence.json'
+    command = [PY, 'scripts/check-candidate.py', '--plan', '--candidate', candidate, '--planned-keys', ','.join(planned_keys)]
+    if runtime:
+        command += ['--runtime', runtime]
+    if a.upgrade_manifest and a.upgrade_manifest.is_file():
+        command += ['--upgrade-manifest', str(a.upgrade_manifest)]
+    if evidence.is_file():
+        command.append(str(evidence))
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    if result.returncode == 0:
+        return []
+    lines = [line.split('plan: ', 1)[-1] for line in result.stderr.splitlines() if line.startswith('check-candidate: plan: ')]
+    return lines or [f'check-candidate.py --plan failed: {(result.stderr or result.stdout).strip()[-600:]}']
+
+
+def configure_rehearsal(runtime, model, timeout=REHEARSAL_TIMEOUT):
+    """Problem text (None when it passes) of `check-upgrade.py --configure-only` at `runtime`: the runtime patches apply to a copy
+    of that revision and cmake/runtime_sources.cmake covers every patched file. Nothing is built."""
+    work = pathlib.Path(tempfile.mkdtemp(prefix='qualify-rehearsal-'))
+    output = work / 'upgrade'
+    try:
+        result = subprocess.run([PY, 'scripts/check-upgrade.py', '--runtime', runtime, '--model', str(model), '--configure-only',
+                                 '--output', str(output)], cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return f'the configure-only rehearsal at {runtime[:12]} did not finish in {timeout} s (kept in {work})'
+    if result.returncode == 0:
+        shutil.rmtree(work, ignore_errors=True)
+        return None
+    logs = sorted(output.glob('*-configure.log'))
+    tail = '\n'.join(logs[-1].read_text(errors='replace').splitlines()[-25:]) if logs else (result.stderr or result.stdout).strip()[-1500:]
+    return f'the configure-only rehearsal at {runtime[:12]} failed (kept in {work}):\n{tail}'
+
+
+def rehearsal_stages(a, record, candidate, ci, evidence_path, planned_keys, runtime_checkout=True):
+    """After the input checks passed: [(stage, seconds, problems)] cheapest first, stopping at the first stage with problems."""
+    stages = []
+
+    def stage(name, work):
+        started = time.monotonic()
+        problems = work()
+        stages.append((name, time.monotonic() - started, problems))
+        return not problems
+
+    downloaded = downloaded_runtime(ci)
+    runtime = a.runtime or downloaded
+    if not stage('plan check (gates, evidence keys, reuse table, rehearsal axes)', lambda: plan_check(candidate, runtime, a, planned_keys, evidence_path, ci)):
+        return stages
+    def axis():
+        if a.runtime and downloaded and a.runtime != downloaded:
+            return [f'--runtime {a.runtime[:12]} differs from the downloaded qualify run\'s rehearsed runtime {downloaded[:12]}']
+        path = ROOT / record['runtime']['path']
+        if subprocess.run(['git', '-C', str(path), 'rev-parse', '--verify', '--end-of-options', f'{runtime}^{{commit}}'], capture_output=True).returncode:
+            return [f'runtime {runtime} is not in {record["runtime"]["path"]}: `git -C {record["runtime"]["path"]} fetch origin {runtime}`']
+        return []
+    if not stage('runtime axis (differs from the pin, present in the runtime checkout)', axis):
+        return stages
+    if not a.model:
+        return stages
+    stage('configure-only rehearsal at the runtime (patches, source coverage)',
+          lambda: [problem] if (problem := configure_rehearsal(runtime, a.model)) else [])
+    return stages
+
+
 def discover_model(manifest):
     """--model's default: $DUCKTAPE_TEST_MODEL, else the pinned file in the Hugging Face cache."""
     if os.environ.get('DUCKTAPE_TEST_MODEL'):
@@ -423,6 +523,8 @@ def main(argv=None):
     p.add_argument('--lkg-packages', type=pathlib.Path, help='Last-known-good packages (scripts/release-assets.py retain)')
     p.add_argument('--rootfs', type=pathlib.Path, action='append', help='Ubuntu root filesystem for userspaces, repeatable, required '
                    '(tests/download-userspaces.py --output build-platforms; no default, so a missing path is never used silently)')
+    p.add_argument('--runtime', help='The runtime commit the CI qualify run rehearses (-f runtime=; it must differ from the pin); '
+                   'default: the downloaded qualify run\'s upgrade report')
     p.add_argument('--upgrade-model', type=pathlib.Path, help='model_upgrade candidate model (default: the typed-decisions model)')
     p.add_argument('--upgrade-manifest', type=pathlib.Path, default=ROOT / 'models/laya-typed-decisions.json')
     p.add_argument('--reuse', type=pathlib.Path, help='A previous evidence.json whose hours-long reports may stand (candidate reuse rules)')
@@ -525,10 +627,19 @@ def main(argv=None):
             print(f'  step {step.phase} {step.name} [{where}{", background" if step.background else ""}]: {env + " " if env else ""}{command}')
         else:
             print(f'  step {step.phase} {step.name}: (no command)')
+        if step.remeasure:
+            print(f'    if it fails: re-measure once after the settle wait into {step.remeasure["report"].name}, then the same check; '
+                  'the second attempt must pass')
+        if step.stop:
+            print('    if it fails: the run stops (steps not yet started are not run)')
     print(f'  then merge the evidence keys into {evidence_path}')
     print('  evidence keys: ' + ', '.join(evidence))
     for note in notes:
         print(f'qualify-host: preflight: {note}')
+    if not problems:  # the rehearsal's minutes are spent only once the cheap input checks pass
+        for name, seconds, found in rehearsal_stages(a, record, candidate, ci, evidence_path, sorted(evidence), True):
+            print(f'qualify-host: preflight: {name}: {"FAILED" if found else "passed"} ({seconds:.1f} s)', flush=True)
+            problems += found
     if a.dry_run:
         for warning in state_problems:
             print(f'qualify-host: preflight warning (fatal in a real run): {warning}', file=sys.stderr)
@@ -537,6 +648,8 @@ def main(argv=None):
     if problems:
         for problem in problems:
             print(f'qualify-host: preflight failed: {problem}', file=sys.stderr)
+        if not a.dry_run:
+            Status.write_file(out / STATUS_FILE, {'state': 'preflight_failed', 'problems': problems, 'updated_unix': time.time()})
         return 2
     print('qualify-host: preflight passed')
     if a.dry_run:
@@ -547,11 +660,50 @@ def main(argv=None):
     return run(steps, cpus, out, evidence, evidence_path, keys)
 
 
+STATUS_FILE = 'qualify-status.json'
+POLL_SECONDS = 5  # how often the foreground wait looks at the background steps
+
+
+class Status:
+    """OUT/qualify-status.json, rewritten atomically on every change, for a watcher that polls it: `state` is running, passed or
+    failed; `failed` lists the failed steps as soon as they fail; each step is pending, running, passed, failed or not_run."""
+
+    def __init__(self, path, steps, started):
+        self.path, self.started = path, started
+        self.data = {'state': 'running', 'started_unix': time.time(), 'failed': [], 'stopped_because': None,
+                     'steps': {step.name: {'phase': str(step.phase), 'state': 'pending'} for step in steps}}
+        self.write()
+
+    @staticmethod
+    def write_file(path, data):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + '.tmp')
+        temporary.write_text(json.dumps(data, indent=2) + '\n')
+        os.replace(temporary, path)
+
+    def write(self):
+        self.data['updated_unix'] = time.time()
+        self.data['elapsed_seconds'] = round(time.monotonic() - self.started)
+        self.write_file(self.path, self.data)
+
+    def step(self, name, **fields):
+        self.data['steps'].setdefault(name, {}).update(fields)
+        if fields.get('state') == 'failed' and name not in self.data['failed']:
+            self.data['failed'].append(name)
+        self.write()
+
+    def finish(self, failed):
+        self.data['state'] = 'failed' if failed else 'passed'
+        self.write()
+
+
 def run(steps, cpus, out, evidence, evidence_path, keys=None):
-    """Run the steps; the evidence keys of a step that did not run (the evidence build failed) are not written."""
+    """Run the steps; the evidence keys of a step that did not run (the run stopped) are not written."""
     logs = out / 'qualify-logs'
     logs.mkdir(parents=True, exist_ok=True)
     failed, background, started = [], [], time.monotonic()
+    status = Status(out / STATUS_FILE, steps, started)
+    elapsed = lambda: f'{time.monotonic() - started:.0f} s'  # noqa: E731
 
     def launch(step):
         command = [str(part) for part in step.command]
@@ -560,53 +712,117 @@ def run(steps, cpus, out, evidence, evidence_path, keys=None):
         env = dict(os.environ, **step.env)
         log = (logs / f'{step.name}.log').open('w')
         stdout = (open(step.capture, 'w') if step.capture else log)
-        print(f'qualify-host: {step.name} started ({time.monotonic() - started:.0f} s)', flush=True)
+        print(f'qualify-host: {step.name} started ({elapsed()})', flush=True)
+        status.step(step.name, state='running', started_seconds=round(time.monotonic() - started))
         return subprocess.Popen(command, cwd=ROOT, env=env, stdout=stdout, stderr=log), log, stdout
 
-    not_run = []
+    def conclude(step, code, log, stdout):
+        """Close the step's files, judge it, announce and record the result; returns whether it passed."""
+        log.close()
+        if stdout is not log:
+            stdout.close()
+        passed = step.judge(code)
+        status.step(step.name, state='passed' if passed else 'failed', exit_code=code, finished_seconds=round(time.monotonic() - started),
+                    log=str(logs / f'{step.name}.log'))
+        if passed:
+            print(f'qualify-host: {step.name} passed ({elapsed()})', flush=True)
+        else:
+            fail(step.name, f'exit {code}, log {logs / (step.name + ".log")}')
+        return passed
+
+    def fail(name, detail):
+        banner = f'qualify-host: ***** FAILED: {name} at {elapsed()} ({detail}) *****'
+        print(banner, flush=True)
+        print(banner, file=sys.stderr, flush=True)
+        status.step(name, state='failed', detail=detail)
+
+    def poll_background():
+        for item in list(background):
+            step, process, log, stdout = item
+            if (code := process.poll()) is not None:
+                background.remove(item)
+                if not conclude(step, code, log, stdout):
+                    failed.append(step.name)
+
+    def wait(process):
+        while True:
+            try:
+                return process.wait(timeout=POLL_SECONDS)
+            except subprocess.TimeoutExpired:
+                poll_background()  # a failing soak is reported when it fails, not when the foreground steps end
+
+    def execute(step):
+        process, log, stdout = launch(step)
+        return conclude(step, wait(process), log, stdout)
+
+    def remeasure(step):
+        """One re-measure of a failed performance budget after the benchmark's own settle wait; the second attempt must pass."""
+        again = step.remeasure
+        print(f'qualify-host: {step.name} failed; re-measuring once after the settle wait (budgets unchanged; both attempts are kept)', flush=True)
+        first_log = logs / f'{step.name}.log'
+        status.step(step.name, remeasured=True, first_attempt_report=str(again['first']))
+        if not (execute(again['measure']) and execute(again['check'])):
+            return False
+        report = json.loads(again['report'].read_text())
+        report['remeasure'] = {'attempt': 2, 'reason': 'the first attempt failed its budget check',
+                               'first_attempt_report': os.path.relpath(again['first'], again['report'].parent),
+                               'first_attempt_sha256': hashlib.sha256(again['first'].read_bytes()).hexdigest(),
+                               'first_attempt_check': first_log.read_text(errors='replace')[-3000:] if first_log.is_file() else None}
+        again['report'].write_text(json.dumps(report, indent=2) + '\n')
+        evidence[again['key']] = os.path.relpath(again['report'], evidence_path.parent)
+        return True
+
+    not_run, stopped_by = [], None
     for step in steps:
         if step.phase == 4:
             continue  # after the soak
-        if failed[:1] == ['native']:
-            print(f'qualify-host: {step.name} not run: the evidence build failed', flush=True)
+        if stopped_by:
+            print(f'qualify-host: {step.name} not run: {stopped_by} failed', flush=True)
             not_run.append(step.name)
+            status.step(step.name, state='not_run', detail=f'{stopped_by} failed')
             continue
         if step.action:
+            status.step(step.name, state='running')
             try:
                 step.action()
+                status.step(step.name, state='passed')
             except (OSError, RuntimeError, tarfile.TarError) as error:
-                print(f'qualify-host: {step.name} FAILED: {error}', flush=True)
+                fail(step.name, str(error))
                 failed.append(step.name)
             continue
         process, log, stdout = launch(step)
         if step.background:
             background.append((step, process, log, stdout))
             continue
-        code = process.wait()
-        log.close()
-        if stdout is not log:
-            stdout.close()
-        passed = step.judge(code)
-        print(f'qualify-host: {step.name} {"passed" if passed else "FAILED"} ({time.monotonic() - started:.0f} s)', flush=True)
+        passed = conclude(step, wait(process), log, stdout)
+        if not passed and step.remeasure:
+            passed = remeasure(step)
+            if passed:
+                status.step(step.name, state='passed', detail='passed on the re-measure')
+                print(f'qualify-host: {step.name} passed on the re-measure ({elapsed()})', flush=True)
         if not passed:
             failed.append(step.name)
+            if step.stop:
+                stopped_by = step.name
+                data = status.data
+                data['stopped_because'] = step.name
+                status.write()
     for step, process, log, stdout in background:
-        code = process.wait()
-        log.close()
-        passed = step.judge(code)
-        print(f'qualify-host: {step.name} {"passed" if passed else "FAILED"} ({time.monotonic() - started:.0f} s)', flush=True)
-        if not passed:
+        if not conclude(step, process.wait(), log, stdout):
             failed.append(step.name)
+    background.clear()
     for step in steps:
         if step.phase != 4:
             continue
-        if 'native' in not_run or failed[:1] == ['native']:
+        if stopped_by:
             not_run.append(step.name)
+            status.step(step.name, state='not_run', detail=f'{stopped_by} failed')
             continue
         try:
             step.action()
+            status.step(step.name, state='passed')
         except OSError as error:
-            print(f'qualify-host: {step.name} FAILED: {error}', flush=True)
+            fail(step.name, str(error))
             failed.append(step.name)
     merged = {}
     if evidence_path.is_file():
@@ -614,6 +830,7 @@ def run(steps, cpus, out, evidence, evidence_path, keys=None):
     skipped = {key for name in not_run for key in (keys or {}).get(name, [])}
     merged.update({key: value for key, value in evidence.items() if key not in skipped})
     evidence_path.write_text(json.dumps(merged, indent=2) + '\n')
+    status.finish(failed)
     print(f'qualify-host: wrote {len(evidence) - len(skipped & set(evidence))} keys to {evidence_path}' + (f'; failed: {", ".join(failed)}' if failed else ''))
     return 1 if failed else 0
 

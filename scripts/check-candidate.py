@@ -9,6 +9,9 @@ inventory. The CI linux-x64 library and Node addon must be byte-identical to the
 locally validated ones. Every release target in release/compatibility.json is
 evaluated: the tier-1 target with the gates below, each tier-2 target with its
 own gates from CI evidence (scripts/release_targets.py).
+--plan checks, in seconds and before any long step, everything about the gates that the inputs and the
+host plan already decide (scripts/gate_plan.py): the candidate's record, policy and documents, the
+rehearsal runtime and model axes, the reuse table and that every evidence key the gates read will be produced.
 Each required gate passes only if its evidence exists, passed, and is bound to
 that candidate (source commit, library, package, asset and model hashes). Hours-long
 gates (soak, stress, fuzz, sanitizers, performance, upgrade rehearsals) may reuse
@@ -35,10 +38,16 @@ from release_targets import (Context, Missing, Mismatch, COMPARISON_NOTES, compa
                              run_gate)
 
 p = argparse.ArgumentParser(description=__doc__)
-p.add_argument('evidence', type=pathlib.Path, help='JSON object: evidence name -> report path (relative to the manifest)')
+p.add_argument('evidence', type=pathlib.Path, nargs='?', help='JSON object: evidence name -> report path (relative to the manifest)')
 p.add_argument('--candidate', default='HEAD', help='Candidate commit (default HEAD); evaluated from its own tree')
-p.add_argument('--report', type=pathlib.Path, required=True)
+p.add_argument('--report', type=pathlib.Path)
+p.add_argument('--plan', action='store_true', help='Check the gates against the plan only; judge no evidence, write no report')
+p.add_argument('--runtime', help='With --plan, the runtime commit the CI qualify run rehearses')
+p.add_argument('--upgrade-manifest', type=pathlib.Path, help='With --plan, the model-upgrade candidate model\'s manifest')
+p.add_argument('--planned-keys', default='', help='With --plan, comma-separated evidence keys the host plan will write')
 a = p.parse_args()
+if not a.plan and not (a.evidence and a.report):
+    p.error('the evidence manifest and --report are required (except with --plan)')
 commit = git(ROOT, 'rev-parse', '--verify', a.candidate + '^{commit}')
 # Release record, policy, notices and source identity come from the candidate's
 # tree, so later tooling or documentation commits cannot change what is checked.
@@ -60,10 +69,10 @@ try:
 except (ValueError, KeyError, TypeError, OSError) as error:
     raise SystemExit(f'check-candidate: the candidate {commit} has an invalid release record: {type(error).__name__}: {error}')
 manifest_model = read_json(candidate_tree / record['models'][0])
-base = a.evidence.resolve().parent
-paths = {key: (base / value).resolve() for key, value in read_json(a.evidence).items()}
+base = a.evidence.resolve().parent if a.evidence else pathlib.Path.cwd()
+paths = {key: (base / value).resolve() for key, value in read_json(a.evidence).items()} if a.evidence and a.evidence.is_file() else {}
 dirty = False  # Evidence must come from a clean candidate tree; checked per report.
-source = source_identity(candidate_tree)['sha256']
+source = '' if a.plan else source_identity(candidate_tree)['sha256']  # hashing the tree is for judging evidence
 ctx = Context(commit, source, record, policy, candidate_tree, paths)
 load, same_source = ctx.load, ctx.same_source
 
@@ -425,6 +434,18 @@ def checker_tree_dirty():
 
 if set(GATES) != set(record['required_release_gates']):
     raise SystemExit('Gate checker does not match release/compatibility.json required gates')
+if a.plan:
+    from gate_plan import plan_problems
+    here = pathlib.Path(__file__).resolve().parent
+    upgrade = json.loads(paths['upgrade'].read_text()) if paths.get('upgrade') and paths['upgrade'].is_file() else None
+    upgrade_sha = read_json(a.upgrade_manifest)['sha256'] if a.upgrade_manifest else None
+    problems = plan_problems(record, record['runtime']['commit'], [(here / 'check-candidate.py').read_text(), (here / 'release_targets.py').read_text()],
+                             HARNESS, [k for k in a.planned_keys.split(',') if k], list(paths), a.runtime, upgrade, upgrade_sha, manifest_model['sha256'])
+    for problem in problems:
+        print(f'check-candidate: plan: {problem}', file=sys.stderr)
+    shutil.rmtree(candidate_tree, ignore_errors=True)
+    print(f'check-candidate: plan {"failed" if problems else "consistent"} for {commit[:12]}: {len(GATES)} release gates')
+    raise SystemExit(2 if problems else 0)
 result = {'schema_version': 2, 'candidate_commit': commit, 'checker_commit': git(ROOT, 'rev-parse', 'HEAD'),
           'checker_tree_dirty': checker_tree_dirty(),
           'source_identity_sha256': source,
