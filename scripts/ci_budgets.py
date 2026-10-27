@@ -19,8 +19,11 @@ BUDGETS = {
     'branch-push': 100,           # a native edit: changes + generic-linux-x64
     'docs-only': 45,              # changes + policy (docs-links, release-notes)
     'verify-ci-model-free': 300,  # verify.py --ci, every stale model-free job
-    'real-model-dispatch': 480,   # a plain real_model=true dispatch
-    'candidate': 660,             # mode=candidate
+    # A plain real_model=true dispatch. 480 s measured it before macOS joined native.yml; in run 40572053784 every other job
+    # was done at 428 s and the last macOS job at 935 s, after up to 245 s of waiting for a macOS runner (GitHub's macOS
+    # concurrency) behind bindings-real-macos-x64's 557 s: the macOS critical path now sets the wall.
+    'real-model-dispatch': 960,
+    'candidate': 660,             # mode=candidate; measured before macOS joined it: refresh from its first candidate run
 }
 JOB_BUDGETS = {
     'changes': 25, 'policy': 60, 'tooling': 120,
@@ -65,22 +68,27 @@ JOB_BUDGETS = {
     # mode=warm-cache (run 40203145188, the only one so far; refresh from the p90 once there are ten):
     'warm-linux-x64': 60, 'warm-linux-arm64': 45,          # 35 s and 25 s (build phase 11 s on Linux x64: the compiler cache was warm)
     'warm-linux-x64-clang': 200, 'warm-windows-x64': 240,  # 180 s and 228 s
-    # TODO(lead): measured basis for both macOS warm jobs. Provisional: warm-linux-arm64's 45 s, the closest tier-2 warm job.
-    'warm-macos-arm64': 45, 'warm-macos-x64': 45,
+    # macOS: no warm-cache run yet. A warm job builds what build-<P> builds, which took 52 s (arm64) and 132 s (x64) with a
+    # warm compiler cache in run 40572053784; refresh from the first warm-cache run.
+    'warm-macos-arm64': 60, 'warm-macos-x64': 150,
     'warm-asan': 330, 'warm-tsan': 270, 'warm-fuzz': 340,  # 322 s, 263 s and 333 s
     'cache-prune': 30,                                     # 12 s (gh api list and delete)
     # mode=experiment, two clang-cl builds of the library and then the benchmark step (~1,050 s of the 1,259 s of run 40243819478):
     'bench-windows-x64': 1320,  # the p90 of the runs with the benchmark step (1,320 s run 40219296140, 1,259 s run 40243819478); 169 s in run 40203151892 had builds only
-    # macOS jobs, all provisional until the first runs. TODO(lead): measured basis for each; the numbers below are copied from the
-    # closest existing job and measure nothing yet.
-    # generic: generic-macos-arm64's 120 s from platforms.yml, the job these two replace.
-    'generic-macos-arm64': 120, 'generic-macos-x64': 120,
-    # One job for the six model-free suites, on one setup: local-bindings' 300 s (the same six suites in one local job).
-    'binding-macos-arm64': 300, 'binding-macos-x64': 300,
-    # packages: packages-linux-arm64's 120 s (the blanket value above). assembled: the blanket 180 s.
-    'packages-macos-arm64': 120, 'packages-macos-x64': 120, 'assembled-macos-arm64': 180, 'assembled-macos-x64': 180,
-    # reproducibility: reproducibility-linux-arm64's 300 s. build, shards, stress and evidence: the blanket values above
-    # (build 210 s, shard 270 s, stress 420 s, evidence 60 s, the tier-2 values).
+    # macOS, from verify run 40572053784 (warm compiler and toolchain caches; one run each, so refresh from the p90 once there
+    # are ten). Cold caches (run 40566157580, the first) took far longer: generic 111 s and 264 s, binding-macos-x64 431 s.
+    'generic-macos-arm64': 60, 'generic-macos-x64': 110,     # 44 s and 91 s
+    'binding-macos-arm64': 120, 'binding-macos-x64': 160,    # 107 s and 142 s, the six model-free suites in one job
+    'packages-macos-arm64': 110, 'packages-macos-x64': 230,  # 94 s and 207 s (x64: 64 s of packaging, the rest toolchain setup)
+    'assembled-macos-arm64': 70, 'assembled-macos-x64': 150,  # 58 s and 135 s
+    # Shards: their checks dominate, not setup. native: the upstream reference alone took 127 s and 116 s.
+    'native-macos-arm64': 310, 'native-macos-x64': 450,      # 285 s and 415 s
+    'parity-a-macos-arm64': 350, 'parity-b-macos-arm64': 300,  # 317 s and 270 s
+    'parity-a-macos-x64': 350, 'parity-b-macos-x64': 390,      # 323 s and 356 s
+    # bindings-real-macos-x64: the six real-model suites run in parallel on 4 cores (165 to 363 s each). Halves would add a
+    # job to a run already waiting up to 245 s for a macOS runner, without less runner time: kept whole.
+    'bindings-real-macos-x64': 600,                          # 557 s (arm64: 193 s, inside the shard budget)
+    # reproducibility: no run yet (candidate only); reproducibility-linux-arm64's 300 s until the first candidate run.
     'reproducibility-macos-arm64': 300, 'reproducibility-macos-x64': 300,
     'local-bindings': 300, 'local-packaging': 300, 'local-sanitizers': 900, 'local-fuzz': 300, 'local-real-model': 1200,
     'local-reproducibility': 1200, 'local-browser-wasm': 1200, 'local-browser-webgpu': 1200,
