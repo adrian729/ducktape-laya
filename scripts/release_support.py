@@ -113,8 +113,9 @@ TARGETS = [Target(t) for t in [
 ]]
 
 # Toolchain environment a build ran in, beyond the compiler's own version: the GitHub runner
-# image, and on Windows the MSVC toolset and Windows SDK whose libraries are linked into the DLL.
-BUILD_ENVIRONMENT = ('ImageOS', 'ImageVersion', 'VCToolsVersion', 'WindowsSDKVersion', 'VSCMD_VER')
+# image, on Windows the MSVC toolset and Windows SDK whose libraries are linked into the DLL, and on macOS the pinned Xcode
+# (DEVELOPER_DIR names its install, XCODE_VERSION is the `xcodebuild -version` number the workflow exports).
+BUILD_ENVIRONMENT = ('ImageOS', 'ImageVersion', 'VCToolsVersion', 'WindowsSDKVersion', 'VSCMD_VER', 'DEVELOPER_DIR', 'XCODE_VERSION')
 
 def build_environment():
     """The toolchain environment variables that are set (none on an ordinary Linux host)."""
@@ -342,7 +343,7 @@ def versioned_doc_problems(record, root=ROOT):
     return problems
 
 # Release targets a record may name (release_support.TARGETS names that are qualified releases).
-RELEASE_PLATFORMS = ('linux-x64', 'linux-arm64', 'windows-x64')
+RELEASE_PLATFORMS = ('linux-x64', 'linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64')
 
 def record_target(record, platform):
     """The release target entry of record['targets'] for this package platform."""
@@ -618,13 +619,14 @@ def require_compiled_hardening(path, library):
 
 
 def macho_info(path):
-    """Linked dylibs, run-path entries and minimum macOS version of a 64-bit Mach-O image."""
+    """Linked dylibs, run-path entries, minimum macOS version, external symbols and code-signature presence of a 64-bit Mach-O image."""
     import struct
     data = pathlib.Path(path).read_bytes()
     try:
         magic, cpu, _, _, commands, _, _, _ = struct.unpack_from('<IiiIIIII', data, 0)
         if magic != 0xfeedfacf: raise ValueError('not a 64-bit little-endian Mach-O')
         dylibs, rpaths, minimum, position = [], [], None, 32
+        exports, imports, signed = [], [], False
         for _ in range(commands):
             command, size = struct.unpack_from('<II', data, position)
             if command in (0xc, 0x18 | 0x80000000, 0x1f | 0x80000000):  # LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB
@@ -633,13 +635,67 @@ def macho_info(path):
             elif command == 0x8000001c:  # LC_RPATH
                 start = position + struct.unpack_from('<I', data, position + 8)[0]
                 rpaths.append(data[start:data.index(b'\0', start)].decode())
+            elif command == 0x1d:  # LC_CODE_SIGNATURE
+                signed = True
+            elif command == 0x2:  # LC_SYMTAB: external symbols, defined (exports) and undefined (imports)
+                symoff, count, stroff, _ = struct.unpack_from('<IIII', data, position + 8)
+                for index in range(count):
+                    strx, kind, _, _, _ = struct.unpack_from('<IBBHQ', data, symoff + 16 * index)
+                    if not kind & 0x01 or kind & 0xe0: continue  # N_EXT only, no debug (stab) entries
+                    start = stroff + strx
+                    name = data[start:data.index(b'\0', start)].decode()
+                    (exports if kind & 0x0e == 0x0e else imports if kind & 0x0e == 0 else []).append(name)  # N_SECT / N_UNDF
             elif command == 0x32:  # LC_BUILD_VERSION
                 packed = struct.unpack_from('<I', data, position + 12)[0]
                 minimum = f'{packed >> 16}.{(packed >> 8) & 0xff}'
             position += size
-        return {'cpu': cpu, 'dylibs': dylibs, 'rpaths': rpaths, 'minimum_os': minimum}
+        return {'cpu': cpu, 'dylibs': dylibs, 'rpaths': rpaths, 'minimum_os': minimum, 'exports': sorted(exports), 'imports': sorted(imports),
+                'code_signature': signed}
     except (struct.error, ValueError) as error:
         raise ValueError(f'{path}: not a readable Mach-O image ({error})') from None
+
+# Mach-O CPU types (mach/machine.h) of the macOS release targets, and the libraries a shipped binary may link.
+MACHO_CPU = {'macos-arm64': 0x0100000C, 'macos-x64': 0x01000007}
+MACHO_SYSTEM_LIBRARIES = ('/usr/lib/libc++.1.dylib', '/usr/lib/libSystem.B.dylib')
+
+
+def require_macho_cpu(path, platform):
+    """The image is built for the CPU of the package target (a Rosetta Python must not label an arm64 payload macos-x64)."""
+    cpu = macho_info(path)['cpu']
+    if cpu != MACHO_CPU[platform]:
+        raise SystemExit(f'{pathlib.Path(path).name} has CPU type {cpu & 0xffffffff:#x}, not the {platform} type {MACHO_CPU[platform]:#x}')
+
+
+def require_macho_rpaths(path):
+    """Every LC_RPATH entry is relative to the binary (@loader_path): an absolute or working-directory path would let
+    the build machine's or the caller's directories supply libducktape_laya at load time."""
+    bad = [entry for entry in macho_info(path)['rpaths'] if not re.fullmatch(r'@loader_path(?:/.*)?', entry)]
+    if bad:
+        raise SystemExit(f'{pathlib.Path(path).name} searches for libraries outside its own directory: {":".join(bad)}')
+
+
+def require_macho_hardening(path, library):
+    """Smoke checks of the compiler hardening on a shipped Mach-O binary: the stack protector's failure handler is imported
+    and a library calls fortified (_FORTIFY_SOURCE) functions (___*_chk)."""
+    imports = set(macho_info(path)['imports'])
+    if '___stack_chk_fail' not in imports:
+        raise SystemExit(f'{pathlib.Path(path).name} does not use the stack protector (no ___stack_chk_fail)')
+    if library and not any(re.fullmatch(r'___\w+_chk', name) and name != '___stack_chk_fail' for name in imports):
+        raise SystemExit(f'{pathlib.Path(path).name} calls no fortified function (no ___*_chk): built without _FORTIFY_SOURCE?')
+
+
+def require_macho_signature(path, platform):
+    """arm64 images carry a code signature (the linker's ad-hoc one; the kernel refuses unsigned arm64 code)."""
+    if platform == 'macos-arm64' and not macho_info(path)['code_signature']:
+        raise SystemExit(f'{pathlib.Path(path).name} has no LC_CODE_SIGNATURE')
+
+
+def require_macho_linkage(path, extra=()):
+    """Only libc++ and libSystem, plus EXTRA (the addon links the library through @rpath)."""
+    bad = [name for name in macho_info(path)['dylibs'] if name not in (*MACHO_SYSTEM_LIBRARIES, *extra)]
+    if bad:
+        raise SystemExit(f'{pathlib.Path(path).name} links libraries beyond {", ".join((*MACHO_SYSTEM_LIBRARIES, *extra))}: {", ".join(bad)}')
+
 
 def binary_info(build):
     """Inspect the built ABI without a model; detect stale/incompatible artifacts."""

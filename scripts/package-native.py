@@ -149,6 +149,11 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     elif target.os == 'win32':
         for path in (native.glob('bin/ducktape_laya.dll'), native.glob('lib*/ducktape-laya/node/ducktape_laya.node')):
             for item in path: require_guard_cf(item)
+    elif target.os == 'darwin':
+        # Same checks as scripts/check-binary.py, on the installed files (no strip step on macOS).
+        for path in (*native.glob('lib*/libducktape_laya.dylib'), *native.glob('lib*/ducktape-laya/node/ducktape_laya.node')):
+            problems = check_binary.macho_problems(path, target, library=path.suffix == '.dylib')
+            if problems: raise SystemExit('; '.join(problems))
     # tar.gz with symlinks on Linux and macOS, zip on Windows (no symlinks there).
     archive = archive_zip if target.archive == '.zip' else archive_tree
     archive(native, out / (native.name + target.archive), native.name, epoch)

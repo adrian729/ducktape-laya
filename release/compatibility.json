@@ -264,6 +264,92 @@
         "short_stress",
         "cross_profile_drift"
       ]
+    },
+    {
+      "platform": "macos-arm64",
+      "tier": 2,
+      "os": "macos",
+      "architecture": "arm64",
+      "cpu_baseline": {
+        "isa": "armv8.2-a with dot product and FP16",
+        "required_cpu_features": [
+          "asimddp",
+          "fphp"
+        ]
+      },
+      "numerical_profile": {
+        "runtime_id": "native-cpu:asimddp+fphp",
+        "compiler": "apple-clang",
+        "math_library": "apple-libm"
+      },
+      "models": [
+        "models/manifest.json"
+      ],
+      "build": {
+        "qualified_on": "ci",
+        "built_by": ".github/workflows/native.yml",
+        "runner": "macos-15",
+        "node_headers": "24.21.0"
+      },
+      "known_deviations": [],
+      "electron": true,
+      "required_gates": [
+        "native_contracts",
+        "binding_conformance",
+        "upstream_reference",
+        "original_reference",
+        "abi",
+        "installed_packages",
+        "artifact_integrity",
+        "reproducibility",
+        "short_stress",
+        "cross_profile_drift"
+      ]
+    },
+    {
+      "platform": "macos-x64",
+      "tier": 2,
+      "os": "macos",
+      "architecture": "x86_64",
+      "cpu_baseline": {
+        "isa": "x86-64 with AVX2, FMA, F16C and BMI2",
+        "required_cpu_features": [
+          "avx",
+          "avx2",
+          "fma",
+          "f16c",
+          "bmi2",
+          "sse4.2"
+        ]
+      },
+      "numerical_profile": {
+        "runtime_id": "native-cpu:avx+avx2+fma+f16c+bmi2+sse4.2",
+        "compiler": "apple-clang",
+        "math_library": "apple-libm"
+      },
+      "models": [
+        "models/manifest.json"
+      ],
+      "build": {
+        "qualified_on": "ci",
+        "built_by": ".github/workflows/native.yml",
+        "runner": "macos-15-intel",
+        "node_headers": "24.21.0"
+      },
+      "known_deviations": [],
+      "electron": true,
+      "required_gates": [
+        "native_contracts",
+        "binding_conformance",
+        "upstream_reference",
+        "original_reference",
+        "abi",
+        "installed_packages",
+        "artifact_integrity",
+        "reproducibility",
+        "short_stress",
+        "cross_profile_drift"
+      ]
     }
   ]
 }

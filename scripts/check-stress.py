@@ -142,7 +142,7 @@ try:
     started = time.monotonic()
     # Windows finds the DLL on PATH.
     env = dict(os.environ, PATH=str(build) + os.pathsep + os.environ.get('PATH', '')) if sys.platform == 'win32' \
-        else dict(os.environ, LD_LIBRARY_PATH=str(build))
+        else dict(os.environ, **{'DYLD_LIBRARY_PATH' if sys.platform == 'darwin' else 'LD_LIBRARY_PATH': str(build)})
     with (out / 'stress.log').open('w') as log, (out / 'result.json').open('w') as result:
         report['exit_code'], report['stopped'] = run_watched(command, out, env, result, log, out / 'stress.log')
     report['elapsed_seconds'] = time.monotonic() - started

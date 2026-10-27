@@ -13,7 +13,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from release_support import (LIBRARY, require_uninstrumented_binary, ROOT, browser_build_identity, sha256, source_identity, native_build_identity,
                              require_mapped_source_paths, require_runtime_identity, require_elf_hardening, require_origin_search_paths,
-                             require_guard_cf, require_compiled_hardening)
+                             require_guard_cf, require_compiled_hardening, macho_info, target)
 WINDOWS = sys.platform == 'win32'
 _spec = importlib.util.spec_from_file_location('check_binary', ROOT / 'scripts/check-binary.py')
 check_binary = importlib.util.module_from_spec(_spec)
@@ -425,6 +425,101 @@ class CheckBinaryTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(check_binary.main([str(build)]), 0)
         self.assertEqual(set(json.loads(output.getvalue())['binaries']), {'library'})
+
+
+def macho(cpu=0x0100000C, dylibs=('/usr/lib/libc++.1.dylib', '/usr/lib/libSystem.B.dylib'), rpaths=('@loader_path',), signed=True,
+          exports=None, imports=('___stack_chk_fail', '___memcpy_chk', '_memcpy'), identifier=None):
+    """A minimal 64-bit Mach-O image: header, load commands (dylibs, run paths, code signature, symbol table) and symbols."""
+    import struct
+    exports = check_binary.expected_exports() if exports is None else exports
+    names = [('_' + name, 0x0f) for name in exports] + [(name, 0x01) for name in imports] + [('_local', 0x0e), ('stab', 0x24)]
+    strings, entries = b'\0', b''
+    for name, kind in names:
+        entries += struct.pack('<IBBHQ', len(strings), kind, 1, 0, 0)
+        strings += name.encode() + b'\0'
+
+    def string_command(command, text):
+        raw = text.encode() + b'\0'
+        raw += b'\0' * (-len(raw) % 8)
+        if command == 0x8000001c:  # LC_RPATH: command, size, path offset
+            return struct.pack('<III', command, 12 + len(raw), 12) + raw
+        return struct.pack('<IIIIII', command, 24 + len(raw), 24, 0, 0, 0) + raw  # LC_LOAD_DYLIB
+    commands = [string_command(0xc, name) for name in dylibs] + [string_command(0x8000001c, name) for name in rpaths]
+    commands.append(struct.pack('<IIIIII', 0x32, 24, 1, 14 << 16, 14 << 16, 0))  # LC_BUILD_VERSION: macOS 14.0
+    if signed:
+        commands.append(struct.pack('<IIII', 0x1d, 16, 0, 0))
+    body = b''.join(commands)
+    symoff = 32 + len(body) + 24
+    strings_at = symoff + len(entries)
+    commands.append(struct.pack('<IIIIII', 0x2, 24, symoff, len(names), strings_at, len(strings)))
+    body = b''.join(commands)
+    return struct.pack('<IiiIIIII', 0xfeedfacf, cpu, 0, 6, len(commands), len(body), 0, 0) + body + entries + strings
+
+
+class MachOCheckTests(unittest.TestCase):
+    """The Mach-O shipping checks (check-binary.py macho_problems, package-native.py) on hand-built images: no macOS toolchain is needed."""
+    ARM, X64 = target('macos-arm64'), target('macos-x64')
+    ADDON_LINK = ('/usr/lib/libc++.1.dylib', '/usr/lib/libSystem.B.dylib', '@rpath/libducktape_laya.1.dylib')
+
+    def problems(self, platform=None, library=True, **kwargs):
+        platform = platform or self.ARM
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'image'
+            path.write_bytes(macho(cpu=kwargs.pop('cpu', 0x0100000C if platform is self.ARM else 0x01000007), **kwargs))
+            return check_binary.macho_problems(path, platform, library)
+
+    def test_parser_reads_the_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'image'
+            path.write_bytes(macho())
+            info = macho_info(path)
+        self.assertEqual((info['cpu'], info['rpaths'], info['code_signature']), (0x0100000C, ['@loader_path'], True))
+        self.assertEqual(info['dylibs'], ['/usr/lib/libc++.1.dylib', '/usr/lib/libSystem.B.dylib'])
+        self.assertEqual(info['imports'], ['___memcpy_chk', '___stack_chk_fail', '_memcpy'])
+        self.assertEqual([name.lstrip('_') for name in info['exports']], check_binary.expected_exports())
+
+    def test_conforming_images_pass(self):
+        self.assertEqual(self.problems(), [])
+        self.assertEqual(self.problems(self.X64, signed=False), [])
+        self.assertEqual(self.problems(library=False, dylibs=self.ADDON_LINK, exports=[], imports=('___stack_chk_fail',), rpaths=('@loader_path', '@loader_path/../..')), [])
+
+    def test_each_constraint_is_enforced(self):
+        cases = {'CPU type': (dict(cpu=0x01000007), 'CPU type'), 'run path': (dict(rpaths=('@loader_path', '/opt/build/lib')), 'outside its own directory'),
+                 'bare run path': (dict(rpaths=('lib',)), 'outside its own directory'),
+                 'stack protector': (dict(imports=('___memcpy_chk',)), 'stack protector'),
+                 'fortify': (dict(imports=('___stack_chk_fail',)), 'fortified'),
+                 'signature': (dict(signed=False), 'LC_CODE_SIGNATURE'),
+                 'libraries': (dict(dylibs=('/usr/lib/libSystem.B.dylib', '/opt/homebrew/lib/libomp.dylib')), 'libomp'),
+                 'rpath library in the library': (dict(dylibs=self.ADDON_LINK), 'libducktape_laya.1.dylib'),
+                 'extra export': (dict(exports=check_binary.expected_exports() + ['dtl_extra']), 'exports'),
+                 'missing export': (dict(exports=check_binary.expected_exports()[1:]), 'exports')}
+        for label, (change, message) in cases.items():
+            with self.subTest(label):
+                problems = self.problems(**change)
+                self.assertTrue(any(message in problem for problem in problems), problems)
+
+    def test_platform_specific_rules(self):
+        self.assertTrue(any('CPU type' in problem for problem in self.problems(self.X64, cpu=0x0100000C)))
+        # The ad-hoc signature is required on arm64 only.
+        self.assertEqual(self.problems(self.X64, signed=False), [])
+        # An addon is not held to the export list or to fortified calls, but must link the library through @rpath only.
+        self.assertTrue(any('libomp' in problem for problem in self.problems(library=False, exports=[], imports=('___stack_chk_fail',),
+                                                                       dylibs=(*self.ADDON_LINK, '/opt/lib/libomp.dylib'))))
+        self.assertTrue(any('stack protector' in problem for problem in self.problems(library=False, exports=[], imports=(), dylibs=self.ADDON_LINK)))
+
+    def test_check_binaries_runs_the_checks_for_the_platform(self):
+        from unittest import mock
+        # nm and the source-path scan read real toolchain output; the Mach-O checks are what this test routes.
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(check_binary, 'require_uninstrumented_binary'), \
+                mock.patch.object(check_binary, 'require_mapped_source_paths'):
+            path = pathlib.Path(directory) / 'libducktape_laya.dylib'
+            path.write_bytes(macho())
+            ours = check_binary.check_binaries(path, platform='macos-arm64')
+            other = check_binary.check_binaries(path, platform='macos-x64')
+            elf = check_binary.check_binaries(path, platform='linux-x64')
+        self.assertEqual((ours['status'], ours['problems'], ours['minimum_macos']), ('passed', [], '14.0'))
+        self.assertTrue(any('CPU type' in problem for problem in other['problems']), other['problems'])
+        self.assertTrue(any('not the elf binary' in problem for problem in elf['problems']), elf['problems'])
 
 
 if __name__ == '__main__':

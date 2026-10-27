@@ -48,7 +48,7 @@ from release_targets import (PLATFORM_POLICY, POLICY_LABELS, Context, Mismatch, 
                              run_gate, target_gates)
 from release_world import World, digest  # noqa: E402
 
-TIER2 = ('linux-arm64', 'windows-x64')
+TIER2 = ('linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64')
 
 
 class Targets(unittest.TestCase):
@@ -82,7 +82,7 @@ class Targets(unittest.TestCase):
         ctx = Context(self.world.commit, self.world.source, self.world.record, self.world.policy, ROOT, self.world.paths)
         tier1 = {gate: {'status': 'not_run'} for gate in self.world.record['required_release_gates']}
         result = evaluate_targets(ctx, tier1)
-        self.assertEqual(sorted(result), ['linux-arm64', 'linux-x64', 'windows-x64'])
+        self.assertEqual(sorted(result), ['linux-arm64', 'linux-x64', 'macos-arm64', 'macos-x64', 'windows-x64'])
         self.assertEqual(result['linux-x64'], {'tier': 1, 'gates': tier1})
         self.assertEqual(result['windows-x64']['ci_run']['run_id'], 7)
 
@@ -145,11 +145,11 @@ class Targets(unittest.TestCase):
         self.assertGate('windows-x64', 'installed_packages', 'failed', 'not the release packages')
         self.setUp()
         self.world.repack_release(f'ducktape-laya-{self.world.version}.tgz',
-                                  lambda entries: {**entries, 'package/native/darwin-arm64/ducktape_laya.node': b'x'})
+                                  lambda entries: {**entries, 'package/native/freebsd-x64/ducktape_laya.node': b'x'})
         self.assertGate('linux-arm64', 'artifact_integrity', 'failed', 'npm: native files outside')
         self.setUp()
         self.world.repack_release(f'ducktape-laya-{self.world.version}.jar',
-                                  lambda entries: {**entries, 'native/macos-arm64/libducktape_laya.dylib': (b'x', True)})
+                                  lambda entries: {**entries, 'native/freebsd-x64/libducktape_laya.so': (b'x', True)})
         self.assertGate('linux-arm64', 'artifact_integrity', 'failed', 'java: native files outside')
         self.setUp()
         self.world.repack_release(f'DucktapeLaya.{self.world.version}.nupkg',
@@ -341,7 +341,7 @@ class Profiles(unittest.TestCase):
 
     def test_consistent_reports_pass(self):
         for profile in self.CALLS:
-            for platform in ('linux-x64', 'windows-x64'):
+            for platform in ('linux-x64', 'windows-x64', 'macos-arm64'):
                 with self.subTest(profile=profile, platform=platform):
                     self.assertIsNone(self.refusal(profile, lambda r: None, platform))
 
@@ -480,7 +480,7 @@ class CheckCandidate(unittest.TestCase):
         # Evidence paths are relative to the evidence manifest, never absolute local paths.
         self.assertEqual(gates['evidence'], {key: os.path.relpath(path, world.directory) for key, path in world.paths.items()})
         self.assertFalse(any(os.path.isabs(path) for path in gates['evidence'].values()))
-        self.assertEqual(sorted(gates['targets']), ['linux-arm64', 'linux-x64', 'windows-x64'])
+        self.assertEqual(sorted(gates['targets']), ['linux-arm64', 'linux-x64', 'macos-arm64', 'macos-x64', 'windows-x64'])
         for platform in TIER2:
             self.assertEqual({k: v['status'] for k, v in gates['targets'][platform]['gates'].items()},
                              {gate: 'passed' for gate in world.targets[platform]['required_gates']}, gates['targets'][platform])
