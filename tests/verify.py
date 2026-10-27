@@ -320,7 +320,7 @@ class Output(unittest.TestCase):
     def test_timing_table(self):
         table = verify.timing_table([('generic-linux-x64', 'ci', 'passed', 70.0), ('generic-windows-x64', 'ci', 'FAILURE', 200.0),
                                      ('local-fuzz', 'local', 'passed', None)],
-                                    [('native.yml run 1', 290.0, 'verify-ci-model-free'), ('native.yml run 2', 500.0, 'real-model-dispatch')])
+                                    [('native.yml run 1', 290.0, 'verify-ci-model-free'), ('native.yml run 2', verify.ci_budgets.BUDGETS['real-model-dispatch'] + 20.0, 'real-model-dispatch')])
         lines = table.splitlines()
         self.assertNotIn('OVER BUDGET', lines[1])
         self.assertIn('OVER BUDGET', lines[2])
