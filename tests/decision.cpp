@@ -13,7 +13,7 @@
 #include <stdexcept>
 using dtl::json;
 static void expect(bool ok, const char *message) { if (!ok) throw std::runtime_error(message); }
-static bool near(double a, double b) { return std::fabs(a - b) < 1e-12; }
+static bool nearly(double a, double b) { return std::fabs(a - b) < 1e-12; }
 static json options(std::initializer_list<const char *> keys) {
     json result = json::array();
     for (auto key : keys) result.push_back({{"key", key}, {"description", std::string("level ") + key}});
@@ -28,10 +28,10 @@ static int parse_scaling() {
         text += "]";
         return dtl_test::cpu_seconds_per_run([&] { expect(dtl::parse_request_json(text, 64, 1024).size() == objects, "parsed"); });
     };
-    const double small = seconds(20000), large = seconds(40000);
-    std::cout << "request parse: 20000 objects " << small << " s, 40000 objects " << large << " s\n";
+    const double half = seconds(20000), full = seconds(40000);
+    std::cout << "request parse: 20000 objects " << half << " s, 40000 objects " << full << " s\n";
     // Linear growth doubles the time and quadratic growth quadruples it.
-    if (large > 3 * small) { std::cerr << "request parsing grows faster than linearly\n"; return 1; }
+    if (full > 3 * half) { std::cerr << "request parsing grows faster than linearly\n"; return 1; }
     return 0;
 }
 int main(int argc, char **argv) {
@@ -127,30 +127,30 @@ int main(int argc, char **argv) {
 
         // Equal scores: uniform probabilities, first option, zero concentration.
         auto tie = dtl::answer_from_scores("choice", options({"a", "b", "c"}), {0.5f, 0.5f, 0.5f}, 3);
-        expect(tie["choice"] == "a" && near(tie["probabilities"]["b"].get<double>(), 1.0 / 3) &&
-               near(tie["confidence"].get<double>(), 0) && near(tie["answer_confidence"].get<double>(), 1.0 / 3),
+        expect(tie["choice"] == "a" && nearly(tie["probabilities"]["b"].get<double>(), 1.0 / 3) &&
+               nearly(tie["confidence"].get<double>(), 0) && nearly(tie["answer_confidence"].get<double>(), 1.0 / 3),
                "three-way choice tie chooses the first option");
         auto later = dtl::answer_from_scores("choice", options({"a", "b", "c"}), {1, 3, 3}, 1);
         expect(later["choice"] == "b", "tie between later options chooses the first of them");
-        expect(near(later["probabilities"]["a"].get<double>(), 1 / (1 + 2 * std::exp(2.0))) &&
+        expect(nearly(later["probabilities"]["a"].get<double>(), 1 / (1 + 2 * std::exp(2.0))) &&
                later["probabilities"]["b"] == later["probabilities"]["c"], "softmax probabilities");
         auto scaled = dtl::answer_from_scores("choice", options({"a", "b"}), {0, 2}, 2);
         const double pb = 1 / (1 + std::exp(-1.0));
         const double entropy = -(pb * std::log(pb) + (1 - pb) * std::log(1 - pb));
-        expect(near(scaled["probabilities"]["b"].get<double>(), pb) && near(scaled["answer_confidence"].get<double>(), pb) &&
-               near(scaled["confidence"].get<double>(), 1 - entropy / std::log(2.0)), "temperature, answer_confidence and concentration");
+        expect(nearly(scaled["probabilities"]["b"].get<double>(), pb) && nearly(scaled["answer_confidence"].get<double>(), pb) &&
+               nearly(scaled["confidence"].get<double>(), 1 - entropy / std::log(2.0)), "temperature, answer_confidence and concentration");
 
         // Ordinal score: the expected level over the probabilities.
         auto score = dtl::answer_from_scores("score", options({"0", "1", "2"}), {2, 0, 2}, 1);
         const double edge = 1 / (2 + std::exp(-2.0)), middle = std::exp(-2.0) * edge;
-        expect(near(score["score"].get<double>(), middle + 2 * edge), "expected level");
+        expect(nearly(score["score"].get<double>(), middle + 2 * edge), "expected level");
         const double score_entropy = -(2 * edge * std::log(edge) + middle * std::log(middle));
-        expect(near(score["confidence"].get<double>(), 1 - score_entropy / std::log(3.0)) &&
-               near(score["answer_confidence"].get<double>(), edge), "score concentration and answer_confidence");
+        expect(nearly(score["confidence"].get<double>(), 1 - score_entropy / std::log(3.0)) &&
+               nearly(score["answer_confidence"].get<double>(), edge), "score concentration and answer_confidence");
         expect(score["legend"]["2"] == "level 2" && !score.contains("choice"), "score legend");
 
         auto noul = dtl::answer_from_scores("noul", json::array(), {0, 0}, 1);
-        expect(noul.size() == 4 && noul["noul"].get<double>() == 0.5 && near(noul["confidence"].get<double>(), 0) &&
+        expect(noul.size() == 4 && noul["noul"].get<double>() == 0.5 && nearly(noul["confidence"].get<double>(), 0) &&
                noul["answer_confidence"].get<double>() == 0.5, "noul tie is one half");
         auto single = dtl::single_option_answer(options({"only"}));
         expect(single["choice"] == "only" && single["probabilities"]["only"] == 1.0 && single["confidence"] == 1.0 &&
