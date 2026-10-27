@@ -543,8 +543,6 @@ jobs:
       # Xcode pinned for every macOS job (the compiler, SDK and linker are part of the library's bytes). It is recorded in each
       # build, stress and reproducibility report through release_support.BUILD_ENVIRONMENT, which the evidence jobs compare
       # (image-check): a runner image that drifts to another Xcode fails the merge instead of shipping.
-      # TODO(lead): BUILD_ENVIRONMENT needs 'DEVELOPER_DIR' (scripts/release_support.py, B2's file) for the Xcode to be recorded.
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -569,7 +567,6 @@ jobs:
       DTL_CACHE_FALLBACK: |-
         macos-x64-appleclang-warm
       DTL_CACHE_SAVE: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -755,7 +752,6 @@ jobs:
         macos-arm64-appleclang-build
         macos-arm64-appleclang-warm
       DTL_CACHE_SAVE: 'false'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -792,7 +788,6 @@ jobs:
         macos-x64-appleclang-build
         macos-x64-appleclang-warm
       DTL_CACHE_SAVE: 'false'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -963,7 +958,6 @@ jobs:
         macos-arm64-appleclang-build
         macos-arm64-appleclang-warm
       DTL_CACHE_SAVE: 'false'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -1000,7 +994,6 @@ jobs:
         macos-x64-appleclang-build
         macos-x64-appleclang-warm
       DTL_CACHE_SAVE: 'false'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -1372,7 +1365,6 @@ jobs:
     env:
       DTL_JOB: reproducibility-macos-arm64
       DTL_NODE: 24.21.0
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -1400,7 +1392,6 @@ jobs:
     env:
       DTL_JOB: reproducibility-macos-x64
       DTL_NODE: 24.21.0
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -1623,7 +1614,6 @@ jobs:
       DTL_CACHE_FALLBACK: |-
         macos-arm64-appleclang-warm
       DTL_CACHE_SAVE: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -1656,7 +1646,6 @@ jobs:
       DTL_CACHE_FALLBACK: |-
         macos-x64-appleclang-warm
       DTL_CACHE_SAVE: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -1896,7 +1885,6 @@ jobs:
       DTL_NODE: 24.21.0
       DTL_TOOLS: ${{ matrix.tools }}
       DTL_MODEL: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *setup-node
@@ -1935,7 +1923,6 @@ jobs:
       DTL_NODE: 24.21.0
       DTL_TOOLS: ${{ matrix.tools }}
       DTL_MODEL: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *setup-node
@@ -2105,7 +2092,6 @@ jobs:
       DTL_NODE: 24.21.0
       DTL_TOOLS: rust,java,dotnet,go
       DTL_MODEL: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *setup-node
@@ -2139,7 +2125,6 @@ jobs:
       DTL_NODE: 24.21.0
       DTL_TOOLS: rust,java,dotnet,go
       DTL_MODEL: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *setup-node
@@ -2229,7 +2214,6 @@ jobs:
       DTL_JOB: stress-macos-arm64
       DTL_PLATFORM: macos-arm64
       DTL_MODEL: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *model-key
@@ -2250,7 +2234,6 @@ jobs:
       DTL_JOB: stress-macos-x64
       DTL_PLATFORM: macos-x64
       DTL_MODEL: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *model-key
@@ -2813,7 +2796,6 @@ jobs:
       DTL_CACHE_FALLBACK: |-
         macos-arm64-appleclang-build
       DTL_CACHE_SAVE: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja
@@ -2842,7 +2824,6 @@ jobs:
       DTL_CACHE_FALLBACK: |-
         macos-x64-appleclang-build
       DTL_CACHE_SAVE: 'true'
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - *checkout
       - *ninja

@@ -113,14 +113,25 @@ TARGETS = [Target(t) for t in [
 ]]
 
 # Toolchain environment a build ran in, beyond the compiler's own version: the GitHub runner
-# image, on Windows the MSVC toolset and Windows SDK whose libraries are linked into the DLL, and on macOS the pinned Xcode
-# (DEVELOPER_DIR names its install, XCODE_VERSION is the `xcodebuild -version` number the workflow exports).
-BUILD_ENVIRONMENT = ('ImageOS', 'ImageVersion', 'VCToolsVersion', 'WindowsSDKVersion', 'VSCMD_VER', 'DEVELOPER_DIR', 'XCODE_VERSION')
+# image, and on Windows the MSVC toolset and Windows SDK whose libraries are linked into the DLL.
+BUILD_ENVIRONMENT = ('ImageOS', 'ImageVersion', 'VCToolsVersion', 'WindowsSDKVersion', 'VSCMD_VER')
 
 def build_environment():
-    """The toolchain environment variables that are set (none on an ordinary Linux host)."""
+    """The toolchain environment variables that are set (none on an ordinary Linux host); on macOS also the Xcode
+    the build used (DEVELOPER_DIR, from xcode-select or the environment, and XCODE_VERSION, `xcodebuild -version`),
+    whose SDK and linker are recorded in every Mach-O binary."""
     import os
-    return {key: os.environ[key].strip().rstrip('\\') for key in BUILD_ENVIRONMENT if os.environ.get(key)}
+    environment = {key: os.environ[key].strip().rstrip('\\') for key in BUILD_ENVIRONMENT if os.environ.get(key)}
+    if sys.platform == 'darwin':
+        def tool(*command):
+            try:
+                return subprocess.run(command, capture_output=True, text=True, check=True).stdout.strip()
+            except (OSError, subprocess.CalledProcessError):
+                return ''
+        developer = os.environ.get('DEVELOPER_DIR') or tool('xcode-select', '-p')
+        version = ' '.join(tool('xcodebuild', '-version').split())
+        environment.update({key: value for key, value in (('DEVELOPER_DIR', developer), ('XCODE_VERSION', version)) if value})
+    return environment
 
 def target(name):
     for item in TARGETS:
