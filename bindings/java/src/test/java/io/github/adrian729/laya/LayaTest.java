@@ -77,7 +77,11 @@ public final class LayaTest {
         eq("linux-arm64", Native.platform("linux", "aarch64"), "Linux arm64");
         eq("macos-arm64", Native.platform("mac os x", "aarch64"), "macOS arm64");
         eq("windows-x64", Native.platform("windows server 2025", "amd64"), "Windows x64");
-        eq(null, Native.platform("mac os x", "x86_64"), "Intel macOS has no package");
+        eq("macos-x64", Native.platform("mac os x", "x86_64"), "macOS x86-64");
+        eq("macos-x64", Native.platform("mac os x", "amd64"), "macOS amd64");
+        // The macOS extraction leaf carries the content hash, so a same-named file on DYLD_LIBRARY_PATH cannot shadow it.
+        check(Native.uniqueLeaf(new byte[] {1}).matches("libducktape_laya-[0-9a-f]{16}\\.dylib"), "macOS extraction leaf");
+        check(!Native.uniqueLeaf(new byte[] {1}).equals(Native.uniqueLeaf(new byte[] {2})), "leaf depends on content");
         eq(null, Native.platform("windows 11", "aarch64"), "Windows arm64 has no package");
         eq(null, Native.platform("freebsd", "amd64"), "FreeBSD has no package");
     }

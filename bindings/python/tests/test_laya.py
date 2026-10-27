@@ -26,11 +26,11 @@ class LibraryChoice(unittest.TestCase):
             bundled.write_bytes(b'')
             self.assertEqual(_native._target('ARM64', 'win32', bundled), (str(bundled), True))
             bundled.unlink()
-            with self.assertRaisesRegex(laya.LayaLoadError, 'Unsupported platform win32/ARM64: .*Linux x86-64 and arm64 and Windows x64'):
+            with self.assertRaisesRegex(laya.LayaLoadError, 'Unsupported platform win32/ARM64: .*Linux x86-64 and arm64, macOS arm64 and x86-64 and Windows x64'):
                 _native._target('ARM64', 'win32', bundled)
             self.assertEqual(_native._target('AMD64', 'win32', bundled), (_native._VERSIONED, False))
 
-    def _open(self, plat, bundled, error=None, env=None):
+    def _open(self, plat, bundled, error=None, env=None, machine='AMD64'):
         """Runs the loader with a fake ctypes.CDLL; returns the calls it made and the result or error."""
         from unittest import mock
         from ducktape_laya import _native
@@ -44,7 +44,7 @@ class LibraryChoice(unittest.TestCase):
             if not env:
                 os.environ.pop('DUCKTAPE_LAYA_LIB_DIR', None)
             try:
-                return calls, _native._open(cdll, 'AMD64', plat, bundled)
+                return calls, _native._open(cdll, machine, plat, bundled)
             except laya.LayaLoadError as caught:
                 return calls, caught
 
@@ -87,6 +87,51 @@ class LibraryChoice(unittest.TestCase):
             self.assertEqual(calls, [(_native._VERSIONED, {'winmode': 0x1000})])
             calls, _ = self._open('linux', missing)
             self.assertEqual(calls, [(_native._VERSIONED, {})])
+
+    def test_macos_loads_absolute_paths_only_and_checks_the_image(self):
+        import pathlib
+        import tempfile
+        from unittest import mock
+        from ducktape_laya import _native
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(_native, '_verify_image') as verify:
+            bundled = pathlib.Path(directory, _native._NAME)
+            bundled.write_bytes(b'')
+            for machine in ('arm64', 'x86_64'):
+                self.assertEqual(_native._target(machine, 'darwin', bundled), (str(bundled), True))
+            bundled.unlink()
+            with mock.patch.object(_native.os.path, 'isfile', return_value=False):
+                for machine in ('arm64', 'x86_64'):
+                    with self.assertRaisesRegex(laya.LayaLoadError, r'not found: .*/opt/homebrew/lib nor /usr/local/lib'):
+                        _native._target(machine, 'darwin', bundled)
+                calls, error = self._open('darwin', bundled, machine='arm64')
+                self.assertEqual(calls, [])  # no bare-name load
+                self.assertIsInstance(error, laya.LayaLoadError)
+            with mock.patch.object(_native.os.path, 'isfile', side_effect=lambda p: p == '/usr/local/lib/' + _native._VERSIONED):
+                calls, result = self._open('darwin', bundled, machine='x86_64')
+                self.assertEqual(calls, [('/usr/local/lib/' + _native._VERSIONED, {})])
+                verify.assert_called_with('library', '/usr/local/lib/' + _native._VERSIONED)
+            # The explicit directory is made absolute before it is loaded and verified.
+            os.makedirs(os.path.join(directory, 'lib'))
+            pathlib.Path(directory, 'lib', _native._NAME).write_bytes(b'')
+            cwd = os.getcwd()
+            os.chdir(directory)
+            try:
+                calls, _ = self._open('darwin', bundled, machine='arm64', env={'DUCKTAPE_LAYA_LIB_DIR': 'lib'})
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(os.path.isabs(calls[0][0]))
+            self.assertTrue(calls[0][0].endswith(os.path.join('lib', _native._NAME)))
+
+    def test_macos_refuses_a_swapped_library(self):
+        from unittest import mock
+        from ducktape_laya import _native
+        swapped = laya.LayaLoadError('Refusing the native ducktape-laya library: /a was requested but dtl_abi_version comes from /b; DYLD_LIBRARY_PATH')
+        with mock.patch.object(_native, '_verify_image', side_effect=swapped):
+            _, error = self._open('darwin', __import__('pathlib').Path(__file__), machine='arm64')
+        self.assertIs(error, swapped)
+        self.assertEqual(error.status, laya.Status.UNSUPPORTED_PLATFORM)
+
 
 
 class Basics(unittest.TestCase):

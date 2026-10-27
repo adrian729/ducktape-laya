@@ -6,7 +6,7 @@ Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Go: ask named
 go get github.com/adrian729/ducktape-laya/bindings/go@v0.3.0
 ```
 
-Requires Go 1.22+ (CI tests 1.27), a C compiler, and the native library and header from the [v0.3.0 release archive](https://github.com/adrian729/ducktape-laya/releases/tag/v0.3.0) for Linux x86-64, Linux arm64 or Windows x64 ([Windows](#windows); the v0.1.0 archive has ABI 1 and does not work with this binding); other platforms build the library [from a checkout](#from-a-checkout). Platform requirements: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
+Requires Go 1.22+ (CI tests 1.27), a C compiler, and the native library and header from the [v0.3.0 release archive](https://github.com/adrian729/ducktape-laya/releases/tag/v0.3.0) for Linux x86-64, Linux arm64, macOS arm64, macOS x86-64 (`-macos-arm64.tar.gz`, `-macos-x64.tar.gz`; releases from the one that promotes macOS to tier 2) or Windows x64 ([Windows](#windows); the v0.1.0 archive has ABI 1 and does not work with this binding); other platforms build the library [from a checkout](#from-a-checkout). Platform requirements: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md). No model or runtime download occurs; download the model separately ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
 The package links `-lducktape_laya` and includes `<ducktape_laya.h>`, so tell cgo where they are:
 

@@ -382,7 +382,8 @@ test('on musl the resolver and every entry point report that the glibc addon can
   }
   // glibc: the packaged addon path (missing in a checkout); other systems are never checked for musl.
   assert.throws(() => resolveAddon(undefined, { platform: 'linux', arch: 'x64', env: {}, musl: () => false }), { status: 7, message: /is missing/ });
-  assert.throws(() => resolveAddon(undefined, { platform: 'darwin', arch: 'arm64', env: {}, musl: () => true }), { status: 7, message: /is missing/ });
+  for (const arch of ['arm64', 'x64']) assert.throws(() => resolveAddon(undefined, { platform: 'darwin', arch, env: {}, musl: () => true }), { status: 7, message: /Native Laya addon for darwin-\w+ is missing/ });
+  assert.throws(() => resolveAddon(undefined, { platform: 'darwin', arch: 'ia32', env: {}, musl: () => false }), { status: 7, message: /macOS arm64 and x64/ });
   // An explicit addon (a musl build) is used as given.
   assert.equal(resolveAddon('/opt/musl/ducktape_laya.node', { platform: 'linux', arch: 'x64', env: {}, musl: () => true }), path.resolve('/opt/musl/ducktape_laya.node'));
   assert.equal(resolveAddon(undefined, { platform: 'linux', arch: 'x64', env: { DUCKTAPE_LAYA_ADDON: '/opt/musl/a.node' }, musl: () => true }), path.resolve('/opt/musl/a.node'));

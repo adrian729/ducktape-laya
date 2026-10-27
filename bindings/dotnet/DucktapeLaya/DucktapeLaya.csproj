@@ -30,7 +30,7 @@
     <InternalsVisibleTo Include="DucktapeLaya.Tests" />
   </ItemGroup>
   <!-- The native library at runtimes/<rid>/native/ under its own file name: libducktape_laya.so (linux-x64,
-       linux-arm64), libducktape_laya.dylib (osx-arm64) or ducktape_laya.dll (win-x64). -->
+       linux-arm64), libducktape_laya.dylib (osx-arm64, osx-x64) or ducktape_laya.dll (win-x64). -->
   <PropertyGroup>
     <DucktapeLayaRuntime Condition="'$(DucktapeLayaRuntime)' == ''">linux-x64</DucktapeLayaRuntime>
     <DucktapeLayaNativeFile>$([System.IO.Path]::GetFileName('$(DucktapeLayaNativeLibrary)'))</DucktapeLayaNativeFile>

@@ -49,7 +49,7 @@ app.whenReady().then(async () => {
       console.log(JSON.stringify(results.at(-1)));
     }
     // platform: the package platform this ran on (as tests/installed-packages.py names it).
-    const platform = { 'linux-x64': 'linux-x64', 'linux-arm64': 'linux-arm64', 'win32-x64': 'windows-x64', 'darwin-arm64': 'macos-arm64' }[`${process.platform}-${process.arch}`];
+    const platform = { 'linux-x64': 'linux-x64', 'linux-arm64': 'linux-arm64', 'win32-x64': 'windows-x64', 'darwin-arm64': 'macos-arm64', 'darwin-x64': 'macos-x64' }[`${process.platform}-${process.arch}`];
     if (report) writeFileSync(report, JSON.stringify({ status: 'passed', platform, artifact: path.basename(artifact),
       artifact_sha256: createHash('sha256').update(readFileSync(artifact)).digest('hex'), results }, null, 2) + '\n');
   } finally { rmSync(directory, { recursive: true, force: true }); }

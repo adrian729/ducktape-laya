@@ -28,12 +28,12 @@ final class Native {
     /** libducktape_laya.so on Linux, libducktape_laya.dylib on macOS, ducktape_laya.dll on Windows. */
     static final String LIB = System.mapLibraryName("ducktape_laya");
     /** Package platform of a JVM's os.name and os.arch (the jar's native/&lt;platform&gt;/ directory),
-     *  or null where no package exists: linux-x64, linux-arm64, macos-arm64 or windows-x64. */
+     *  or null where no package exists: linux-x64, linux-arm64, macos-arm64, macos-x64 or windows-x64. */
     static String platform(String os, String arch) {
         boolean x64 = arch.equals("amd64") || arch.equals("x86_64");
         boolean arm64 = arch.equals("aarch64") || arch.equals("arm64");
         if (os.contains("linux") && (x64 || arm64)) return x64 ? "linux-x64" : "linux-arm64";
-        if ((os.contains("mac") || os.contains("darwin")) && arm64) return "macos-arm64";
+        if ((os.contains("mac") || os.contains("darwin")) && (x64 || arm64)) return x64 ? "macos-x64" : "macos-arm64";
         if (os.contains("windows") && x64) return "windows-x64";
         return null;
     }
@@ -106,7 +106,7 @@ final class Native {
     }
 
     /** Released packages; any other platform needs a library built from source. */
-    static final String RELEASED = "packages exist for Linux x86-64 and arm64 and Windows x64; on other platforms build the "
+    static final String RELEASED = "packages exist for Linux x86-64 and arm64, macOS arm64 and x86-64 and Windows x64; on other platforms build the "
         + "library from source and set -Dducktape.laya.library or DUCKTAPE_LAYA_LIB_DIR";
 
     private static SymbolLookup load() {
@@ -209,10 +209,50 @@ final class Native {
         // macOS dyld would otherwise fall back to DYLD_LIBRARY_PATH for a missing path.
         if (!Files.isRegularFile(path))
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot load " + path + ": no such file");
+        SymbolLookup lookup;
         try {
-            return SymbolLookup.libraryLookup(path, arena);
+            lookup = SymbolLookup.libraryLookup(path, arena);
         } catch (RuntimeException e) {
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot load " + path + ": " + e.getMessage(), e);
+        }
+        requireImage(lookup, path, arena);
+        return lookup;
+    }
+
+    /** macOS only: dyld searches DYLD_LIBRARY_PATH by leaf name even for an absolute path, so a library of
+     *  the same name there replaces the one asked for. Asks dladdr which image provides dtl_abi_version and
+     *  refuses (status 7) unless it is the expected file. */
+    static void requireImage(SymbolLookup lookup, Path expected, Arena arena) {
+        if (!LIB.endsWith(".dylib")) return;
+        String loaded = null;
+        try {
+            MemorySegment symbol = lookup.find("dtl_abi_version").orElseThrow(() -> incompatible("lacks symbol dtl_abi_version"));
+            SymbolLookup system = LINKER.defaultLookup();
+            MemorySegment dladdr = system.find("dladdr").orElseGet(
+                () -> SymbolLookup.libraryLookup("/usr/lib/libSystem.B.dylib", arena).find("dladdr").orElseThrow());
+            MethodHandle handle = LINKER.downcallHandle(dladdr, FunctionDescriptor.of(ValueLayout.JAVA_INT, PTR, PTR));
+            try (Arena local = Arena.ofConfined()) {
+                // Dl_info: dli_fname, dli_fbase, dli_sname, dli_saddr.
+                MemorySegment info = local.allocate(32, 8);
+                int found = (int) handle.invokeExact(symbol, info);
+                MemorySegment name = info.get(PTR, 0);
+                if (found != 0 && name.address() != 0) loaded = name.reinterpret(Long.MAX_VALUE).getString(0);
+            }
+        } catch (LayaException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot check which file provides " + expected + ": " + t, t);
+        }
+        if (loaded == null || !realPath(Path.of(loaded)).equals(realPath(expected)))
+            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Refusing the ducktape-laya native library: " + expected
+                + " was requested but dtl_abi_version comes from " + loaded + "; DYLD_LIBRARY_PATH may have replaced it. Unset DYLD_LIBRARY_PATH.");
+    }
+
+    private static Path realPath(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException | RuntimeException e) {
+            return path.toAbsolutePath().normalize();
         }
     }
 
@@ -234,7 +274,7 @@ final class Native {
                 file = extractWindows(bytes);
             } else {
                 dir = Files.createTempDirectory(tempBase(), "ducktape-laya");
-                file = dir.resolve(LIB);
+                file = dir.resolve(platform.startsWith("macos") ? uniqueLeaf(bytes) : LIB);
                 Files.write(file, bytes);
             }
         } catch (IOException e) {
@@ -242,18 +282,36 @@ final class Native {
             throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot extract bundled library: " + e.getMessage(), e);
         }
         try {
-            return SymbolLookup.libraryLookup(file, arena);
-        } catch (RuntimeException e) {
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Found the bundled library " + resource
-                + " but it could not be loaded (extracted to " + file + "): " + e.getMessage() + " (" + loadHint(platform) + ")", e);
+            SymbolLookup lookup;
+            try {
+                lookup = SymbolLookup.libraryLookup(file, arena);
+            } catch (RuntimeException e) {
+                throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Found the bundled library " + resource
+                    + " but it could not be loaded (extracted to " + file + "): " + e.getMessage() + " (" + loadHint(platform) + ")", e);
+            }
+            requireImage(lookup, file, arena);
+            return lookup;
         } finally {
             if (dir != null) deleteTree(dir);
         }
     }
 
+    /** The macOS extraction leaf: libducktape_laya-&lt;first 16 hex of the content's sha256&gt;.dylib, so that a
+     *  file of the usual name on DYLD_LIBRARY_PATH cannot shadow the extracted copy. */
+    static String uniqueLeaf(byte[] bytes) {
+        try {
+            String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes), 0, 8);
+            return "libducktape_laya-" + hash + ".dylib";
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private static void deleteTree(Path dir) {
         try {
-            Files.deleteIfExists(dir.resolve(LIB));
+            try (var names = Files.list(dir)) {
+                for (Path entry : (Iterable<Path>) names::iterator) Files.deleteIfExists(entry);
+            }
             Files.deleteIfExists(dir);
         } catch (IOException | RuntimeException ignored) {
             // Best effort: the files are private to this user in a directory only this user can write.

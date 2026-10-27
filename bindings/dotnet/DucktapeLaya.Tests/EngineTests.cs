@@ -32,6 +32,23 @@ public class EngineTests
     }
 
     [Fact]
+    public void MacOSRefusesAnImageOtherThanTheRequestedFile()
+    {
+        // macOS only: dyld may substitute a library of the same leaf name from DYLD_LIBRARY_PATH.
+        var real = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
+        if (!OperatingSystem.IsMacOS() || string.IsNullOrEmpty(real)) return;
+        var file = Path.GetFullPath(Path.Combine(real, Native.FileName));
+        var handle = System.Runtime.InteropServices.NativeLibrary.Load(file);
+        Assert.True(System.Runtime.InteropServices.NativeLibrary.TryGetExport(handle, "dtl_abi_version", out var abi));
+        Native.RequireImage(abi, file);
+        var other = Path.Combine(Path.GetTempPath(), "ducktape-laya-other", Native.FileName);
+        var error = Assert.Throws<LayaException>(() => Native.RequireImage(abi, other));
+        Assert.Equal(7, error.Status);
+        Assert.Contains("DYLD_LIBRARY_PATH", error.Message);
+        Assert.Contains(other, error.Message);
+    }
+
+    [Fact]
     public void UnloadableLibraryIsReportedAsFoundWithTheOsReason()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ducktape-laya-broken-" + Guid.NewGuid().ToString("N"));

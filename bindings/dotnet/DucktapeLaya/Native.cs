@@ -21,6 +21,15 @@ internal unsafe struct DtlCallOptions
     public void* CancelUserData;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct DlInfo
+{
+    public byte* FileName;
+    public void* BaseAddress;
+    public byte* SymbolName;
+    public void* SymbolAddress;
+}
+
 internal static unsafe partial class Native
 {
     const string Lib = "ducktape_laya";
@@ -88,11 +97,48 @@ internal static unsafe partial class Native
 
     static LayaException LoadError(string message, Exception? inner = null) => new((int)LayaStatus.UnsupportedPlatform, message, inner);
 
-    // Rejects a library of the wrong ABI; returns dtl_cancel_flag.
-    static IntPtr Validate(IntPtr handle)
+    const string LibSystem = "/usr/lib/libSystem.B.dylib";
+
+    // macOS: realpath() through libSystem (resolves directory symlinks such as /tmp -> /private/tmp).
+    static string? RealPath(IntPtr libSystem, string path)
+    {
+        if (!NativeLibrary.TryGetExport(libSystem, "realpath", out var realpath)) return null;
+        var input = Marshal.StringToCoTaskMemUTF8(path);
+        try
+        {
+            byte* buffer = stackalloc byte[4096];
+            var result = ((delegate* unmanaged<byte*, byte*, byte*>)realpath)((byte*)input, buffer);
+            return result == null ? null : Marshal.PtrToStringUTF8((IntPtr)buffer);
+        }
+        finally { Marshal.FreeCoTaskMem(input); }
+    }
+
+    /// <summary>macOS only: dyld searches DYLD_LIBRARY_PATH by leaf name even for an absolute path, so a library of the
+    /// same name there replaces the one asked for. Asks dladdr which image provides dtl_abi_version and throws status 7
+    /// unless it is the expected file.</summary>
+    internal static void RequireImage(IntPtr abi, string expected)
+    {
+        var libSystem = NativeLibrary.Load(LibSystem);
+        string? loaded = null;
+        if (NativeLibrary.TryGetExport(libSystem, "dladdr", out var dladdr))
+        {
+            DlInfo info = default;
+            if (((delegate* unmanaged<void*, DlInfo*, int>)dladdr)((void*)abi, &info) != 0 && info.FileName != null)
+                loaded = Marshal.PtrToStringUTF8((IntPtr)info.FileName);
+        }
+        var want = RealPath(libSystem, expected) ?? expected;
+        var got = loaded is null ? null : RealPath(libSystem, loaded) ?? loaded;
+        if (got != want)
+            throw LoadError($"Refusing the native ducktape_laya library: {expected} was requested but dtl_abi_version comes from {loaded ?? "an unknown image"}; "
+                + "DYLD_LIBRARY_PATH may have replaced it. Unset DYLD_LIBRARY_PATH.");
+    }
+
+    // Rejects a library of the wrong ABI (and, on macOS, one that is not the expected file); returns dtl_cancel_flag.
+    static IntPtr Validate(IntPtr handle, string? expected)
     {
         if (!NativeLibrary.TryGetExport(handle, "dtl_abi_version", out var abi))
             throw Incompatible("it does not export dtl_abi_version");
+        if (expected is not null) RequireImage(abi, expected);
         var version = ((delegate* unmanaged<uint>)abi)();
         if (version != 2) throw Incompatible($"it reports ABI version {version}, expected 2");
         if (!NativeLibrary.TryGetExport(handle, "dtl_cancel_flag", out var cancel))
@@ -139,26 +185,48 @@ internal static unsafe partial class Native
         "The bundled ducktape_laya library needs glibc, and this looks like a musl system (for example Alpine), and no musl build of "
         + "libducktape_laya.so.1 is on the loader path; use a glibc-based image, or set DUCKTAPE_LAYA_LIB_DIR to a musl build.");
 
+    // macOS never loads a bare name (dyld would search DYLD_LIBRARY_PATH, the rpaths and the current directory):
+    // installed libraries are loaded by absolute path from Homebrew's directory and the CMake install default.
+    static readonly string[] MacOSLibraryDirs = ["/opt/homebrew/lib", "/usr/local/lib"];
+
     // Released packages; any other platform needs a library built from source.
-    const string Released = "packages exist for Linux x86-64 and arm64 and Windows x64; on other platforms build the library from source and set DUCKTAPE_LAYA_LIB_DIR";
+    const string Released = "packages exist for Linux x86-64 and arm64, macOS arm64 and x86-64 and Windows x64; on other platforms build the library from source and set DUCKTAPE_LAYA_LIB_DIR";
 
     static (IntPtr, IntPtr) Load()
     {
         // An explicit override is honoured or fails; it never falls back to other locations.
         var dir = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
-        if (!string.IsNullOrEmpty(dir)) return Checked(LoadFile(System.IO.Path.Combine(dir, FileName), "DUCKTAPE_LAYA_LIB_DIR is set but", null));
+        if (!string.IsNullOrEmpty(dir))
+        {
+            var file = System.IO.Path.Combine(dir, FileName);
+            if (OperatingSystem.IsMacOS()) file = System.IO.Path.GetFullPath(file);
+            return Checked(LoadFile(file, "DUCKTAPE_LAYA_LIB_DIR is set but", null), file);
+        }
         // On a glibc system, the copy shipped with the package (runtimes/<rid>/native/, or next to the assembly) comes
         // first, so an unrelated installed version of the library cannot shadow it; present, it must load. On musl
         // the bundled glibc build cannot load, so only a musl build through the system loader can.
         var musl = OperatingSystem.IsLinux() && IsMusl();
         if (!musl && BundledPath(AppContext.BaseDirectory) is { } bundled)
-            return Checked(LoadFile(bundled, "The bundled library", LoadHint()));
-        // The soname, then the plain name, through the system loader: the assembly directory and the safe system
-        // directories (never the current directory or PATH) on Windows, the dynamic loader's search on Linux.
-        foreach (var name in new[] { VersionedName, FileName })
+            return Checked(LoadFile(bundled, "The bundled library", LoadHint()), bundled);
+        if (OperatingSystem.IsMacOS())
         {
-            if (NativeLibrary.TryLoad(name, typeof(Native).Assembly, DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.SafeDirectories, out var handle))
-                return Checked(handle);
+            // Absolute paths only, never a bare name.
+            foreach (var installed in MacOSLibraryDirs)
+                foreach (var name in new[] { VersionedName, FileName })
+                {
+                    var candidate = System.IO.Path.Combine(installed, name);
+                    if (System.IO.File.Exists(candidate)) return Checked(LoadFile(candidate, "The installed library", LoadHint()), candidate);
+                }
+        }
+        else
+        {
+            // The soname, then the plain name, through the system loader: the assembly directory and the safe system
+            // directories (never the current directory or PATH) on Windows, the dynamic loader's search on Linux.
+            foreach (var name in new[] { VersionedName, FileName })
+            {
+                if (NativeLibrary.TryLoad(name, typeof(Native).Assembly, DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.SafeDirectories, out var handle))
+                    return Checked(handle, null);
+            }
         }
         if (musl) throw MuslUnsupported();
         var missing = new DllNotFoundException($"{FileName} was not found.");
@@ -168,9 +236,10 @@ internal static unsafe partial class Native
               + $"Install the DucktapeLaya package for this platform, or set DUCKTAPE_LAYA_LIB_DIR (ducktape-laya {Released}).", missing);
     }
 
-    static (IntPtr, IntPtr) Checked(IntPtr handle)
+    // expected is the file that must provide the library (checked on macOS only).
+    static (IntPtr, IntPtr) Checked(IntPtr handle, string? expected)
     {
-        try { return (handle, Validate(handle)); }
+        try { return (handle, Validate(handle, OperatingSystem.IsMacOS() ? expected : null)); }
         catch (LayaException)
         {
             NativeLibrary.Free(handle);
