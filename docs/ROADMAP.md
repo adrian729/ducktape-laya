@@ -19,6 +19,7 @@ Tooling items under [build, CI and packaging](#build-ci-and-packaging) join whic
 macOS arm64 and x86-64 (Intel) become tier-2 release targets, like Linux arm64 and Windows x64. The code is done: both targets are in `release/compatibility.json` `targets` and `release/qualification.json`, `native.yml` has their push, real-model, candidate and warm jobs (`macos-15` and `macos-15-intel`), and the loaders refuse bare-name loading and a `DYLD_LIBRARY_PATH` swap. A pre-check run passed on both. What remains:
 
 - **The first full candidate and release.** Run the candidate run with both macOS targets, add `macos-arm64:drift` and `macos-x64:drift` to the evidence, re-read the macOS numbers in [PLATFORMS.md](PLATFORMS.md#numerical-results-across-platforms) and [QUALIFICATION.md](QUALIFICATION.md#release-targets-and-tiers) from it, and release the packages.
+- **Benchmark thread-leak gate on macOS.** `tests/benchmark.py` still skips its thread-leak check on macOS, a skip that dates from builds with Accelerate on, whose libdispatch workers varied between runs. Release builds now have Accelerate off, and the stress test's Mach thread count stayed at 1 on both runners, so measure the benchmark once on each architecture with Accelerate off and enforce the gate if the count is stable.
 - **Intel runner end of life.** GitHub reports the `macos-15-intel` runner as supported until about fall 2027; after that, the maintainer's Intel MacBook runs the Intel checks.
 
 ## Wanted later
