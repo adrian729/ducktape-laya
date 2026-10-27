@@ -260,7 +260,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D sums -p SHA256SUMS
-          python3 -I scripts/pypi-missing-wheels.py --package ducktape-laya --version "${TAG#v}" --dist dist --sums sums/SHA256SUMS
+          python3 scripts/pypi-missing-wheels.py --package ducktape-laya --version "${TAG#v}" --dist dist --sums sums/SHA256SUMS
       - if: steps.plan.outputs.upload == 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:

@@ -51,7 +51,7 @@ Small improvements that were considered and deferred.
 Non-blocking notes from the 0.3.0 security review.
 - **Trust model in SECURITY.md.** It covers models and requests, but not that `DUCKTAPE_LAYA_LIB_DIR`, `DUCKTAPE_LAYA_ADDON`, `-Dducktape.laya.library` and `-Dducktape.laya.tmpdir` select the native code that runs, nor that on Windows without the VC++ Redistributable the .NET and Node loaders can resolve `vcruntime140.dll` and `msvcp140.dll` through the standard DLL search order. Document them as trusted inputs.
 - **Leaks on out-of-memory in ggml-webgpu `alloc_buffer`.** The paths `c-api-no-throw.patch` adds there leak when an allocation fails; only on out-of-memory, which is then reported. Free them in the patch.
-- **The PyPI comparison's hashes.** `publish-release.yml`'s "Compare with PyPI" step downloads `SHA256SUMS` again and compares PyPI's files with it, while the wheels in `dist` were verified against their attestations; the file itself is not attested. Compare with the hashes of the verified wheels instead (`scripts/pypi-missing-wheels.py`).
+- **The PyPI comparison's hashes.** `publish-release.yml`'s "Compare with PyPI" step downloads `SHA256SUMS` again and compares PyPI's files with it, while the wheels in `dist` were verified against their attestations; the file itself is not attested. Compare with the hashes of the verified wheels instead (`scripts/pypi-missing-wheels.py`), and run that script with `python3 -I` like the workflow's other Python calls.
 - **Repository settings** (the maintainer's decision): no branch protection on `main`, no required reviewer on the release environment, immutable releases off, Dependabot alerts off.
 
 ### API unification before 1.0
