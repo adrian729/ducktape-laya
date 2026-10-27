@@ -7,6 +7,11 @@
 # unchanged ones untouched and remove those <stage> no longer has.
 function(dtl_sync_patched_copies stage root)
   file(GLOB_RECURSE staged LIST_DIRECTORIES false RELATIVE "${stage}" "${stage}/*")
+  # patch(1) can leave a backup NAME.orig beside a file whose hunks applied at a line offset (GNU
+  # patch does unless told --no-backup-if-mismatch; other patch programs may too). A backup is not
+  # a patched copy: copied, it reached the runtime source record as an uncovered file and failed the
+  # configure of a runtime-upgrade rehearsal whose upstream had moved the patched lines.
+  list(FILTER staged EXCLUDE REGEX "\\.orig$")
   foreach(name IN LISTS staged)
     get_filename_component(directory "${root}/${name}" DIRECTORY)
     file(MAKE_DIRECTORY "${directory}")
@@ -14,7 +19,7 @@ function(dtl_sync_patched_copies stage root)
   endforeach()
   file(GLOB_RECURSE existing LIST_DIRECTORIES false RELATIVE "${root}" "${root}/*")
   foreach(name IN LISTS existing)
-    if(NOT EXISTS "${stage}/${name}")
+    if(NOT name IN_LIST staged)
       file(REMOVE "${root}/${name}")
     endif()
   endforeach()

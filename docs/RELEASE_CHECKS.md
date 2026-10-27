@@ -146,7 +146,7 @@ It records the library, test program and model identities before the run and che
 The sanitizer, fuzz and runtime-upgrade evidence comes from CI: `native.yml` dispatched with `mode=qualify` on the candidate commit, after the candidate run's `build-*` jobs have finished ([RELEASING.md](RELEASING.md#2-qualify-the-candidate)):
 
 ```sh
-gh workflow run native.yml --ref BRANCH -f mode=qualify   # optional: -f runtime=COMMIT -f fuzz_seconds=N
+gh workflow run native.yml --ref BRANCH -f mode=qualify -f runtime=RUNTIME   # optional: -f fuzz_seconds=N
 ```
 
 | Job | Runs | Artifact |
@@ -155,7 +155,7 @@ gh workflow run native.yml --ref BRANCH -f mode=qualify   # optional: -f runtime
 | `qualify-sanitizers-thread` | `--only thread` (the `sanitize-thread` preset, with `vm.mmap_rnd_bits=28` and the pinned Rust nightly) | |
 | `qualify-sanitizers` | `check-sanitizers.py --merge ADDRESS_DIR THREAD_DIR`: one report with both entries; it refuses reports of different commits, models or runtimes, a dirty tree, a missing or failed sanitizer | `sanitizers` |
 | `qualify-fuzz` | `scripts/check-fuzz.py --seconds FUZZ_SECONDS --compiler-launcher ccache` (default 3,600 s, the `fuzz_seconds_per_target` budget) | `fuzz` |
-| `qualify-upgrade` | `scripts/check-upgrade.py --runtime RUNTIME --model MODEL --compiler-launcher ccache` (default: the pinned runtime; gcc and every binding toolchain, QEMU for the CPU guard) | `upgrade` |
+| `qualify-upgrade` | `scripts/check-upgrade.py --runtime RUNTIME --model MODEL --compiler-launcher ccache` (`RUNTIME` must differ from the pinned runtime for the `upgrade_rollback` gate, which requires a rehearsed runtime axis; the input defaults to the pin, which only replays the baseline. How to choose it: [RELEASING.md](RELEASING.md#2-qualify-the-candidate). gcc and every binding toolchain, QEMU for the CPU guard) | `upgrade` |
 
 The run takes about 70 minutes. These reports are bound to the source commit, model and runtime, not to a host, so they can come from CI; `python3 -I scripts/fetch-ci-evidence.py --candidate COMMIT --qualify ...` downloads them (the newest successful qualify run of the commit carrying all three artifacts, or `--qualify-run RUN`, which may be on an ancestor), checks each against GitHub's digest and that its `source_commit` is the run's head, records the run as `qualify_run` in `ci-run.json`, and adds the keys `sanitizers`, `fuzz` and `upgrade`. With an `--output` that already holds the download of the same candidate run and commit (the one `qualify-host.py` reads), it adds only the qualify files under `OUTPUT/qualify`; it refuses another run, commit or changed file, and repeating it changes nothing. A local report under those keys (the same scripts run by hand) is still accepted.
 

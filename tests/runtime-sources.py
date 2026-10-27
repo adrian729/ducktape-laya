@@ -60,6 +60,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${UPSTREAM}/ggml
 if(UNCOVERED_PATCH)
   file(WRITE "${stage}/tools/tool.c" "int tool(void) { return 3; }\\n")
 endif()
+if(PATCH_BACKUP)
+  # What GNU patch leaves beside a file whose hunk applied at a line offset.
+  file(WRITE "${stage}/ggml/src/ggml.c.orig" "${original}")
+endif()
 dtl_sync_patched_copies("${stage}" "${DTL_PATCH_ROOT}")
 include(cmake/runtime_sources.cmake)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
@@ -163,6 +167,16 @@ dtl_record_runtime_sources(ducktape_laya)
         self.assertFalse(stray.exists())
         self.compile()
         self.check()
+
+    def test_patch_backup_is_not_a_patched_copy(self):
+        # A NAME.orig backup in the stage (a hunk applied at an offset) neither reaches the patch root
+        # nor fails the configure as an uncovered patched file; one already in the root is removed.
+        stale = self.build / 'runtime-patched/ggml/src/ggml.c.orig'
+        stale.write_text('int stale(void) { return 6; }\n')
+        self.configure('-DPATCH_BACKUP=ON')
+        self.assertFalse(stale.exists())
+        self.compile()
+        self.assertEqual(self.check(), {'upstream_files': 3, 'patched_files': 1})
 
     def test_edited_patched_copy_is_refused(self):
         copy = self.build / 'runtime-patched/ggml/src/ggml.c'

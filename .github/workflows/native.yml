@@ -64,7 +64,7 @@ on:
         options: [auto, 'off']
         default: auto
       runtime:
-        description: mode qualify, qualify-upgrade the runtime commit to rehearse (default the pinned one)
+        description: mode qualify, the runtime commit qualify-upgrade rehearses; a release needs one other than the pin (upgrade_rollback), the default pin only replays the baseline
         type: string
         default: ''
       fuzz_seconds:

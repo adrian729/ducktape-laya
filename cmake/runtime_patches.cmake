@@ -19,6 +19,14 @@ endif()
 set(DTL_PATCHED_HEADERS vendor/nlohmann/json.hpp)
 set(DTL_VENDOR_INCLUDE "${DTL_PATCH_ROOT}/vendor")
 find_program(DTL_PATCH_EXECUTABLE patch REQUIRED)
+# GNU patch (Linux, and Git for Windows' patch.exe) writes NAME.orig when a hunk applies at a line
+# offset; --no-backup-if-mismatch stops it. BSD patch (macOS) has no such option, so it is passed to
+# GNU patch only, and dtl_sync_patched_copies() leaves any backup out of the patched copies either way.
+execute_process(COMMAND "${DTL_PATCH_EXECUTABLE}" --version OUTPUT_VARIABLE DTL_PATCH_VERSION ERROR_QUIET)
+set(DTL_PATCH_NO_BACKUP)
+if(DTL_PATCH_VERSION MATCHES "GNU patch")
+  set(DTL_PATCH_NO_BACKUP --no-backup-if-mismatch)
+endif()
 # Copy and patch in a fresh staging directory; dtl_sync_patched_copies() below then
 # replaces only the copies whose content changed, so a reconfigure recompiles nothing.
 set(DTL_PATCH_STAGE "${CMAKE_CURRENT_BINARY_DIR}/runtime-patched.stage")
@@ -37,7 +45,7 @@ if(DTL_PATCH_COUNT GREATER 0)
       message(FATAL_ERROR "Runtime patch hash mismatch: ${path}")
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${path}")
-    execute_process(COMMAND "${DTL_PATCH_EXECUTABLE}" --batch --forward --fuzz=0 -p1
+    execute_process(COMMAND "${DTL_PATCH_EXECUTABLE}" --batch --forward --fuzz=0 ${DTL_PATCH_NO_BACKUP} -p1
       -d "${DTL_PATCH_STAGE}" -i "${CMAKE_CURRENT_SOURCE_DIR}/${path}"
       RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
     if(NOT result EQUAL 0)
