@@ -14,7 +14,7 @@ One native library does the work; thin bindings expose it to C/C++, Rust, Node.j
 ## Status
 
 - **Current release: 0.3.0** (2026-10-26), on [GitHub Releases](https://github.com/adrian729/ducktape-laya/releases/tag/v0.3.0), npm, crates.io, PyPI, NuGet, Maven Central and the Go module proxy. Its package files are attested and listed in `SHA256SUMS` ([verify a download](SECURITY.md#verify-a-download)). Its packages run on **Linux x86-64, Linux arm64 and Windows x64**; the browser package is experimental.
-- **Platforms:** Linux x86-64 is tier 1 (passes every release check); Linux arm64 and Windows x64 are tier 2 (tested in CI with the English model); macOS on Apple silicon builds from source. Details: [docs/PLATFORMS.md](docs/PLATFORMS.md).
+- **Platforms:** Linux x86-64 is tier 1 (passes every release check); Linux arm64 and Windows x64 are tier 2 (tested in CI with the English model); macOS on Apple silicon and Intel are tier 2 targets from the next release (until then they build from source). Details: [docs/PLATFORMS.md](docs/PLATFORMS.md).
 
 ## Requirements
 
@@ -23,6 +23,8 @@ One native library does the work; thin bindings expose it to C/C++, Rust, Node.j
 | Linux x86-64 | AVX, AVX2, FMA, F16C, BMI2, SSE4.2 (Intel Haswell, AMD Excavator/Zen or newer) | glibc 2.38+ and libstdc++ with `GLIBCXX_3.4.29` (Ubuntu 24.04+); not musl/Alpine |
 | Linux arm64 | Armv8.2-A with dot product and FP16 (Graviton2+, Ampere Altra, Raspberry Pi 5) | as Linux x86-64 |
 | Windows x64 | as Linux x86-64 | Microsoft Visual C++ Redistributable |
+| macOS arm64 (Apple silicon), from the next release | Armv8.2-A with dot product and FP16 (M1 or newer) | macOS 14+ |
+| macOS x86-64 (Intel), from the next release | as Linux x86-64 (Rosetta 2 is not supported) | macOS 14+ |
 
 On a CPU without the required features, opening an engine fails with status 7 and names the missing feature (a router checks when its first request loads a model). Plan for about 0.6 GiB of memory per open engine with the English model (1.2 GiB with the multilingual one) and 449 MB of disk for the English model. Language runtimes, tested versions and macOS: [docs/PLATFORMS.md](docs/PLATFORMS.md).
 

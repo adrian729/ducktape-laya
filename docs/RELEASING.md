@@ -15,16 +15,16 @@ The one release procedure, from version bump to verified registries. A release a
 | `io.github.adrian729:ducktape-laya` (Java) | Maven Central | — | Published | Published |
 | `DucktapeLaya` (.NET) | NuGet | — | Published | Published |
 
-0.1.0 and 0.2.0 carry Linux x86-64 only. From 0.3.0 every release target in `release/compatibility.json` is published (Linux x86-64 tier 1; Linux arm64 and Windows x64 tier 2); macOS arm64 is built in CI but not released.
+0.1.0 and 0.2.0 carry Linux x86-64 only. From 0.3.0 every release target in `release/compatibility.json` is published (Linux x86-64 tier 1; Linux arm64 and Windows x64 tier 2). The macOS targets (`macos-arm64`, `macos-x64`, tier 2) are in the record and are published from the release after 0.3.0.
 
-| Channel | Linux x86-64 | Linux arm64 | Windows x64 |
-| --- | --- | --- | --- |
-| GitHub Releases | `-linux-x64.tar.gz` | `-linux-arm64.tar.gz` | `-windows-x64.zip` |
-| npm | `native/linux-x64/` | `native/linux-arm64/` | `native/win32-x64/` |
-| PyPI | `manylinux_2_38_x86_64` wheel | `manylinux_2_38_aarch64` wheel | `win_amd64` wheel |
-| Maven Central | `native/linux-x64/` in the jar | `native/linux-arm64/` | `native/windows-x64/` |
-| NuGet | `runtimes/linux-x64/native/` | `runtimes/linux-arm64/native/` | `runtimes/win-x64/native/` |
-| crates.io, Go proxy | source only; the native library comes from the platform's archive | same | same (the zip's import library) |
+| Channel | Linux x86-64 | Linux arm64 | Windows x64 | macOS arm64 | macOS x64 |
+| --- | --- | --- | --- | --- | --- |
+| GitHub Releases | `-linux-x64.tar.gz` | `-linux-arm64.tar.gz` | `-windows-x64.zip` | `-macos-arm64.tar.gz` | `-macos-x64.tar.gz` |
+| npm | `native/linux-x64/` | `native/linux-arm64/` | `native/win32-x64/` | `native/darwin-arm64/` | `native/darwin-x64/` |
+| PyPI | `manylinux_2_38_x86_64` wheel | `manylinux_2_38_aarch64` wheel | `win_amd64` wheel | `macosx_14_0_arm64` wheel | `macosx_14_0_x86_64` wheel |
+| Maven Central | `native/linux-x64/` in the jar | `native/linux-arm64/` | `native/windows-x64/` | `native/macos-arm64/` | `native/macos-x64/` |
+| NuGet | `runtimes/linux-x64/native/` | `runtimes/linux-arm64/native/` | `runtimes/win-x64/native/` | `runtimes/osx-arm64/native/` | `runtimes/osx-x64/native/` |
+| crates.io, Go proxy | source only; the native library comes from the platform's archive | same | same (the zip's import library) | same | same |
 
 The npm package, the jar and the NuGet package are one file each and carry every platform.
 
@@ -49,7 +49,7 @@ Only `scripts/package-native.py` builds publishable packages. A wheel built from
 
 ## 2. Qualify the candidate
 
-Qualify until `scripts/check-candidate.py` reports every gate of every release target passed. The release host builds only Linux x86-64. Two CI dispatches on the exact candidate commit produce the rest: the candidate run (the packages of every target and the Linux arm64 and Windows x64 tier-2 evidence) and the qualify run (sanitizers, the one-hour fuzz and the runtime-upgrade rehearsal). `scripts/qualify-host.py` runs this host's gates. `COMMIT` is the candidate's full SHA, `BRANCH` a branch whose head it is, `MODEL`, `ML` and `TD` the three model files ([AGENTS.md](../AGENTS.md#this-release-host) gives their paths on the release host).
+Qualify until `scripts/check-candidate.py` reports every gate of every release target passed. The release host builds only Linux x86-64. Two CI dispatches on the exact candidate commit produce the rest: the candidate run (the packages of every target and the tier-2 evidence of Linux arm64, Windows x64, macOS arm64 and macOS x64) and the qualify run (sanitizers, the one-hour fuzz and the runtime-upgrade rehearsal). `scripts/qualify-host.py` runs this host's gates. `COMMIT` is the candidate's full SHA, `BRANCH` a branch whose head it is, `MODEL`, `ML` and `TD` the three model files ([AGENTS.md](../AGENTS.md#this-release-host) gives their paths on the release host).
 
 **Cheap checks first.** Everything a long run needs and a short check can decide runs before the first long step; the 0.3.0 qualification found three such problems only after hours (a qualify run that rehearsed the pin against itself, a runtime patch that failed to configure at the chosen revision, a performance budget that failed 35 minutes into a 3.5 hour run). In this order, each in seconds to a minute or two:
 
@@ -92,11 +92,13 @@ Qualify until `scripts/check-candidate.py` reports every gate of every release t
    ```
 
    It requires `build-candidate/ci` to be a download of the same candidate run and commit (it refuses another run, another commit or a file that changed), downloads only the qualify artifacts into `build-candidate/ci/qualify`, adds `sanitizers`, `fuzz` and `upgrade` (recorded under `qualify_run` in `ci-run.json`) and leaves the candidate files, and so the host's references into them, as they were. Repeating it with the same qualify run changes nothing; another qualify run needs a new `--output`.
-8. **Drift.** Measure each tier-2 target's drift and add `linux-arm64:drift` and `windows-x64:drift` to `build-candidate/evidence.json`:
+8. **Drift.** Measure each tier-2 target's drift and add `linux-arm64:drift`, `windows-x64:drift`, `macos-arm64:drift` and `macos-x64:drift` to `build-candidate/evidence.json`:
 
    ```sh
    python3 tests/compare-profiles.py build-candidate/native/outputs.json build-candidate/ci/evidence-linux-arm64/outputs.json --target-platform linux-arm64 --report build-candidate/drift-linux-arm64.json
    python3 tests/compare-profiles.py build-candidate/native/outputs.json build-candidate/ci/evidence-windows-x64/outputs.json --target-platform windows-x64 --report build-candidate/drift-windows-x64.json
+   python3 tests/compare-profiles.py build-candidate/native/outputs.json build-candidate/ci/evidence-macos-arm64/outputs.json --target-platform macos-arm64 --report build-candidate/drift-macos-arm64.json
+   python3 tests/compare-profiles.py build-candidate/native/outputs.json build-candidate/ci/evidence-macos-x64/outputs.json --target-platform macos-x64 --report build-candidate/drift-macos-x64.json
    ```
 9. **Check.** Write the security review ([format](RELEASE_CHECKS.md#security-review)), add it to `build-candidate/evidence.json` as `security_review`, and run `python3 scripts/check-candidate.py build-candidate/evidence.json --candidate COMMIT --report build-candidate/gates.json` until it is `release_ready`. Run it from the clean checkout of the candidate commit itself: `gates.json` records `checker_commit`, and a checker at any other commit (older or newer) makes the report not `release_ready`, and `scripts/release-gates.jq` refuses it. It reads the versioned documentation from the candidate's tree, not the checkout's. A gate also fails when a required test was skipped (a registered test that reports itself skipped, or a `SKIPPED:` line inside a passing one, recorded as `<test> (partly)`, such as the non-ASCII path check of `tests/native.cpp`), for every release target; rerun on a host where every check runs.
 
@@ -162,7 +164,7 @@ A failed run can be rerun with the same tag (`gh run rerun RUN --failed`, or a n
 
 The attestation predicate (`release-qualification/v1`) records the release, the tag commit, the hash of `gates.json` and each target's tier. A valid attestation, signed by `attest-release.yml` as it is on `main`, proves that this workflow found, for this tag: every asset listed once in `SHA256SUMS` with matching bytes; a `gates.json` for the tag commit, from a clean checker, that reports as passed exactly the gates and targets which that commit's `release/compatibility.json` and `release/qualification.json` require; the published inventories to be the ones `gates.json` names, packaged from the tag commit, listing every other asset; and, from 0.3.0, the native inventory to be the `packages-assembled` inventory of the successful `native.yml` candidate run on the tag commit that `gates.json` names. It does not prove that the gates ran or that their evidence holds: `gates.json` is written by `scripts/check-candidate.py` on the maintainer's release host from the evidence there, and the workflow takes its gate results as written. Nor is it build provenance ([roadmap](ROADMAP.md#more-release-targets-and-release-provenance)).
 
-The native files of 0.1.0 and 0.2.0 were built on the maintainer's release host, qualified there and attested as the qualified files. From 0.3.0, every target's files are built on GitHub-hosted runners in the candidate run, and the release host qualifies those exact files: for Linux x86-64 the candidate run's library and Node addon must be byte-identical to the release host's validated build, which binds the shipped bytes to the local qualification. Linux arm64 and Windows x64 are qualified by the CI run alone, with fewer gates.
+The native files of 0.1.0 and 0.2.0 were built on the maintainer's release host, qualified there and attested as the qualified files. From 0.3.0, every target's files are built on GitHub-hosted runners in the candidate run, and the release host qualifies those exact files: for Linux x86-64 the candidate run's library and Node addon must be byte-identical to the release host's validated build, which binds the shipped bytes to the local qualification. Linux arm64, Windows x64, macOS arm64 and macOS x64 are qualified by the CI run alone, with fewer gates.
 
 The `release` environment admits deployments from `main` only (a repository setting, not enforced by the workflow files). It has no required reviewer by the maintainer's choice: a release runs end to end once the maintainer asks for it. What stops unqualified bytes is then the checks `attest-release` makes before signing (which bind the published files to the qualification report and, for the native packages, to the CI candidate run, but take the report's gate results as written), the exact signer pin `publish-release` verifies before every upload, and the `main`-only environment; whoever can change `main` or produce a `gates.json` on the release host can pass them. The npm tarballs are uploaded exactly as attested. crates.io holds the released `.crate` files byte for byte: `publish-release` repackages them from the tag and requires byte-identical files before `cargo publish` (the 0.1.0 and 0.2.0 crates.io checksums also equal the released files).
 

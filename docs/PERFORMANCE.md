@@ -1,6 +1,6 @@
 # Performance and accuracy
 
-All numbers here were measured, and each says where it comes from. They describe one reference machine and, in a separate section, one second machine; they are not promises for other hardware, and nothing here was measured on Linux arm64, Windows, Apple silicon or in the browser.
+All numbers here were measured, and each says where it comes from. They describe one reference machine and, in a separate section, one second machine; they are not promises for other hardware, and nothing here was measured on Linux arm64, Windows, Apple silicon or in the browser, and the macOS release targets have no performance budgets.
 
 ## Method
 
@@ -41,9 +41,9 @@ Tokenizing very long input is linear in its length: on an 8-core x86-64 developm
 
 ## A second machine: Intel MacBook Pro
 
-An independent run on different hardware, to show how the numbers move with the CPU. macOS on x86-64 is not a release target and is unsupported ([platforms](PLATFORMS.md)); it builds and the tests pass there, but nothing on this page is a support promise.
+An independent run on different hardware, to show how the numbers move with the CPU. macOS on x86-64 is a tier-2 release target from the next release ([platforms](PLATFORMS.md)); this run predates it, and nothing on this page is a support promise.
 
-- **Machine:** MacBook Pro, Intel Core i9-9880H (8 cores, 16 threads, AVX2/FMA/F16C/BMI2), 32 GB, macOS 15.7.2, Apple clang 17.0.0, Release build with the native CPU profile (`native-cpu:avx+avx2+fma+f16c+bmi2+sse4.2`). ggml's Accelerate (Apple BLAS) option was on, Metal off.
+- **Machine:** MacBook Pro, Intel Core i9-9880H (8 cores, 16 threads, AVX2/FMA/F16C/BMI2), 32 GB, macOS 15.7.2, Apple clang 17.0.0, Release build with the native CPU profile (`native-cpu:avx+avx2+fma+f16c+bmi2+sse4.2`). ggml's Accelerate (Apple BLAS) option was on, Metal off; release builds turn Accelerate off, so these numbers do not describe them.
 - **Source:** `tests/benchmark.py` run on 2026-10-24 against main `8994a03` plus the macOS port of the benchmark (the same code as `10c39d1`): three runs per model and thread count, 20 warm samples per single-request workload, the workloads above. Cells show the median of the three runs with the minimum and maximum in parentheses. The raw reports are not stored in the repository.
 - **Load:** the laptop was not isolated. macOS background indexing (Spotlight `mds_stores`, `mediaanalysisd`) used one to two cores throughout, and the load average read 3 to 8 at the start of a run (it includes the tail of the previous run; each run started 45 s after the last). Treat the numbers as a retained sample, as on the first machine.
 - **Memory:** resident set from `ps` on macOS, not directly comparable with `VmRSS` on Linux.
@@ -67,7 +67,7 @@ An independent run on different hardware, to show how the numbers move with the 
 
 With 4 threads on both machines, the i9 is roughly 1.6 to 2 times faster on a 3-question request with the Q8_0 models (about 0.9 s against 1.5-1.8 s) and about 3.5 to 4 times faster near the 512-token limit (about 1.9 s against 6.2-7.9 s). The multilingual model is about as fast on short requests (0.40 s against 0.41-0.57 s) and 2.5 to 3 times faster near the limit. Eight threads on the 8-core i9 did not help short requests (1.03 s against 0.92 s) and made two concurrent engines slower (2.9 s against 2.1 s, they compete for the same cores); only the near-limit request gained (1.67 s against 1.85 s). The post-close memory is higher than on Linux (about 111 MiB against 49 MiB); it was not investigated further.
 
-One benchmark gate is not enforced on macOS: the thread-leak check, because the libdispatch worker pool behind Accelerate grows and shrinks on its own (16 or more extra threads, varying by one or two between runs). The report records this under `skipped_checks`; the thread counts are still recorded and the descriptor-leak check still applies (none leaked).
+One benchmark gate is not enforced on macOS: the thread-leak check, because the libdispatch worker pool behind Accelerate grew and shrank on its own in this run (release builds have Accelerate off, but the benchmark still skips the gate on macOS) (16 or more extra threads, varying by one or two between runs). The report records this under `skipped_checks`; the thread counts are still recorded and the descriptor-leak check still applies (none leaked).
 
 ## Package sizes
 

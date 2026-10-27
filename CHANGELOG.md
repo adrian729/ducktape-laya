@@ -8,7 +8,14 @@ User-facing changes per release. Each section lists breaking changes first; "Rel
 
 - **Repeated JSON keys are rejected.** A request, open config or router config with the same key twice in one object fails with status 1; the last value used to win silently, so a policy layer reading the first value could see a different `model`, `state` or `overflow` than the library used. Nesting is limited to 64 levels, as documented (65 were accepted).
 - **Model info `name` can be `null`.** `dtl_info` with an engine returns `"name": null` for a model without `general.name` metadata; it failed with status 2 although the model opened.
+- **macOS loads absolute paths only and refuses a swapped library.** Python, .NET, Java and Node never `dlopen` a bare `libducktape_laya.1.dylib` on macOS (dyld would search `DYLD_LIBRARY_PATH`, run paths and the current directory); they load the bundled library, `DUCKTAPE_LAYA_LIB_DIR`, then `/opt/homebrew/lib` and `/usr/local/lib`. After loading, each asks `dladdr` which file provides the library and fails with status 7, naming `DYLD_LIBRARY_PATH`, when it is not the file it asked for. Java extracts the bundled library under a name that carries its SHA-256 prefix.
+- **Accelerate is off on macOS.** `GGML_BLAS` and `GGML_ACCELERATE` are forced off, so macOS runs ggml's own CPU kernels; Accelerate's results depend on the macOS version and it starts libdispatch threads. Probabilities from a macOS source build can differ slightly from earlier builds.
+- **Several `CMAKE_OSX_ARCHITECTURES` values are refused.** Configure one architecture per build and combine the libraries with `lipo` ([packaging](docs/PACKAGING.md#macos)).
 - **Browser `backend: 'auto'`** no longer retries an invalid config or route (status 1) with WASM.
+
+### Features
+
+- **macOS packages for Apple silicon and Intel Macs (tier 2).** `macos-arm64` and `macos-x64` are release targets ([platforms](docs/PLATFORMS.md)): two `.tar.gz` archives, npm `native/darwin-arm64` and `native/darwin-x64`, wheels `macosx_14_0_arm64` and `macosx_14_0_x86_64`, NuGet `osx-arm64` and `osx-x64`, and the jar's `native/macos-arm64` and `native/macos-x64`. They need macOS 14 or newer and carry one architecture each; an application for both combines the libraries with `lipo`. Intel Macs need the same x86-64 CPU features as Linux, and Rosetta 2 is not supported. In a pre-check run the probabilities stayed within 0.0285 (arm64) and 0.0390 (x64) of the original Laya's, with no known deviation, and memory stayed flat in a 300 s stress run.
 
 ### Fixes
 

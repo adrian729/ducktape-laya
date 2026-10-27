@@ -23,6 +23,8 @@ cmake --build build -j 3
 cmake --install build --prefix "$PWD/build/staging"
 ```
 
+On macOS, build one architecture per configure: `-DCMAKE_OSX_ARCHITECTURES=arm64` or `x86_64` (an x86_64 slice builds on Apple silicon); several values are refused. For a universal application, combine the two libraries with `lipo` ([PACKAGING.md](PACKAGING.md#macos)). ggml's Accelerate and BLAS are forced off on macOS, so the library uses ggml's own CPU kernels (Accelerate's results depend on the macOS version, and it starts libdispatch threads); a source build from before this change computed slightly different probabilities.
+
 `-DDUCKTAPE_BUILD_TESTS=OFF` leaves out the native test executables, which a checkout builds by default ([run the tests](#run-the-tests)); the library is the same either way.
 
 The default x86-64 build requires AVX, AVX2, FMA, F16C, BMI2 and SSE4.2 at run time and the arm64 build Armv8.2-A with dot product and FP16 ([platforms](PLATFORMS.md#cpu-check-at-open)). The installed prefix holds the headers, the shared library, CMake and pkg-config files, licences, the model manifest and `download-model.py`; [PACKAGING.md](PACKAGING.md) explains how applications link it. To point a binding at the build tree instead, set `DUCKTAPE_LAYA_LIB_DIR` to `build` (the Python, Go, Java, .NET and Rust package READMEs have a "From a checkout" section).
@@ -198,7 +200,7 @@ Outputs go to `build-verify/<job>/`; the state of each local job (the last commi
 
 ## Build the packages
 
-`scripts/package-native.py` builds every package for the platform it runs on, in one run (`linux-x64`, `linux-arm64`, `macos-arm64` or `windows-x64`): the native archive, the npm package, the Rust crates, the Python wheel, the Maven jar with its sources and javadoc jars and POM, the NuGet package, an SBOM and an inventory. It needs a Release build with the Node addon, `npm`, Cargo with the locked dependencies fetched, a JDK (`javac`, `javadoc`), the .NET SDK, Python 3.11+ and, on Linux, `readelf`. The native tests are not needed (`cmake --preset product -DNODE_INCLUDE_DIR=/path/to/include/node` configures the same options in `build-product`; on Windows also pass the generator and compilers below):
+`scripts/package-native.py` builds every package for the platform it runs on, in one run (`linux-x64`, `linux-arm64`, `macos-arm64`, `macos-x64` or `windows-x64`): the native archive, the npm package, the Rust crates, the Python wheel, the Maven jar with its sources and javadoc jars and POM, the NuGet package, an SBOM and an inventory. It needs a Release build with the Node addon, `npm`, Cargo with the locked dependencies fetched, a JDK (`javac`, `javadoc`), the .NET SDK, Python 3.11+ and, on Linux, `readelf`. The native tests are not needed (`cmake --preset product -DNODE_INCLUDE_DIR=/path/to/include/node` configures the same options in `build-product`; on Windows also pass the generator and compilers below):
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDUCKTAPE_BUILD_TESTS=OFF -DDUCKTAPE_BUILD_NODE=ON -DNODE_INCLUDE_DIR=/path/to/include/node
@@ -208,7 +210,7 @@ python3 tests/package-smoke.py build/packages                                  #
 python3 tests/installed-packages.py build/packages /path/to/Laya-Q8_0.gguf      # real inference
 ```
 
-Only the product build is packaged. The script refuses a build with a custom runtime source or revision, a build type other than `Release`, or compiler flags other than CMake's defaults. On Linux it strips the library and addon (`--strip-unneeded`, dynamic symbols kept) and requires full RELRO; on Windows it requires Control Flow Guard. It checks every binary before shipping it: on Linux the glibc and libstdc++ symbol versions against the declared floor, on macOS the deployment target (14.0), on Windows that the DLL exports exactly the `dtl_*` functions; and it rejects sanitizer, fuzzer-coverage or profiling instrumentation. Existing output directories are rejected, and nothing is published or downloaded. The [package artifacts](PACKAGING.md#package-artifacts) table lists what each file contains.
+Only the product build is packaged. The script refuses a build with a custom runtime source or revision, a build type other than `Release`, or compiler flags other than CMake's defaults. On Linux it strips the library and addon (`--strip-unneeded`, dynamic symbols kept) and requires full RELRO; on Windows it requires Control Flow Guard. It checks every binary before shipping it: on Linux the glibc and libstdc++ symbol versions against the declared floor, on macOS the deployment target (14.0), the CPU type, `@loader_path`-only run paths, the stack protector and fortify imports, the ad-hoc signature on arm64 and the linked libraries (libc++ and libSystem only), on Windows that the DLL exports exactly the `dtl_*` functions; and it rejects sanitizer, fuzzer-coverage or profiling instrumentation. Existing output directories are rejected, and nothing is published or downloaded. The [package artifacts](PACKAGING.md#package-artifacts) table lists what each file contains.
 
 Other ways to build single packages are incomplete and must not be published: a `pip wheel` or `python -m build` of `bindings/python` has no native library, and neither has a plain `dotnet pack` without `-p:DucktapeLayaNativeLibrary=PATH`.
 
@@ -216,11 +218,11 @@ A release ships one npm package, one jar and one NuGet package for every platfor
 
 ```sh
 python3 scripts/assemble-packages.py --output build/release-packages \
-  packages-linux-x64 packages-linux-arm64 packages-windows-x64
+  packages-linux-x64 packages-linux-arm64 packages-windows-x64 packages-macos-arm64 packages-macos-x64
 python3 tests/package-smoke.py build/release-packages
 ```
 
-The result keeps each platform's archive and wheel unchanged and adds one npm package (`os` and `cpu` list every platform; npm checks the two lists separately, so an unlisted combination such as Intel macOS installs but fails at load with a clear error), one jar with each `native/<platform>/`, one NuGet package with each `runtimes/<rid>/native/`, and the crates, sources and javadoc jars, POM and SBOM once. Everything except each platform's native files must be identical in every input, compared entry by entry; inputs from different commits, build sources or `SOURCE_DATE_EPOCH` are refused. The output depends only on the inputs' contents: sorted entries, fixed timestamps and permissions, LF text, no NuGet PDB, and the same JDK on every CI runner (javadoc output changes between JDK patch releases). The CI workflow `native.yml` builds each platform's packages on a GitHub-hosted runner, keeps them as the artifacts `packages-<platform>` and assembles them in `packages-assembled` ([RELEASING.md](RELEASING.md)).
+The result keeps each platform's archive and wheel unchanged and adds one npm package (`os` and `cpu` list every platform; npm checks the two lists separately, so an unlisted combination such as Windows on Arm installs but fails at load with a clear error), one jar with each `native/<platform>/`, one NuGet package with each `runtimes/<rid>/native/`, and the crates, sources and javadoc jars, POM and SBOM once. Everything except each platform's native files must be identical in every input, compared entry by entry; inputs from different commits, build sources or `SOURCE_DATE_EPOCH` are refused. The output depends only on the inputs' contents: sorted entries, fixed timestamps and permissions, LF text, no NuGet PDB, and the same JDK on every CI runner (javadoc output changes between JDK patch releases). The CI workflow `native.yml` builds each platform's packages on a GitHub-hosted runner, keeps them as the artifacts `packages-<platform>` and assembles them in `packages-assembled` ([RELEASING.md](RELEASING.md)).
 
 ### Build records
 
