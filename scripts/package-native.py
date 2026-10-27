@@ -36,6 +36,16 @@ p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDes
 p.add_argument('--build', type=pathlib.Path, default=ROOT / 'build')
 p.add_argument('--output', type=pathlib.Path, required=True)
 a = p.parse_args()
+
+def quiet(command, **options):
+    """Runs COMMAND with its output captured; on failure, fails with the command and the end of its output, which
+    would otherwise be lost (a CalledProcessError does not print what it captured)."""
+    result = subprocess.run(command, capture_output=True, text=True, **options)
+    if result.returncode:
+        output = (result.stderr or '') + (result.stdout or '')
+        raise SystemExit(f'{" ".join(map(str, command))} failed ({result.returncode}):\n{output[-4000:]}')
+    return result
+
 def normalize_nupkg(source, destination, epoch):
     """Rewrite a nupkg deterministically: NuGet stamps entries with the pack time and
     gives relationships random IDs, and writes its XML parts with the platform's line
@@ -120,7 +130,7 @@ npm, cargo, dotnet = (shutil.which(name) or name for name in ('npm', 'cargo', 'd
 with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     directory = pathlib.Path(directory)
     native = directory / f'ducktape-laya-{version}-{platform_dir}'
-    subprocess.run(['cmake', '--install', str(build), '--prefix', str(native)], check=True, capture_output=True)
+    quiet(['cmake', '--install', str(build), '--prefix', str(native)])
     shipped_sha256 = {}
     if target.os == 'linux':
         # Drop the symbol table and debug sections the dynamic loader does not need (--strip-unneeded keeps
@@ -130,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         for path in [*library_files, addon_file]:
             subprocess.run(['strip', '--strip-unneeded', str(path)], check=True)
         if len(library_files) != 1: raise SystemExit(f'Expected one installed library file, found {[x.name for x in library_files]}')
-        subprocess.run([sys.executable, str(ROOT / 'scripts/check-abi.py'), str(library_files[0])], check=True, capture_output=True)
+        quiet([sys.executable, str(ROOT / 'scripts/check-abi.py'), str(library_files[0])])
         shipped_sha256 = {'ducktape_laya': sha256(library_files[0]), 'ducktape_laya_node': sha256(addon_file)}
         # Stripping keeps the dynamic section and segments; check the hardening on the shipped bytes too.
         for path in (library_files[0], addon_file):
@@ -168,7 +178,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
     # in out), and each is dominated by an external tool (npm, cargo, javac and javadoc, dotnet), so they are made
     # concurrently; the first failure in this order is the one reported.
     def pack_npm():
-        subprocess.run([npm, 'pack', '--ignore-scripts', '--pack-destination', str(out)], cwd=package, check=True, capture_output=True)
+        quiet([npm, 'pack', '--ignore-scripts', '--pack-destination', str(out)], cwd=package)
 
     def pack_crates():
         env = dict(os.environ, DUCKTAPE_LAYA_LIB_DIR=str(build))
@@ -178,7 +188,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
             # Permit packaging the unpublished sibling locally. Cargo normalizes the
             # actual .crate dependency to its version; no checkout path is shipped.
             command += ['--config', f'patch.crates-io.ducktape-laya-sys.path="{(ROOT / "bindings/rust/ducktape-laya-sys").as_posix()}"']
-            subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True)
+            quiet(command, cwd=ROOT, env=env)
             shutil.copy(ROOT / f'bindings/rust/target/package/{name}-{version}.crate', out)
 
     def pack_wheel():
@@ -194,11 +204,11 @@ with tempfile.TemporaryDirectory(prefix='ducktape-pack-') as directory:
         # artifacts path: otherwise pack reuses any Release build already in the checkout's obj/
         # (tests build one), with its own options and absolute paths.
         nuget = directory / 'nuget'
-        subprocess.run([dotnet, 'pack', str(ROOT / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj'), '-c', 'Release', '-m:1',
+        quiet([dotnet, 'pack', str(ROOT / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj'), '-c', 'Release', '-m:1',
                         '--artifacts-path', str(directory / 'dotnet-build'),
                         '-o', str(nuget), f'-p:DucktapeLayaNativeLibrary={installed_library}', '-p:DebugType=none',
                         f'-p:DucktapeLayaRuntime={target.nuget}', '-p:ContinuousIntegrationBuild=true', '--nologo'],
-                       cwd=ROOT, env=dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1'), check=True, capture_output=True)
+                       cwd=ROOT, env=dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1'))
         normalize_nupkg(nuget / f'DucktapeLaya.{version}.nupkg', out / f'DucktapeLaya.{version}.nupkg', epoch)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
