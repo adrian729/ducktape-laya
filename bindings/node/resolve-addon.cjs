@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 // native/<platform>-<arch>/ holds the addon and the shared library it links.
-const PLATFORMS = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'win32-x64'];
+const PLATFORMS = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win32-x64'];
 const unsupported = message => Object.assign(new Error(message), { status: 7 });
 // A musl dynamic loader is present and no glibc one is, in the directories where the loaders live
 // (/lib and /lib64; tests pass their own).
@@ -20,7 +20,7 @@ function resolveAddon(override, { platform: os = process.platform, arch = proces
   if (override || env.DUCKTAPE_LAYA_ADDON) return path.resolve(override || env.DUCKTAPE_LAYA_ADDON);
   const platform = `${os}-${arch}`;
   if (!PLATFORMS.includes(platform)) {
-    throw unsupported(`Unsupported native platform: ${os}/${arch}; packages exist for Linux x64 and arm64 and Windows x64; on other platforms build the addon from source and set addonPath or DUCKTAPE_LAYA_ADDON`);
+    throw unsupported(`Unsupported native platform: ${os}/${arch}; packages exist for Linux x64 and arm64, macOS arm64 and x64, and Windows x64; on other platforms build the addon from source and set addonPath or DUCKTAPE_LAYA_ADDON`);
   }
   if (os === 'linux' && musl()) {
     throw unsupported(`The native Laya addon for ${platform} needs glibc, and this looks like a musl system (for example Alpine). Use a glibc-based image, or set addonPath / DUCKTAPE_LAYA_ADDON to a musl build.`);

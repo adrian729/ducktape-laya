@@ -6,6 +6,11 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#ifdef __APPLE__
+#include <dlfcn.h>
+#include <climits>
+#include <cstdlib>
+#endif
 struct holder { dtl_engine *engine = nullptr;
     ~holder() { dtl_close(engine); } };
 struct native_error : std::runtime_error {
@@ -29,11 +34,36 @@ static void check(dtl_status s, char *error) {
 #ifndef DTL_ADDON_VERSION
 #error "DTL_ADDON_VERSION (the package version) must be defined"
 #endif
+#ifdef __APPLE__
+static std::string real_path(const char *path) {
+    char buffer[PATH_MAX];
+    return path && realpath(path, buffer) ? std::string(buffer) : std::string();
+}
+static std::string parent_of(const std::string &path) {
+    auto slash = path.rfind('/');
+    return slash == std::string::npos ? std::string() : slash == 0 ? "/" : path.substr(0, slash);
+}
+// dyld searches DYLD_LIBRARY_PATH by leaf name before the addon's rpaths, so a library of the same name there
+// would replace the shipped one. The addon's rpaths are @loader_path and @loader_path/../..: require the image
+// that provides dtl_abi_version to live in the addon's directory or two levels above it (status 7 otherwise).
+static void require_library_location() {
+    Dl_info addon{}, library{};
+    if (!dladdr(reinterpret_cast<void *>(&require_library_location), &addon) || !dladdr(reinterpret_cast<void *>(&dtl_abi_version), &library))
+        throw native_error(DTL_UNSUPPORTED_PLATFORM, "Cannot determine which file provides the native ducktape-laya library");
+    auto addon_dir = parent_of(real_path(addon.dli_fname)), library_dir = parent_of(real_path(library.dli_fname));
+    if (addon_dir.empty() || library_dir.empty() || (library_dir != addon_dir && library_dir != parent_of(parent_of(addon_dir))))
+        throw native_error(DTL_UNSUPPORTED_PLATFORM, ("The native ducktape-laya library was loaded from " + std::string(library.dli_fname ? library.dli_fname : "an unknown image") +
+            ", not from the addon's directory " + addon_dir + " or its parent's parent; DYLD_LIBRARY_PATH may have replaced it. Unset DYLD_LIBRARY_PATH.").c_str());
+}
+#endif
 // The addon and its library come from one build: refuse a library of another ABI or package version
 // (for example one the dynamic loader found elsewhere), with status 7. Checked once; a failure repeats.
 static void require_library() {
     static std::atomic<bool> checked{false};
     if (checked.load(std::memory_order_acquire)) return;
+#ifdef __APPLE__
+    require_library_location();
+#endif
     if (dtl_abi_version() != 2) throw native_error(DTL_UNSUPPORTED_PLATFORM, ("Native ducktape-laya ABI " + std::to_string(dtl_abi_version()) + " is not supported (expected 2)").c_str());
     char *result = nullptr, *error = nullptr;
     auto status = dtl_info(nullptr, &result, &error);

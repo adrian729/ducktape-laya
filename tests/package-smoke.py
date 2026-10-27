@@ -40,6 +40,86 @@ def manifest_attributes(data):
         if not match: raise SystemExit(f'MANIFEST.MF: not a manifest line: {line[:80]!r}')
         attributes[match[1]] = match[2]
     return attributes
+SKIP_MACOS = 'skipped: the DYLD_LIBRARY_PATH decoy checks run on macOS only'
+
+
+def macos_decoys(native, target, directory):
+    """Real copies of the library under every name a macOS loader might ask for, in a directory for
+    DYLD_LIBRARY_PATH and one for the current directory. dyld searches DYLD_LIBRARY_PATH by leaf name even
+    for an absolute path, so a same-leaf decoy there replaces the library asked for unless the binding
+    notices: it must refuse the decoy (status 7, naming DYLD_LIBRARY_PATH) or never load it."""
+    source = library_directory(native, target) / target.library
+    decoys = {}
+    for place in ('dyld', 'cwd'):
+        decoys[place] = directory / f'decoy-{place}'
+        decoys[place].mkdir()
+        for name in {target.library, *target.node_libraries}:
+            shutil.copy(source, decoys[place] / name)
+    return decoys
+
+
+def check_decoy_outcome(what, refused, images, expected):
+    """Either the binding refused (a message naming DYLD_LIBRARY_PATH), or it loaded only the expected files."""
+    if refused:
+        if 'DYLD_LIBRARY_PATH' not in refused:
+            raise SystemExit(f'{what}: refused with a message that does not name DYLD_LIBRARY_PATH: {refused}')
+        return 'refused the decoy'
+    if sorted(set(images)) != sorted(set(str(pathlib.Path(path).resolve()) for path in expected)):
+        raise SystemExit(f'{what}: loaded {sorted(set(images))}, expected only {sorted(str(pathlib.Path(p).resolve()) for p in expected)}')
+    return 'ignored the decoy'
+
+
+# In a child process: the library images mapped (dyld's list) whose file is a ducktape_laya library.
+MACOS_IMAGES_PY = (
+    "import ctypes, json, os\n"
+    "def images():\n"
+    "    libsystem = ctypes.CDLL('/usr/lib/libSystem.B.dylib')\n"
+    "    libsystem._dyld_get_image_name.restype = ctypes.c_char_p\n"
+    "    libsystem._dyld_get_image_name.argtypes = [ctypes.c_uint32]\n"
+    "    names = (libsystem._dyld_get_image_name(i) for i in range(libsystem._dyld_image_count()))\n"
+    "    return sorted({os.path.realpath(os.fsdecode(n)) for n in names if n and os.path.basename(n).startswith(b'libducktape_laya')})\n")
+
+
+def check_wheel_decoys(venv, native, target, directory, env):
+    """macOS: the wheel's bundled library, with same-leaf decoys on DYLD_LIBRARY_PATH and in the current directory."""
+    decoys = macos_decoys(native, target, directory)
+    script = (MACOS_IMAGES_PY + "import ducktape_laya\n"
+              "bundled = os.path.realpath(os.path.join(os.path.dirname(ducktape_laya.__file__), '_native', 'libducktape_laya.dylib'))\n"
+              "refused = None\n"
+              "try:\n    ducktape_laya.runtime_info()\nexcept ducktape_laya.LayaLoadError as error:\n    refused = str(error)\n"
+              "print(json.dumps({'refused': refused, 'images': images(), 'bundled': bundled}))\n")
+    outcomes = []
+    for env_vars, label in (({'DYLD_LIBRARY_PATH': str(decoys['dyld'])}, 'DYLD_LIBRARY_PATH'), ({}, 'current directory')):
+        result = subprocess.run([str(venv_python(venv)), '-c', script], cwd=decoys['cwd'], env=dict(env, **env_vars),
+                                capture_output=True, text=True)
+        if result.returncode: raise SystemExit(f'wheel with a decoy in the {label} failed: {result.stdout}{result.stderr}')
+        data = json.loads(result.stdout)
+        outcomes.append(check_decoy_outcome(f'wheel with a decoy in the {label}', data['refused'], data['images'], [data['bundled']]))
+    return f'DYLD_LIBRARY_PATH decoy {outcomes[0]}; current-directory decoy {outcomes[1]}'
+
+
+def check_jar_decoys(jar, probe, native, target, directory, env):
+    """macOS: the jar's extracted library has a content-hash leaf, so a same-leaf decoy on DYLD_LIBRARY_PATH cannot
+    shadow it; an explicitly configured library is checked with dladdr and refused if a decoy replaced it."""
+    decoys = macos_decoys(native, target, directory)
+    base = ['java', '--enable-native-access=ALL-UNNAMED', '-cp', str(jar)]
+    run_env = dict(env, DYLD_LIBRARY_PATH=str(decoys['dyld']))
+    result = subprocess.run([*base, str(probe)], cwd=decoys['cwd'], env=run_env, capture_output=True, text=True)
+    if result.returncode or result.stdout != str(abi):
+        raise SystemExit(f'jar with decoys on DYLD_LIBRARY_PATH and in the current directory failed: {result.stdout}{result.stderr}')
+    real = directory / 'real'
+    real.mkdir()
+    shutil.copy(library_directory(native, target) / target.library, real / target.library)
+    result = subprocess.run([*base, f'-Dducktape.laya.library={real / target.library}', str(probe)], cwd=decoys['cwd'], env=run_env,
+                            capture_output=True, text=True)
+    if result.returncode:
+        refused = 'DYLD_LIBRARY_PATH' in result.stderr and 'Refusing' in result.stderr
+        if not refused: raise SystemExit(f'jar with an explicit library and a DYLD_LIBRARY_PATH decoy failed unexpectedly: {result.stdout}{result.stderr}')
+        return 'extracted library not shadowed; explicit library with a same-leaf decoy refused'
+    if result.stdout != str(abi): raise SystemExit(f'jar with an explicit library reported {result.stdout!r}')
+    return 'extracted library not shadowed; explicit library with a same-leaf decoy ignored'
+
+
 def check_dotnet_resolution(out, native, target, directory, env):
     """The NuGet package loads the library it bundles (runtimes/<rid>/native/), never a copy of the
     same name in the current directory or on the search path (PATH on Windows, LD_LIBRARY_PATH on
@@ -65,17 +145,20 @@ def check_dotnet_resolution(out, native, target, directory, env):
     bundled = (out / 'runtimes' / target.nuget / 'native' / target.library).resolve()
     if not bundled.is_file(): raise SystemExit(f'NuGet consumer output lacks {bundled}')
     result, files = loaded(out, search)
-    if result.returncode or files != [bundled]:
+    # macOS: a same-leaf decoy on DYLD_LIBRARY_PATH is either never loaded or refused with a message naming it.
+    refused = target.os == 'darwin' and result.returncode and not files and 'DYLD_LIBRARY_PATH' in result.stdout + result.stderr
+    if not refused and (result.returncode or files != [bundled]):
         raise SystemExit(f'NuGet package with decoys in the current directory and on the search path loaded {files}, '
                          f'expected only {bundled}: {result.stdout}{result.stderr}')
     # The same application without the bundled library (and without its deps.json, which lists it).
     bare = directory / 'dotnet-unbundled'
     shutil.copytree(out, bare, ignore=shutil.ignore_patterns('runtimes', 'Probe.deps.json', target.library))
-    result, files = loaded(bare, search if target.os == 'win32' else env)
+    result, files = loaded(bare, search if target.os in ('win32', 'darwin') else env)
     # A copy installed in the system's own library directories (ldconfig, /usr/local/lib) is a
     # legitimate answer of the system fallback; only a decoy must never load.
     system_copy = (result.returncode == 0 and len(files) == 1 and files[0].name in names and
                    not files[0].is_relative_to(scratch_root.resolve()))
+    # macOS loads installed libraries by absolute path only, so a decoy on DYLD_LIBRARY_PATH is never a candidate.
     if system_copy:
         print(f'NuGet package without its bundled library loaded the system copy {files[0]} (not a decoy)')
     elif result.returncode == 0 or files or f'{target.library} was not found' not in result.stderr:
@@ -86,6 +169,15 @@ def check_dotnet_resolution(out, native, target, directory, env):
     result, files = loaded(bare, dict(env, DUCKTAPE_LAYA_LIB_DIR=str(decoys['cwd'])))
     if result.returncode or files != [(decoys['cwd'] / target.library).resolve()]:
         raise SystemExit(f'DUCKTAPE_LAYA_LIB_DIR={decoys["cwd"]} loaded {files}: {result.stdout}{result.stderr}')
+    if target.os == 'darwin':
+        # An explicit library with a same-leaf decoy on DYLD_LIBRARY_PATH: refused, or the explicit file itself is loaded.
+        explicit = directory / 'explicit'
+        explicit.mkdir()
+        shutil.copy(source, explicit / target.library)
+        result, files = loaded(bare, dict(search, DUCKTAPE_LAYA_LIB_DIR=str(explicit)))
+        refused = result.returncode and not files and 'DYLD_LIBRARY_PATH' in result.stdout + result.stderr
+        if not refused and (result.returncode or files != [(explicit / target.library).resolve()]):
+            raise SystemExit(f'DUCKTAPE_LAYA_LIB_DIR={explicit} with a DYLD_LIBRARY_PATH decoy loaded {files}: {result.stdout}{result.stderr}')
     if target.os == 'linux':
         result, files = loaded(bare, search)
         expected = decoys['search-path'].resolve()
@@ -116,6 +208,34 @@ def check_node_resolution(app, native, target, directory, env):
     if [str(pathlib.Path(file).resolve()) for file in files] != expected:
         raise SystemExit(f'With a decoy on LD_LIBRARY_PATH the addon loaded {files}, expected only {expected}')
     return 'bundled library loaded; LD_LIBRARY_PATH decoy ignored (DT_RPATH $ORIGIN)'
+
+
+def check_node_resolution_macos(app, native, target, directory, env):
+    """On macOS the addon's rpaths are @loader_path and @loader_path/../.. only, and at its first use the addon
+    requires the image that provides dtl_abi_version to be in its own directory or two levels up. A same-leaf
+    decoy on DYLD_LIBRARY_PATH is therefore refused (status 7, naming DYLD_LIBRARY_PATH) or never loaded, and one in
+    the current directory is never loaded. The loaded images come from process.report's shared-object list."""
+    addon = app / 'node_modules/ducktape-laya/native' / target.npm / 'ducktape_laya.node'
+    commands = subprocess.check_output(['otool', '-l', str(addon)], text=True)
+    rpaths = re.findall(r'cmd LC_RPATH\n(?:.*\n)*?\s+path (\S+) \(offset', commands)
+    if not rpaths or any(not rpath.startswith('@loader_path') for rpath in rpaths):
+        raise SystemExit(f'{addon}: expected only @loader_path rpaths, found {rpaths}')
+    decoys = macos_decoys(native, target, directory)
+    script = ("const path = require('node:path'); let refused = '';"
+              f"try {{ require({json.dumps(str(app / 'node_modules/ducktape-laya'))}).Laya.runtimeInfo(); }} catch (error) {{ refused = error.message; }}"
+              "const files = [...new Set(process.report.getReport().sharedObjects.filter(file => path.basename(file).startsWith('libducktape_laya')))];"
+              "process.stdout.write(JSON.stringify({ refused, files }))")
+    expected = [(addon.parent / target.node_libraries[0]).resolve()]
+    outcomes = []
+    for env_vars, label in (({'DYLD_LIBRARY_PATH': str(decoys['dyld'])}, 'DYLD_LIBRARY_PATH'), ({}, 'current directory')):
+        result = subprocess.run(['node', '-e', script], cwd=decoys['cwd'], env=dict(env, **env_vars), capture_output=True, text=True)
+        if result.returncode: raise SystemExit(f'node with a decoy in the {label} failed: {result.stdout}{result.stderr}')
+        data = json.loads(result.stdout)
+        images = [str(pathlib.Path(file).resolve()) for file in data['files']]
+        outcomes.append(check_decoy_outcome(f'npm package with a decoy in the {label}', data['refused'], images, expected))
+        if label == 'current directory' and data['refused']:
+            raise SystemExit(f'npm package refused a library with only a current-directory decoy: {data["refused"]}')
+    return f'DYLD_LIBRARY_PATH decoy {outcomes[0]}; current-directory decoy {outcomes[1]}; only @loader_path rpaths'
 
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -151,8 +271,12 @@ def probe_npm(directory, native):
                                         f"if (!r.includes(require('node:path').join('native', '{target.npm}', 'ducktape_laya.node'))) throw new Error(r); "
                                         "process.stdout.write(String(require('ducktape-laya').Laya.runtimeInfo().abi_version))"],
                                        cwd=app, env=env, text=True)
-    node_resolution = check_node_resolution(app, native, target, directory, env) if target.os == 'linux' else \
-        'skipped: the loaded-library check reads /proc/self/maps and the DT_RPATH (Linux)'
+    if target.os == 'linux':
+        node_resolution = check_node_resolution(app, native, target, directory, env)
+    elif target.os == 'darwin':
+        node_resolution = check_node_resolution_macos(app, native, target, directory, env)
+    else:
+        node_resolution = 'skipped: the loaded-library check reads /proc/self/maps and the DT_RPATH (Linux) or the loaded images (macOS)'
     return {'npm': reported}, {'npm_resolution': node_resolution}
 
 
@@ -161,8 +285,10 @@ def probe_wheel(directory, native):
     venv = directory / 'venv'
     subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
     subprocess.run([str(venv_python(venv)), '-m', 'pip', 'install', '--quiet', '--no-index', str(wheel)], check=True)
-    return {'wheel': subprocess.check_output([str(venv_python(venv)), '-c', 'import ducktape_laya; print(ducktape_laya.runtime_info()["abi_version"], end="")'],
-                                             cwd=directory, env=env, text=True)}, {}
+    reported = subprocess.check_output([str(venv_python(venv)), '-c', 'import ducktape_laya; print(ducktape_laya.runtime_info()["abi_version"], end="")'],
+                                       cwd=directory, env=env, text=True)
+    resolution = check_wheel_decoys(venv, native, target, directory, env) if target.os == 'darwin' else SKIP_MACOS
+    return {'wheel': reported}, {'wheel_resolution': resolution}
 
 
 def probe_jar(directory, native):
@@ -188,15 +314,20 @@ def probe_jar(directory, native):
     seen = subprocess.check_output(['java', str(directory / 'ManifestProbe.java'), str(artifacts / f'ducktape-laya-{version}.jar')],
                                    cwd=directory, env=env, text=True)
     if seen != f'{version} {java_package.MODULE}': raise SystemExit(f'java.util.jar reads the jar manifest as {seen!r}')
-    return {'jar': reported}, {}
+    resolution = check_jar_decoys(artifacts / f'ducktape-laya-{version}.jar', java, native, target, directory, env) if target.os == 'darwin' else SKIP_MACOS
+    return {'jar': reported}, {'jar_resolution': resolution}
 
 
 def probe_nupkg(directory, native):
     # The NuGet package, restored from a local feed holding only the candidate package.
     dotnet = directory / 'dotnet'
     dotnet.mkdir()
-    # With --loaded-from the probe prints the file of every ducktape_laya library mapped into the process.
+    # With --loaded-from the probe prints the file of every ducktape_laya library mapped into the process
+    # (/proc/self/maps on Linux, the process modules on Windows, dyld's image list on macOS).
     (dotnet / 'Program.cs').write_text('''using System.Text.Json;
+using System.Runtime.InteropServices;
+[DllImport("/usr/lib/libSystem.B.dylib")] static extern uint _dyld_image_count();
+[DllImport("/usr/lib/libSystem.B.dylib")] static extern IntPtr _dyld_get_image_name(uint index);
 var info = JsonDocument.Parse(Ducktape.Laya.LayaEngine.RuntimeInfo());
 if (args.Length > 0 && args[0] == "--loaded-from")
 {
@@ -207,6 +338,14 @@ if (args.Length > 0 && args[0] == "--loaded-from")
         {
             var start = line.IndexOf('/');
             if (start >= 0 && Path.GetFileName(line[start..]).StartsWith("libducktape_laya.so") && !loaded.Contains(line[start..])) loaded.Add(line[start..]);
+        }
+    }
+    else if (OperatingSystem.IsMacOS())
+    {
+        for (uint i = 0, count = _dyld_image_count(); i < count; i++)
+        {
+            var name = Marshal.PtrToStringUTF8(_dyld_get_image_name(i));
+            if (name is not null && Path.GetFileName(name).StartsWith("libducktape_laya") && !loaded.Contains(name)) loaded.Add(name);
         }
     }
     else
@@ -232,10 +371,7 @@ System.Console.Write(info.RootElement.GetProperty("abi_version").GetInt32());
     subprocess.run([tool('dotnet'), 'build', '-c', 'Release', '-o', str(dotnet / 'out'), '-m:1'], cwd=dotnet, env=dotnet_env,
                    check=True, capture_output=True)
     reported = subprocess.check_output([tool('dotnet'), str(dotnet / 'out/Probe.dll')], cwd=directory, env=dotnet_env, text=True)
-    if target.os in ('linux', 'win32'):
-        resolution = check_dotnet_resolution(dotnet / 'out', native, target, directory, dotnet_env)
-    else:
-        resolution = 'skipped: the loaded-library check reads /proc/self/maps (Linux) or the process modules (Windows)'
+    resolution = check_dotnet_resolution(dotnet / 'out', native, target, directory, dotnet_env)
     return {'nupkg': reported}, {'nupkg_resolution': resolution}
 
 
@@ -255,8 +391,7 @@ with tempfile.TemporaryDirectory(prefix='ducktape-smoke-') as directory:
             values, notes = future.result()
             reported.update(values)
             resolutions.update(notes)
-    resolution, node_resolution = resolutions['nupkg_resolution'], resolutions['npm_resolution']
 bad = {name: value for name, value in reported.items() if value != str(abi)}
 if bad:
     raise SystemExit(f'Packages report the wrong ABI (expected {abi}): {bad}')
-print(json.dumps({'abi_version': abi, 'platform': target.name, 'packages': sorted(reported), 'nupkg_resolution': resolution, 'npm_resolution': node_resolution}))
+print(json.dumps({'abi_version': abi, 'platform': target.name, 'packages': sorted(reported), **resolutions}))

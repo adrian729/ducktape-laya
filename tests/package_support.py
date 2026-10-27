@@ -16,7 +16,7 @@ from artifact_support import verify_inventory  # noqa: E402
 from release_support import EXE, host_target  # noqa: E402
 
 # Loader overrides the installed packages must not need.
-OVERRIDES = ('DUCKTAPE_LAYA_ADDON', 'DUCKTAPE_LAYA_LIB_DIR', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH', 'PYTHONPATH',
+OVERRIDES = ('DUCKTAPE_LAYA_ADDON', 'DUCKTAPE_LAYA_LIB_DIR', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH', 'DYLD_FALLBACK_LIBRARY_PATH', 'PYTHONPATH',
              'PKG_CONFIG_PATH', 'LAYA_MODEL')
 
 
