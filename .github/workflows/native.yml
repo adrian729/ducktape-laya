@@ -930,8 +930,8 @@ jobs:
         if: env.DTL_MODEL == 'true' && runner.os == 'Linux'
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libnss3 libasound2t64 libgtk-3-0t64 libgbm1 libxss1
+          sudo apt-get -o Acquire::http::Timeout=20 -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::http::Timeout=20 -o Acquire::Retries=5 install -y --no-install-recommends libnss3 libasound2t64 libgtk-3-0t64 libgbm1 libxss1
       - name: Electron consumer of the multi-platform npm package, directory and ASAR
         if: env.DTL_MODEL == 'true'
         run: >-
@@ -1377,10 +1377,12 @@ jobs:
       - *go
       - *go-cache
       - *typescript
+      # Every apt-get here gives up on a stalled mirror transfer after 20 s and retries: one stalled
+      # qemu-user download took 5 minutes (run 40514690172) against 13 s normally.
       - &qemu
         name: QEMU user mode for the emulated-CPU guard test
         if: matrix.qemu
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user
+        run: sudo apt-get -o Acquire::http::Timeout=20 -o Acquire::Retries=5 update && sudo apt-get -o Acquire::http::Timeout=20 -o Acquire::Retries=5 install -y --no-install-recommends qemu-user
       - *model-key
       - *model-restore
       - *model-fetch
@@ -2079,7 +2081,7 @@ jobs:
       - *model-fetch
       # check-upgrade.py runs every registered real-model test, the emulated-CPU guard included.
       - name: QEMU user mode for the emulated-CPU guard test
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user
+        run: sudo apt-get -o Acquire::http::Timeout=20 -o Acquire::Retries=5 update && sudo apt-get -o Acquire::http::Timeout=20 -o Acquire::Retries=5 install -y --no-install-recommends qemu-user
       - name: Runtime commit to rehearse
         run: |
           git -C third_party/llama.cpp cat-file -e "$RUNTIME^{commit}" 2>/dev/null \
