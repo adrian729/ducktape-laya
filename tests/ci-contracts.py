@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The CI workflows against the data that drives them (offline, no model).
 
-Checks that .github/workflows/native.yml and platforms.yml agree with scripts/ci_paths.py,
+Checks that .github/workflows/native.yml agrees with scripts/ci_paths.py,
 and that the check lists of the scripts agree with each other:
 
 - every workflow job's `name:` is a JOBS key of that workflow, and every JOBS entry of the
@@ -46,7 +46,7 @@ import re
 import subprocess
 import sys
 
-WORKFLOWS = ('native.yml', 'platforms.yml')
+WORKFLOWS = ('native.yml',)
 # The modes of `needs.changes.outputs.mode` and the JOBS profiles they run.
 MODE_PROFILES = {'verify': {'push', 'real_model'}, 'candidate': {'candidate'}, 'qualify': {'qualify'},
                  'warm-cache': {'warm'}, 'experiment': {'experiment'}}
@@ -460,8 +460,8 @@ def check_binding_node(root, read, problems):
     """A binding job sets up Node only for the node suite (scripts/validate.py builds the addon for no other language's suite).
 
     native.yml: DTL_NODE is an expression that is empty unless matrix.lang is node, and the Node SDK step and the shared
-    &setup-node step skip on an empty DTL_NODE. platforms.yml: the job's setup-node step has `if: matrix.lang == 'node'` and no
-    unconditional one runs."""
+    &setup-node step skip on an empty DTL_NODE. (The macOS bindings are one job per architecture, no matrix, and run the node suite
+    with the others on Node 24.21.0.)"""
     count = 0
     for workflow in WORKFLOWS:
         text = (root / '.github/workflows' / workflow).read_text()
@@ -532,8 +532,8 @@ def main(argv=None):
     check_shards(shards, release_targets.PROFILE_CHECKS, problems)
     check_shard_artifacts(root, shards, problems)
     binding_jobs = check_binding_node(root, {workflow: read_jobs(root / '.github/workflows' / workflow, problems) for workflow in WORKFLOWS}, problems)
-    if binding_jobs != 3:
-        problems.append(f'expected 3 binding matrix jobs (linux-x64, windows-x64, macos-arm64), found {binding_jobs}')
+    if binding_jobs != 2:
+        problems.append(f'expected 2 binding matrix jobs (linux-x64, windows-x64), found {binding_jobs}')
 
     missing = sorted(set(validate.FULL_CHECKS) - set(ci_paths.VALIDATE_CHECKS))
     if missing:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decide which CI jobs a workflow run executes: the `changes` job of native.yml and platforms.yml.
+"""Decide which CI jobs a workflow run executes: the `changes` job of native.yml.
 
 Staleness is per job (scripts/ci_paths.py JOBS), from that job's own trusted record:
 
@@ -15,7 +15,7 @@ Staleness is per job (scripts/ci_paths.py JOBS), from that job's own trusted rec
 What runs, by event:
 
 - push to a branch other than main, single parent: the stale jobs among `policy` and
-  `generic-linux-x64` (platforms.yml: none).
+  `generic-linux-x64`.
 - push to main, or a commit with more than one parent: every push-profile job, never
   diff-based, unless a commit P among HEAD's parents and first-parent ancestors has HEAD's tree
   and every push-profile job is not stale at P, or every push-profile job is verified at HEAD

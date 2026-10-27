@@ -27,7 +27,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LANGUAGES = ('rust', 'node', 'python', 'java', 'dotnet', 'go')
 PROFILES = ('push', 'real_model', 'candidate', 'qualify', 'warm', 'experiment')
-WORKFLOWS = ('native.yml', 'platforms.yml')
+WORKFLOWS = ('native.yml',)
 
 # --------------------------------------------------------------------------------------------
 # Categories
@@ -76,6 +76,9 @@ CATEGORIES = {
     'windows': _NATIVE + ['bindings/node/win_delay_load_hook.cpp', 'scripts/fetch-node-sdk.py', 'scripts/node-sdk-sha256.json'],
     'arm64': _NATIVE,
     'clang': _NATIVE,
+    # Both macOS architectures (macos-arm64, macos-x64) share this one category: nothing in a macOS job's inputs depends on the
+    # architecture beyond _NATIVE (the ISA selection is src/platform.cpp and CMakeLists.txt, both in _NATIVE; src/exports.macos is
+    # one file for both), so a separate x86-64 category would classify the same paths and only make the two jobs go stale apart.
     'macos': _NATIVE + ['src/exports.macos', 'scripts/verify-model.py'],
     # M4: the source inputs too; a clang-cl anonymous-namespace name in a moved TU breaks Windows reproducibility.
     'reproducibility': ['src/*', 'include/*', 'bindings/node/*.cpp', 'cmake/*', 'CMakeLists.txt', 'patches/*.patch', 'third_party*',
@@ -104,8 +107,7 @@ CATEGORIES = {
                 '.gitignore', '.ignore', 'demo'],
     # M2: the classifier and the workflows it drives; every job of every profile is stale. attest-release.yml and
     # publish-release.yml run no verification job: they are inputs of the release-assets policy check.
-    'ci': ['.github/workflows/native.yml', '.github/workflows/platforms.yml', '.github/actions/*', 'scripts/ci_paths.py',
-           'scripts/ci-changes.py'],
+    'ci': ['.github/workflows/native.yml', '.github/actions/*', 'scripts/ci_paths.py', 'scripts/ci-changes.py'],
 }
 CATEGORIES['browser'] = list(dict.fromkeys(CATEGORIES['browser']))
 
@@ -216,10 +218,11 @@ VALIDATE_CHECKS = {
 # --------------------------------------------------------------------------------------------
 # Shards: SHARDS[mode][platform] = {'profile' (candidate only), 'jobs': {job: [checks]}, 'side_outputs': {job: [names]}}
 # --------------------------------------------------------------------------------------------
-BUILD_PLATFORMS = ('linux-x64', 'linux-x64-clang', 'linux-arm64', 'windows-x64')
-PACKAGE_PLATFORMS = ('linux-x64', 'linux-arm64', 'windows-x64')
-TIER2_PLATFORMS = ('linux-arm64', 'windows-x64')
-PLATFORM_CATEGORIES = {'linux-x64': ['native'], 'linux-x64-clang': ['clang'], 'linux-arm64': ['arm64'], 'windows-x64': ['windows']}
+BUILD_PLATFORMS = ('linux-x64', 'linux-x64-clang', 'linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64')
+PACKAGE_PLATFORMS = ('linux-x64', 'linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64')
+TIER2_PLATFORMS = ('linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64')
+PLATFORM_CATEGORIES = {'linux-x64': ['native'], 'linux-x64-clang': ['clang'], 'linux-arm64': ['arm64'], 'windows-x64': ['windows'],
+                       'macos-arm64': ['macos'], 'macos-x64': ['macos']}
 SHARDS = {
     'real_model': {
         'linux-x64': {'jobs': {'native-linux-x64': ['ctest', 'references'], 'parity-linux-x64': ['parity:smoke'],
@@ -236,6 +239,12 @@ SHARDS = {
                                  'parity-a-windows-x64': ['parity:smoke-a'], 'parity-b-windows-x64': ['parity:smoke-b'],
                                  'bindings-real-a-windows-x64': ['bindings:a'], 'bindings-real-b-windows-x64': ['bindings:b']},
                         'side_outputs': {}},
+        # macOS as linux-arm64: three shard jobs each, few because macOS runner concurrency is scarce (runners of 3 cores, macos-15,
+        # and 4 cores, macos-15-intel). TODO(lead): measured basis for the split; re-balance from the first real-model run.
+        'macos-arm64': {'jobs': {'native-macos-arm64': ['ctest', 'references'], 'parity-macos-arm64': ['parity:smoke'],
+                                 'bindings-real-macos-arm64': ['bindings']}, 'side_outputs': {}},
+        'macos-x64': {'jobs': {'native-macos-x64': ['ctest', 'references'], 'parity-macos-x64': ['parity:smoke'],
+                               'bindings-real-macos-x64': ['bindings']}, 'side_outputs': {}},
     },
     'candidate': {
         'linux-x64': {'profile': 'ci-full',
@@ -260,6 +269,15 @@ SHARDS = {
                                  'packages-windows-x64': ['packages'], 'bindings-a-windows-x64': ['bindings:a', 'policy-platform'],
                                  'bindings-b-windows-x64': ['bindings:b']},
                         'side_outputs': {}},
+        # macOS as linux-arm64: four shard jobs. TODO(lead): measured basis; split further if a shard exceeds its budget.
+        'macos-arm64': {'profile': 'ci-full',
+                        'jobs': {'native-macos-arm64': ['ctest', 'references'], 'parity-macos-arm64': ['parity:full-a', 'parity:full-b'],
+                                 'packages-macos-arm64': ['packages'], 'bindings-macos-arm64': ['bindings', 'policy-platform']},
+                        'side_outputs': {}},
+        'macos-x64': {'profile': 'ci-full',
+                      'jobs': {'native-macos-x64': ['ctest', 'references'], 'parity-macos-x64': ['parity:full-a', 'parity:full-b'],
+                               'packages-macos-x64': ['packages'], 'bindings-macos-x64': ['bindings', 'policy-platform']},
+                      'side_outputs': {}},
     },
 }
 
@@ -286,7 +304,7 @@ def _job(name, categories, profiles, needs, workflow='native.yml', artifact_need
 
 
 # `changes` runs in every workflow and every run; it is not a verification unit.
-_job('changes', [], PROFILES, [], always=True, also_in=['platforms.yml'])
+_job('changes', [], PROFILES, [], always=True)
 # Push profile.
 _job('policy', ['policy'], ['push'], ['changes'])
 _job('generic-linux-x64', ['native'], ['push'], ['changes'])
@@ -297,6 +315,11 @@ _job('generic-windows-x64', ['windows', 'abi', 'packaging_identity', 'windows_po
 for _lang in LANGUAGES:
     for _platform in ('linux-x64', 'windows-x64'):
         _job(f'binding-{_lang}-{_platform}', [f'binding_{_lang}'], ['push'], ['changes'])
+# macOS: one job per architecture runs all six model-free suites on one setup (macOS runner concurrency is scarce: ROADMAP, runner queueing).
+_job('generic-macos-arm64', ['macos'], ['push'], ['changes'])
+_job('generic-macos-x64', ['macos'], ['push'], ['changes'])
+for _platform in ('macos-arm64', 'macos-x64'):
+    _job(f'binding-{_platform}', [f'binding_{_lang}' for _lang in LANGUAGES], ['push'], ['changes'])
 PACKAGES = [f'packages-{p}' for p in PACKAGE_PLATFORMS]
 for _platform in PACKAGE_PLATFORMS:
     # One name, two workflow jobs: no build dependency in the push profile, the build tarball in the candidate.
@@ -312,6 +335,8 @@ _job('sanitizers', ['sanitizers'], ['push'], ['changes'])
 _job('fuzzer', ['fuzz'], ['push'], ['changes'])
 _job('reproducibility-windows-x64', ['reproducibility'], ['push', 'candidate'], ['changes'])
 _job('reproducibility-linux-arm64', ['reproducibility'], ['candidate'], ['changes'])
+_job('reproducibility-macos-arm64', ['reproducibility'], ['candidate'], ['changes'])
+_job('reproducibility-macos-x64', ['reproducibility'], ['candidate'], ['changes'])
 # Real-model and candidate profiles.
 for _platform in BUILD_PLATFORMS:
     _job(f'build-{_platform}', PLATFORM_CATEGORIES[_platform], ['real_model', 'candidate'], ['changes'])
@@ -347,16 +372,13 @@ _job('qualify-sanitizers', ['sanitizers'], ['qualify'], ['qualify-sanitizers-add
 _job('qualify-fuzz', ['fuzz'], ['qualify'], ['changes'])
 _job('qualify-upgrade', ['real_model', 'host'], ['qualify'], ['changes'])
 # Warm profile (mode=warm-cache and the nightly): build-only jobs per cache configuration, then the prune.
-WARM_JOBS = ['warm-linux-x64', 'warm-linux-x64-clang', 'warm-linux-arm64', 'warm-windows-x64', 'warm-asan', 'warm-tsan', 'warm-fuzz']
+WARM_JOBS = ['warm-linux-x64', 'warm-linux-x64-clang', 'warm-linux-arm64', 'warm-windows-x64', 'warm-macos-arm64', 'warm-macos-x64',
+             'warm-asan', 'warm-tsan', 'warm-fuzz']
 for _name in WARM_JOBS:
     _job(_name, [], ['warm'], ['changes'], always=True)
 _job('cache-prune', [], ['warm'], WARM_JOBS, always=True)
 # Experiment profile (V1 only, R8).
 _job('bench-windows-x64', [], ['experiment'], ['changes'], always=True)
-# platforms.yml (macOS; never part of a candidate run).
-_job('generic-macos-arm64', ['macos'], ['push'], ['changes'], workflow='platforms.yml')
-for _lang in LANGUAGES:
-    _job(f'binding-{_lang}-macos-arm64', [f'binding_{_lang}'], ['push'], ['changes'], workflow='platforms.yml')
 
 
 def jobs_of(workflow, profile):
@@ -364,7 +386,7 @@ def jobs_of(workflow, profile):
     return [name for name, job in JOBS.items() if name != 'changes' and job['workflow'] == workflow and profile in job['profiles']]
 
 
-BRANCH_PUSH_JOBS = {'native.yml': ['policy', 'generic-linux-x64'], 'platforms.yml': []}
+BRANCH_PUSH_JOBS = {'native.yml': ['policy', 'generic-linux-x64']}
 
 # --------------------------------------------------------------------------------------------
 # Local jobs (scripts/verify.py; outputs in build-verify/<job>/, browser builds in build-browser-<backend>)

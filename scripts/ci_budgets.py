@@ -25,7 +25,6 @@ BUDGETS = {
 JOB_BUDGETS = {
     'changes': 25, 'policy': 60, 'tooling': 120,
     'generic-linux-x64': 80, 'generic-linux-x64-clang': 80, 'generic-linux-arm64': 90, 'generic-windows-x64': 130,
-    'generic-macos-arm64': 120,
     **{f'binding-{lang}-{p}': 90 for lang in LANGUAGES for p in ('linux-x64', 'windows-x64')},
     # Windows setup (Defender, checkout, Node SDK, VS environment, the language's SDK) and the CMake
     # configure take about 75 s before any suite; warm run 40218330855 measured the suites on top of it:
@@ -39,7 +38,6 @@ JOB_BUDGETS = {
     # The node job is the only Windows binding job that sets up Node and fetches its SDK, like its siblings' 75 s of setup, then a 45 s
     # suite: 90 s (the blanket value) held once; runs 40257329206 and 40259163744 took 100 s and 104 s. 110 until ten runs exist.
     'binding-node-windows-x64': 110,
-    **{f'binding-{lang}-macos-arm64': 120 for lang in LANGUAGES},
     **{f'packages-{p}': 120 for p in PACKAGE_PLATFORMS}, 'assemble': 60,
     # 150 was the one warm run 40218330855 (128 s). The budget was raised to 180 from the p90 of the ten runs before the packages ran
     # concurrently (139 to 221 s), which measured the serial packaging this job no longer does. Concurrent packaging (27 s serial) has
@@ -67,10 +65,23 @@ JOB_BUDGETS = {
     # mode=warm-cache (run 40203145188, the only one so far; refresh from the p90 once there are ten):
     'warm-linux-x64': 60, 'warm-linux-arm64': 45,          # 35 s and 25 s (build phase 11 s on Linux x64: the compiler cache was warm)
     'warm-linux-x64-clang': 200, 'warm-windows-x64': 240,  # 180 s and 228 s
+    # TODO(lead): measured basis for both macOS warm jobs. Provisional: warm-linux-arm64's 45 s, the closest tier-2 warm job.
+    'warm-macos-arm64': 45, 'warm-macos-x64': 45,
     'warm-asan': 330, 'warm-tsan': 270, 'warm-fuzz': 340,  # 322 s, 263 s and 333 s
     'cache-prune': 30,                                     # 12 s (gh api list and delete)
     # mode=experiment, two clang-cl builds of the library and then the benchmark step (~1,050 s of the 1,259 s of run 40243819478):
     'bench-windows-x64': 1320,  # the p90 of the runs with the benchmark step (1,320 s run 40219296140, 1,259 s run 40243819478); 169 s in run 40203151892 had builds only
+    # macOS jobs, all provisional until the first runs. TODO(lead): measured basis for each; the numbers below are copied from the
+    # closest existing job and measure nothing yet.
+    # generic: generic-macos-arm64's 120 s from platforms.yml, the job these two replace.
+    'generic-macos-arm64': 120, 'generic-macos-x64': 120,
+    # One job for the six model-free suites, on one setup: local-bindings' 300 s (the same six suites in one local job).
+    'binding-macos-arm64': 300, 'binding-macos-x64': 300,
+    # packages: packages-linux-arm64's 120 s (the blanket value above). assembled: the blanket 180 s.
+    'packages-macos-arm64': 120, 'packages-macos-x64': 120, 'assembled-macos-arm64': 180, 'assembled-macos-x64': 180,
+    # reproducibility: reproducibility-linux-arm64's 300 s. build, shards, stress and evidence: the blanket values above
+    # (build 210 s, shard 270 s, stress 420 s, evidence 60 s, the tier-2 values).
+    'reproducibility-macos-arm64': 300, 'reproducibility-macos-x64': 300,
     'local-bindings': 300, 'local-packaging': 300, 'local-sanitizers': 900, 'local-fuzz': 300, 'local-real-model': 1200,
     'local-reproducibility': 1200, 'local-browser-wasm': 1200, 'local-browser-webgpu': 1200,
 }

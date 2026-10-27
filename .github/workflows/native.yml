@@ -1,7 +1,7 @@
 name: Native checks
-# The release targets: Linux x86-64 (gcc, and clang pinned to LLVM 22.1.8), Linux arm64 and
-# Windows x64, the multi-platform packages assembled from their fragments, sanitizers, fuzz,
-# reproducibility and every dispatch mode. macOS is in platforms.yml.
+# The release targets: Linux x86-64 (gcc, and clang pinned to LLVM 22.1.8), Linux arm64,
+# Windows x64, macOS arm64 and macOS x86-64 (Apple clang, Xcode pinned), the multi-platform packages
+# assembled from their fragments, sanitizers, fuzz, reproducibility and every dispatch mode.
 #
 # The `changes` job decides what runs (scripts/ci-changes.py with scripts/ci_paths.py): a job runs
 # when its name is in the `run` output. Every job other than `changes` therefore has
@@ -122,6 +122,8 @@ jobs:
       shards_linux_x64_clang: ${{ steps.plan.outputs.shards_linux_x64_clang }}
       shards_linux_arm64: ${{ steps.plan.outputs.shards_linux_arm64 }}
       shards_windows_x64: ${{ steps.plan.outputs.shards_windows_x64 }}
+      shards_macos_arm64: ${{ steps.plan.outputs.shards_macos_arm64 }}
+      shards_macos_x64: ${{ steps.plan.outputs.shards_macos_x64 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -196,13 +198,14 @@ jobs:
               outputs[name] = entries
               print(f'{name}: {[entry.get("job", entry) for entry in entries]}')
 
-          # Binding jobs: one per language whose binding-<lang>-<platform> job runs.
+          # Binding jobs: one per language whose binding-<lang>-<platform> job runs (macOS: one job per architecture, no matrix).
           for platform in ('linux-x64', 'windows-x64'):
               langs = sorted(m[1] for m in (re.fullmatch(rf'binding-([a-z]+)-{platform}', job) for job in run) if m)
               matrix('bindings_' + platform.replace('-', '_'), [{'job': f'binding-{lang}-{platform}', 'lang': lang} for lang in langs])
           runners = {'linux-x64': ('ubuntu-24.04', 'python3', 'bash'), 'linux-arm64': ('ubuntu-24.04-arm', 'python3', 'bash'),
                      # PowerShell on Windows: Strawberry Perl's pkg-config.bat does not run from Git Bash.
-                     'windows-x64': ('windows-2025', 'python', 'pwsh')}
+                     'windows-x64': ('windows-2025', 'python', 'pwsh'),
+                     'macos-arm64': ('macos-15', 'python3', 'bash'), 'macos-x64': ('macos-15-intel', 'python3', 'bash')}
           matrix('assembled', [{'job': f'assembled-{platform}', 'platform': platform, 'runner': runner, 'python': python, 'shell': shell}
                                for platform, (runner, python, shell) in runners.items() if f'assembled-{platform}' in run])
 
@@ -215,7 +218,7 @@ jobs:
                    'bindings': ['rust', 'java', 'dotnet', 'go'], 'bindings:a': ['rust'], 'bindings:b': ['java', 'dotnet', 'go'],
                    'packages': ['rust', 'java', 'dotnet', 'go'], 'policy-platform': ['typescript']}
           shard_mode = 'candidate' if mode == 'candidate' else 'real_model'
-          for platform in ('linux-x64', 'linux-x64-clang', 'linux-arm64', 'windows-x64'):
+          for platform in ('linux-x64', 'linux-x64-clang', 'linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64'):
               table = ci_paths.SHARDS.get(shard_mode, {}).get(platform, {})
               side = table.get('side_outputs', {})
               entries = []
@@ -523,6 +526,60 @@ jobs:
       - *cache-stats
       - *report
 
+  generic-macos-arm64:
+    name: generic-macos-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'generic-macos-arm64') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DTL_JOB: generic-macos-arm64
+      DTL_NODE: 24.21.0
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-arm64-appleclang-generic
+      DTL_CACHE_FALLBACK: |-
+        macos-arm64-appleclang-warm
+      DTL_CACHE_SAVE: 'true'
+      # Xcode pinned for every macOS job (the compiler, SDK and linker are part of the library's bytes). It is recorded in each
+      # build, stress and reproducibility report through release_support.BUILD_ENVIRONMENT, which the evidence jobs compare
+      # (image-check): a runner image that drifts to another Xcode fails the merge instead of shipping.
+      # TODO(lead): BUILD_ENVIRONMENT needs 'DEVELOPER_DIR' (scripts/release_support.py, B2's file) for the Xcode to be recorded.
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - name: Generic validation
+        run: python3 scripts/validate.py --output build-ci-report --jobs 3 --compiler-launcher "$DTL_LAUNCHER"
+      - *cache-stats
+      - *report
+
+  generic-macos-x64:
+    name: generic-macos-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'generic-macos-x64') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      DTL_JOB: generic-macos-x64
+      DTL_NODE: 24.21.0
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-x64-appleclang-generic
+      DTL_CACHE_FALLBACK: |-
+        macos-x64-appleclang-warm
+      DTL_CACHE_SAVE: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - name: Generic validation
+        run: python3 scripts/validate.py --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER"
+      - *cache-stats
+      - *report
+
   binding-linux-x64:
     name: binding-${{ matrix.lang }}-linux-x64
     needs: changes
@@ -628,7 +685,7 @@ jobs:
         if: contains(format(',{0},', env.DTL_TOOLS), ',go,')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.os == 'Windows' && '~\AppData\Local\go-build' || '~/.cache/go-build' }}
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\go-build' || runner.os == 'macOS' && '~/Library/Caches/go-build' || '~/.cache/go-build' }}
           key: gocache-1.27.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bindings/go/go.mod', 'tests/consumers/go/go.mod', 'include/ducktape_laya.h') }}
       - name: Model-free binding suite
         run: python3 scripts/validate.py --library-only --bindings "${{ matrix.lang }}" --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER"
@@ -679,6 +736,80 @@ jobs:
           mapfile -t windows < "$DTL_WINDOWS_ARGS"
           python scripts/validate.py --library-only --bindings "${{ matrix.lang }}" --output build-ci-report --jobs 4 \
             --compiler-launcher "$DTL_LAUNCHER" "${windows[@]}"
+      - *cache-stats
+      - *report
+
+  binding-macos-arm64:
+    name: binding-macos-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'binding-macos-arm64') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DTL_JOB: binding-macos-arm64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-arm64-appleclang-generic
+      DTL_CACHE_FALLBACK: |-
+        macos-arm64-appleclang-build
+        macos-arm64-appleclang-warm
+      DTL_CACHE_SAVE: 'false'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go-toolcache-link
+      - *go
+      - *go-cache
+      # All six model-free suites in one job on one setup: macOS runner concurrency is scarce (docs/ROADMAP.md, runner queueing).
+      - name: Model-free binding suites
+        run: python3 scripts/validate.py --library-only --bindings all --output build-ci-report --jobs 3 --compiler-launcher "$DTL_LAUNCHER"
+      - *cache-stats
+      - *report
+
+  binding-macos-x64:
+    name: binding-macos-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'binding-macos-x64') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      DTL_JOB: binding-macos-x64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-x64-appleclang-generic
+      DTL_CACHE_FALLBACK: |-
+        macos-x64-appleclang-build
+        macos-x64-appleclang-warm
+      DTL_CACHE_SAVE: 'false'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go-toolcache-link
+      - *go
+      - *go-cache
+      # All six model-free suites in one job on one setup: macOS runner concurrency is scarce (docs/ROADMAP.md, runner queueing).
+      - name: Model-free binding suites
+        run: python3 scripts/validate.py --library-only --bindings all --output build-ci-report --jobs 4 --compiler-launcher "$DTL_LAUNCHER"
       - *cache-stats
       - *report
 
@@ -815,13 +946,88 @@ jobs:
       - *cache-stats
       - *report
 
+  packages-macos-arm64:
+    name: packages-macos-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode != 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-macos-arm64') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DTL_JOB: packages-macos-arm64
+      DTL_PLATFORM: macos-arm64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-arm64-appleclang-generic
+      DTL_CACHE_FALLBACK: |-
+        macos-arm64-appleclang-build
+        macos-arm64-appleclang-warm
+      DTL_CACHE_SAVE: 'false'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go-toolcache-link
+      - *go
+      - *go-cache
+      - *packages-push
+      - *packages-upload
+      - *cache-stats
+      - *report
+
+  packages-macos-x64:
+    name: packages-macos-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode != 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-macos-x64') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      DTL_JOB: packages-macos-x64
+      DTL_PLATFORM: macos-x64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-x64-appleclang-generic
+      DTL_CACHE_FALLBACK: |-
+        macos-x64-appleclang-build
+        macos-x64-appleclang-warm
+      DTL_CACHE_SAVE: 'false'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go-toolcache-link
+      - *go
+      - *go-cache
+      - *packages-push
+      - *packages-upload
+      - *cache-stats
+      - *report
+
   # The release packages: every platform's fragment of this run merged into one npm package, one jar
   # and one NuGet package (scripts/assemble-packages.py), next to each platform's archive and wheel.
   # The push and the candidate packages-<P> jobs are both needed: only one of each pair runs.
   assemble:
     name: assemble
-    needs: [changes, packages-linux-x64, packages-linux-arm64, packages-windows-x64,
-            packages-candidate-linux-x64, packages-candidate-linux-arm64, packages-candidate-windows-x64]
+    needs: [changes, packages-linux-x64, packages-linux-arm64, packages-windows-x64, packages-macos-arm64, packages-macos-x64,
+            packages-candidate-linux-x64, packages-candidate-linux-arm64, packages-candidate-windows-x64,
+            packages-candidate-macos-arm64, packages-candidate-macos-x64]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'assemble') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -838,8 +1044,8 @@ jobs:
         run: |
           ls fragments
           python3 scripts/assemble-packages.py --output assembled fragments/packages-linux-x64 fragments/packages-linux-arm64 \
-            fragments/packages-windows-x64
-          jq -e --arg commit "$GITHUB_SHA" '.packaging_source_commit == $commit and .platforms == ["linux-arm64", "linux-x64", "windows-x64"]' \
+            fragments/packages-windows-x64 fragments/packages-macos-arm64 fragments/packages-macos-x64
+          jq -e --arg commit "$GITHUB_SHA" '.packaging_source_commit == $commit and .platforms == ["linux-arm64", "linux-x64", "macos-arm64", "macos-x64", "windows-x64"]' \
             assembled/inventory.json
           ls -l assembled
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -1157,6 +1363,62 @@ jobs:
           retention-days: ${{ needs.changes.outputs.mode == 'candidate' && 30 || 14 }}
           overwrite: true
 
+  reproducibility-macos-arm64:
+    name: reproducibility-macos-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'reproducibility-macos-arm64') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DTL_JOB: reproducibility-macos-arm64
+      DTL_NODE: 24.21.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *setup-node
+      - name: Two independent builds of one source snapshot
+        run: python3 scripts/check-reproducibility.py --output build-repro --jobs 3 --cc clang --cxx clang++
+      - name: Retain the reproducibility report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reproducibility-macos-arm64
+          path: |
+            build-repro/report.json
+            build-repro/*.log
+          if-no-files-found: warn
+          retention-days: ${{ needs.changes.outputs.mode == 'candidate' && 30 || 14 }}
+          overwrite: true
+
+  reproducibility-macos-x64:
+    name: reproducibility-macos-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'reproducibility-macos-x64') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      DTL_JOB: reproducibility-macos-x64
+      DTL_NODE: 24.21.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *setup-node
+      - name: Two independent builds of one source snapshot
+        run: python3 scripts/check-reproducibility.py --output build-repro --jobs 4 --cc clang --cxx clang++
+      - name: Retain the reproducibility report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reproducibility-macos-x64
+          path: |
+            build-repro/report.json
+            build-repro/*.log
+          if-no-files-found: warn
+          retention-days: ${{ needs.changes.outputs.mode == 'candidate' && 30 || 14 }}
+          overwrite: true
+
   # ---------------------------------------------------------------- real-model and candidate: build once per platform
 
   # validate.py --phase build (with --full in a candidate run): library, addon, tests and the
@@ -1334,6 +1596,72 @@ jobs:
       - *node-sdk
       - *vs-env
       - *windows-args
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *model-save
+      - *build-phase
+      - *build-tarball
+      - *build-upload
+      - *cache-stats
+      - *report
+
+  build-macos-arm64:
+    name: build-macos-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'build-macos-arm64') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DTL_JOB: build-macos-arm64
+      DTL_PLATFORM: macos-arm64
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-arm64-appleclang-build
+      DTL_CACHE_FALLBACK: |-
+        macos-arm64-appleclang-warm
+      DTL_CACHE_SAVE: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *model-save
+      - *build-phase
+      - *build-tarball
+      - *build-upload
+      - *cache-stats
+      - *report
+
+  build-macos-x64:
+    name: build-macos-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'build-macos-x64') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      DTL_JOB: build-macos-x64
+      DTL_PLATFORM: macos-x64
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-x64-appleclang-build
+      DTL_CACHE_FALLBACK: |-
+        macos-x64-appleclang-warm
+      DTL_CACHE_SAVE: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
       - *model-key
       - *model-restore
       - *model-fetch
@@ -1552,6 +1880,84 @@ jobs:
       - *cross-host
       - *shard-upload
 
+  shards-macos-arm64:
+    name: ${{ matrix.job }}
+    needs: [changes, build-macos-arm64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.shards_macos_arm64 != '[]' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.shards_macos_arm64) }}
+    env:
+      DTL_JOB: ${{ matrix.job }}
+      DTL_PLATFORM: macos-arm64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: ${{ matrix.tools }}
+      DTL_MODEL: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go-toolcache-link
+      - *go
+      - *go-cache
+      - *typescript
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *shard-run
+      - *cross-host
+      - *shard-upload
+
+  shards-macos-x64:
+    name: ${{ matrix.job }}
+    needs: [changes, build-macos-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.shards_macos_x64 != '[]' }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.shards_macos_x64) }}
+    env:
+      DTL_JOB: ${{ matrix.job }}
+      DTL_PLATFORM: macos-x64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: ${{ matrix.tools }}
+      DTL_MODEL: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go-toolcache-link
+      - *go
+      - *go-cache
+      - *typescript
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *shard-run
+      - *cross-host
+      - *shard-upload
+
   # The candidate's packages-<P>: the packages check from the build tarball, a short job so that
   # assemble starts early. Same names as the push profile's jobs, with a build dependency.
   packages-candidate-linux-x64:
@@ -1687,6 +2093,74 @@ jobs:
       - *packages-candidate-upload
       - *packages-shard-upload
 
+  packages-candidate-macos-arm64:
+    name: packages-macos-arm64
+    needs: [changes, build-macos-arm64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode == 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-macos-arm64') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DTL_JOB: packages-macos-arm64
+      DTL_PLATFORM: macos-arm64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_MODEL: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go-toolcache-link
+      - *go
+      - *go-cache
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *packages-shard
+      - *packages-candidate-upload
+      - *packages-shard-upload
+
+  packages-candidate-macos-x64:
+    name: packages-macos-x64
+    needs: [changes, build-macos-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.mode == 'candidate' && contains(fromJSON(needs.changes.outputs.run), 'packages-macos-x64') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      DTL_JOB: packages-macos-x64
+      DTL_PLATFORM: macos-x64
+      DTL_NODE: 24.21.0
+      DTL_TOOLS: rust,java,dotnet,go
+      DTL_MODEL: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *setup-node
+      - *rust-cache
+      - *rust
+      - *java
+      - *nuget-cache
+      - *dotnet
+      - *go-toolcache
+      - *go-toolcache-link
+      - *go
+      - *go-cache
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *packages-shard
+      - *packages-candidate-upload
+      - *packages-shard-upload
+
   # ---------------------------------------------------------------- candidate: tier-2 short stress
 
   stress-linux-arm64:
@@ -1737,6 +2211,48 @@ jobs:
       - *defender
       - *checkout
       - *vs-env
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *stress-run
+      - *stress-upload
+
+  stress-macos-arm64:
+    name: stress-macos-arm64
+    needs: [changes, build-macos-arm64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'stress-macos-arm64') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DTL_JOB: stress-macos-arm64
+      DTL_PLATFORM: macos-arm64
+      DTL_MODEL: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *build-download
+      - *build-extract
+      - *stress-run
+      - *stress-upload
+
+  stress-macos-x64:
+    name: stress-macos-x64
+    needs: [changes, build-macos-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'stress-macos-x64') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      DTL_JOB: stress-macos-x64
+      DTL_PLATFORM: macos-x64
+      DTL_MODEL: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
       - *model-key
       - *model-restore
       - *model-fetch
@@ -1892,6 +2408,52 @@ jobs:
       PY: python
     steps:
       - *defender
+      - *checkout
+      - *build-download
+      - *build-extract
+      - *shards-download
+      - *tier2-stress
+      - *tier2-reproducibility
+      - *image-check
+      - *merge
+      - *evidence-upload
+
+  evidence-macos-arm64:
+    name: evidence-macos-arm64
+    needs: [changes, build-macos-arm64, shards-macos-arm64, packages-candidate-macos-arm64, stress-macos-arm64, reproducibility-macos-arm64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'evidence-macos-arm64') }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DTL_JOB: evidence-macos-arm64
+      DTL_PLATFORM: macos-arm64
+      DTL_EVIDENCE: evidence-macos-arm64
+      DTL_NATIVE: ''
+      DTL_TIER2: 'true'
+    steps:
+      - *checkout
+      - *build-download
+      - *build-extract
+      - *shards-download
+      - *tier2-stress
+      - *tier2-reproducibility
+      - *image-check
+      - *merge
+      - *evidence-upload
+
+  evidence-macos-x64:
+    name: evidence-macos-x64
+    needs: [changes, build-macos-x64, shards-macos-x64, packages-candidate-macos-x64, stress-macos-x64, reproducibility-macos-x64]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'evidence-macos-x64') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    env:
+      DTL_JOB: evidence-macos-x64
+      DTL_PLATFORM: macos-x64
+      DTL_EVIDENCE: evidence-macos-x64
+      DTL_NATIVE: ''
+      DTL_TIER2: 'true'
+    steps:
       - *checkout
       - *build-download
       - *build-extract
@@ -2235,6 +2797,64 @@ jobs:
       - *build-phase
       - *cache-stats
 
+  warm-macos-arm64:
+    name: warm-macos-arm64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'warm-macos-arm64') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DTL_JOB: warm-macos-arm64
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-arm64-appleclang-warm
+      DTL_CACHE_FALLBACK: |-
+        macos-arm64-appleclang-build
+      DTL_CACHE_SAVE: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *model-save
+      - *build-phase
+      - *cache-stats
+
+  warm-macos-x64:
+    name: warm-macos-x64
+    needs: changes
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'warm-macos-x64') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      DTL_JOB: warm-macos-x64
+      DTL_NODE: 24.21.0
+      DTL_MODEL: 'true'
+      DTL_MODE: ${{ needs.changes.outputs.mode }}
+      DTL_LAUNCHER: ${{ needs.changes.outputs.cache == 'off' && 'none' || 'ccache' }}
+      DTL_CACHE_KEY: macos-x64-appleclang-warm
+      DTL_CACHE_FALLBACK: |-
+        macos-x64-appleclang-build
+      DTL_CACHE_SAVE: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - *checkout
+      - *ninja
+      - *compiler-cache
+      - *setup-node
+      - *model-key
+      - *model-restore
+      - *model-fetch
+      - *model-save
+      - *build-phase
+      - *cache-stats
+
   warm-asan:
     name: warm-asan
     needs: changes
@@ -2312,7 +2932,7 @@ jobs:
   # A warm-cache dispatch on another ref only lists what it would delete.
   cache-prune:
     name: cache-prune
-    needs: [changes, warm-linux-x64, warm-linux-x64-clang, warm-linux-arm64, warm-windows-x64, warm-asan, warm-tsan, warm-fuzz]
+    needs: [changes, warm-linux-x64, warm-linux-x64-clang, warm-linux-arm64, warm-windows-x64, warm-macos-arm64, warm-macos-x64, warm-asan, warm-tsan, warm-fuzz]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(fromJSON(needs.changes.outputs.run), 'cache-prune') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15

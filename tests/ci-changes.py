@@ -215,11 +215,12 @@ class Categories(Base):
         self.assertEqual(job['artifact_needs'], {'push': [], 'candidate': ['build-linux-x64']})
         self.assertEqual(job['rebuild_with'], [])
         self.assertEqual(ci_paths.JOBS['reproducibility-windows-x64']['needs'], {'push': ['changes'], 'candidate': ['changes']})
-        self.assertEqual(ci_paths.JOBS['assemble']['rebuild_with'], ['packages-linux-x64', 'packages-linux-arm64', 'packages-windows-x64'])
-        for name in ('assembled-linux-x64', 'assembled-linux-arm64', 'assembled-windows-x64', 'musl'):
+        self.assertEqual(ci_paths.JOBS['assemble']['rebuild_with'], ['packages-linux-x64', 'packages-linux-arm64', 'packages-windows-x64',
+                                                                    'packages-macos-arm64', 'packages-macos-x64'])
+        chain = ('assembled-linux-x64', 'assembled-linux-arm64', 'assembled-windows-x64', 'assembled-macos-arm64', 'assembled-macos-x64', 'musl')
+        for name in chain:
             self.assertEqual(ci_paths.JOBS[name]['rebuild_with'], ['assemble'])
-        others = [name for name, job in ci_paths.JOBS.items() if job['rebuild_with'] and name not in
-                  ('assemble', 'assembled-linux-x64', 'assembled-linux-arm64', 'assembled-windows-x64', 'musl')]
+        others = [name for name, job in ci_paths.JOBS.items() if job['rebuild_with'] and name not in ('assemble',) + chain]
         self.assertEqual(others, [], 'only the packaging chain sets rebuild_with')
 
 
@@ -368,10 +369,6 @@ class BranchPush(Base):
         self.assertEqual(decision['run'], ['policy', 'generic-linux-x64'])
         self.assertEqual(decision['policy_checks'], list(ci_paths.POLICY_CHECKS))
 
-    def test_platforms_branch_push_runs_nothing(self):
-        head = self.repo.commit([self.root], {'src/laya.cpp': 'int y;\n'})
-        self.assertEqual(self.decide(head, workflow='platforms.yml')['run'], [])
-
     def test_partial_dispatch_counts_only_for_its_jobs(self):
         middle = self.repo.commit([self.root], {'src/laya.cpp': 'int y;\n'})
         self.api.record(middle, ['policy'], event='workflow_dispatch')  # e.g. scope=policy
@@ -383,7 +380,7 @@ class BranchPush(Base):
         self.assertEqual(decision['run'], ['policy', 'generic-linux-x64'])  # generic: src changed since root
 
     def test_untrusted_runs_are_ignored(self):
-        cases = {'pull_request': dict(event='pull_request'), 'other workflow': dict(workflow='platforms.yml'),
+        cases = {'pull_request': dict(event='pull_request'), 'other workflow': dict(workflow='other.yml'),
                  'fork head': dict(head_repo='someone/fork'), 'other repository': dict(repo='someone/fork'),
                  'failed job': dict(conclusion='failure'), 'skipped job': dict(conclusion='skipped'),
                  'other head': dict(head_sha='f' * 40), 'dynamic event': dict(event='dynamic')}
@@ -564,8 +561,8 @@ class MainAndMerges(Base):
         self.verify_all(self.root)
         branch = self.repo.commit([self.root], {'src/laya.cpp': 'int y;\n'})
         self.api.record(branch, [job for job in PUSH if 'native' in ci_paths.JOBS[job]['categories'] or job in
-                                 ('generic-linux-x64-clang', 'generic-linux-arm64', 'generic-windows-x64', 'sanitizers', 'fuzzer',
-                                  'reproducibility-windows-x64')], event='workflow_dispatch')
+                                 ('generic-linux-x64-clang', 'generic-linux-arm64', 'generic-windows-x64', 'generic-macos-arm64',
+                                  'generic-macos-x64', 'sanitizers', 'fuzzer', 'reproducibility-windows-x64')], event='workflow_dispatch')
         merge = self.repo.commit([self.root, branch], {'src/laya.cpp': 'int y;\n'})
         self.assertTrue(self.decide(merge, ref='refs/heads/main')['skip_all'])
 
@@ -609,8 +606,8 @@ class Dispatch(Base):
         self.verify_all(self.root)
         head = self.repo.commit([self.root], {'src/laya.cpp': 'int y;\n'})
         run = set(self.decide(head, event='workflow_dispatch')['run'])
-        self.assertEqual(run, {'generic-linux-x64', 'generic-linux-x64-clang', 'generic-linux-arm64', 'generic-windows-x64', 'sanitizers',
-                               'fuzzer', 'reproducibility-windows-x64'})
+        self.assertEqual(run, {'generic-linux-x64', 'generic-linux-x64-clang', 'generic-linux-arm64', 'generic-windows-x64',
+                               'generic-macos-arm64', 'generic-macos-x64', 'sanitizers', 'fuzzer', 'reproducibility-windows-x64'})
 
     def test_scope_all_and_lists(self):
         self.verify_all(self.root)
@@ -621,14 +618,15 @@ class Dispatch(Base):
                          ['build-linux-x64', 'bindings-real-linux-x64'])
         with self.assertRaises(ValueError):
             self.decide(self.root, event='workflow_dispatch', scope='no-such-job')
-        self.assertEqual(self.decide(self.root, event='workflow_dispatch', scope='generic-macos-arm64')['run'], [])
+        self.assertEqual(self.decide(self.root, event='workflow_dispatch', scope='generic-macos-arm64')['run'], ['generic-macos-arm64'])
 
     def test_only_packages_windows_stale(self):
         head = self.repo.commit([self.root], {'docs/API.md': '# 2\n'})
         self.verify_all(head, [job for job in PUSH if job != 'packages-windows-x64'], event='workflow_dispatch')
         run = set(self.decide(head, event='workflow_dispatch')['run'])
         self.assertEqual(run, {'packages-windows-x64', 'assemble', 'assembled-linux-x64', 'assembled-linux-arm64', 'assembled-windows-x64',
-                               'musl', 'packages-linux-x64', 'packages-linux-arm64'})
+                               'assembled-macos-arm64', 'assembled-macos-x64', 'musl', 'packages-linux-x64', 'packages-linux-arm64',
+                               'packages-macos-arm64', 'packages-macos-x64'})
 
     def test_only_bindings_real_linux_x64_stale(self):
         head = self.repo.commit([self.root], {'docs/API.md': '# 2\n'})
@@ -687,8 +685,6 @@ class Dispatch(Base):
             with self.subTest(mode=mode):
                 self.assertEqual(set(self.decide(self.root, event='workflow_dispatch', mode=mode)['run']),
                                  set(ci_paths.jobs_of('native.yml', profile)))
-        self.assertEqual(self.decide(self.root, event='workflow_dispatch', mode='candidate', workflow='platforms.yml')['run'], [])
-        self.assertNotIn('warm', ' '.join(self.decide(self.root, event='schedule', mode='warm-cache', workflow='platforms.yml')['run']))
         qualify = set(self.decide(self.root, event='workflow_dispatch', mode='qualify')['run'])
         self.assertEqual(qualify, {'qualify-sanitizers-address', 'qualify-sanitizers-thread', 'qualify-sanitizers', 'qualify-fuzz',
                                    'qualify-upgrade'})

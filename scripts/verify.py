@@ -4,10 +4,9 @@
 Run it once per batch, before merging (AGENTS.md, Development workflow). It works out which jobs
 are stale with scripts/ci_paths.py:
 
-- CI jobs (the push profile of native.yml and platforms.yml, and the real-model profile with
-  --real-model) from their own trusted job records, as the workflows' `changes` job does
-  (scripts/ci-changes.py). It dispatches native.yml with mode=verify and scope=affected (and
-  platforms.yml when a macOS job is stale), which runs exactly those jobs.
+- CI jobs (the push profile of native.yml, and the real-model profile with --real-model) from their
+  own trusted job records, as the workflow's `changes` job does (scripts/ci-changes.py). It
+  dispatches native.yml with mode=verify and scope=affected, which runs exactly those jobs.
 - Local jobs (ci_paths.LOCAL_JOBS) from the state file at `git rev-parse --git-path
   verify-state.json` (per job, the last commit it verified on this checkout; per linked worktree).
 

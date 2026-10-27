@@ -152,9 +152,7 @@ class MakePlan(unittest.TestCase):
         plan = self.plan(local_states=local_states(['local-sanitizers', 'local-fuzz']),
                          ci_states=ci_states(['generic-windows-x64', 'generic-macos-arm64']))
         self.assertEqual(plan['local'], ['local-sanitizers', 'local-fuzz'])
-        self.assertEqual(plan['dispatch'], {'native.yml': 'affected', 'platforms.yml': 'affected'})
-        plan = self.plan(ci_states=ci_states(['sanitizers']))
-        self.assertEqual(plan['dispatch'], {'native.yml': 'affected'})  # platforms.yml only when a macOS job is stale
+        self.assertEqual(plan['dispatch'], {'native.yml': 'affected'})  # one workflow holds every platform
 
     def test_sides(self):
         kwargs = dict(local_states=local_states(['local-fuzz']), ci_states=ci_states(['sanitizers']))
@@ -164,7 +162,7 @@ class MakePlan(unittest.TestCase):
     def test_all(self):
         plan = self.plan(all_jobs=True, emsdk='/emsdk', real_model=True, model='/m.gguf')
         self.assertEqual(plan['local'], list(ci_paths.LOCAL_JOBS))
-        self.assertEqual(plan['dispatch'], {'native.yml': 'all', 'platforms.yml': 'all'})
+        self.assertEqual(plan['dispatch'], {'native.yml': 'all'})
         plan = self.plan(all_jobs=True)
         self.assertEqual(set(plan['not_run']), {'local-real-model', 'local-browser-wasm', 'local-browser-webgpu'})
         self.assertEqual(plan['failures'], [])
@@ -172,8 +170,7 @@ class MakePlan(unittest.TestCase):
     def test_only(self):
         plan = self.plan(only=['local-fuzz', 'generic-windows-x64', 'bindings-real-linux-x64', 'generic-macos-arm64'], real_model=True)
         self.assertEqual(plan['local'], ['local-fuzz'])
-        self.assertEqual(plan['dispatch'], {'native.yml': 'generic-windows-x64,bindings-real-linux-x64',
-                                            'platforms.yml': 'generic-macos-arm64'})
+        self.assertEqual(plan['dispatch'], {'native.yml': 'generic-windows-x64,bindings-real-linux-x64,generic-macos-arm64'})
         # Names a verify dispatch would skip, so the run would pass without running them.
         for only, real_model in ((['no-such-job'], False), (['tooling'], False), (['stress-windows-x64'], True),
                                  (['bindings-real-linux-x64'], False)):
