@@ -65,7 +65,7 @@ def macho_problems(path, package_target, library):
     run-path entries, compiler hardening, code signature, linked libraries, and for the library its exports."""
     extra = () if library else tuple('@rpath/' + name for name in package_target.node_libraries)
     problems = [problem for problem in (_problem(require_macho_cpu, path, package_target.name), _problem(require_macho_rpaths, path),
-                                        _problem(require_macho_hardening, path, library), _problem(require_macho_signature, path, package_target.name),
+                                        _problem(require_macho_hardening, path), _problem(require_macho_signature, path, package_target.name),
                                         _problem(require_macho_linkage, path, extra)) if problem]
     if library:
         exports = [name.lstrip('_') for name in macho_info(path)['exports']]

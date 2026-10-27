@@ -685,14 +685,13 @@ def require_macho_rpaths(path):
         raise SystemExit(f'{pathlib.Path(path).name} searches for libraries outside its own directory: {":".join(bad)}')
 
 
-def require_macho_hardening(path, library):
-    """Smoke checks of the compiler hardening on a shipped Mach-O binary: the stack protector's failure handler is imported
-    and a library calls fortified (_FORTIFY_SOURCE) functions (___*_chk)."""
-    imports = set(macho_info(path)['imports'])
-    if '___stack_chk_fail' not in imports:
+def require_macho_hardening(path):
+    """Smoke check of the compiler hardening on a shipped Mach-O binary: the stack protector's failure handler is imported.
+    Fortification is not checkable here: Apple's headers size objects with the static __builtin_object_size, and clang
+    folds every ___*_chk call whose bound it proves (or cannot know) into the plain call, so a fortified library may
+    import none (the first macOS CI builds, run 40566157580, import none). The ELF check covers the shared -D_FORTIFY_SOURCE compile option."""
+    if '___stack_chk_fail' not in macho_info(path)['imports']:
         raise SystemExit(f'{pathlib.Path(path).name} does not use the stack protector (no ___stack_chk_fail)')
-    if library and not any(re.fullmatch(r'___\w+_chk', name) and name != '___stack_chk_fail' for name in imports):
-        raise SystemExit(f'{pathlib.Path(path).name} calls no fortified function (no ___*_chk): built without _FORTIFY_SOURCE?')
 
 
 def require_macho_signature(path, platform):

@@ -487,7 +487,6 @@ class MachOCheckTests(unittest.TestCase):
         cases = {'CPU type': (dict(cpu=0x01000007), 'CPU type'), 'run path': (dict(rpaths=('@loader_path', '/opt/build/lib')), 'outside its own directory'),
                  'bare run path': (dict(rpaths=('lib',)), 'outside its own directory'),
                  'stack protector': (dict(imports=('___memcpy_chk',)), 'stack protector'),
-                 'fortify': (dict(imports=('___stack_chk_fail',)), 'fortified'),
                  'signature': (dict(signed=False), 'LC_CODE_SIGNATURE'),
                  'libraries': (dict(dylibs=('/usr/lib/libSystem.B.dylib', '/opt/homebrew/lib/libomp.dylib')), 'libomp'),
                  'rpath library in the library': (dict(dylibs=self.ADDON_LINK), 'libducktape_laya.1.dylib'),
@@ -502,7 +501,7 @@ class MachOCheckTests(unittest.TestCase):
         self.assertTrue(any('CPU type' in problem for problem in self.problems(self.X64, cpu=0x0100000C)))
         # The ad-hoc signature is required on arm64 only.
         self.assertEqual(self.problems(self.X64, signed=False), [])
-        # An addon is not held to the export list or to fortified calls, but must link the library through @rpath only.
+        # An addon is not held to the export list, but must link the library through @rpath only.
         self.assertTrue(any('libomp' in problem for problem in self.problems(library=False, exports=[], imports=('___stack_chk_fail',),
                                                                        dylibs=(*self.ADDON_LINK, '/opt/lib/libomp.dylib'))))
         self.assertTrue(any('stack protector' in problem for problem in self.problems(library=False, exports=[], imports=(), dylibs=self.ADDON_LINK)))

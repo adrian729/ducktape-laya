@@ -106,10 +106,11 @@ class LibraryChoice(unittest.TestCase):
                 calls, error = self._open('darwin', bundled, machine='arm64')
                 self.assertEqual(calls, [])  # no bare-name load
                 self.assertIsInstance(error, laya.LayaLoadError)
-            with mock.patch.object(_native.os.path, 'isfile', side_effect=lambda p: p == '/usr/local/lib/' + _native._VERSIONED):
+            installed = os.path.join('/usr/local/lib', _native._VERSIONED)  # the host's separator: this also runs on Windows
+            with mock.patch.object(_native.os.path, 'isfile', side_effect=lambda p: p == installed):
                 calls, result = self._open('darwin', bundled, machine='x86_64')
-                self.assertEqual(calls, [('/usr/local/lib/' + _native._VERSIONED, {})])
-                verify.assert_called_with('library', '/usr/local/lib/' + _native._VERSIONED)
+                self.assertEqual(calls, [(installed, {})])
+                verify.assert_called_with('library', installed)
             # The explicit directory is made absolute before it is loaded and verified.
             os.makedirs(os.path.join(directory, 'lib'))
             pathlib.Path(directory, 'lib', _native._NAME).write_bytes(b'')

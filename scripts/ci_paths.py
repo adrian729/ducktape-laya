@@ -239,12 +239,16 @@ SHARDS = {
                                  'parity-a-windows-x64': ['parity:smoke-a'], 'parity-b-windows-x64': ['parity:smoke-b'],
                                  'bindings-real-a-windows-x64': ['bindings:a'], 'bindings-real-b-windows-x64': ['bindings:b']},
                         'side_outputs': {}},
-        # macOS as linux-arm64: three shard jobs each, few because macOS runner concurrency is scarce (runners of 3 cores, macos-15,
-        # and 4 cores, macos-15-intel). TODO(lead): measured basis for the split; re-balance from the first real-model run.
-        'macos-arm64': {'jobs': {'native-macos-arm64': ['ctest', 'references'], 'parity-macos-arm64': ['parity:smoke'],
-                                 'bindings-real-macos-arm64': ['bindings']}, 'side_outputs': {}},
-        'macos-x64': {'jobs': {'native-macos-x64': ['ctest', 'references'], 'parity-macos-x64': ['parity:smoke'],
-                               'bindings-real-macos-x64': ['bindings']}, 'side_outputs': {}},
+        # macOS: few shard jobs, as macOS runner concurrency is scarce (runners of 3 cores, macos-15, and 4 cores, macos-15-intel).
+        # Parity in halves, as Windows': the whole smoke profile took 439 s on macos-15 (run 40566157580; 545 s with setup).
+        # In that run bindings-real took 131 s on arm64 and 343 s on x64, the latter with cold Rust/Go/Maven caches:
+        # split it only if it stays over budget with warm caches.
+        'macos-arm64': {'jobs': {'native-macos-arm64': ['ctest', 'references'], 'parity-a-macos-arm64': ['parity:smoke-a'],
+                                 'parity-b-macos-arm64': ['parity:smoke-b'], 'bindings-real-macos-arm64': ['bindings']},
+                        'side_outputs': {}},
+        'macos-x64': {'jobs': {'native-macos-x64': ['ctest', 'references'], 'parity-a-macos-x64': ['parity:smoke-a'],
+                               'parity-b-macos-x64': ['parity:smoke-b'], 'bindings-real-macos-x64': ['bindings']},
+                      'side_outputs': {}},
     },
     'candidate': {
         'linux-x64': {'profile': 'ci-full',
@@ -269,13 +273,15 @@ SHARDS = {
                                  'packages-windows-x64': ['packages'], 'bindings-a-windows-x64': ['bindings:a', 'policy-platform'],
                                  'bindings-b-windows-x64': ['bindings:b']},
                         'side_outputs': {}},
-        # macOS as linux-arm64: four shard jobs. TODO(lead): measured basis; split further if a shard exceeds its budget.
+        # macOS: parity in halves, as Windows' (the smoke profile alone took 439 s on macos-15, run 40566157580).
         'macos-arm64': {'profile': 'ci-full',
-                        'jobs': {'native-macos-arm64': ['ctest', 'references'], 'parity-macos-arm64': ['parity:full-a', 'parity:full-b'],
+                        'jobs': {'native-macos-arm64': ['ctest', 'references'], 'parity-a-macos-arm64': ['parity:full-a'],
+                                 'parity-b-macos-arm64': ['parity:full-b'],
                                  'packages-macos-arm64': ['packages'], 'bindings-macos-arm64': ['bindings', 'policy-platform']},
                         'side_outputs': {}},
         'macos-x64': {'profile': 'ci-full',
-                      'jobs': {'native-macos-x64': ['ctest', 'references'], 'parity-macos-x64': ['parity:full-a', 'parity:full-b'],
+                      'jobs': {'native-macos-x64': ['ctest', 'references'], 'parity-a-macos-x64': ['parity:full-a'],
+                               'parity-b-macos-x64': ['parity:full-b'],
                                'packages-macos-x64': ['packages'], 'bindings-macos-x64': ['bindings', 'policy-platform']},
                       'side_outputs': {}},
     },
