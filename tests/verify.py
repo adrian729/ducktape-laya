@@ -170,12 +170,17 @@ class MakePlan(unittest.TestCase):
         self.assertEqual(plan['failures'], [])
 
     def test_only(self):
-        plan = self.plan(only=['local-fuzz', 'generic-windows-x64', 'bindings-real-linux-x64', 'generic-macos-arm64'])
+        plan = self.plan(only=['local-fuzz', 'generic-windows-x64', 'bindings-real-linux-x64', 'generic-macos-arm64'], real_model=True)
         self.assertEqual(plan['local'], ['local-fuzz'])
         self.assertEqual(plan['dispatch'], {'native.yml': 'generic-windows-x64,bindings-real-linux-x64',
                                             'platforms.yml': 'generic-macos-arm64'})
-        with self.assertRaises(ValueError):
-            self.plan(only=['no-such-job'])
+        # Names a verify dispatch would skip, so the run would pass without running them.
+        for only, real_model in ((['no-such-job'], False), (['tooling'], False), (['stress-windows-x64'], True),
+                                 (['bindings-real-linux-x64'], False)):
+            with self.subTest(only=only), self.assertRaises(ValueError):
+                self.plan(only=only, real_model=real_model)
+        # A local job asked for by name and not run fails the verdict.
+        self.assertEqual(self.plan(only=['local-browser-wasm'])['failures'], ['NOT RUN: local-browser-wasm (browser build: add --emsdk)'])
 
     def test_real_model_without_a_model(self):
         plan = self.plan(local_states=local_states(['local-real-model']), real_model=True, model=None, model_note='not found')
@@ -215,7 +220,7 @@ class Commands(unittest.TestCase):
         fuzz = verify.local_commands('local-fuzz', root)
         self.assertEqual(fuzz[0], ['cmake', '--preset', 'fuzz'])
         self.assertEqual(fuzz[1][fuzz[1].index('--seconds') + 1], '60')
-        self.assertEqual(verify.local_commands('local-sanitizers', root)[-1], ['ctest', '--preset', 'sanitize'])
+        self.assertEqual(verify.local_commands('local-sanitizers', root)[-1], ['ctest', '--preset', 'sanitize', '-L', '^tier-generic$'])
 
 
 class ModelDiscovery(unittest.TestCase):
@@ -341,6 +346,8 @@ class Output(unittest.TestCase):
             {'name': 'sanitizers', 'completedAt': None}]}
         self.assertEqual(verify.seconds_between(view['createdAt'], verify.run_end(view)), 420.0)
         self.assertEqual(verify.run_end({'updatedAt': '2026-10-25T05:20:00Z', 'jobs': []}), '2026-10-25T05:20:00Z')
+        rerun = {**view, 'startedAt': '2026-10-25T06:00:00Z', 'jobs': [{'name': 'generic-windows-x64', 'completedAt': '2026-10-25T06:05:00Z'}]}
+        self.assertEqual(verify.seconds_between(verify.run_start(rerun), verify.run_end(rerun)), 300.0)
 
 
 if __name__ == '__main__':

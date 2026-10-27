@@ -38,12 +38,13 @@ _NATIVE = [
     'tests/original-reference/routing/*', 'tests/consumers/c.c', 'tests/consumers/cpp.cpp', 'bindings/node/*.cpp',
     'examples/*.c', 'examples/*.cpp', 'examples/*.h', 'examples/*.json', 'examples/presets/*', 'scripts/validate.py',
     'scripts/release_support.py', 'scripts/check-binary.py', 'tests/cpu-guard.py', 'tests/examples-smoke.py',
-    'tests/reconfigure.py', 'tests/compile-commands.py',
+    'tests/reconfigure.py', 'tests/compile-commands.py', '.gitattributes',  # line endings feed the patch and source hashes
     # Also read by every generic validate.py run: the ABI export check, the release policy
     # (check-binary.py's glibc floor, check_record) and the pinned model manifests.
     'scripts/check-abi.py', 'release/qualification.json', 'models/*.json',
 ]
-_BINDING_SHARED = ['include/ducktape_laya.h']
+# The binding jobs run their suites through validate.py (--library-only --bindings), which imports release_support.py.
+_BINDING_SHARED = ['include/ducktape_laya.h', 'scripts/validate.py', 'scripts/release_support.py']
 _BINDINGS = {
     'rust': ['bindings/rust/*', 'tests/consumers/rust/*'],
     'node': ['bindings/node/*', 'tests/consumers/node.cjs', 'tests/typescript/*'],
@@ -65,14 +66,17 @@ CATEGORIES = {
                   'tests/package_support.py', 'tests/installed-packages.py', 'tests/installed-native.py', 'tests/musl-packages.sh',
                   'tests/electron/*', 'cmake/*', 'CMakeLists.txt', 'release/*.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
                   'licenses/*', 'models/*.json', 'bindings/*/package.json', 'bindings/*/Cargo.toml', 'bindings/*/pyproject.toml',
-                  'bindings/*/*.csproj', 'bindings/*/README.md', 'scripts/download-model.py'],
+                  'bindings/*/*.csproj', 'bindings/*/README.md', 'scripts/download-model.py',
+                  # validate.py --packages runs the package jobs; release_support.py is imported by most of the above.
+                  'scripts/validate.py', 'scripts/release_support.py', 'scripts/verify-model.py'],
     'sanitizers': _NATIVE + ['scripts/check-sanitizers.py'],
     'fuzz': ['src/*', 'include/*', 'cmake/*', 'patches/*.patch', 'CMakeLists.txt', 'CMakePresets.json', 'third_party*',
-             'tests/input-libfuzzer.cpp', 'tests/fuzz-corpus.py', 'tests/fixtures/*', 'scripts/check-fuzz.py'],
+             'tests/input-libfuzzer.cpp', 'tests/fuzz-corpus.py', 'tests/fixtures/*', 'scripts/check-fuzz.py', 'scripts/release_support.py',
+             'release/compatibility.json'],  # CMake reads the runtime patch list and the version from it
     'windows': _NATIVE + ['bindings/node/win_delay_load_hook.cpp', 'scripts/fetch-node-sdk.py', 'scripts/node-sdk-sha256.json'],
     'arm64': _NATIVE,
     'clang': _NATIVE,
-    'macos': _NATIVE + ['src/exports.macos'],
+    'macos': _NATIVE + ['src/exports.macos', 'scripts/verify-model.py'],
     # M4: the source inputs too; a clang-cl anonymous-namespace name in a moved TU breaks Windows reproducibility.
     'reproducibility': ['src/*', 'include/*', 'bindings/node/*.cpp', 'cmake/*', 'CMakeLists.txt', 'patches/*.patch', 'third_party*',
                         '.gitmodules', 'release/compatibility.json', 'scripts/check-reproducibility.py', 'scripts/release_support.py',
@@ -97,9 +101,11 @@ CATEGORIES = {
              'scripts/setup.py', 'scripts/check-release.py'],
     # Local tooling with its own policy check and no CI job of its own.
     'tooling': ['scripts/verify.py', 'tests/verify.py', 'scripts/ci_budgets.py', 'scripts/check-policy.py', 'scripts/ci-cache-prune.py',
-                '.gitignore', '.gitattributes', '.ignore', 'demo'],
-    # M2: the classifier and the workflows; every job of every profile is stale.
-    'ci': ['.github/*', 'scripts/ci_paths.py', 'scripts/ci-changes.py', 'tests/ci-changes.py'],
+                '.gitignore', '.ignore', 'demo'],
+    # M2: the classifier and the workflows it drives; every job of every profile is stale. attest-release.yml and
+    # publish-release.yml run no verification job: they are inputs of the release-assets policy check.
+    'ci': ['.github/workflows/native.yml', '.github/workflows/platforms.yml', '.github/actions/*', 'scripts/ci_paths.py',
+           'scripts/ci-changes.py'],
 }
 CATEGORIES['browser'] = list(dict.fromkeys(CATEGORIES['browser']))
 
@@ -169,6 +175,9 @@ POLICY_CHECKS = {
 PLATFORM_POLICY_CHECKS = ('abi-layouts', 'packaging-identities', 'browser-backend-identities', 'typescript-consumers')
 # A policy input is a known path: the `policy` category is their union (pseudo globs left out).
 CATEGORIES['policy'] = sorted({glob for globs in POLICY_CHECKS.values() for glob in globs if not glob.startswith('deleted:')})
+# The two policy checks generic-windows-x64 runs on Windows, whose results can differ from Linux: their inputs.
+WINDOWS_POLICY_CHECKS = ('abi-layouts', 'packaging-identities')
+CATEGORIES['windows_policy'] = ['scripts/check-policy.py'] + sorted({glob for check in WINDOWS_POLICY_CHECKS for glob in POLICY_CHECKS[check]})
 
 # --------------------------------------------------------------------------------------------
 # validate.py checks (run labels and shard checks) by category; validate.FULL_CHECKS must be a subset.
@@ -283,8 +292,8 @@ _job('policy', ['policy'], ['push'], ['changes'])
 _job('generic-linux-x64', ['native'], ['push'], ['changes'])
 _job('generic-linux-x64-clang', ['clang'], ['push'], ['changes'])
 _job('generic-linux-arm64', ['arm64'], ['push'], ['changes'])
-# S2: abi-layouts and packaging-identities run in the Windows generic job when their category is stale.
-_job('generic-windows-x64', ['windows', 'abi', 'packaging_identity'], ['push'], ['changes'])
+# S2: the job always runs WINDOWS_POLICY_CHECKS, so their inputs make it stale.
+_job('generic-windows-x64', ['windows', 'abi', 'packaging_identity', 'windows_policy'], ['push'], ['changes'])
 for _lang in LANGUAGES:
     for _platform in ('linux-x64', 'windows-x64'):
         _job(f'binding-{_lang}-{_platform}', [f'binding_{_lang}'], ['push'], ['changes'])

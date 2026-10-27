@@ -4,6 +4,22 @@ User-facing changes per release. Each section lists breaking changes first; "Rel
 
 ## Unreleased
 
+### Breaking changes
+
+- **Repeated JSON keys are rejected.** A request, open config or router config with the same key twice in one object fails with status 1; the last value used to win silently, so a policy layer reading the first value could see a different `model`, `state` or `overflow` than the library used. Nesting is limited to 64 levels, as documented (65 were accepted).
+- **Model info `name` can be `null`.** `dtl_info` with an engine returns `"name": null` for a model without `general.name` metadata; it failed with status 2 although the model opened.
+- **Browser `backend: 'auto'`** no longer retries an invalid config or route (status 1) with WASM.
+
+### Fixes
+
+- **Request parsing is linear.** Parsing request text took quadratic time in the number of objects (40,000 empty objects, 117 KiB, took 6 s, and no deadline or cancellation could stop it); it now takes milliseconds.
+- **Error messages are valid UTF-8 of at most 1 KiB.** They could contain invalid bytes from paths or request text, and echo up to 1 MiB of a request.
+- **`dtl_open` requires a regular file,** as routers already did: a FIFO path blocked the call.
+- **No debugger on abort.** A ggml abort (an internal assertion, or a small allocation failing under memory pressure) ran `gdb` or `lldb` from `PATH` against the host process to print a backtrace; it now prints only the message before aborting.
+- **`add_subdirectory` keeps the parent's `BUILD_SHARED_LIBS`,** which the build used to force off in the parent's cache.
+- **Node.js and browser:** errors raised inside the Node addon (an open config over 1 MiB, an invalid argument) carry a status, and `NaN` or `Infinity` in a request object is rejected with status 1, where `JSON.stringify` would write `null`.
+- **Python:** a request that cannot be serialized as JSON raises `LayaError` with status 1.
+
 ## 0.3.0 (2026-10-26)
 
 Packages for Linux arm64 and Windows x64 (tier 2) next to Linux x86-64 (tier 1) ([platforms](docs/PLATFORMS.md)). The C ABI stays 2 (`libducktape_laya.so.1`): code built against 0.2.0 keeps working, but the bindings report load failures and some errors differently, look up the native library more strictly, and prompts change for some structured values. `find_package(ducktape_laya 0.2 ...)` no longer finds the library (CMake package versions match the same minor version): request `0.3` or drop the version. Migration notes are in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#migrating-from-020-to-030).

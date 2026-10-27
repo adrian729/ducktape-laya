@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from release_support import (LIBRARY, require_uninstrumented_binary, ROOT, browser_build_identity, sha256, source_identity, native_build_identity,
-                             require_mapped_source_paths, require_runtime_identity, require_elf_hardening,
+                             require_mapped_source_paths, require_runtime_identity, require_elf_hardening, require_origin_search_paths,
                              require_guard_cf, require_compiled_hardening)
 WINDOWS = sys.platform == 'win32'
 _spec = importlib.util.spec_from_file_location('check_binary', ROOT / 'scripts/check-binary.py')
@@ -62,6 +62,25 @@ class ArtifactInventoryTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(SystemExit, 'full RELRO'):
                             require_elf_hardening(library)
+
+    @unittest.skipIf(WINDOWS or not (shutil.which('cc') or shutil.which('gcc')) or not shutil.which('readelf'), 'needs cc and readelf')
+    def test_search_paths_must_be_origin_relative(self):
+        compiler = shutil.which('cc') or shutil.which('gcc')
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            (base / 'tiny.c').write_text('int tiny(void) { return 1; }\n')
+            for name, flags, allowed in [('none', [], True), ('origin', ["-Wl,-rpath,$ORIGIN:$ORIGIN/../..", '-Wl,--disable-new-dtags'], True),
+                                         ('runpath', ['-Wl,-rpath,$ORIGIN/lib', '-Wl,--enable-new-dtags'], True),
+                                         ('absolute', ['-Wl,-rpath,$ORIGIN:/opt/lib', '-Wl,--enable-new-dtags'], False),
+                                         ('relative', ['-Wl,-rpath,lib', '-Wl,--disable-new-dtags'], False)]:
+                library = base / f'lib{name}.so'
+                subprocess.run([compiler, '-shared', '-fPIC', *flags, str(base / 'tiny.c'), '-o', str(library)], check=True)
+                with self.subTest(name=name):
+                    if allowed:
+                        require_origin_search_paths(library)
+                    else:
+                        with self.assertRaisesRegex(SystemExit, 'outside its own directory'):
+                            require_origin_search_paths(library)
 
     @unittest.skipIf(WINDOWS or not (shutil.which('cc') or shutil.which('gcc')) or not shutil.which('readelf'), 'needs cc and readelf')
     def test_compiled_hardening_check(self):

@@ -14,6 +14,7 @@
 #include "json.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -108,6 +109,9 @@ struct backend::impl {
             // This build statically embeds a private libllama. Keep diagnostics
             // out of the host application's stdout/stderr; use per-call errors.
             llama_log_set([](ggml_log_level, const char *, void *) {}, nullptr);
+            // ggml's default abort handler runs gdb or lldb against the host process to print a
+            // backtrace; print only the message before aborting.
+            ggml_set_abort_callback([](const char *message) { std::fprintf(stderr, "%s\n", message); });
             llama_backend_init();
         });
         auto mp = llama_model_default_params();
@@ -140,7 +144,7 @@ struct backend::impl {
             throw failure(DTL_MODEL_ERROR, "Invalid mask token");
         marker_text.assign(piece, n);
         trained = static_cast<size_t>(std::max<int32_t>(0, llama_model_n_ctx_train(model.get())));
-        if (!trained) throw failure(DTL_MODEL_ERROR, "Missing trained context length");
+        if (trained < 32) throw failure(DTL_MODEL_ERROR, "Trained context length is missing or below 32 tokens");
         max_head = std::stoul(meta(model.get(), prefix + "max_head_tokens"));
         if (!max_head || max_head > trained) throw failure(DTL_MODEL_ERROR, "Invalid head token budget");
         capacity = config.context_tokens ? config.context_tokens : std::min<size_t>(512, trained);
@@ -422,8 +426,9 @@ struct backend::impl {
 backend::backend(const char *path, const engine_config &config) : impl_(std::make_unique<impl>(path, config)) {}
 backend::~backend() = default;
 json backend::info() const {
+    const auto name = find_meta(impl_->model.get(), "general.name");  // optional in GGUF
     return {{"architecture", meta(impl_->model.get(), "general.architecture")},
-            {"name", meta(impl_->model.get(), "general.name")}, {"decision_type", "laya"},
+            {"name", name ? json(*name) : json()}, {"decision_type", "laya"},
             {"max_head_tokens", impl_->max_head}, {"context_tokens", impl_->capacity},
             {"trained_context_tokens", impl_->trained},
             {"temperatures", impl_->temperatures}, {"metadata_temperatures", impl_->metadata_temperatures}};

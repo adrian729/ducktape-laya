@@ -41,7 +41,7 @@ def registration(linux=True, model=True, tiers=True, x86=True):
     """`ctest --show-only=json-v1` of a build: the tests and labels CMakeLists.txt registers with dtl_add_test."""
     tests = [('abi-errors', 'generic', 'native'), ('feature-errors', 'generic', 'native'), ('control-errors', 'generic', 'native'),
              ('decision-rules', 'generic', 'native'), ('language-routing', 'generic', 'native'), ('tokenizer-partition', 'generic', 'native'),
-             ('tokenizer-scaling', 'specialized', 'native'), ('stress-rule', 'generic', 'native')]
+             ('tokenizer-scaling', 'specialized', 'native'), ('request-parse-scaling', 'specialized', 'native'), ('stress-rule', 'generic', 'native')]
     if linux:
         tests.append(('ggml-faults', 'generic', 'faults'))
     if model:

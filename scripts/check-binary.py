@@ -26,7 +26,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from release_support import (ROOT, read_json, sha256, host_target, target as named_target, require_uninstrumented_binary,
-                             require_mapped_source_paths, require_elf_hardening, require_compiled_hardening, require_guard_cf,
+                             require_mapped_source_paths, require_elf_hardening, require_origin_search_paths, require_compiled_hardening,
+                             require_guard_cf,
                              pe_info, macho_info)
 
 ADDON = 'ducktape_laya.node'
@@ -54,7 +55,8 @@ def binary_format(path):
 
 def hardening_problems(path, library):
     """The hardening of one ELF binary (also applied by package-native.py to the stripped shipped files)."""
-    return [problem for problem in (_problem(require_elf_hardening, path), _problem(require_compiled_hardening, path, library)) if problem]
+    return [problem for problem in (_problem(require_elf_hardening, path), _problem(require_origin_search_paths, path),
+                                    _problem(require_compiled_hardening, path, library)) if problem]
 
 
 def _version(text):

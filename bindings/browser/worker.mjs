@@ -174,7 +174,8 @@ async function init(options) {
     const status = await runtime.ccall(routed ? 'dtl_open_router' : 'dtl_open', 'number', ['string','string','number','number'], [input, JSON.stringify(config), out, error], { async: true });
     handle = runtime.HEAPU32[out >>> 2];
     const message = runtime.HEAPU32[error >>> 2];
-    try { if (status) throw fail(message ? runtime.UTF8ToString(message) : 'Model loading failed', status); }
+    // An invalid config or route (status 1) is invalid on every backend: backend 'auto' does not retry it.
+    try { if (status) throw (status === 1 ? assetError : fail)(message ? runtime.UTF8ToString(message) : 'Model loading failed', status); }
     finally { runtime._dtl_free(message); }
   } finally { runtime._free(out); runtime._free(error); }
   return { backend: options.backend, abi: 2, threads: 1, runningCancellation: globalThis.crossOriginIsolated === true && options.backend === 'wasm', deadlines: true };

@@ -4,6 +4,7 @@
 #include <iostream>
 #include <random>
 #include <stdexcept>
+#include <cstring>
 #include <string>
 #include <utility>
 static void expect(bool ok, const char *message) {
@@ -80,6 +81,15 @@ int main(int argc, char **argv) {
                    "missing non-ASCII route"); dtl_free(error);
         }
         expect(dtl_open("/nonexistent/ducktape-laya.gguf", nullptr, &raw, &error) == DTL_MODEL_ERROR, "missing model"); dtl_free(error);
+        expect(dtl_open(".", nullptr, &raw, &error) == DTL_MODEL_ERROR && !raw && std::string(error).find("not a local regular file") != std::string::npos,
+               "a directory is not a model"); dtl_free(error);
+        // Error messages are valid UTF-8 of at most 1 KiB, whatever bytes they quote.
+        expect(dtl_open("/nonexistent/\xff\xc3.gguf", nullptr, &raw, &error) == DTL_MODEL_ERROR &&
+               std::string(error).find("/nonexistent/\xef\xbf\xbd\xef\xbf\xbd.gguf") != std::string::npos, "invalid UTF-8 in an error is replaced");
+        dtl_free(error);
+        const std::string long_path = "/nonexistent/" + std::string(1100, 'a') + "\xc3\xa9";
+        expect(dtl_open(long_path.c_str(), nullptr, &raw, &error) == DTL_MODEL_ERROR && std::strlen(error) <= 1024 &&
+               std::string(error).substr(std::strlen(error) - 3) == "...", "a long error is cut to 1 KiB"); dtl_free(error);
         expect(dtl_execute(nullptr, "{}", nullptr, &result, &error) == DTL_INVALID_ARGUMENT, "null engine"); dtl_free(error);
         dtl_free(nullptr); dtl_close(nullptr);
         if (argc > 1) {

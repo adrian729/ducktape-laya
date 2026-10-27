@@ -147,7 +147,7 @@ class World:
         (scripts/merge-validation.py: ci-full per target, ci-compiler for the clang entry of the native matrix)."""
         item = self.targets[platform]
         linux = item['os'] == 'linux'
-        tests = ['abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition', 'tokenizer-scaling',
+        tests = ['abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition', 'tokenizer-scaling', 'request-parse-scaling',
                  'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head', 'stress-rule']
         tests += ['real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults'] + (['cpu-guard'] if platform == 'linux-x64' else []) if linux else []
         skipped = {} if linux else {name: 'Linux only' for name in ('real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults', 'cpu-guard')}
@@ -302,7 +302,8 @@ class World:
                                   'model_sha256': self.model},
                    'fuzz': {'status': 'passed', 'qualification_budget_met': True, 'requested_seconds': budgets['fuzz_seconds_per_target']},
                    'upgrade': {'status': 'passed', 'candidate_runtime': 'c' * 40, 'baseline_runtime': self.record['runtime']['commit'],
-                               'adapter_checks_passed': True}}
+                               'adapter_checks_passed': True, 'configure_only': False, 'comparison': {'status': 'passed'},
+                               'gates': {gate: {'status': 'passed'} for gate in ('native_contracts', 'binding_conformance', 'abi')}}}
         for name, value in reports.items():
             write_json(self.ci / 'qualify' / name / 'report.json', {**value, 'source_commit': head, 'source_tracked_dirty': False})
             self.paths[name] = self.ci / 'qualify' / name / 'report.json'

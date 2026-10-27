@@ -55,7 +55,7 @@ node bindings/node/decide.cjs /path/to/Laya-Q8_0.gguf < examples/request.json
 | Option | Default | Meaning |
 |---|---|---|
 | `DUCKTAPE_BUILD_TESTS` | `ON` in a checkout | Native test executables and CTest registration. `OFF` when the project is added to another one (`add_subdirectory`, `FetchContent`), unless that project sets `BUILD_TESTING`, whose value it then takes |
-| `DUCKTAPE_TEST_MODEL` | empty | A local GGUF; registers the real-model tests (`real-model`, `real-features`, `real-faults`, `cpu-guard` when `qemu-x86_64` is found, ...) |
+| `DUCKTAPE_TEST_MODEL` | empty | A local GGUF; registers the real-model tests (`real-model`, `real-features`, `real-faults`, `cpu-guard` on Linux x86-64 non-sanitizer builds with `python3`; it finds QEMU when it runs, ...) |
 | `DUCKTAPE_REAL_TEST_TIMEOUT` | `600` | Per-test timeout in seconds for the long real-model tests; raise it for instrumented builds |
 | `DUCKTAPE_BUILD_EXAMPLES` | `OFF` | Developer examples: `laya-decide`, `laya-decide-cpp` and the demo programs |
 | `DUCKTAPE_BUILD_NODE` | `OFF` | The Node-API addon; supply `NODE_INCLUDE_DIR`, and on Windows `NODE_LIB` |
@@ -71,7 +71,7 @@ node bindings/node/decide.cjs /path/to/Laya-Q8_0.gguf < examples/request.json
 
 ggml's `GGML_CCACHE` compiles through `ccache` or `sccache` whenever one is on `PATH`; with `DUCKTAPE_REPRODUCIBLE_PATHS` (the default) this project defaults it to `OFF`. To compile through a cache, set `CMAKE_C_COMPILER_LAUNCHER` and `CMAKE_CXX_COMPILER_LAUNCHER` (the `dev` preset does). A cache does not change the compiled bytes as long as it hands the compiler the same arguments: ccache's `base_dir` (`CCACHE_BASEDIR`, or `base_dir` in a ccache configuration file) makes source paths relative, so `-ffile-prefix-map` no longer maps them and `__FILE__` strings in the library change. The `dev` preset sets `base_dir` on purpose, for cache hits across worktrees, and is never packaged; the other presets set no launcher, and every script that compiles through ccache sets `CCACHE_BASEDIR` and `CCACHE_SLOPPINESS` empty (overriding a configured `base_dir`) and `CCACHE_COMPILERCHECK=content`, and records `ccache --show-config` in its report. `validate.py` and `package-native.py` refuse a library or addon holding a source path outside the mapped directories (`./`, `./third_party/llama.cpp` and `./build`; Clang writes them without the leading `./`), such as `../src/laya.cpp` or an absolute path. The project's scripts set the launcher and `GGML_CCACHE` explicitly.
 
-The GGML ISA options (`GGML_AVX2`, `GGML_FMA`, ...) select the CPU profile and are set explicitly for x86-64; AVX-512 and VNNI variants are refused. The library, ggml and llama.cpp are built with `-fstack-protector-strong`, `_FORTIFY_SOURCE=3` (optimised builds), full RELRO (`-z relro -z now`), `-mbranch-protection=standard` on Linux arm64 and Control Flow Guard (`/guard:cf`) with clang-cl. On Linux arm64 that gives return-address signing (PAC); the BTI landing pads are compiled in too, but the shipped binaries are not marked BTI-compatible, so BTI is not enforced: Ubuntu 24.04's glibc start files (`crti.o`, `crtn.o`) carry no BTI property, and the linker marks an output only when every input is marked. `package-native.py` checks the shipped Linux library and addon for full RELRO and the stack protector, the library for fortified calls, and on arm64 both for PAC instructions.
+The GGML ISA options (`GGML_AVX2`, `GGML_FMA`, ...) select the CPU profile and are set explicitly for x86-64; AVX-512 and VNNI variants are refused. The library, ggml and llama.cpp are built with `-fstack-protector-strong`, `_FORTIFY_SOURCE=3` (optimised builds), full RELRO (`-z relro -z now`), `-mbranch-protection=standard` on Linux arm64 and Control Flow Guard (`/guard:cf`) with clang-cl. On Linux arm64 that gives return-address signing (PAC); the BTI landing pads are compiled in too, but the shipped binaries are not marked BTI-compatible, so BTI is not enforced: Ubuntu 24.04's glibc start files (`crti.o`, `crtn.o`) carry no BTI property, and the linker marks an output only when every input is marked. `package-native.py` checks the shipped Linux library and addon for full RELRO, the stack protector and library search paths only relative to the binary (`$ORIGIN`), the library for fortified calls, and on arm64 both for PAC instructions.
 
 ## Run the tests
 
@@ -122,7 +122,7 @@ dtl_add_test(NAME n COMMAND ... TIER generic|specialized|release CATEGORY native
 | Tier | Holds | Runs |
 |---|---|---|
 | `generic` | Model-free and fast: `abi-errors`, `control-errors`, `decision-rules`, `feature-errors`, `language-routing`, `stress-rule`, `tokenizer-partition`, and on Linux `ggml-faults` | After every change (`ctest --preset dev`), in every `generic-*` CI job and every `validate.py` run |
-| `specialized` | Needs the real model, a platform tool (QEMU) or a quiet machine: the `real-*` tests, `cpu-guard`, and the timing check `tokenizer-scaling` | `ctest --preset dev-real`, `validate.py --model` (the `cat-real_model` tests; `--checks ctest` and `--full` run every test), the real-model CI shards |
+| `specialized` | Needs the real model, a platform tool (QEMU) or a quiet machine: the `real-*` tests, `cpu-guard`, and the timing checks `tokenizer-scaling` and `request-parse-scaling` | `ctest --preset dev-real`, `validate.py --model` (the `cat-real_model` tests; `--checks ctest` and `--full` run every test), the real-model CI shards |
 | `release` | Release evidence only | None registered yet |
 
 Categories: `native` (the library without a model), `real_model` (with the model) and `faults` (fault injection, Linux only). Extra labels: `timing` (a CPU-time ratio check; registered `SERIAL`, so `ctest -j` runs it alone) and `qemu` (the emulated-CPU guard). `PROCESSORS` is the most threads an engine of the test uses, which `ctest -j` counts. Select with anchored label regexes, since a bare `-L generic` matches any label containing the word:
@@ -175,8 +175,8 @@ python3 scripts/validate.py --library-only --policy all --packages --output buil
 
 ```sh
 python3 scripts/verify.py --list        # what is stale; runs nothing
-python3 scripts/verify.py               # every stale local and CI job
-python3 scripts/verify.py --ci --all    # every CI job of both workflows, before merging to main
+python3 scripts/verify.py               # every stale local and CI job: the run before merging to main
+python3 scripts/verify.py --ci --all    # the push profile of both workflows (plus the real-model jobs with --real-model), whatever is stale
 python3 scripts/verify.py --rerun-failed
 ```
 
@@ -184,13 +184,13 @@ python3 scripts/verify.py --rerun-failed
 |---|---|
 | `local-bindings` | `validate.py --library-only --bindings all` |
 | `local-packaging` | `validate.py --library-only --packages` |
-| `local-sanitizers` | the `sanitize` preset and `ctest --preset sanitize` (model-free) |
+| `local-sanitizers` | the `sanitize` preset and `ctest --preset sanitize -L '^tier-generic$'` (model-free, as CI's `sanitizers` job, even when `build-sanitize` was configured with a model) |
 | `local-fuzz` | the `fuzz` preset and `check-fuzz.py --seconds 60` |
 | `local-real-model` (with `--real-model`) | `validate.py --model MODEL --parity smoke --upstream-reference` |
 | `local-reproducibility` | `check-reproducibility.py` |
 | `local-browser-wasm`, `local-browser-webgpu` (with `--emsdk DIR`) | `build-browser.py --reference` into `build-browser-<backend>` |
 
-Outputs go to `build-verify/<job>/`; the state of each local job (the last commit it verified) is kept per worktree at `git rev-parse --git-path verify-state.json`. A change under `.github/` makes every CI job stale but no local job, since none reads the workflows or actions; a change to the classifier does. Windows, Linux arm64 and macOS run only in CI. Other options: `--local` or `--ci` (one side; `--ci` refuses a dirty tree or a HEAD not pushed to its branch, since a dispatch cannot target a SHA), `--all` (every job whatever is stale), `--only JOB[,JOB]`, and `--real-model` with `--model PATH` (default `DUCKTAPE_TEST_MODEL` or the pinned file in the Hugging Face cache; without one the run prints `NOT RUN: real_model` and exits 1).
+Outputs go to `build-verify/<job>/`; the state of each local job (the last commit it verified) is kept per worktree at `git rev-parse --git-path verify-state.json`. A change to `native.yml`, `platforms.yml` or `.github/actions/` makes every CI job stale but no local job, since none reads the workflows or actions; a change to the classifier does. The release workflows (`attest-release.yml`, `publish-release.yml`) run no verification job: a change to them runs only their policy checks. Windows, Linux arm64 and macOS run only in CI. Other options: `--local` or `--ci` (one side; any CI dispatch, so also the default run when a CI job is stale, refuses a dirty tree or a HEAD not pushed to its branch, since a dispatch cannot target a SHA), `--all` (every job whatever is stale), `--only JOB[,JOB]` (refuses names a verify dispatch would not run, the candidate, qualify, warm and experiment jobs, and real-model jobs without `--real-model`; a named job that is not run, such as a browser job without `--emsdk`, fails the verdict), and `--real-model` with `--model PATH` (default `DUCKTAPE_TEST_MODEL` or the pinned file in the Hugging Face cache; without one the run prints `NOT RUN: real_model` and exits 1).
 
 ## Try it
 

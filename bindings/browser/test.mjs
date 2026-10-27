@@ -36,6 +36,8 @@ test('invalid Unicode is rejected instead of replaced', async () => {
   const engine = await Laya.open({ modelUrl: 'model.gguf' });
   await assert.rejects(engine.execute({ state: lone, questions: {} }), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
   await assert.rejects(engine.execute(`{"state":"${lone}"}`), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
+  for (const value of [NaN, Infinity])
+    await assert.rejects(engine.execute({ state: { amount: value }, questions: {} }), e => e.status === 1 && /non-finite number/.test(e.message));
 });
 
 test('per-route overflow is validated', async () => {
@@ -86,7 +88,7 @@ test('page deadline is wall-clock so the worker realm can measure it', async () 
   await call;
 });
 
-async function workerHarness(abi = 2, { create, fetch: fetchAsset } = {}) {
+async function workerHarness(abi = 2, { create, fetch: fetchAsset, openStatus = 0 } = {}) {
   let top = 64;
   const calls = [], strings = new Map(), heap = new Uint32Array(4096);
   const runtime = {
@@ -97,7 +99,7 @@ async function workerHarness(abi = 2, { create, fetch: fetchAsset } = {}) {
     FS: { files: new Map(), writeFile(path, bytes) { this.files.set(path, bytes); }, unlink() {} },
     async ccall(name, type, types, args) {
       calls.push({ name, args: [...args], words: name === 'dtl_execute' ? [...heap.slice(args[2] >>> 2, (args[2] >>> 2) + 10)] : undefined });
-      if (name === 'dtl_open' || name === 'dtl_open_router') heap[args[2] >>> 2] = 1000;
+      if (name === 'dtl_open' || name === 'dtl_open_router') { heap[args[2] >>> 2] = openStatus ? 0 : 1000; return openStatus; }
       return 0;
     },
   };
@@ -196,6 +198,13 @@ test('with a Content-Encoding the declared length is no bound: the stream decide
   const huge = await workerHarness(2, { fetch: response([new Uint8Array(4)], 2 ** 40, 200, null, failed) });
   await assert.rejects(huge.namespace.init({ ...wasm, maxModelBytes: 2 ** 41 }), error => error.status === 4 && error.final === true);
   assert.ok(failed.cancelled, 'the body is cancelled after an allocation failure');
+});
+
+test('an invalid config is final for backend auto; a model load failure is not', async () => {
+  for (const [status, final] of [[1, true], [2, false]]) {
+    const { namespace } = await workerHarness(2, { openStatus: status });
+    await assert.rejects(namespace.init(wasm), error => error.status === status && (error.final === true) === final);
+  }
 });
 
 test('WebAssembly memory exhaustion at instantiation is status 4, other instantiation failures status 7', async () => {

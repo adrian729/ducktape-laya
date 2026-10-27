@@ -21,11 +21,13 @@ const optionsObject = options => {
   return options;
 };
 // JSON.stringify escapes lone surrogates instead of failing, which the native
-// side would then silently replace; reject them before serializing.
+// side would then silently replace, and writes non-finite numbers as null;
+// reject both before serializing.
 const wellFormedJson = (value, what) => {
   try {
     return JSON.stringify(value, (key, item) => {
       if (!key.isWellFormed() || (typeof item === 'string' && !item.isWellFormed())) throw invalid(TypeError, `${what} is not valid Unicode`);
+      if (typeof item === 'number' && !Number.isFinite(item)) throw invalid(TypeError, `${what} contains a non-finite number`);
       return item;
     });
   } catch (error) {

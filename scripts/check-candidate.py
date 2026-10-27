@@ -88,17 +88,21 @@ BINDING_CODE = ['bindings/*.cjs', 'bindings/*.mjs', 'bindings/*.cpp', 'bindings/
 COMMON_HARNESS = ['scripts/release_support.py', 'scripts/artifact_support.py', 'tests/reference_requests.py']
 HARNESS = {
     # Package manifests too: they declare dependencies and install scripts.
-    'security_review': BINDING_CODE + ['bindings/*.json', 'scripts/*', '.github/*'],
-    'stress': ['tests/stress.cpp', 'scripts/check-stress.py'],
-    'soak': ['tests/stress.cpp', 'scripts/check-stress.py'],
-    # tests/fuzz-corpus.py seeds the corpus from the fixtures.
-    'fuzz': ['tests/input-libfuzzer.cpp', 'tests/fuzz-corpus.py', 'scripts/check-fuzz.py', 'tests/fixtures/*'],
+    'security_review': BINDING_CODE + ['bindings/*.json', 'scripts/*', '.github/*', 'SECURITY.md'],
+    # The headers too: stress.cpp includes the late-growth rule (stress_rule.hpp) and the thread census.
+    'stress': ['tests/stress.cpp', 'tests/*.hpp', 'scripts/check-stress.py'],
+    'soak': ['tests/stress.cpp', 'tests/*.hpp', 'scripts/check-stress.py'],
+    # tests/fuzz-corpus.py seeds the corpus from the fixtures; the fuzz preset sets the sanitizer flags.
+    'fuzz': ['tests/input-libfuzzer.cpp', 'tests/fuzz-corpus.py', 'scripts/check-fuzz.py', 'tests/fixtures/*', 'CMakePresets.json'],
     # The native tests read the routing cases of the original reference.
-    'sanitizers': NATIVE_TESTS + ['scripts/check-sanitizers.py', 'bindings/rust/*.rs', 'bindings/rust/*.toml', 'bindings/rust/*.lock',
+    'sanitizers': NATIVE_TESTS + ['scripts/check-sanitizers.py', 'CMakePresets.json', 'bindings/rust/*.rs', 'bindings/rust/*.toml', 'bindings/rust/*.lock',
                                   'tests/original-reference/routing/*'],
     'performance': ['tests/benchmark.py', 'scripts/performance-budgets.py', 'tests/fixtures/*'],
-    'upgrade': NATIVE_TESTS + ['scripts/check-upgrade.py', 'scripts/compare_results.py', 'tests/parity.py'] + BINDING_CODE,
-    'model_upgrade': NATIVE_TESTS + ['scripts/check-upgrade.py', 'scripts/compare_results.py', 'tests/parity.py'] + BINDING_CODE,
+    # The rehearsal's ctest also runs tests/cpu-guard.py and reads the routing cases of the original reference.
+    'upgrade': NATIVE_TESTS + ['scripts/check-upgrade.py', 'scripts/compare_results.py', 'tests/parity.py', 'tests/cpu-guard.py',
+                               'tests/original-reference/routing/*'] + BINDING_CODE,
+    'model_upgrade': NATIVE_TESTS + ['scripts/check-upgrade.py', 'scripts/compare_results.py', 'tests/parity.py', 'tests/cpu-guard.py',
+                                     'tests/original-reference/routing/*'] + BINDING_CODE,
 }
 reused = {}
 def tested_source(report, name):
@@ -195,7 +199,8 @@ def long_gate(name):
 def sanitizers():
     report = long_gate('sanitizers')
     tested_source(report, 'sanitizers')
-    need(report['status'] == 'passed' and all(s['status'] == 'passed' for s in report['sanitizers'].values()), 'sanitizers: not all passed')
+    need(report['status'] == 'passed' and set(report['sanitizers']) >= {'address', 'thread'} and
+         all(s['status'] == 'passed' for s in report['sanitizers'].values()), 'sanitizers: not all passed (address and thread required)')
     need(report['model_sha256'] == manifest_model['sha256'], 'sanitizers: model differs')
     fuzz = long_gate('fuzz')
     tested_source(fuzz, 'fuzz')
@@ -403,6 +408,10 @@ def upgrade_rollback():
     upgrade = long_gate('upgrade')
     tested_source(upgrade, 'upgrade')
     need(upgrade['candidate_runtime'] != upgrade['baseline_runtime'] and upgrade['adapter_checks_passed'], 'upgrade: runtime axis not rehearsed')
+    # A configure-only rehearsal (the preflight's) builds and tests nothing.
+    need(not upgrade.get('configure_only') and 'failure' not in upgrade and
+         all(upgrade.get('gates', {}).get(g, {}).get('status') == 'passed' for g in ('native_contracts', 'binding_conformance', 'abi')) and
+         upgrade.get('comparison', {}).get('status') == 'passed', 'upgrade: the rehearsal did not build and test the runtime')
     model = load('model_upgrade')
     tested_source(model, 'model_upgrade')
     need(model['candidate_model']['sha256'] != model['model']['sha256'], 'model upgrade: no model axis')

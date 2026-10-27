@@ -141,6 +141,16 @@ class Basics(unittest.TestCase):
         with self.assertRaises(ValueError):
             laya.Engine.open_router({'models': {'unused': __file__}, 'max_loaded': float('nan')})
 
+    def test_unserializable_request_is_invalid(self):
+        engine = laya.Engine.open_router({'models': {'unused': __file__}})
+        try:
+            for request in ({'state': {'amount': float('nan')}, 'questions': {}}, {'state': {1, 2}, 'questions': {}}):
+                with self.subTest(request=repr(request)), self.assertRaises(laya.LayaError) as caught:
+                    engine.execute(request)
+                self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+        finally:
+            engine.close()
+
     def test_router_auto_validation(self):
         def route(**extra):
             return dict({'models': {'a': __file__}}, **extra)

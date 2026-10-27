@@ -171,7 +171,10 @@ try:
                 settings[match[1]] = match[2]
         report['runs'][label + '-build']['settings'] = settings
     if a.configure_only:
-        report['adapter_checks_passed'] = True  # every configure passed (run() raises otherwise); no gate ran
+        # Every configure passed (run() raises otherwise), but no gate ran: never adapter_checks_passed, which the
+        # upgrade_rollback gate reads.
+        report['adapter_checks_passed'] = False
+        report['configure_passed'] = True
     else:
         expected = sorted(set(re.findall(r'\b(dtl_\w+)\s*;', (core / 'src/exports.map').read_text())))
         if any(value != expected for value in symbols.values()):
@@ -200,4 +203,4 @@ except Exception as error:
 finally:
     save()
 print(f'Report: {output / "report.json"}; release_ready=false', flush=True)
-sys.exit(0 if report['adapter_checks_passed'] else 1)
+sys.exit(0 if report['adapter_checks_passed'] or report.get('configure_passed') else 1)

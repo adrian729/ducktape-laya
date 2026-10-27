@@ -45,6 +45,8 @@ def fake_inputs(base):
     (rootfs / 'etc').mkdir(parents=True)
     (rootfs / 'etc/os-release').write_text('ID=ubuntu\n')
     (ci / 'packages-assembled').mkdir(parents=True)
+    head = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    (ci / 'ci-run.json').write_text(json.dumps({'candidate_commit': head}))
     emsdk = base / 'in/emsdk'
     emsdk.mkdir()
     return {'model': paths['model'], 'multilingual': paths['laya-multilingual-f16.gguf'], 'typed': paths['laya-typed-decisions-q8_0.gguf'],
@@ -306,6 +308,12 @@ class Preflight(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn('no CI evidence', err)
 
+    def test_ci_evidence_of_another_candidate(self):
+        (self.out / 'ci/ci-run.json').write_text(json.dumps({'candidate_commit': 'f' * 40}))
+        code, _, err = self.run_dry()
+        self.assertEqual(code, 2)
+        self.assertIn('not the candidate', err)
+
     def test_existing_outputs_need_replace(self):
         (self.out / 'performance').mkdir()
         (self.out / 'performance/laya-english-q8_0.json').write_text('{}')
@@ -471,6 +479,27 @@ class Reuse(unittest.TestCase):
         self.assertIsNone(qualify.reusable(self.report(docs, status='failed'), 'soak', docs, self.rules))
         self.assertIsNone(qualify.reusable(self.report(library), 'soak', docs, self.rules))  # not an ancestor
         self.assertIsNone(qualify.reusable(pathlib.Path(self.tmp.name) / 'missing.json', 'soak', docs, self.rules))
+
+    def test_reusable_soak_meets_the_candidates_budgets(self):
+        """A soak shorter, or with fewer rounds, than the candidate's budgets is not reused: check-candidate.py would fail it."""
+        base = self.commit({'src/a.cpp': '1'})
+        budgets = {'routine_stress_seconds': 3600, 'candidate_soak_seconds': 10800, 'candidate_soak_rounds': 1000}
+        soak = dict(kind='candidate_soak', qualification_budget_met=True, requested_seconds=10800, result={'rounds': 1200})
+        self.assertIsNotNone(qualify.reusable(self.report(base, **soak), 'soak', base, self.rules, budgets))
+        for change in ({'requested_seconds': 7200}, {'result': {'rounds': 900}}, {'kind': 'routine_stress'}, {'qualification_budget_met': False}):
+            with self.subTest(change=change):
+                self.assertIsNone(qualify.reusable(self.report(base, **{**soak, **change}), 'soak', base, self.rules, budgets))
+        routine = dict(kind='routine_stress', qualification_budget_met=True, requested_seconds=3600)
+        self.assertIsNotNone(qualify.reusable(self.report(base, **routine), 'stress', base, self.rules, budgets))
+
+    def test_same_library(self):
+        directory = pathlib.Path(self.tmp.name)
+        (directory / 'native.json').write_text(json.dumps({'library_sha256': 'a' * 64}))
+        (directory / 'same.json').write_text(json.dumps({'library_sha256': 'a' * 64}))
+        (directory / 'other.json').write_text(json.dumps({'library_sha256': 'b' * 64}))
+        qualify.same_library(directory / 'native.json', {'soak': directory / 'same.json'})
+        with self.assertRaisesRegex(RuntimeError, 'performance'):
+            qualify.same_library(directory / 'native.json', {'soak': directory / 'same.json', 'performance': directory / 'other.json'})
 
 
 class Extract(unittest.TestCase):
@@ -752,13 +781,17 @@ def g():
     def test_problems(self):
         record = {'targets': [{'platform': 'linux-x64', 'tier': 1}, {'platform': 'windows-x64', 'tier': 2}]}
         source = "load('native'); load('ghost'); tested_source(r, 'nope')"
-        problems = self.gate_plan.plan_problems(record, 'p' * 40, [source], {'soak': []}, ['native'], [], 'p' * 40,
-                                                {'candidate_runtime': 'p' * 40, 'baseline_runtime': 'p' * 40}, 's', 's')
+        problems = self.gate_plan.plan_problems(record, 'c' * 40, [source], {'soak': []}, ['native'], [], 'c' * 40,
+                                                {'candidate_runtime': 'c' * 40, 'baseline_runtime': 'c' * 40}, 's', 's')
         text = ' | '.join(problems)
-        for expected in ('nope have no HARNESS', 'ghost', 'is the pin', 'against itself', 'is the primary model'):
+        for expected in ('nope have no HARNESS', 'ghost', 'is the pin', 'against itself', 'not a passed full rehearsal', 'is the primary model'):
             self.assertIn(expected, text)
-        self.assertEqual(self.gate_plan.plan_problems(record, 'p' * 40, ["load('native')"], {}, ['native'], [], 'q' * 40), [])
+        self.assertEqual(self.gate_plan.plan_problems(record, 'c' * 40, ["load('native')"], {}, ['native'], [], 'd' * 40), [])
 
+        # An abbreviation of the pin, or a ref, could resolve to the pin: only a full SHA is compared.
+        for runtime in ('c' * 12, 'HEAD'):
+            self.assertIn('not a full 40-character commit SHA',
+                          ' '.join(self.gate_plan.plan_problems(record, 'c' * 40, ["load('native')"], {}, ['native'], [], runtime)))
 
 if __name__ == '__main__':
     unittest.main()

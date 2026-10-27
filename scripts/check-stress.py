@@ -59,8 +59,8 @@ else:
     kind, required, required_rounds = 'routine_stress', budgets['routine_stress_seconds'], None
 if a.min_rounds is None:
     a.min_rounds = required_rounds
-if a.min_rounds is not None and not 1 <= a.min_rounds <= 1000000:
-    p.error('--min-rounds must be 1..1000000')
+if a.min_rounds is not None and not 10 <= a.min_rounds <= 1000000:  # laya-stress's own range (tests/stress.cpp)
+    p.error('--min-rounds must be 10..1000000')
 # A rounds floor that outlasts the seconds budget is not cut off. A round takes 2.2-3.0 s on the CI runners but
 # 11-14 s on the release host's pinned soak cores under the overlapping gates (V1 H10: 12.3 s on average, 13.9 s at
 # worst); 20 s is the margin. A hang is caught sooner by the stall limit: laya-stress reports progress on stderr

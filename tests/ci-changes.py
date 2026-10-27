@@ -117,14 +117,16 @@ class Categories(Base):
         cases = {
             'docs/BUILDING.md': {'docs', 'policy'}, 'src/laya.cpp': {'native', 'sanitizers', 'fuzz', 'windows', 'arm64', 'clang', 'macos',
                                                                      'reproducibility', 'real_model', 'real_model_native', 'browser'},
-            'tests/abi-layout.py': {'abi', 'policy'}, 'tests/packaging-identity.py': {'packaging_identity', 'policy'},
-            'scripts/package-native.py': {'packaging', 'policy'}, 'scripts/check-sanitizers.py': {'sanitizers', 'policy'},
+            'tests/abi-layout.py': {'abi', 'policy', 'windows_policy'},
+            'tests/packaging-identity.py': {'packaging_identity', 'policy', 'windows_policy'},
+            'scripts/package-native.py': {'packaging', 'policy', 'windows_policy'}, 'scripts/check-sanitizers.py': {'sanitizers', 'policy'},
             'tests/input-libfuzzer.cpp': {'fuzz', 'native', 'sanitizers', 'windows', 'arm64', 'clang', 'macos', 'real_model',
                                           'real_model_native', 'browser'},
             'scripts/fetch-node-sdk.py': {'windows', 'reproducibility'}, 'src/exports.macos': None,
             'scripts/check-reproducibility.py': {'reproducibility'}, 'tests/parity.py': {'real_model'},
             'bindings/browser/worker.mjs': None, 'scripts/check-stress.py': {'host'}, 'scripts/verify.py': {'tooling', 'policy'},
             '.github/workflows/native.yml': None, 'scripts/ci_paths.py': None,
+            '.github/workflows/publish-release.yml': {'policy'}, '.github/workflows/attest-release.yml': {'policy'},
         }
         for lang in ci_paths.LANGUAGES:
             cases[f'bindings/{lang}/x'] = None
@@ -158,8 +160,11 @@ class Categories(Base):
     def test_unmatched_and_ci_paths_touch_everything(self):
         self.assertEqual(ci_paths.touched_categories(['newdir/file.txt']), {ci_paths.EVERYTHING})
         self.assertEqual(ci_paths.touched_categories(['docs/API.md', 'newdir/file.txt']), {ci_paths.EVERYTHING})
-        for path in ('.github/actions/setup-llvm/action.yml', 'scripts/ci-changes.py', 'tests/ci-changes.py'):
+        for path in ('.github/actions/setup-llvm/action.yml', 'scripts/ci-changes.py', '.github/workflows/native.yml'):
             self.assertEqual(ci_paths.touched_categories([path]), {ci_paths.EVERYTHING})
+        # The classifier's own test and the release workflows are policy inputs only.
+        for path in ('tests/ci-changes.py', '.github/workflows/publish-release.yml'):
+            self.assertEqual(ci_paths.touched_categories([path]), {'policy'})
         self.assertEqual(ci_paths.touched_categories(None), {ci_paths.EVERYTHING})
 
     def test_policy_selection(self):
@@ -272,6 +277,62 @@ class PolicyImports(unittest.TestCase):
             uncovered = sorted(path for path in seen if path.endswith('.py') and not ci_paths.matches(path, ci_paths.POLICY_CHECKS[label]))
             with self.subTest(check=label):
                 self.assertEqual(uncovered, [])
+
+
+class JobImports(PolicyImports):
+    """Each push or real-model CI job's categories cover the scripts its steps run and what they load, transitively.
+
+    The candidate and qualify profiles run every job, so only these two profiles depend on the categories. A script
+    missing here lets a change to it pass verify.py without the job that runs it (validate.py and release_support.py
+    were missing from every binding and packaging job)."""
+    RUN = re.compile(r'(?<![\w/.-])((?:scripts|tests)/[A-Za-z0-9_./-]+\.(?:py|sh|mjs|cjs))')
+
+    def test_categories_cover_what_jobs_run(self):
+        spec = importlib.util.spec_from_file_location('ci_contracts', ROOT / 'tests/ci-contracts.py')
+        contracts = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(contracts)
+        for workflow in contracts.WORKFLOWS:
+            path = ROOT / '.github/workflows' / workflow
+            jobs, blocks = contracts.read_jobs(path, []), contracts.job_blocks(path.read_text())
+            for job_id, lines in blocks.items():
+                pending = [p for p in self.RUN.findall('\n'.join(map(contracts.strip_comment, lines))) if (ROOT / p).is_file()]
+                seen = self.closure(pending)
+                names = contracts.served(workflow, job_id, jobs[job_id], ci_paths.JOBS, ci_paths.SHARDS, [])
+                cross_host = {job for shards in ci_paths.SHARDS.values() for platform in shards.values()
+                              for job, outputs in platform['side_outputs'].items() if 'cross-host' in outputs}
+                for name, profiles in names.items():
+                    if not set(profiles or ci_paths.JOBS[name]['profiles']) & {'push', 'real_model'}:
+                        continue
+                    # The shard jobs share one definition; the cross-host step runs only in the side-output shards.
+                    seen_here = seen if name in cross_host else seen - {'tests/cross-host.py'}
+                    globs = [glob for category in ci_paths.JOBS[name]['categories'] + ['ci'] for glob in ci_paths.CATEGORIES[category]]
+                    with self.subTest(workflow=workflow, job=name):
+                        self.assertEqual(sorted(path for path in seen_here if not ci_paths.matches(path, globs)), [])
+
+    def test_categories_cover_what_local_jobs_run(self):
+        spec = importlib.util.spec_from_file_location('verify_under_test', ROOT / 'scripts/verify.py')
+        verify = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verify)
+        for job, entry in ci_paths.LOCAL_JOBS.items():
+            pending = [part for command in verify.local_commands(job, ROOT, model='MODEL', emsdk='EMSDK') for part in command
+                       if part.startswith(('scripts/', 'tests/')) and (ROOT / part).is_file()]
+            seen = self.closure(pending)
+            globs = [glob for category in entry['categories'] + ['ci'] for glob in ci_paths.CATEGORIES[category]]
+            with self.subTest(job=job):
+                self.assertEqual(sorted(path for path in seen if not ci_paths.matches(path, globs)), [])
+
+    def closure(self, pending):
+        """The scripts and what they import, transitively (imports only: validate.py names every check's script by path)."""
+        seen = set()
+        while pending:
+            script = pending.pop()
+            if script not in seen:
+                seen.add(script)
+                if script.endswith('.py'):
+                    text = (ROOT / script).read_text()
+                    pending += [f'{directory}/{name}.py' for name in self.MODULE.findall(text) for directory in ('scripts', 'tests')
+                                if (ROOT / directory / f'{name}.py').is_file()]
+        return seen
 
 
 class BranchPush(Base):

@@ -28,6 +28,28 @@ char *copy(const std::string &s) {
     std::memcpy(p, s.c_str(), s.size() + 1);
     return p;
 }
+// Error messages are valid UTF-8 of at most 1 KiB: they can quote request text, paths, model
+// metadata and nlohmann's last read bytes, and every binding decodes them as UTF-8.
+std::string error_text(const char *message) {
+    constexpr size_t limit = 1024;
+    auto text = dtl::parse_json(dtl::dump_json(json(message), -1, ' ', false, json::error_handler_t::replace)).get<std::string>();
+    if (text.size() <= limit) return text;
+    size_t end = limit - 3;
+    while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80) --end;
+    return text.substr(0, end) + "...";
+}
+// The canonical path of a regular file, or empty: a directory, FIFO or device is not a model (a
+// FIFO would block the load). Paths are UTF-8 in the C ABI: u8path/u8string convert to and from
+// wide strings on Windows (the narrow forms use the ANSI code page there) and keep the bytes
+// unchanged on POSIX. llama.cpp opens with ggml_fopen (UTF-8).
+std::string regular_file(const std::string &path) {
+    try {
+        std::error_code ec;
+        auto canonical = std::filesystem::canonical(std::filesystem::u8path(path), ec);
+        if (!ec && std::filesystem::is_regular_file(canonical, ec) && !ec) return canonical.u8string();
+    } catch (const std::system_error &) {}  // not convertible on this platform
+    return {};
+}
 template<class F> dtl_status boundary(char **error, F f) noexcept {
     if (error) *error = nullptr;
     dtl_status status;
@@ -36,7 +58,7 @@ template<class F> dtl_status boundary(char **error, F f) noexcept {
     catch (const std::exception &e) {
         const auto *specific = dynamic_cast<const failure *>(&e);
         status = specific ? specific->status : DTL_INFERENCE_ERROR;
-        if (error) { try { *error = copy(e.what()); } catch (...) {} }
+        if (error) { try { *error = copy(error_text(e.what())); } catch (...) {} }
     } catch (...) { status = DTL_INFERENCE_ERROR; }
     return status;
 }
@@ -106,8 +128,10 @@ dtl_status dtl_open(const char *path, const char *config_json, dtl_engine **out,
     return boundary(error, [&] {
         require(out && path && *path, "model_path and out are required");
         auto config = engine_config(optional_json(config_json));
+        const auto resolved = regular_file(path);
+        if (resolved.empty()) throw failure(DTL_MODEL_ERROR, std::string("Model path is not a local regular file: ") + path);
         auto engine = std::make_unique<dtl_engine>();
-        engine->single = load_model(path, config);
+        engine->single = load_model(resolved, config);
         engine->overflow = config.overflow;
         *out = engine.release();
     });
@@ -139,15 +163,7 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
             require(path.is_string(), "route " + id + ": path must be a string");
             auto text = path.get<std::string>();
             require(!text.empty() && text.find('\0') == std::string::npos, "route " + id + ": invalid model path");
-            // Paths are UTF-8 in the C ABI: u8path/u8string convert to and from wide
-            // strings on Windows (the narrow forms use the ANSI code page there) and
-            // keep the bytes unchanged on POSIX. llama.cpp opens with ggml_fopen (UTF-8).
-            std::string resolved;
-            try {
-                std::error_code ec;
-                auto canonical = std::filesystem::canonical(std::filesystem::u8path(text), ec);
-                if (!ec && std::filesystem::is_regular_file(canonical, ec) && !ec) resolved = canonical.u8string();
-            } catch (const std::system_error &) {}  // not convertible on this platform
+            const auto resolved = regular_file(text);
             if (resolved.empty())
                 throw failure(DTL_MODEL_ERROR, "Model path is not a local regular file: " + id);
             router_state::route route{resolved, {}, engine_config(config, shared)};

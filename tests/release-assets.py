@@ -19,6 +19,7 @@ passes the shared filter for 0.1.0 and 0.2.0 only, and the published 0.1.0 and
 scripts/check-release-run.py (attest-release) runs against a fake GitHub API: the
 published native inventory must be the packages-assembled inventory of the
 successful, complete candidate run on the tagged commit that gates.json names.
+release-assets.py retain refuses an inventory artifact name with a directory part.
 scripts/registry-state.py (publish-release retries) runs against canned registry
 answers: a version a registry already holds is skipped only with the same contents.
 
@@ -620,6 +621,21 @@ class PyPI(unittest.TestCase):
         result, _ = self.run_script(status=404)
         self.assertIn('does not match SHA256SUMS', result.stderr)
         self.assertNotEqual(result.returncode, 0)
+
+
+class Retain(unittest.TestCase):
+    """release-assets.py retain refuses an inventory artifact name with a directory part before copying anything."""
+    def test_path_names_are_refused(self):
+        with tempfile.TemporaryDirectory(prefix='ducktape-retain-') as temp:
+            work = pathlib.Path(temp)
+            (work / 'assets').mkdir()
+            (work / 'outside').write_text('x')
+            (work / 'assets/native-inventory.json').write_text(json.dumps({'artifacts': {'../outside': {}}}))
+            result = subprocess.run([sys.executable, str(ROOT / 'scripts/release-assets.py'), 'retain', str(work / 'assets'),
+                                     '--output', str(work / 'out')], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('is not a plain file name', result.stderr)
+            self.assertEqual(sorted(p.name for p in (work / 'out').iterdir()), [])
 
 
 if __name__ == '__main__':

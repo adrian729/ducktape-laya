@@ -12,8 +12,12 @@ namespace dtl {
 using json = nlohmann::ordered_json;
 // json::parse(text); throws json::parse_error on invalid input.
 json parse_json(std::string_view text);
-// json::parse(text, callback): the callback sees every parse event, as nlohmann documents.
-json parse_json(std::string_view text, const json::parser_callback_t &callback);
+// Parses request text in linear time (nlohmann's parser callbacks rescan each object's parent
+// when it ends, quadratic in the input) and enforces the request limits while reading: at most
+// max_depth nested arrays and objects, at most max_members members per object and no repeated
+// key, each a dtl::failure with status 1. An integer literal outside int64/uint64 is kept as
+// its digits (a big integer, python_json.hpp) instead of nlohmann's rounded double.
+json parse_request_json(std::string_view text, size_t max_depth, size_t max_members);
 // value.dump(indent, indent_char, ensure_ascii, handler), with nlohmann's defaults.
 std::string dump_json(const json &value, int indent = -1, char indent_char = ' ', bool ensure_ascii = false,
                       json::error_handler_t handler = json::error_handler_t::strict);

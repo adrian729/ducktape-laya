@@ -72,6 +72,9 @@ else:
     a.output.mkdir(parents=True)
     inventory = json.loads((a.assets / 'native-inventory.json').read_text())
     for name in inventory['artifacts']:
+        # Checked before copying: a name with a directory part would write outside --output.
+        if pathlib.Path(name).name != name or name in ('', '.', '..'):
+            raise SystemExit(f'{a.assets}: inventory artifact {name!r} is not a plain file name')
         source = 'native-sbom.cdx.json' if name == 'sbom.cdx.json' else name
         shutil.copy(a.assets / source, a.output / name)
     shutil.copy(a.assets / 'native-inventory.json', a.output / 'inventory.json')

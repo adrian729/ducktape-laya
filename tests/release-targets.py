@@ -571,12 +571,14 @@ class CheckCandidate(unittest.TestCase):
         world = self.world('reuse')
         record = world.record
         reports = {
-            'sanitizers': {'status': 'passed', 'sanitizers': {'address': {'status': 'passed'}}, 'model_sha256': world.model},
+            'sanitizers': {'status': 'passed', 'sanitizers': {'address': {'status': 'passed'}, 'thread': {'status': 'passed'}}, 'model_sha256': world.model},
             'fuzz': {'status': 'passed', 'qualification_budget_met': True, 'requested_seconds': world.policy['budgets']['fuzz_seconds_per_target']},
             'security_review': {'runtime_commit': record['runtime']['commit'], 'runtime_patches': [p['sha256'] for p in record['runtime']['patches']],
                                 'release_blocking_code_issues': [], 'model_licence': 'Apache-2.0, reviewed'}}
         package = json.loads((ROOT / 'bindings/node/package.json').read_text())
+        presets = (ROOT / 'CMakePresets.json').read_text()
         cases = {'fuzz seeds': ('tests/fixtures/zz-reuse-test.json', '{}\n', 'fuzz', 'sanitizers', 'fuzz: inputs changed'),
+                 'fuzz preset': ('CMakePresets.json', presets + '\n', 'fuzz', 'sanitizers', 'fuzz: inputs changed'),
                  'routing references': ('tests/original-reference/routing/zz-reuse-test.json', '{}\n', 'sanitizers', 'sanitizers', 'sanitizers: inputs changed'),
                  'npm manifest': ('bindings/node/package.json', json.dumps({**package, 'scripts': {'install': 'node evil.js'}}, indent=2) + '\n',
                                   'security_review', 'security_review', 'security_review: inputs changed')}
@@ -617,7 +619,8 @@ class CheckCandidate(unittest.TestCase):
         # A report that says it met its budget, measured against a shorter one than the candidate's.
         self.evidence(world, 'soak', {**soak, 'requested_seconds': budgets['candidate_soak_seconds'] - 1})
         self.assertIn('soak: shorter than', self.check(world)['gates']['stress']['detail'])
-        self.evidence(world, 'sanitizers', {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'sanitizers': {},
+        self.evidence(world, 'sanitizers', {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed',
+                                            'sanitizers': {'address': {'status': 'passed'}, 'thread': {'status': 'passed'}},
                                             'model_sha256': world.model})
         self.evidence(world, 'fuzz', {'source_commit': self.commit, 'source_tracked_dirty': False, 'status': 'passed', 'qualification_budget_met': True,
                                       'requested_seconds': budgets['fuzz_seconds_per_target'] // 4})
@@ -677,7 +680,12 @@ class CheckCandidate(unittest.TestCase):
                  'not the run head': (lambda: world.edit('qualify/sanitizers/report.json', lambda r: r.update(source_commit='c' * 40)),
                                       'sanitizers', "not the qualify run's commit"),
                  'upgrade edited': (lambda: world.edit('qualify/upgrade/report.json', lambda r: r.update(note='x'), rehash=False),
-                                    'upgrade_rollback', 'changed after download')}
+                                    'upgrade_rollback', 'changed after download'),
+                 # check-upgrade.py --configure-only (the preflight's rehearsal) builds and tests nothing.
+                 'one sanitizer': (lambda: world.edit('qualify/sanitizers/report.json', lambda r: r.update(sanitizers={'address': {'status': 'passed'}})),
+                                   'sanitizers', 'address and thread required'),
+                 'configure-only upgrade': (lambda: world.edit('qualify/upgrade/report.json', lambda r: r.update(
+                     configure_only=True, gates={}, comparison={})), 'upgrade_rollback', 'did not build and test the runtime')}
         for label, (change, gate, message) in cases.items():
             with self.subTest(label):
                 world.qualify_reports()

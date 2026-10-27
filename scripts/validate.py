@@ -103,7 +103,7 @@ NEEDS_MODEL = ('references', 'parity:smoke', 'parity:smoke-a', 'parity:smoke-b',
 REAL_MODEL_LABELS = ('native', 'bindings', 'original-reference', 'upstream-reference')
 # Native tests every target registers (also in scripts/release_targets.py); the fault-injection tests are Linux-only.
 MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition',
-                    'tokenizer-scaling'}
+                    'tokenizer-scaling', 'request-parse-scaling'}
 REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head'}
 LINUX_REAL_MODEL_TESTS = ('real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults')
 ADDITIONAL_MODEL_GATES = ('tokenizer', 'decision_head', 'control_tokenize', 'original_reference', 'upstream_reference')

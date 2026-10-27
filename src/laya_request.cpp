@@ -17,21 +17,8 @@ json read_json(const char *text) {
     size_t n = 0;
     while (n <= max_request && text[n]) ++n;
     require(n <= max_request, "Request exceeds 1 MiB");
-    dtl::integer_literals literals(std::string_view(text, n));
     try {
-        // Objects keep insertion order with a linear key search, so parsing one object
-        // costs O(members^2): bound the members per object.
-        std::vector<size_t> members;
-        return parse_json(std::string_view(text, n), [&](int depth, json::parse_event_t event, json &parsed) {
-            require(depth <= 64, "JSON nesting exceeds 64 levels");
-            if (event == json::parse_event_t::object_start) members.push_back(0);
-            else if (event == json::parse_event_t::object_end) members.pop_back();
-            else if (event == json::parse_event_t::key)
-                require(++members.back() <= max_object_members, "JSON objects are limited to " +
-                        std::to_string(max_object_members) + " members");
-            else if (event == json::parse_event_t::value) literals.keep(parsed);
-            return true;
-        });
+        return parse_request_json(std::string_view(text, n), 64, max_object_members);
     } catch (const json::exception &e) { throw failure(DTL_INVALID_ARGUMENT, e.what()); }
 }
 }

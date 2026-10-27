@@ -177,6 +177,7 @@ jobs:
           SCOPE: ${{ steps.inputs.outputs.scope }}
           RUN: ${{ steps.changes.outputs.run }}
           SKIP_ALL: ${{ steps.changes.outputs.skip_all }}
+          DOCS_ONLY: ${{ steps.changes.outputs.docs_only }}
           RUNTIME: ${{ inputs.runtime }}
           REPLAY_BASELINE: ${{ inputs.replay_baseline }}
         run: |
@@ -229,11 +230,13 @@ jobs:
                                   'cross_host': 'cross-host' in side.get(job, [])})
               matrix('shards_' + platform.replace('-', '_'), entries)
 
-          # The policy job runs the stale policy checks on a branch push, a pull request and an affected
-          # verify dispatch; every policy check otherwise (main, merges, schedules, scope all or a list).
+          # The policy job runs the stale policy checks on a branch push, a pull request, an affected verify
+          # dispatch and a docs-only push to main (its docs against the verified tree; an unknown base means
+          # every check); every policy check otherwise (main, merges, schedules, scope all or a list).
           parents = subprocess.run(['git', 'rev-list', '--parents', '-n', '1', 'HEAD'], capture_output=True, text=True).stdout.split()
           branch_push = event == 'push' and os.environ['GITHUB_REF'] != 'refs/heads/main' and len(parents) == 2
-          stale = branch_push or event == 'pull_request' or (event == 'workflow_dispatch' and scope == 'affected')
+          stale = branch_push or event == 'pull_request' or (event == 'workflow_dispatch' and scope == 'affected') \
+              or (event == 'push' and os.environ.get('DOCS_ONLY') == 'true')
           outputs['policy'] = 'stale' if stale else 'all'
 
           # qualify-upgrade: the requested runtime commit. A release needs one other than the pin (check-candidate.py

@@ -261,7 +261,10 @@ class Engine:
             raise
 
     def _call(self, request, on_event, request_id, timeout, cancel):
-        text = request if isinstance(request, str) else json.dumps(request, ensure_ascii=False, allow_nan=False)
+        try:
+            text = request if isinstance(request, str) else json.dumps(request, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError, RecursionError) as error:  # non-finite numbers, sets and other non-JSON values, cycles
+            raise LayaError(Status.INVALID_ARGUMENT, f'request is not serializable as JSON: {error}') from error
         payload = _encode(text, 'request')
         if on_event is not None and not callable(on_event):
             raise TypeError('on_event must be callable')

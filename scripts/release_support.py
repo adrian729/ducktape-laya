@@ -569,6 +569,17 @@ def require_elf_hardening(path):
         raise SystemExit(f'{path.name} lacks full RELRO (GNU_RELRO and BIND_NOW)')
 
 
+def require_origin_search_paths(path):
+    """Every DT_RPATH and DT_RUNPATH entry is relative to the binary ($ORIGIN): an absolute or working-directory path
+    would let the build machine's or the caller's directories supply libducktape_laya or libstdc++ at load time."""
+    path = pathlib.Path(path)
+    dynamic = subprocess.check_output(['readelf', '-dW', str(path)], text=True)
+    entries = [entry for paths in re.findall(r'\((?:RPATH|RUNPATH)\)\s+Library (?:rpath|runpath): \[(.*)\]', dynamic) for entry in paths.split(':')]
+    bad = [entry for entry in entries if not re.fullmatch(r'\$(?:ORIGIN|\{ORIGIN\})(?:/.*)?', entry)]
+    if bad:
+        raise SystemExit(f'{path.name} searches for libraries outside its own directory: {":".join(bad)}')
+
+
 def require_guard_cf(path):
     """Control Flow Guard: IMAGE_DLLCHARACTERISTICS_GUARD_CF set in the PE header."""
     if not pe_info(path)['dll_characteristics'] & 0x4000:

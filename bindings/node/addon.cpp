@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 struct holder { dtl_engine *engine = nullptr;
@@ -48,18 +49,21 @@ static void require_library() {
             "; another copy of the library was loaded instead of the one shipped with the addon").c_str());
     checked.store(true, std::memory_order_release);
 }
+static void throw_status(napi_env env, int32_t code, const char *text) {
+    napi_value message, error, status;
+    napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message);
+    napi_create_error(env, nullptr, message, &error);
+    napi_create_int32(env, code, &status);
+    napi_set_named_property(env, error, "status", status);
+    napi_throw(env, error);
+}
+// Every error carries a status (docs/API.md): the addon's own checks reject arguments (size, NUL, types).
 template<class F> napi_value guarded(napi_env env, F f) {
     try { return f(); }
-    catch (const native_error &e) {
-        napi_value message, error, status;
-        napi_create_string_utf8(env, e.what(), NAPI_AUTO_LENGTH, &message);
-        napi_create_error(env, nullptr, message, &error);
-        napi_create_int32(env, e.status, &status);
-        napi_set_named_property(env, error, "status", status);
-        napi_throw(env, error);
-    }
-    catch (const std::exception &e) { napi_throw_error(env, nullptr, e.what()); }
-    catch (...) { napi_throw_error(env, nullptr, "Native addon failure"); }
+    catch (const native_error &e) { throw_status(env, e.status, e.what()); }
+    catch (const std::bad_alloc &) { throw_status(env, DTL_OUT_OF_MEMORY, "Out of memory"); }
+    catch (const std::exception &e) { throw_status(env, DTL_INVALID_ARGUMENT, e.what()); }
+    catch (...) { throw_status(env, DTL_INFERENCE_ERROR, "Native addon failure"); }
     return nullptr;
 }
 static napi_value open_engine(napi_env env, napi_callback_info info) {

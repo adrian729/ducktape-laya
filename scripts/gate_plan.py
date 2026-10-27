@@ -5,6 +5,7 @@ evidence. The gate logic itself stays in check-candidate.py: the evidence keys t
 never listed a second time.
 """
 import ast
+import re
 
 # Calls whose first argument names an evidence key (check-candidate.py's helpers and Context's methods).
 KEY_CALLS = {'load', 'long_gate', 'path', 'ci_json', 'ci_file', 'qualify_file'}
@@ -91,6 +92,9 @@ def plan_problems(record, pinned_runtime, sources, harness, planned_keys, suppli
     # The runtime axis (upgrade_rollback: candidate_runtime != baseline_runtime) and the model axis.
     if not runtime:
         problems.append('no rehearsal runtime: the upgrade_rollback gate needs a runtime other than the pin')
+    elif not re.fullmatch(r'[0-9a-f]{40}', runtime):
+        # An abbreviation or a ref could name the pin and pass the comparison below (native.yml refuses it too).
+        problems.append(f'the rehearsal runtime {runtime!r} is not a full 40-character commit SHA')
     elif runtime == pinned_runtime:
         problems.append(f'the rehearsal runtime {runtime[:12]} is the pin: upgrade_rollback requires a runtime axis '
                         '(the qualify run must be dispatched with -f runtime=COMMIT past the pin)')
@@ -101,6 +105,8 @@ def plan_problems(record, pinned_runtime, sources, harness, planned_keys, suppli
             problems.append('the downloaded upgrade report compares against another baseline than the pin')
         if upgrade_report.get('candidate_runtime') == upgrade_report.get('baseline_runtime'):
             problems.append('the downloaded upgrade report rehearsed the pin against itself')
+        if upgrade_report.get('configure_only') or not upgrade_report.get('adapter_checks_passed'):
+            problems.append('the downloaded upgrade report is not a passed full rehearsal (configure-only or failed)')
     if upgrade_sha256 is not None and upgrade_sha256 == primary_sha256:
         problems.append('the model-upgrade candidate model is the primary model: model_upgrade requires a model axis')
     return problems

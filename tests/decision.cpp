@@ -1,9 +1,11 @@
 // Model-free decision rules: calibration buckets, probabilities, confidence and the
 // documented tie rule (first option or level) for choices, scores and integer values.
 #include "decision.hpp"
+#include "errors.hpp"
 #include "python_json.hpp"
 #include "threads.hpp"
 #include "request_state.hpp"
+#include "thread-cpu-time.hpp"
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -17,8 +19,24 @@ static json options(std::initializer_list<const char *> keys) {
     for (auto key : keys) result.push_back({{"key", key}, {"description", std::string("level ") + key}});
     return result;
 }
-int main() {
+// Request parsing time must grow linearly with the text: nlohmann's parser callbacks rescan each
+// object's parent when the object ends, so 40,000 empty objects (117 KiB) once took 6 s.
+static int parse_scaling() {
+    auto seconds = [](size_t objects) {
+        std::string text = "[";
+        for (size_t i = 0; i < objects; ++i) text += i ? R"(,{"a":[1]})" : R"({"a":[1]})";
+        text += "]";
+        return dtl_test::cpu_seconds_per_run([&] { expect(dtl::parse_request_json(text, 64, 1024).size() == objects, "parsed"); });
+    };
+    const double small = seconds(20000), large = seconds(40000);
+    std::cout << "request parse: 20000 objects " << small << " s, 40000 objects " << large << " s\n";
+    // Linear growth doubles the time and quadratic growth quadruples it.
+    if (large > 3 * small) { std::cerr << "request parsing grows faster than linearly\n"; return 1; }
+    return 0;
+}
+int main(int argc, char **argv) {
     try {
+        if (argc > 1 && std::string(argv[1]) == "--parse-scaling") return parse_scaling();
         // Structured values are serialized exactly as Python's json.dumps(v, ensure_ascii=False).
         const std::pair<double, const char *> floats[] = {{149.0, "149.0"}, {3.14159265358979, "3.14159265358979"},
             {1e21, "1e+21"}, {1e-07, "1e-07"}, {-0.125, "-0.125"}, {1.0 / 3, "0.3333333333333333"}, {-0.0, "-0.0"},
@@ -34,13 +52,7 @@ int main() {
                "\"u\": 18446744073709551615}", "python_json object, escaping and separators");
         // Integers outside int64/uint64 keep their digits, as Python's json does (it parses
         // them as exact ints); the expected text is Python's json.dumps output.
-        auto parse_kept = [](const std::string &text) {
-            dtl::integer_literals literals(text);
-            return json::parse(text, [&](int, json::parse_event_t event, json &parsed) {
-                if (event == json::parse_event_t::value) literals.keep(parsed);
-                return true;
-            });
-        };
+        auto parse_kept = [](const std::string &text) { return dtl::parse_request_json(text, 64, 1024); };
         const std::string big = R"({"a":100000000000000000000000,"b":-9223372036854775809,"c":18446744073709551616,)"
             R"("d":9223372036854775807,"e":-9223372036854775808,"f":18446744073709551615,"g":1e23,)"
             R"("h":100000000000000000000000.0,"i":-0,"j":0,"k":[123456789012345678901234567890,)"
@@ -75,6 +87,32 @@ int main() {
             expect(dtl::result_json(mixed) == mixed.dump() && dtl::result_json(plain) == plain.dump() &&
                    dtl::result_json(json::array({plain, json::object(), json::array()})) == json::array({plain, json::object(), json::array()}).dump(),
                    "results without big integers are nlohmann's dump");
+        }
+        // Request limits, enforced while parsing: depth 64, 1,024 members per object, no repeated key.
+        {
+            auto rejects = [](const std::string &text, const char *message) {
+                try { dtl::parse_request_json(text, 64, 1024); } catch (const dtl::failure &e) {
+                    expect(e.status == DTL_INVALID_ARGUMENT && std::string(e.what()).find(message) != std::string::npos, message);
+                    return true;
+                }
+                return false;
+            };
+            auto nested = [](size_t levels) { return std::string(levels, '[') + std::string(levels, ']'); };
+            auto members = [](size_t count) {
+                std::string text = "{";
+                for (size_t i = 0; i < count; ++i) text += (i ? ",\"" : "\"") + std::to_string(i) + "\":0";
+                return text + "}";
+            };
+            expect(dtl::parse_request_json(nested(64), 64, 1024).is_array() && rejects(nested(65), "nesting exceeds 64") &&
+                   rejects("{\"a\":" + nested(64) + "}", "nesting exceeds 64"), "64 levels of nesting are accepted, 65 are not");
+            expect(dtl::parse_request_json(members(1024), 64, 1024).size() == 1024 && rejects(members(1025), "limited to 1024") &&
+                   rejects("[" + members(1024) + "," + members(1025) + "]", "limited to 1024"), "1,024 members per object are accepted, 1,025 are not");
+            expect(rejects(R"({"a":1,"b":{"a":2,"a":3}})", "repeats the key \"a\"") &&
+                   dtl::parse_request_json(R"({"a":{"a":1},"b":[{"a":2},{"a":3}]})", 64, 1024).size() == 2,
+                   "a repeated key is rejected; the same key in different objects is not");
+            bool invalid = false;
+            try { dtl::parse_request_json("{\"a\":}", 64, 1024); } catch (const json::parse_error &) { invalid = true; }
+            expect(invalid, "invalid JSON is nlohmann's parse_error");
         }
         const std::map<std::string, float> temperatures{{"choice.2", 2}, {"choice.3_5", 3}, {"choice.6_10", 6},
             {"choice.11", 11}, {"score", 4}, {"score.3_5", 5}, {"noul.2", 7}};

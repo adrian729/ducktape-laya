@@ -148,14 +148,28 @@ def git(*args):
     return subprocess.run(['git', '-C', str(ROOT), *args], capture_output=True, text=True)
 
 
-def reusable(report_path, gate, candidate, rules):
-    """Why a previous report can stand for this gate (None when it cannot), as check-candidate.py's tested_source decides."""
+def meets_budgets(report, gate, budgets):
+    """Whether a stress or soak report meets the candidate's own budgets, as check-candidate.py's stress gate requires."""
+    if gate not in ('stress', 'soak'):
+        return True
+    kinds = ('routine_stress', 'candidate_soak') if gate == 'stress' else ('candidate_soak',)
+    seconds = budgets['routine_stress_seconds' if gate == 'stress' else 'candidate_soak_seconds']
+    rounds = (report.get('result') or {}).get('rounds')
+    return (report.get('kind') in kinds and report.get('qualification_budget_met') is True and report.get('requested_seconds', 0) >= seconds
+            and (report.get('kind') != 'candidate_soak' or isinstance(rounds, int) and rounds >= budgets['candidate_soak_rounds']))
+
+
+def reusable(report_path, gate, candidate, rules, budgets=None):
+    """Why a previous report can stand for this gate (None when it cannot), as check-candidate.py's tested_source and,
+    for stress and soak, its budget rules decide (budgets: the candidate's release/qualification.json budgets)."""
     try:
         report = json.loads(pathlib.Path(report_path).read_text())
     except (OSError, ValueError):
         return None
     produced = report.get('source_commit')
     if report.get('source_tracked_dirty') is not False or report.get('status', 'passed') != 'passed' or not isinstance(produced, str):
+        return None
+    if budgets is not None and not meets_budgets(report, gate, budgets):
         return None
     if produced == candidate:
         return f'produced at the candidate {candidate[:12]}'
@@ -196,6 +210,14 @@ def model_upgrade_completed(report_path):
     return ('failure' not in report and
             all(report.get('gates', {}).get(gate, {}).get('status') == 'passed' for gate in ('native_contracts', 'binding_conformance', 'abi')) and
             report.get('comparison', {}).get('status') in ('passed', 'failed'))
+
+
+def same_library(native_report, reports):
+    library = json.loads(pathlib.Path(native_report).read_text())['library_sha256']
+    differ = [key for key, path in reports.items() if json.loads(pathlib.Path(path).read_text()).get('library_sha256') != library]
+    if differ:
+        raise RuntimeError(f'reused {", ".join(sorted(differ))} measured another library than this build ({library[:12]}): '
+                           'rerun without --reuse for them')
 
 
 def model_ids(record):
@@ -370,7 +392,7 @@ def require_path(problems, flag, path, kind, hint, inside=None):
         problems.append(f'{flag} {path} has no {inside}: {hint}')
 
 
-def preflight(a, record, candidate_pin, ci, install):
+def preflight(a, record, candidate_pin, ci, install, candidate=None):
     """Everything the hours-long steps need, checked in seconds before the first one: (problems, notes)."""
     problems, notes = [], []
     if (problem := runtime_problem(record)):
@@ -400,6 +422,15 @@ def preflight(a, record, candidate_pin, ci, install):
         require_path(problems, '--rootfs', rootfs, 'dir', 'a root filesystem from tests/download-userspaces.py', 'etc/os-release')
     if not (ci / 'packages-assembled').is_dir():
         problems.append(f'no CI evidence in {ci}: run fetch-ci-evidence.py --candidate COMMIT first')
+    elif candidate:
+        # A download of another candidate (a recut) would otherwise be found only by check-candidate.py, hours later.
+        try:
+            downloaded = json.loads((ci / 'ci-run.json').read_text()).get('candidate_commit')
+        except (OSError, ValueError):
+            downloaded = None
+        if downloaded != candidate:
+            problems.append(f'the CI download in {ci} is of {str(downloaded)[:12]}, not the candidate {candidate[:12]}: '
+                            'run fetch-ci-evidence.py --candidate COMMIT again')
     return problems, notes
 
 
@@ -584,12 +615,12 @@ def main(argv=None):
             if step == 'performance':
                 keys = tuple(key for key in previous if key == 'performance' or key.startswith('performance_'))
             gate = {'soak': 'soak', 'model-upgrade': 'model_upgrade', 'performance': 'performance'}[step]
-            reasons = [reusable(a.reuse.parent / previous[key], gate if key != 'stress' else 'stress', candidate, rules)
+            reasons = [reusable(a.reuse.parent / previous[key], gate if key != 'stress' else 'stress', candidate, rules, policy['budgets'])
                        if key in previous else None for key in keys]
             if keys and all(reasons):
                 reused[step] = reasons[0]
                 reuse_keys.update({key: os.path.relpath((a.reuse.parent / previous[key]).resolve(), evidence_path.parent) for key in keys})
-    found, notes = preflight(a, record, emsdk_pin(), ci,
+    found, notes = preflight(a, record, emsdk_pin(), ci, candidate=candidate,
                              install=not a.dry_run)
     problems += found
     # The plan below is printed even when the preflight failed, with placeholders for what is missing.
@@ -602,6 +633,12 @@ def main(argv=None):
     plan_args.lkg_packages = a.lkg_packages or pathlib.Path('<LKG_PACKAGES>')
     plan_args.rootfs = a.rootfs or [pathlib.Path('<ROOTFS>')]
     steps = plan(plan_args, record, policy, out, ci, reused)
+    if reuse_keys:
+        # check-candidate.py requires the reused soak and performance reports to be of the new build's exact library: a
+        # changed host toolchain changes the bytes without any library input changing. Stop before the long steps.
+        reports = {key: (evidence_path.parent / path).resolve() for key, path in reuse_keys.items() if key in ('soak', 'stress')
+                   or key.startswith('performance')}
+        steps.insert(1, Step('reused-library', 1, action=lambda: same_library(out / 'native/report.json', reports), stop=True))
     existing = [path for step in steps for path in step.outputs if pathlib.Path(path).exists()]
     if existing and not a.replace:
         problems.append('outputs exist (nothing is overwritten; move them away or pass --replace to move them to '
@@ -786,9 +823,13 @@ def run(steps, cpus, out, evidence, evidence_path, keys=None):
             try:
                 step.action()
                 status.step(step.name, state='passed')
-            except (OSError, RuntimeError, tarfile.TarError) as error:
+            except (OSError, ValueError, KeyError, RuntimeError, tarfile.TarError) as error:
                 fail(step.name, str(error))
                 failed.append(step.name)
+                if step.stop:
+                    stopped_by = step.name
+                    status.data['stopped_because'] = step.name
+                    status.write()
             continue
         process, log, stdout = launch(step)
         if step.background:

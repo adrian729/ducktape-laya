@@ -175,6 +175,14 @@ def make_plan(*, local_states, ci_states, side='both', all_jobs=False, only=None
         unknown = [name for name in only if name not in ci_paths.LOCAL_JOBS and name not in ci_paths.JOBS]
         if unknown:
             raise ValueError('unknown jobs: ' + ', '.join(unknown) + ' (see --list)')
+        # A verify dispatch runs only the push and real-model profiles: another job would be skipped and the run pass.
+        other = [name for name in only if name in ci_paths.JOBS and not {'push', 'real_model'} & set(ci_paths.JOBS[name]['profiles'])]
+        if other:
+            raise ValueError('not run by a verify dispatch (candidate, qualify, warm or experiment jobs): ' + ', '.join(other))
+        if not real_model:
+            real_only = [name for name in only if name in ci_paths.JOBS and 'push' not in ci_paths.JOBS[name]['profiles']]
+            if real_only:
+                raise ValueError('real-model jobs: add --real-model for ' + ', '.join(real_only))
     for job, spec in ci_paths.LOCAL_JOBS.items():
         if side == 'ci':
             continue
@@ -191,6 +199,8 @@ def make_plan(*, local_states, ci_states, side='both', all_jobs=False, only=None
             plan['not_run'][job] = 'browser build: add --emsdk'
         else:
             plan['local'].append(job)
+    # A job asked for by name and not run is a failure, not "nothing stale".
+    plan['failures'] += [f'NOT RUN: {job} ({reason})' for job, reason in plan['not_run'].items() if only and job in only]
     if side != 'local':
         for workflow, states in ci_states.items():
             if only:
@@ -221,7 +231,9 @@ def local_commands(job, root, model=None, emsdk=None):
     commands = {
         'local-bindings': [validate + ['--library-only', '--bindings', 'all', '--build', root / 'build-verify/build-library', '--output', out]],
         'local-packaging': [validate + ['--library-only', '--packages', '--build', root / 'build-verify/build-library', '--output', out]],
-        'local-sanitizers': [['cmake', '--preset', 'sanitize'], ['cmake', '--build', root / 'build-sanitize'], ['ctest', '--preset', 'sanitize']],
+        # The model-free tests, as CI's sanitizers job: build-sanitize may have been configured with a model (check-sanitizers.py).
+        'local-sanitizers': [['cmake', '--preset', 'sanitize'], ['cmake', '--build', root / 'build-sanitize'],
+                             ['ctest', '--preset', 'sanitize', '-L', '^tier-generic$']],
         'local-fuzz': [['cmake', '--preset', 'fuzz'],
                        [PY, 'scripts/check-fuzz.py', '--seconds', '60', '--compiler-launcher', launcher, '--output', out]],
         'local-real-model': [validate + ['--model', model, '--parity', 'smoke', '--upstream-reference',
@@ -304,10 +316,15 @@ def dispatch(workflow, branch, head, scope, real_model):
 
 def wait_run(run_id):
     while True:
-        view = json.loads(gh('run', 'view', str(run_id), '--json', 'status,conclusion,jobs,createdAt,updatedAt,url'))
+        view = json.loads(gh('run', 'view', str(run_id), '--json', 'status,conclusion,jobs,createdAt,startedAt,updatedAt,url'))
         if view['status'] == 'completed':
             return view
         time.sleep(POLL_SECONDS)
+
+
+def run_start(view):
+    """When the run's latest attempt started: after --rerun-failed, createdAt would add the time since the first attempt."""
+    return view.get('startedAt') or view.get('createdAt')
 
 
 def run_end(view):
@@ -434,7 +451,7 @@ def main(argv=None, root=ROOT):
     for note in plan['notes']:
         print(f'verify: note: {note}')
     if not plan['local'] and not plan['dispatch'] and not plan.get('rerun'):
-        print('verify: nothing stale' + ('; ' + '; '.join(plan['failures']) if plan['failures'] else ''))
+        print('verify: ' + ('nothing run; ' + '; '.join(plan['failures']) if plan['failures'] else 'nothing stale'))
         return 1 if plan['failures'] else 0
 
     runs = {}
@@ -469,7 +486,7 @@ def main(argv=None, root=ROOT):
                 ci_failed.setdefault(workflow, []).append(job)
         if view.get('conclusion') != 'success' and workflow not in ci_failed:
             ci_failed[workflow] = [f'run {view.get("conclusion")}']
-        walls.append((f'{workflow} run {run_id}', seconds_between(view.get('createdAt'), run_end(view)),
+        walls.append((f'{workflow} run {run_id}', seconds_between(run_start(view), run_end(view)),
                       'real-model-dispatch' if a.real_model and workflow == 'native.yml' else 'verify-ci-model-free'))
         print(f'verify: {workflow} run {run_id}: {view.get("conclusion")} ({view.get("url", "")})', flush=True)
 

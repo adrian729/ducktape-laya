@@ -158,7 +158,7 @@ def require_complete_validation(report, name, *, profiles, cache_allowed):
 
 # Native tests every target registers; the fault-injection tests are Linux-only (CMakeLists.txt).
 MODEL_FREE_TESTS = {'abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition',
-                    'tokenizer-scaling'}
+                    'tokenizer-scaling', 'request-parse-scaling'}
 REAL_MODEL_TESTS = {'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head'}
 LINUX_TESTS = {'real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults'}
 # Suites a selected validate.py run leaves out (listed under skipped); a release report leaves none out (ci-compiler: policy).

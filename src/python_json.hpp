@@ -39,7 +39,7 @@ inline std::string python_float(double value) {
     return value < 0 ? "-" + out : out;
 }
 // Integers outside the int64/uint64 range: Python keeps them exact and writes their
-// digits, while nlohmann would parse them as doubles (1e+23). read_json stores such a
+// digits, while nlohmann would parse them as doubles (1e+23). parse_request_json stores such a
 // number as a binary value of this subtype holding its JSON text, which is exactly
 // what Python writes (a JSON integer has no leading zeros, and these are nonzero).
 inline constexpr std::uint64_t big_integer_subtype = 0x6c61796142494e54ull; // "layaBINT"
@@ -52,46 +52,6 @@ std::string big_integer_text(const Json &value) {
     const auto &bytes = value.get_binary();
     return std::string(bytes.begin(), bytes.end());
 }
-// Keeps integer literals outside int64/uint64 as text while parsing: construct it
-// from the whole JSON text and call keep(parsed) for every parse_event_t::value.
-// Number values are visited in document order, so the Nth number value is the Nth
-// number literal of the text; only long integer literals are recorded.
-class integer_literals {
-public:
-    explicit integer_literals(std::string_view text) {
-        size_t numbers = 0;
-        for (size_t i = 0; i < text.size();) {
-            const char c = text[i];
-            if (c == '"') {
-                for (++i; i < text.size() && text[i] != '"'; ++i) if (text[i] == '\\') ++i;
-                ++i;
-            } else if (c == '-' || (c >= '0' && c <= '9')) {
-                const size_t start = i;
-                bool integer = true;
-                for (; i < text.size() && (text[i] == '+' || text[i] == '-' || text[i] == '.' || text[i] == 'e' ||
-                                           text[i] == 'E' || (text[i] >= '0' && text[i] <= '9')); ++i)
-                    if ((text[i] < '0' || text[i] > '9') && i != start) integer = false;
-                // Shorter literals always fit int64; only longer ones can overflow.
-                if (integer && i - start >= 19) long_.emplace_back(numbers, text.substr(start, i - start));
-                ++numbers;
-            } else ++i;
-        }
-    }
-    template <class Json>
-    void keep(Json &parsed) {
-        if (!parsed.is_number()) return;
-        if (next_ < long_.size() && long_[next_].first == number_) {
-            const auto literal = long_[next_++].second;
-            // nlohmann makes an integer literal a double only when it overflows.
-            if (parsed.is_number_float())
-                parsed = Json::binary(typename Json::binary_t::container_type(literal.begin(), literal.end()), big_integer_subtype);
-        }
-        ++number_;
-    }
-private:
-    std::vector<std::pair<size_t, std::string_view>> long_;
-    size_t next_ = 0, number_ = 0;
-};
 template <class Json>
 void python_json(const Json &value, std::string &out) {
     switch (value.type()) {

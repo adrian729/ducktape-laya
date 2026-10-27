@@ -44,7 +44,10 @@ option(DUCKTAPE_DEV_PCH "Developer build: precompiled nlohmann/json and standard
 set(DUCKTAPE_REFERENCE_PROBE_LAUNCHER "" CACHE STRING "Compiler launcher for the reference probe's own targets only")
 set(DUCKTAPE_TEST_MODEL "" CACHE FILEPATH "Local Laya GGUF for integration tests")
 set(DUCKTAPE_REAL_TEST_TIMEOUT 600 CACHE STRING "Per-test timeout in seconds for long real-model tests (raise for instrumented builds)")
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# The runtime is linked in statically. A normal variable, not a forced cache entry, so a project
+# that adds this one with add_subdirectory keeps its own BUILD_SHARED_LIBS (llama.cpp's option()
+# defers to the variable under CMP0077).
+set(BUILD_SHARED_LIBS OFF)
 foreach(opt COMMON TESTS TOOLS EXAMPLES SERVER APP MTMD)
   set(LLAMA_BUILD_${opt} OFF CACHE BOOL "" FORCE)
 endforeach()
@@ -362,8 +365,10 @@ if(DUCKTAPE_BUILD_TESTS)
   dtl_add_test(NAME feature-errors COMMAND laya-feature-tests TIER generic CATEGORY native)
   dtl_add_test(NAME abi-errors COMMAND laya-tests TIER generic CATEGORY native)
   add_executable(laya-decision-tests tests/decision.cpp $<TARGET_OBJECTS:dtl_json_io>)
-  target_include_directories(laya-decision-tests PRIVATE src ${DTL_VENDOR_INCLUDE})
+  target_include_directories(laya-decision-tests PRIVATE src include ${DTL_VENDOR_INCLUDE})
   dtl_add_test(NAME decision-rules COMMAND laya-decision-tests TIER generic CATEGORY native)
+  # Request parsing must grow linearly with the text (a CPU-time ratio, so specialized timing).
+  dtl_add_test(NAME request-parse-scaling COMMAND laya-decision-tests --parse-scaling TIER specialized CATEGORY native LABELS timing SERIAL)
   add_executable(laya-language-tests tests/language.cpp $<TARGET_OBJECTS:dtl_language>)
   target_include_directories(laya-language-tests PRIVATE src ${DTL_VENDOR_INCLUDE})
   dtl_add_test(NAME language-routing COMMAND laya-language-tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/original-reference/routing

@@ -12,6 +12,10 @@ test('invalid options reject', async () => {
   const circular = {}; circular.self = circular;
   await assert.rejects(Laya.openRouter(circular), /circular/i);
   await assert.rejects(Laya.openRouter({ models: {} }), e => e.status === 1);
+  // The addon's own argument checks carry a status too: an open config over 1 MiB.
+  const temperatures = Object.fromEntries(Array.from({ length: 600 }, (_, i) => [`k${i}${'x'.repeat(1900)}`, 1]));
+  await assert.rejects(Laya.openRouter({ models: { unused: __filename } }, { temperatures }),
+    e => e.status === 1 && /1 MiB/.test(e.message));
 });
 test('serialization reentry cannot bypass queue or close boundaries', async () => {
   // Lazy routing permits validation tests without loading a model.
@@ -275,6 +279,8 @@ test('invalid Unicode is rejected instead of replaced', async () => {
   try {
     await assert.rejects(engine.execute({ state: lone, questions: {} }), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
     await assert.rejects(engine.execute({ state: {}, questions: { [lone]: {} } }), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
+    for (const value of [NaN, Infinity, -Infinity])
+      await assert.rejects(engine.execute({ state: { amount: value }, questions: {} }), e => e.status === 1 && /non-finite number/.test(e.message));
     await assert.rejects(engine.execute(`{"state":"${lone}"}`), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
   } finally { await engine.close(); }
 });

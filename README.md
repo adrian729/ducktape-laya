@@ -37,7 +37,7 @@ On a CPU without the required features, opening an engine fails with status 7 an
 | Java, Kotlin | `io.github.adrian729:ducktape-laya:0.3.0` | Java 22+, run with `--enable-native-access`; the jar bundles the library. [Package README](bindings/java/README.md) |
 | .NET | `dotnet add package DucktapeLaya` | .NET 10; the package bundles the library. [Package README](bindings/dotnet/README.md) |
 | C, C++ | [`ducktape-laya-0.3.0-linux-x64.tar.gz`](https://github.com/adrian729/ducktape-laya/releases/tag/v0.3.0) (also `-linux-arm64.tar.gz` and `-windows-x64.zip`) | Headers, library, CMake and pkg-config files. [Linking guide](docs/PACKAGING.md) |
-| Browser | `npm install ducktape-laya-browser` | Experimental, tested on Chromium only. [Browser guide](docs/BROWSER.md) |
+| Browser | `npm install ducktape-laya-browser` | Experimental, tested on Chrome (Chromium) only; 0.3.0 passed on Chrome 156. [Browser guide](docs/BROWSER.md) |
 
 ## Get the model
 
