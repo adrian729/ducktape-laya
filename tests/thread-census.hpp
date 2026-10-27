@@ -1,5 +1,5 @@
 #pragma once
-// Linux: the number of this process's threads that are alive and not exiting.
+// The number of this process's threads that are alive and not exiting (Linux and macOS).
 //
 // pthread_join (and std::thread::join) returns when the kernel clears the thread's TID in
 // mm_release, early in do_exit; the thread leaves /proc/self/task only later, when
@@ -42,6 +42,29 @@ inline long live_threads() {
         if (!(flags & 0x4)) ++n; // PF_EXITING
     }
     closedir(dir);
+    return n;
+}
+}
+#elif defined(__APPLE__)
+// macOS: the task's Mach threads, leaving out halted ones (a thread that has ended and is being
+// torn down), as the Linux census leaves out exiting ones.
+#include <mach/mach.h>
+
+namespace dtl_test {
+inline long live_threads() {
+    thread_act_array_t threads = nullptr;
+    mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) return -1;
+    long n = 0;
+    for (mach_msg_type_number_t i = 0; i < count; ++i) {
+        thread_basic_info_data_t info{};
+        mach_msg_type_number_t size = THREAD_BASIC_INFO_COUNT;
+        // A thread that ended since task_threads listed it fails the query: not live.
+        if (thread_info(threads[i], THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &size) == KERN_SUCCESS &&
+            info.run_state != TH_STATE_HALTED) ++n;
+        mach_port_deallocate(mach_task_self(), threads[i]);
+    }
+    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads), count * sizeof *threads);
     return n;
 }
 }

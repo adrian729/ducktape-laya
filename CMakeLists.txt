@@ -64,11 +64,26 @@ set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_CUDA OFF CACHE BOOL "" FORCE)
 set(GGML_METAL OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+# Apple's Accelerate (BLAS sgemm and vDSP) depends on the macOS version and starts libdispatch
+# worker threads; every platform runs ggml's own CPU kernels instead.
+set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+set(GGML_ACCELERATE OFF CACHE BOOL "" FORCE)
+# The processor the library is built for. On macOS a single CMAKE_OSX_ARCHITECTURES value selects
+# it (an x86_64 slice can be built on Apple silicon); several at once would compile one slice with
+# the other's ISA options and ggml's scalar fallback, so build one slice per configure and lipo.
+set(DTL_TARGET_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
+if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+  list(LENGTH CMAKE_OSX_ARCHITECTURES dtl_osx_architectures)
+  if(dtl_osx_architectures GREATER 1)
+    message(FATAL_ERROR "Build one macOS architecture per configure (CMAKE_OSX_ARCHITECTURES=arm64 or x86_64), then combine the libraries with lipo")
+  endif()
+  set(DTL_TARGET_PROCESSOR "${CMAKE_OSX_ARCHITECTURES}")
+endif()
 # x86-64 profile: AVX2 baseline (AVX, AVX2, FMA, F16C, BMI2, SSE4.2), checked at open
 # (src/platform.cpp). ggml's own defaults turn these off when SOURCE_DATE_EPOCH is set
 # or when cross-compiling, which would silently change the numerical profile; pin them.
 # They remain cache options: -DGGML_AVX2=OFF ... still selects the portable profile.
-if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+if(NOT EMSCRIPTEN AND DTL_TARGET_PROCESSOR MATCHES "x86_64|AMD64")
   foreach(feature AVX AVX2 BMI2 SSE42)
     set(GGML_${feature} ON CACHE BOOL "ggml: enable ${feature} (ducktape-laya profile)")
   endforeach()
@@ -79,7 +94,7 @@ if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
 endif()
 # 64-bit Arm baseline: dot product and half precision (Graviton2+, Ampere Altra,
 # Cortex-A76 / Raspberry Pi 5). The library checks them at open (src/platform.cpp).
-if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+if(NOT EMSCRIPTEN AND DTL_TARGET_PROCESSOR MATCHES "aarch64|arm64|ARM64")
   set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "Arm -march for ggml")
 endif()
 set(DUCKTAPE_LLAMA_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp" CACHE PATH "Pinned or isolated candidate llama.cpp checkout")
@@ -169,7 +184,7 @@ if(DUCKTAPE_BUILD_FUZZERS)
     message(FATAL_ERROR "Fuzzer builds require Linux and Clang")
   endif()
 endif()
-if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+if(NOT EMSCRIPTEN AND DTL_TARGET_PROCESSOR MATCHES "x86_64|AMD64")
   foreach(feature AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AVX_VNNI)
     if(GGML_${feature})
       message(FATAL_ERROR "This package's CPU guard does not yet support GGML_${feature}; use the validated AVX2 or portable configuration")
@@ -185,7 +200,7 @@ function(dtl_apply_library_options target)
     PRIVATE ${UPSTREAM}/common ${DTL_VENDOR_INCLUDE} ${UPSTREAM}/vendor ${CMAKE_CURRENT_BINARY_DIR}/generated)
   target_link_libraries(${target} PRIVATE llama)
   target_compile_definitions(${target} PRIVATE DUCKTAPE_LAYA_BUILD)
-  if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  if(NOT EMSCRIPTEN AND DTL_TARGET_PROCESSOR MATCHES "x86_64|AMD64")
     foreach(feature AVX AVX2 FMA F16C BMI2 SSE42)
       # MSVC-style builds (clang-cl too) have no GGML_FMA/GGML_F16C: ggml's /arch:AVX2 implies them.
       if(GGML_${feature} OR (MSVC AND GGML_AVX2 AND feature MATCHES "^(FMA|F16C)$"))
@@ -193,7 +208,7 @@ function(dtl_apply_library_options target)
       endif()
     endforeach()
   endif()
-  if(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+  if(NOT EMSCRIPTEN AND DTL_TARGET_PROCESSOR MATCHES "aarch64|arm64|ARM64")
     if(GGML_CPU_ARM_ARCH MATCHES "dotprod")
       target_compile_definitions(${target} PRIVATE DTL_NEED_DOTPROD)
     endif()

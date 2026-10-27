@@ -20,6 +20,8 @@
 #include <sanitizer/allocator_interface.h>
 #elif defined(__GLIBC__)
 #include <malloc.h>
+#elif defined(__APPLE__)
+#include <malloc/malloc.h>
 #endif
 // Memory is read after close to bound what the library retains, so each reading first returns
 // the allocator's free memory to the OS: the closed RSS then measures live memory, not what
@@ -32,12 +34,16 @@
 //   round's threads happened to use; the closed RSS moved between plateaus about 2.4 MiB
 //   apart from round to round (a 3 MiB step in a pinned 631-round run), larger than the soak
 //   rule's 2 MiB median limit. malloc_trim(0) returns every arena's free pages.
-// Other allocators (Windows' PrivateUsage, macOS, musl) are read as they are.
+// - macOS: malloc_zone_pressure_relief(NULL, 0) returns every zone's free pages, as
+//   malloc_trim does for glibc's arenas.
+// Other allocators (Windows' PrivateUsage, musl) are read as they are.
 static void release_free_memory() {
 #if defined(DTL_STRESS_ASAN)
     __sanitizer_purge_allocator();
 #elif defined(__GLIBC__)
     malloc_trim(0);
+#elif defined(__APPLE__)
+    malloc_zone_pressure_relief(nullptr, 0);
 #endif
 }
 #ifdef _WIN32
@@ -116,6 +122,36 @@ static void stable_baseline() {
         threads = t; fds = f;
     }
 }
+#elif defined(__APPLE__)
+// macOS: the physical footprint for memory (the dirty memory charged to the process, which the OS
+// does not trim away as it does resident pages under pressure), the open descriptors from the
+// kernel's list, live Mach threads.
+#include <libproc.h>
+#include <mach/mach.h>
+#include <sys/resource.h>
+#include <unistd.h>
+static const char *const memory_metric = "phys_footprint";
+static const char *const thread_metric = "live Mach threads (halted threads excluded)";
+static long rss_kib() {
+    task_vm_info_data_t info{};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) return -1;
+    return long(info.phys_footprint / 1024);
+}
+// ru_maxrss is in bytes on macOS (KiB on Linux).
+static long peak_kib() { struct rusage usage{}; getrusage(RUSAGE_SELF, &usage); return long(usage.ru_maxrss / 1024); }
+static long descriptor_count() {
+    const int bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, nullptr, 0);
+    if (bytes <= 0) return -1;
+    std::vector<proc_fdinfo> fds(size_t(bytes) / sizeof(proc_fdinfo) + 16);
+    const int got = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, fds.data(), int(fds.size() * sizeof(proc_fdinfo)));
+    return got < 0 ? -1 : long(size_t(got) / sizeof(proc_fdinfo));
+}
+static long thread_count() { return dtl_test::live_threads(); }
+static unsigned long process_id() { return (unsigned long) ::getpid(); }
+static const unsigned settle_waits = 0;
+static bool settled(long fds, long threads) { return descriptor_count() == fds && thread_count() == threads; }
+static void stable_baseline() {}
 #else
 #include <sys/resource.h>
 #include <unistd.h>
