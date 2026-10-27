@@ -1,6 +1,28 @@
 # Roadmap
 
-Work that is wanted but not scheduled, open research questions, and features deliberately not planned, with the reasons. Nothing here is scheduled; when an item is taken up, remove it from here.
+Scheduled work in order, then work that is wanted but not scheduled, open research questions, and features deliberately not planned, with the reasons. When an item is done, remove it from here.
+
+## Scheduled
+
+In this order; each step is one batch, with its slow checks run once.
+
+1. [macOS on both architectures](#macos-on-both-architectures): an application (Big Brother, a universal macOS app) needs Laya on Apple silicon and Intel Macs.
+2. [API unification](#api-unification-before-10), phases 1 and 2 (names, errors, configuration), with the per-engine cost ceiling.
+3. API unification, phases 3 to 5 (calls, lifecycle, binding tests).
+4. [Native core](#native-core).
+5. The release items of [security hardening](#security-hardening), before the next release.
+
+Tooling items under [build, CI and packaging](#build-ci-and-packaging) join whichever batch already runs their checks.
+
+### macOS on both architectures
+
+macOS arm64 and x86-64 (Intel) become tier-2 release targets, like Linux arm64 and Windows x64.
+
+- **Apple silicon.** It builds, passes the real-model checks and packages its own fragment in CI (`platforms.yml`), but is not in the CI release assembly or `release/compatibility.json` `targets`. Promoting it means moving the macOS job into `native.yml` beside Linux and Windows, adding its fragment to the candidate run's assembly, its short stress and reproducibility jobs, and a `targets` entry; the tier-2 checks in `scripts/release_targets.py` already apply per target.
+- **Intel Macs.** No CI and no release so far, but on a 2019 Intel MacBook Pro (macOS 15.7.2, Apple clang 17) the Release build, the 6 model-free tests and the 4 real-model tests with the English model passed at commit 8994a03 (the suites have grown since), and the benchmark ran ([performance](PERFORMANCE.md#a-second-machine-intel-macbook-pro)). CI uses GitHub's `macos-15-intel` runner, reported as supported until about fall 2027; after that, the maintainer's Intel MacBook runs the Intel checks. Needs the x86-64 CPU-feature check on macOS, its own numerical profile (Apple's libm, which could drift from the original Laya as Windows' C runtime does: measure it), and every package carrying the x86-64 slice.
+- **Universal applications.** An app built for both architectures needs both slices: decide between one universal `libducktape_laya.dylib` and a library per architecture, per package format, and whether a source build can configure both architectures at once.
+- **macOS library search.** dyld searches `DYLD_LIBRARY_PATH` by file name even before an absolute path, so a library of the same name there can still replace the one a package bundles (as `LD_LIBRARY_PATH` could on Linux before the Node addon used `DT_RPATH`). Fix it before macOS packages are released.
+- **macOS bare-name loading.** Python (`_native.py`) and .NET (`Native.cs`) fall back to `dlopen` of a bare `libducktape_laya.1.dylib`, which dyld can resolve from directories the caller does not control; Java loads by absolute path. Fix before macOS packages ship (with the `DYLD_LIBRARY_PATH` item above).
 
 ## Wanted later
 
@@ -49,7 +71,7 @@ CPU comes first only because it runs everywhere, is the simplest to qualify, and
 
 | Backend | Platforms | Notes |
 |---|---|---|
-| Metal | macOS arm64 | Built into ggml; a possibility once macOS arm64 is released (it is the next tier-2 candidate, see below) |
+| Metal | macOS arm64 | Built into ggml; a possibility once macOS arm64 is released ([scheduled](#macos-on-both-architectures)) |
 | CUDA | Linux and Windows x64 with NVIDIA GPUs | Fastest server option; a large toolkit dependency, so ship it as a separate package variant |
 | Vulkan | Linux and Windows (any vendor), Android later | One portable backend across GPU vendors |
 | WebGPU | Browser | Already exists (experimental) |
@@ -63,7 +85,6 @@ Each backend needs:
 
 ### More release targets and release provenance
 
-- **macOS arm64 as the next tier-2 target.** It builds, passes the real-model checks and packages its own fragment in CI (`platforms.yml`), but is not in the CI release assembly or `release/compatibility.json` `targets`. Promoting it means moving the macOS job into `native.yml` beside Linux and Windows, adding its fragment to the candidate run's assembly, its short stress and reproducibility jobs, and a `targets` entry; the tier-2 checks in `scripts/release_targets.py` already apply per target.
 - **Build-provenance attestations.** The release attestation (`attest-release`) states what that workflow checked before signing ([provenance](RELEASING.md#provenance)); it is not build provenance. The candidate run's assembly job could sign SLSA build provenance for every native artifact (`actions/attest-build-provenance`, needs `id-token: write` and `attestations: write`, only when dispatched from `main`).
 - **Registry installation on every target.** The release host can install the published packages only for Linux x86-64. A `registry-check.yml` dispatched with a tag would install from npm, PyPI, NuGet and Maven Central on `windows-2025` and `ubuntu-24.04-arm` and run a real-model consumer: the `registry_installation` publication gate for the tier-2 targets.
 - **Per-platform native packages.** From 0.3.0 the npm package, the jar and the NuGet package each carry the library of every release platform (7.5 MB each instead of 2.9 to 5.7 MB for Linux x86-64 alone; [package sizes](PERFORMANCE.md#package-sizes)), so every install downloads the other platforms' libraries; the Python wheels are already per platform. Each ecosystem has a standard split: npm platform packages as `optionalDependencies` with `os`/`cpu` (as esbuild does; installs with `--no-optional` then get no library), NuGet runtime packages (`DucktapeLaya.runtime.<rid>`) referenced by the main package, and Maven classifier jars. It multiplies the packages each release publishes and attests and changes packaging, release assembly and the install checks; the saving grows with each added platform.
@@ -79,7 +100,7 @@ Small improvements that were considered and deferred.
 - **Budget bases and plan checks.** Most `ci_budgets.py` budgets lack the comment with their measured basis; the plan checks in `gate_plan.py` cannot see per-model performance keys; the browser product (Chrome or Chromium) is not recorded in the browser evidence.
 - **Concurrent verify runs.** Two `verify.py` runs share its state file, match their dispatched runs by branch and time, and share the `build-browser*` directories.
 - **Binding jobs and `src/*`.** The binding CI jobs do not list the core sources as inputs and rely on the library build job; decide whether a core change should rerun them.
-- **`local-fuzz` at its budget.** It took 301 s against 300 s on a cold build; check the next runs before touching the budget.
+- **Jobs over budget.** `local-fuzz` took 301 s and then 345 s against 300 s; in the verify of e3b5521 `native-linux-x64` took 290 s against 270 s, the CI `fuzzer` 131 s against 120 s, and `binding-node-windows-x64` and `binding-rust-windows-x64` a few seconds over theirs. Find where the time goes before changing any budget.
 - **Windows inference speed.** Windows inference is 1.2 to 1.5 times slower than Linux x86-64. It is not the optimization level: the `bench-windows-x64` experiment ([Windows benchmark](RELEASE_CHECKS.md#windows-benchmark)) measured the same p50 latency with the product's `/O2` (`-O3` for the compiler) and with `-O2`. Remaining candidates are the UCRT math functions and first-touch page faults while opening the model; a change is adopted only if faster with byte-identical outputs.
 - **Dev Drive on Windows runners**, if the Defender exclusion still leaves file-heavy steps (`abi-layouts`, `package-smoke`, `dotnet restore`) more than twice as slow as on Linux.
 - **The tier-2 short stress rule.** The 300 s run (100 to 135 rounds) applies only the 32 MiB late-growth rule. With the per-round series every candidate run now records for Linux arm64 and Windows, decide whether a median or slope limit is robust at that length.
@@ -87,7 +108,6 @@ Small improvements that were considered and deferred.
 - **A tiny test model.** A small deterministic model for binding parity and the model-independent real-model tests would make those checks cheap enough for every change; it needs a model design and pinning.
 - **mold or lld for developers.** Document them as an option of the development loop for those who install them; not a default, since linking is about 2% of build time and the dev preset relinks only the library.
 - **.NET on Alpine.** The `musl` CI job checks the npm package and the jar; the NuGet package's musl message is tested only with simulated loader directories.
-- **macOS library search.** dyld searches `DYLD_LIBRARY_PATH` by file name even before an absolute path, so a library of the same name there can still replace the one a package bundles (as `LD_LIBRARY_PATH` could on Linux before the Node addon used `DT_RPATH`). Fix it before macOS packages are released.
 - **BTI on Linux arm64.** The arm64 binaries have return-address signing but are not marked BTI-compatible, because Ubuntu 24.04's glibc start files (`crti.o`, `crtn.o`) carry no BTI property and the linker marks an output only when every input is marked ([building](BUILDING.md)). Mark them once the build image's glibc has BTI start files.
 
 ### Security hardening
@@ -98,7 +118,6 @@ Non-blocking notes from the 0.3.0 security review.
 - **Verify the last-known-good packages before the rollback test.** RELEASING.md and RELEASE_CHECKS.md download the previous release with `gh release download` and `release-assets.py retain` checks the files only against the downloaded inventory; `tests/rollback.py` then compiles and runs a consumer against that library on the release host. Fetch them with `scripts/verify-release-assets.sh vPREVIOUS DIR` instead (SHA256SUMS, `gates.json` and the pinned attestation). `retain` already refuses inventory names with a directory part.
 - **Bind `gates.json` before attesting.** `attest-release.yml` downloads `gates.json` from the release and trusts it, and the browser tarball is tied only to its `inventories_sha256.browser`, so someone who can edit release assets could swap both. Add a required `gates_sha256` input computed from the local `build-candidate/gates.json` and refuse a mismatch (`publish-release` already pins the predicate's `gates_sha256`).
 - **A cost ceiling per engine.** A request's own `overflow: "scan"` and `max_windows` override the engine's default, so a 60 KB request can plan about 3,900 forward passes (the per-call cap is 4,096); only deadlines stop it. Add an engine or route ceiling on planned passes (or make the engine's `overflow` binding), and tell untrusted-input applications in SECURITY.md to set `timeout_ms` and filter `overflow`/`max_windows`.
-- **macOS bare-name loading.** Python (`_native.py`) and .NET (`Native.cs`) fall back to `dlopen` of a bare `libducktape_laya.1.dylib`, which dyld can resolve from directories the caller does not control; Java loads by absolute path. Fix before macOS packages ship (with the `DYLD_LIBRARY_PATH` item above).
 - **Repository settings** (the maintainer's decision): no branch protection on `main`, no required reviewer on the release environment, immutable releases off, Dependabot alerts off.
 
 ### Broader test coverage
@@ -160,4 +179,3 @@ Features the original Laya has that ducktape-laya deliberately leaves out.
 | `batch_tokens` open setting | It sized the batched forward pass, which was not adopted (see Research questions) |
 | Temperature fitting, fine-tuning, evaluation harnesses | Training tooling: use the original's tools, then convert the model or pass the fitted temperatures |
 | HTTP server, MCP server, LangChain/LlamaIndex/CrewAI integrations | In-process embedding is a project goal; integrations could later sit on top of the Python binding |
-| Intel Macs | macOS is not released yet and Apple silicon comes first ([platforms](PLATFORMS.md)); Intel Macs would still be left out, since Apple stopped selling them in 2023 and CI runners are being retired. Measured fact, not a support promise: on a 2019 Intel MacBook Pro (macOS 15.7.2, Apple clang 17) the Release build, the 6 model-free tests and the 4 real-model tests with the English model passed at commit 8994a03 (the suites have grown since), and the benchmark ran ([performance](PERFORMANCE.md#a-second-machine-intel-macbook-pro)) |
