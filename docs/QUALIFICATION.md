@@ -13,6 +13,8 @@ Tier 1 is Linux x86-64 CPU with the declared AVX2-era ISA, Ubuntu 24.04 as the m
 | `linux-x64` | 1 | the release host, with CI's byte-identical build | `ubuntu-24.04` | gcc, glibc |
 | `linux-arm64` | 2 | CI | `ubuntu-24.04-arm` | gcc, glibc |
 | `windows-x64` | 2 | CI | `windows-2025` | clang-cl, UCRT |
+| `macos-arm64` | 2 | CI | `macos-15` | Apple clang, Apple libm |
+| `macos-x64` | 2 | CI | `macos-15-intel` | Apple clang, Apple libm |
 
 **Tier 1** (`linux-x64`) must pass every gate in `required_release_gates`, with the primary model and both additional models. Its native compiler matrix (`platforms.native.compilers`: gcc 13.3.0 and clang 22.1.8) is covered by the release host's gcc validation and the CI candidate run's clang validation, on LLVM 22.1.8 pinned by archive hash. The browser gates require every stage on the non-isolated page and, on the cross-origin-isolated page, the controls, a `primitive.json` execution byte-identical to the non-isolated page's and (WASM) running cancellation ([browser](RELEASE_CHECKS.md#browser)).
 

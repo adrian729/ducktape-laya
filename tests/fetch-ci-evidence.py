@@ -149,7 +149,7 @@ class Fetch(unittest.TestCase):
             self.assertEqual(hashlib.sha256((self.output / relative).read_bytes()).hexdigest(), digest)
         keys = json.loads((self.output / 'evidence.json').read_text())
         self.assertEqual(keys, fetch.evidence_keys(RECORD))
-        for platform in ('linux-x64', 'linux-arm64', 'windows-x64'):
+        for platform in ('linux-x64', 'linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64'):
             self.assertIn(f'{platform}:native', keys)
         self.assertIn('windows-x64:stress', keys)
         self.assertNotIn('linux-x64:stress', keys)

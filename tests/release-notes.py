@@ -57,7 +57,8 @@ def main():
         root = pathlib.Path(directory)
         (root / 'release').mkdir()
         (root / 'CHANGELOG.md').write_text(CHANGELOG)
-        targets = [{'platform': 'linux-x64', 'tier': 1}, {'platform': 'linux-arm64', 'tier': 2}, {'platform': 'windows-x64', 'tier': 2}]
+        targets = [{'platform': 'linux-x64', 'tier': 1}, {'platform': 'linux-arm64', 'tier': 2}, {'platform': 'windows-x64', 'tier': 2},
+                   {'platform': 'macos-arm64', 'tier': 2}, {'platform': 'macos-x64', 'tier': 2}]
         (root / 'release/compatibility.json').write_text(json.dumps({'package_version': '1.2.3', 'targets': targets}))
         result = run(root, '--version', '1.2.3')
         check(result.returncode == 0, f'renders 1.2.3: {result.stderr}')
@@ -66,8 +67,8 @@ def main():
                          f'[above]({BLOB}/CHANGELOG.md#unreleased)', '[external](https://example.com/a.md)',
                          '`[code](docs/X.md)`', '[fenced](docs/Y.md)', f'[ref]: {BLOB}/docs/REF.md',
                          '`io.github.adrian729:ducktape-laya:1.2.3`', 'bindings/go@v1.2.3`',
-                         '`ducktape-laya-1.2.3-linux-x64.tar.gz`, `ducktape-laya-1.2.3-linux-arm64.tar.gz`, `ducktape-laya-1.2.3-windows-x64.zip`',
-                         'Linux x86-64 (tier 1', 'Linux arm64 and Windows x64 (tier 2', '--cert-identity https://github.com/adrian729/ducktape-laya/.github/workflows/attest-release.yml@refs/heads/main',
+                         '`ducktape-laya-1.2.3-linux-x64.tar.gz`, `ducktape-laya-1.2.3-linux-arm64.tar.gz`, `ducktape-laya-1.2.3-windows-x64.zip`, `ducktape-laya-1.2.3-macos-arm64.tar.gz`, `ducktape-laya-1.2.3-macos-x64.tar.gz`',
+                         'Linux x86-64 (tier 1', 'Linux arm64, Windows x64, macOS arm64 and macOS x64 (tier 2', '--cert-identity https://github.com/adrian729/ducktape-laya/.github/workflows/attest-release.yml@refs/heads/main',
                          'except `SHA256SUMS` and `gates.json`'):
             check(expected in text, f'output lacks {expected}')
         check('## 1.2.3' not in text and 'Older.' not in text and 'Preview entry.' not in text, 'output holds only the 1.2.3 section body')
