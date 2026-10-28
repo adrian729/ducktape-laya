@@ -50,6 +50,7 @@ COMMANDS = {
     'release-notes': [PY, 'tests/release-notes.py'],
     'ci-changes': [PY, 'tests/ci-changes.py'],
     'abi-layouts': [PY, 'tests/abi-layout.py'],
+    'binding-abi': [PY, 'tests/binding-abi.py'],
     'typescript-consumers': [PY, 'tests/typescript/check.py'],
     'packaging-identities': [PY, 'tests/packaging-identity.py'],
     'package-assembly': [PY, 'tests/package-assembly.py'],

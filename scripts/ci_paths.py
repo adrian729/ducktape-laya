@@ -133,6 +133,13 @@ POLICY_CHECKS = {
     'ci-changes': ['tests/ci-changes.py', 'scripts/ci-changes.py', 'scripts/ci_paths.py', 'scripts/check-policy.py', 'scripts/*.py',
                    'tests/*.py', 'deleted:*'],
     'abi-layouts': ['tests/abi-layout.py', 'include/*', 'bindings/rust/*'],
+    # Static copies of the status codes and call-options layout in the bindings (Linux only: abi-layouts is the
+    # compiled probe and also runs on Windows).
+    'binding-abi': ['tests/binding-abi.py', 'include/ducktape_laya.h', 'bindings/python/src/ducktape_laya/_errors.py',
+                    'bindings/python/src/ducktape_laya/_native.py', 'bindings/node/index.cjs', 'bindings/node/index.d.ts',
+                    'bindings/browser/index.mjs', 'bindings/browser/protocol.d.ts', 'bindings/java/src/main/java/*/Status.java',
+                    'bindings/java/src/main/java/*/Native.java', 'bindings/dotnet/DucktapeLaya/Status.cs',
+                    'bindings/dotnet/DucktapeLaya/Native.cs', 'bindings/go/laya.go', 'bindings/rust/ducktape-laya/src/lib.rs'],
     'typescript-consumers': ['tests/typescript/*', 'bindings/node/*', 'bindings/browser/*', 'examples/demo.cjs', 'examples/demo.cts'],
     'packaging-identities': ['tests/packaging-identity.py', 'cmake/*', 'CMakeLists.txt', 'bindings/*/pom.xml', 'bindings/*/pyproject.toml',
                              'bindings/node/*', 'bindings/browser/*', 'scripts/artifact_support.py', 'scripts/package-native.py',

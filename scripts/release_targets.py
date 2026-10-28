@@ -208,7 +208,7 @@ ADDITIONAL_MODEL_RUNS = ('tokenizer-', 'decision-head-', 'control-tokenize-', 'o
 HOST_FULL_RUNS = ('native', 'examples-smoke', 'abi', 'check-binary', 'rust', 'node', 'python', 'java', 'dotnet', 'go', 'bindings',
                   'original-reference', 'upstream-reference', 'package', 'package-smoke')
 POLICY_LABELS = ('result-comparison', 'qualification-policy', 'docs-links', 'docs-links-self-test', 'release-notes', 'ci-changes',
-                 'abi-layouts', 'typescript-consumers', 'packaging-identities', 'package-assembly', 'fetch-ci-evidence', 'release-targets',
+                 'abi-layouts', 'binding-abi', 'typescript-consumers', 'packaging-identities', 'package-assembly', 'fetch-ci-evidence', 'release-targets',
                  'release-assets', 'browser-backend-identities', 'browser-lifecycle', 'browser-binding', 'model-download',
                  'runtime-sources', 'merge-validation', 'validate', 'check-sanitizers', 'verify', 'qualify-host', 'ci-contracts')
 # Skips a required run label may have instead of a run: {label: (platforms, the reason validate.py records)}.

@@ -53,7 +53,7 @@ BINDING_SUITES = {'rust', 'node', 'python', 'java-compile', 'java-test-compile',
 FULL_CHECKS = ('native', 'examples-smoke', 'abi', 'check-binary', 'rust', 'node', 'python', 'java', 'dotnet', 'go', 'bindings',
                'original-reference', 'upstream-reference', 'package', 'package-smoke')
 FULL_POLICY_CHECKS = ('result-comparison', 'qualification-policy', 'docs-links', 'docs-links-self-test', 'release-notes', 'ci-changes',
-                      'abi-layouts', 'typescript-consumers', 'packaging-identities', 'package-assembly', 'fetch-ci-evidence',
+                      'abi-layouts', 'binding-abi', 'typescript-consumers', 'packaging-identities', 'package-assembly', 'fetch-ci-evidence',
                       'release-targets', 'release-assets', 'browser-backend-identities', 'browser-lifecycle', 'browser-binding',
                       'model-download', 'runtime-sources', 'merge-validation', 'validate', 'check-sanitizers', 'verify', 'qualify-host',
                       'ci-contracts')
