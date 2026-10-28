@@ -1,6 +1,6 @@
 # Ducktape Laya for Go
 
-Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Go: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get calibrated probabilities, computed on the CPU by the shared native library through cgo.
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Go: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get probabilities, computed on the CPU by the shared native library through cgo.
 
 ```sh
 go get github.com/adrian729/ducktape-laya/bindings/go@v0.3.0

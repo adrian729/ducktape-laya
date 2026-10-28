@@ -1,6 +1,6 @@
 # Ducktape Laya for .NET
 
-Local [Laya](https://github.com/NandhaKishorM/laya) decisions from .NET: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get calibrated probabilities, computed on the CPU by the shared native library bundled in the package.
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions from .NET: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get probabilities, computed on the CPU by the shared native library bundled in the package.
 
 ```sh
 dotnet add package DucktapeLaya

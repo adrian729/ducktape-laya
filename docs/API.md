@@ -146,6 +146,7 @@ Requests are strict: these are the only top-level keys, and any other key (inclu
 | `instructions` | Required, non-null text or JSON |
 | `criteria` | Options or levels; see the table below |
 | `aggregate` | `noul` only: `any` (default) or `all`, how `scan` combines windows |
+| `labels` | `noul` only: `{"false": ..., "true": ...}`, two distinct non-empty texts that replace the option names `false` and `true` the model reads (surrounding whitespace is trimmed). The answer is still `noul`, the probability of true. The original Laya has the same option. Neutral names such as `B` and `A` weakened the pull of text length on real data ([using Laya](USAGE.md#get-the-best-results)) |
 
 Any other key in a question is rejected.
 
@@ -159,7 +160,7 @@ A primitive request contains non-null `state` and 1–32 named `questions`. Each
 
 Every answer also has `answer_confidence` and `confidence`:
 
-- `answer_confidence` is the probability of the reported answer: the winning option's or level's probability, and for `noul` the larger of `noul` and `1 − noul`. It is the calibrated quantity: once the temperatures are fitted on held-out data, answers reported at `answer_confidence` c are right about c of the time. Gate or abstain on this value.
+- `answer_confidence` is the probability of the reported answer: the winning option's or level's probability, and for `noul` the larger of `noul` and `1 − noul`. It is the quantity the temperatures calibrate: each model's temperatures were fitted by its authors on their own held-out data, where answers reported at `answer_confidence` c are right about c of the time. On your questions and texts that need not hold, and 0.5 need not be a sensible cut-off ([limitations](USAGE.md#known-limitations)): gate or abstain on this value with a threshold chosen on your own labelled examples.
 - `confidence` is how concentrated the whole distribution is, `1 − H(p)/log k`, where H(p) = −Σ p log p is the entropy of the probabilities and k the number of options or levels (k = 2 for `noul`): 0 for a uniform distribution, 1 for certainty. It is not calibrated.
 
 A `choice` with a single option is answered without running the model: that option, with probability, `confidence` and `answer_confidence` 1, using no input tokens.

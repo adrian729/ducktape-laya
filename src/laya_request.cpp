@@ -48,7 +48,7 @@ std::vector<question> parse_questions(const json &body) {
         require(q.is_object() && q.contains("instructions") && !q["instructions"].is_null(),
                 id + ": instructions are required");
         for (const auto &[key, ignored] : q.items())
-            require(key == "type" || key == "instructions" || key == "criteria" || key == "aggregate",
+            require(key == "type" || key == "instructions" || key == "criteria" || key == "aggregate" || key == "labels",
                     id + ": unsupported key " + key);
         require(q.contains("type") && q["type"].is_string(), id + ": type is required");
         question out{id, q["type"].get<std::string>(), q["instructions"], json::array()};
@@ -80,9 +80,33 @@ std::vector<question> parse_questions(const json &body) {
             require(criteria.is_null() || criteria.is_object(), id + ": noul criteria must be an object");
             if (criteria.is_object()) for (auto &[key, ignored] : criteria.items())
                 require(key == "false" || key == "true", id + ": noul keys must be false or true");
-            for (const char *key : {"false", "true"})
-                add(key, criteria.is_object() ? criteria.value(key, json()) : json());
+            // `labels` renames the option keys the model reads (the answer stays P(true)), as the
+            // original Laya's: the template picks its default description by the key "true", so a
+            // relabelled option without a description gets the default text written out.
+            json labels = q.value("labels", json());
+            if (q.contains("labels")) {
+                require(labels.is_object() && labels.size() == 2 && labels.contains("false") && labels.contains("true") &&
+                        labels["false"].is_string() && labels["true"].is_string(),
+                        id + ": noul labels must map exactly false and true to distinct non-empty strings");
+                for (const char *key : {"false", "true"}) {
+                    auto text = labels[key].get<std::string>();
+                    auto first = text.find_first_not_of(" \t\n\r\f\v");
+                    labels[key] = first == std::string::npos ? std::string()
+                                                             : text.substr(first, text.find_last_not_of(" \t\n\r\f\v") - first + 1);
+                }
+                require(!labels["false"].get<std::string>().empty() && !labels["true"].get<std::string>().empty() &&
+                        labels["false"] != labels["true"],
+                        id + ": noul labels must map exactly false and true to distinct non-empty strings");
+            }
+            for (const char *key : {"false", "true"}) {
+                json description = criteria.is_object() ? criteria.value(key, json()) : json();
+                if (labels.is_null()) { add(key, description); continue; }
+                if (description.is_null() || description == "")
+                    description = key == std::string("true") ? "yes, the statement holds" : "no, the statement does not hold";
+                add(labels[key].get<std::string>(), description);
+            }
         } else require(false, id + ": supported types are choice, score, noul");
+        require(!q.contains("labels") || out.type == "noul", id + ": labels are for noul questions");
         if (q.contains("aggregate")) {
             require(out.type == "noul" && (q["aggregate"] == "any" || q["aggregate"] == "all"),
                     id + ": aggregate is any or all, for noul questions");

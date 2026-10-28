@@ -1,6 +1,6 @@
 # Ducktape Laya for Python
 
-Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Python: ask named questions about a text and get calibrated probabilities. A `choice` question picks one of several options, a `noul` question gives the probability that a statement is true, and a `score` question picks a level on an ordered scale. Inference runs on the CPU inside your process, through the shared native library bundled in the wheel: no server, network access, compiler or implicit model download.
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Python: ask named questions about a text and get probabilities. A `choice` question picks one of several options, a `noul` question gives the probability that a statement is true, and a `score` question picks a level on an ordered scale. Inference runs on the CPU inside your process, through the shared native library bundled in the wheel: no server, network access, compiler or implicit model download.
 
 ## Install
 
@@ -28,6 +28,10 @@ with ducktape_laya.Engine.open("/path/to/Laya-Q8_0.gguf") as engine:
 ```
 
 Requests are JSON values or JSON strings (a string is sent as is); results are parsed JSON. `execute` accepts primitive and structured requests and lists of up to 32 requests. Optional per-request `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` are plain request keys. The request format is in the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).
+
+## Evaluating a question
+
+`python -m ducktape_laya.evaluate MODEL examples.jsonl questions.json` runs your questions on labelled examples and compares them with a text-length baseline and your current rule, with thresholds chosen on held-out halves; `--controls order,shuffle` adds option-order and shuffled-words checks. Input formats and what to look for: [using Laya in an application](https://github.com/adrian729/ducktape-laya/blob/main/docs/USAGE.md#measure-it-on-your-task).
 
 ## Configuration
 

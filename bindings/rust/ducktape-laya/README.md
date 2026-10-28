@@ -1,6 +1,6 @@
 # Ducktape Laya for Rust
 
-Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Rust: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get calibrated probabilities, computed on the CPU by the shared native library. This safe crate provides ownership and errors; [`ducktape-laya-sys`](https://crates.io/crates/ducktape-laya-sys) exposes the raw C ABI.
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Rust: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get probabilities, computed on the CPU by the shared native library. This safe crate provides ownership and errors; [`ducktape-laya-sys`](https://crates.io/crates/ducktape-laya-sys) exposes the raw C ABI.
 
 ## Install
 

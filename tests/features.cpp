@@ -162,6 +162,23 @@ void requests_and_budgets(context &c) {
             invalid([&] { engine.execute(R"({"state":{"n":)" + number + "}" + question); });
     }
     {
+        // noul `labels` rename only the keys the model reads: labels equal to the defaults render
+        // the same prompt, with and without criteria (the default descriptions are written out).
+        const json plain = {{"type", "noul"}, {"instructions", "Does the customer ask for a refund?"}};
+        json described = plain;
+        described["criteria"] = {{"true", "they ask for their money back"}, {"false", "they ask for something else"}};
+        auto ask = [&](const json &q) {
+            return json::parse(engine.execute(json{{"state", "Please refund me."}, {"questions", {{"q", q}}}}.dump()))["answers"]["q"];
+        };
+        for (const json &q : {plain, described}) {
+            json same = q, neutral = q;
+            same["labels"] = {{"false", "false"}, {"true", " true "}};
+            neutral["labels"] = {{"false", "B"}, {"true", "A"}};
+            expect(ask(same) == ask(q), "default labels render the default prompt");
+            expect(ask(neutral)["noul"] != ask(q)["noul"], "labels reach the prompt");
+        }
+    }
+    {
         // Runs of spaces have no length limit (0.2.0 rejected runs over 4,096) and tokenize in
         // linear time: 128 KiB of spaces in the state takes no longer than twice the same size
         // of ordinary words. Both are truncated to one 64-token window, so the calls' time is

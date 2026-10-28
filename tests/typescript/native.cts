@@ -17,7 +17,7 @@ async function consumer() {
   void profile;
   const overflow: Overflow = 'scan';
   const windowed = await engine.execute({ ...request, overflow, max_windows: 4, lang: 'en', questions: {
-    any: { type: 'noul', instructions: 'Any refund?', aggregate: 'any' }, all: { type: 'noul', instructions: 'All refund?', aggregate: 'all' } } });
+    any: { type: 'noul', instructions: 'Any refund?', aggregate: 'any', labels: { false: 'B', true: 'A' } }, all: { type: 'noul', instructions: 'All refund?', aggregate: 'all' } } });
   const first: Answer = windowed.answers.any;
   const confidence: number = first.answer_confidence + first.confidence;
   const index: number | undefined = first.window?.index;

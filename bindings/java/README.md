@@ -1,6 +1,6 @@
 # Ducktape Laya for Java
 
-Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Java and Kotlin: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get calibrated probabilities. The binding calls the shared native library through the Foreign Function & Memory API, with no JNI, JNA or third-party dependencies; requests and results are JSON `String`s.
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions from Java and Kotlin: ask named questions about a text (`choice` picks one of several options, `noul` gives the probability that a statement is true, `score` picks a level on an ordered scale) and get probabilities. The binding calls the shared native library through the Foreign Function & Memory API, with no JNI, JNA or third-party dependencies; requests and results are JSON `String`s.
 
 ```text
 io.github.adrian729:ducktape-laya:0.3.0

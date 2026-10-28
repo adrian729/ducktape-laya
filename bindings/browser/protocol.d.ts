@@ -3,7 +3,7 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export type Question =
   | { type: 'choice'; instructions: Json; criteria: Record<string, Json> | string[] }
   | { type: 'score'; instructions: Json; criteria: Json[] }
-  | { type: 'noul'; instructions: Json; criteria?: { false?: Json; true?: Json }; aggregate?: 'any' | 'all' };
+  | { type: 'noul'; instructions: Json; criteria?: { false?: Json; true?: Json }; aggregate?: 'any' | 'all'; labels?: { false: string; true: string } };
 export type Overflow = 'reject' | 'truncate_end' | 'truncate_start' | 'scan';
 export interface Request { state: Json; questions: Record<string, Question>; model?: string; lang?: string; max_tokens?: number; temperatures?: Record<string, number>; overflow?: Overflow; max_windows?: number }
 export type Answer =

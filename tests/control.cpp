@@ -46,6 +46,17 @@ int main(int argc, char **argv) {
                 router.execute(std::string(R"({"model":"a","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}})") + "," + field + "}"); }) == DTL_INVALID_ARGUMENT);
         CHECK(status([&] { router.execute(R"({"model":"auto","lang":"","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_INVALID_ARGUMENT);
         CHECK(status([&] { router.execute(R"({"model":"a","state":"x","questions":{"q":{"type":"score","instructions":"How urgent?","aggregate":"all","criteria":["a","b"]}}})"); }) == DTL_INVALID_ARGUMENT);
+        auto labelled = [](const char *question) {
+            return std::string(R"({"model":"a","state":"x","questions":{"q":)") + question + "}}";
+        };
+        for (const char *question : {R"({"type":"choice","instructions":"Which?","criteria":["a","b"],"labels":{"false":"A","true":"B"}})",
+                                     R"({"type":"noul","instructions":"Is it urgent?","labels":{"true":"A"}})",
+                                     R"({"type":"noul","instructions":"Is it urgent?","labels":{"false":"A","true":" A "}})",
+                                     R"({"type":"noul","instructions":"Is it urgent?","labels":{"false":" ","true":"A"}})",
+                                     R"({"type":"noul","instructions":"Is it urgent?","labels":{"false":"B","true":"A","maybe":"C"}})",
+                                     R"({"type":"noul","instructions":"Is it urgent?","labels":null})"})
+            CHECK(status([&] { router.execute(labelled(question)); }) == DTL_INVALID_ARGUMENT);
+        CHECK(status([&] { router.execute(labelled(R"({"type":"noul","instructions":"Is it urgent?","labels":{"false":"B","true":"A"}})")); }) == DTL_MODEL_ERROR);
         // A valid request reaches the (non-GGUF) model and fails there, not in validation.
         CHECK(status([&] { router.execute(R"({"model":"a","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_MODEL_ERROR);
         CHECK(status([&] { router.execute(R"({"model":"auto","lang":"fr","overflow":"scan","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_MODEL_ERROR);

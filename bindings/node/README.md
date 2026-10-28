@@ -1,6 +1,6 @@
 # ducktape-laya
 
-Local [Laya](https://github.com/NandhaKishorM/laya) decisions for Node.js and Electron: ask named questions about a text and get calibrated probabilities. A `choice` question picks one of several options, a `noul` question gives the probability that a statement is true, and a `score` question picks a level on an ordered scale. Inference runs on the CPU in a worker thread of your process: no server, network access or implicit model download. 0.1.0 had a different API ([migration notes](https://github.com/adrian729/ducktape-laya/blob/main/docs/COMPATIBILITY.md)).
+Local [Laya](https://github.com/NandhaKishorM/laya) decisions for Node.js and Electron: ask named questions about a text and get probabilities. A `choice` question picks one of several options, a `noul` question gives the probability that a statement is true, and a `score` question picks a level on an ordered scale. Inference runs on the CPU in a worker thread of your process: no server, network access or implicit model download. 0.1.0 had a different API ([migration notes](https://github.com/adrian729/ducktape-laya/blob/main/docs/COMPATIBILITY.md)).
 
 ## Requirements
 
