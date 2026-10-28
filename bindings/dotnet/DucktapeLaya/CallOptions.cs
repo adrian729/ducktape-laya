@@ -2,7 +2,7 @@ using System;
 
 namespace Ducktape.Laya;
 
-public sealed class LayaCallOptions
+public sealed class CallOptions
 {
     /// <summary>Identifier reported in events.</summary>
     public ulong RequestId { get; set; }

@@ -286,6 +286,9 @@ def check_record(root=ROOT, docs=True):
     pom = (root / 'bindings/java/pom.xml').read_text()
     if re.search(r'<artifactId>ducktape-laya</artifactId>\s*<version>([^<]+)</version>', pom)[1] != version:
         raise ValueError('Java package version mismatch')
+    java_native = (root / 'bindings/java/src/main/java/io/github/adrian729/laya/Native.java').read_text()
+    if f'PACKAGE_VERSION = "{version}"' not in java_native:
+        raise ValueError('Java native PACKAGE_VERSION mismatch')
     if f'<Version>{version}</Version>' not in (root / 'bindings/dotnet/DucktapeLaya/DucktapeLaya.csproj').read_text():
         raise ValueError('.NET package version mismatch')
     browser = root / 'bindings/browser/package.json'

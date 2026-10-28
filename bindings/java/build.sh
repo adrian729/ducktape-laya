@@ -11,4 +11,4 @@ javac --release 22 "$lint" -d target/classes $(find src/main -name '*.java')
 jar --create --file target/ducktape-laya.jar -C target/classes .
 javac --release 22 "$lint" -cp target/ducktape-laya.jar -d target/test-classes $(find src/test -name '*.java')
 [ "${1:-}" = --no-test ] && exit 0
-java --enable-native-access=ALL-UNNAMED -cp target/ducktape-laya.jar:target/test-classes io.github.adrian729.laya.LayaTest
+java --enable-native-access=ALL-UNNAMED -cp target/ducktape-laya.jar:target/test-classes io.github.adrian729.laya.EngineTest

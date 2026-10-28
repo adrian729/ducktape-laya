@@ -1,5 +1,5 @@
 import io.github.adrian729.laya.Config;
-import io.github.adrian729.laya.Laya;
+import io.github.adrian729.laya.Engine;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -33,17 +33,17 @@ public final class Consumer {
         try {
             if (files == null) {
                 String request = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
-                try (Laya laya = Laya.open(args[0], config(configText))) {
+                try (Engine laya = Engine.open(args[0], config(configText))) {
                     System.out.write((laya.execute(request) + "\n").getBytes(StandardCharsets.UTF_8));
                     System.out.flush();
                 }
                 return;
             }
-            Laya laya = null;
+            Engine laya = null;
             try {
                 for (String file : files) {
                     String request = Files.readString(Path.of(file), StandardCharsets.UTF_8);
-                    if (laya == null) laya = Laya.open(args[0], config(configText));
+                    if (laya == null) laya = Engine.open(args[0], config(configText));
                     System.out.write((laya.execute(request) + "\n").getBytes(StandardCharsets.UTF_8));
                     System.out.flush();
                     if (fresh) { laya.close(); laya = null; }
@@ -57,7 +57,7 @@ public final class Consumer {
         }
     }
 
-    // Optional second argument: open config JSON (threads, context_tokens, overflow, temperatures); flat, so a regex suffices.
+    // Optional second argument: open config JSON (threads, context_tokens, overflow, max_windows_per_call, temperatures); flat, so a regex suffices.
     private static Config config(String json) {
         Config config = Config.none();
         Matcher m = Pattern.compile("\"threads\"\\s*:\\s*(\\d+)").matcher(json);
@@ -66,6 +66,8 @@ public final class Consumer {
         if (m.find()) config = config.withContextTokens(Integer.parseInt(m.group(1)));
         m = Pattern.compile("\"overflow\"\\s*:\\s*\"([a-z_]+)\"").matcher(json);
         if (m.find()) config = config.withOverflow(m.group(1));
+        m = Pattern.compile("\"max_windows_per_call\"\\s*:\\s*(\\d+)").matcher(json);
+        if (m.find()) config = config.withMaxWindowsPerCall(Integer.parseInt(m.group(1)));
         m = Pattern.compile("\"temperatures\"\\s*:\\s*\\{([^}]*)\\}").matcher(json);
         if (m.find()) {
             Map<String, Double> temperatures = new LinkedHashMap<>();

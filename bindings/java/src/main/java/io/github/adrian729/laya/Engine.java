@@ -11,29 +11,30 @@ import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 
 /**
- * A loaded Laya model or a bounded local model router. Thread-safe: native calls on one handle
+ * A loaded model or a bounded local model router. Thread-safe: native calls on one handle
  * serialize, and {@link #close()} waits for in-flight calls. Inference blocks the calling thread.
  * Closing a handle from inside its own event callback releases it once the running call finishes.
  */
-public final class Laya implements AutoCloseable {
+public final class Engine implements AutoCloseable {
     private static final MethodHandle EVENT_TARGET;
     private static final Cleaner CLEANER = Cleaner.create();
 
     static {
         try {
-            EVENT_TARGET = MethodHandles.lookup().findStatic(Laya.class, "event",
+            EVENT_TARGET = MethodHandles.lookup().findStatic(Engine.class, "event",
                 MethodType.methodType(void.class, Consumer.class, MemorySegment.class, MemorySegment.class));
         } catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
         }
     }
 
-    /** Owns the native handle; deliberately holds no reference to the Laya so the Cleaner can run. */
+    /** Owns the native handle; deliberately holds no reference to the Engine so the Cleaner can run. */
     private static final class State implements Runnable {
         private final MemorySegment handle;
         private final MethodHandle close;
@@ -59,7 +60,7 @@ public final class Laya implements AutoCloseable {
     private volatile boolean closing;
     private boolean released; // guarded by the write lock
 
-    private Laya(MemorySegment handle, MethodHandle close) {
+    private Engine(MemorySegment handle, MethodHandle close) {
         this.handle = handle;
         this.cleanable = CLEANER.register(this, new State(handle, close));
     }
@@ -70,20 +71,29 @@ public final class Laya implements AutoCloseable {
     }
 
     /** Opens a model with the library defaults. */
-    public static Laya open(String modelPath) {
+    public static Engine open(String modelPath) {
         return open(modelPath, Config.none());
     }
 
     /**
-     * Opens a model. A null path or config throws {@link NullPointerException}. Call {@link #close()}
-     * to release it promptly; a Cleaner releases it if the object is dropped without closing.
+     * Opens a model. A null path throws {@link NullPointerException}; a null config means
+     * {@link Config#none()}. Call {@link #close()} to release it promptly; a Cleaner releases it if
+     * the object is dropped without closing.
      */
-    public static Laya open(String modelPath, Config config) {
-        return create(false, modelPath, config);
+    public static Engine open(String modelPath, Config config) {
+        return create(false, Objects.requireNonNull(modelPath, "modelPath"), config);
+    }
+
+    public static Engine open(Path modelPath) {
+        return open(modelPath, Config.none());
+    }
+
+    public static Engine open(Path modelPath, Config config) {
+        return open(Objects.requireNonNull(modelPath, "modelPath").toString(), config);
     }
 
     /** Opens a router with the library defaults. */
-    public static Laya openRouter(String routerJson) {
+    public static Engine openRouter(String routerJson) {
         return openRouter(routerJson, Config.none());
     }
 
@@ -91,8 +101,16 @@ public final class Laya implements AutoCloseable {
      * Opens a bounded, lazy local model registry; see docs/API.md for the router JSON. The config
      * applies to every route; a route's own "config" overrides it key by key.
      */
-    public static Laya openRouter(String routerJson, Config config) {
-        return create(true, routerJson, config);
+    public static Engine openRouter(String routerJson, Config config) {
+        return create(true, Objects.requireNonNull(routerJson, "routerJson"), config);
+    }
+
+    public static Engine openRouter(RouterConfig router) {
+        return openRouter(router, Config.none());
+    }
+
+    public static Engine openRouter(RouterConfig router, Config config) {
+        return openRouter(Objects.requireNonNull(router, "router").toJson(), config);
     }
 
     /** Model metadata for a single model; a router reports the runtime only. */
@@ -137,14 +155,13 @@ public final class Laya implements AutoCloseable {
         }
     }
 
-    private static Laya create(boolean router, String input, Config config) {
-        Objects.requireNonNull(input, router ? "routerJson" : "modelPath");
-        Objects.requireNonNull(config, "config");
+    private static Engine create(boolean router, String input, Config config) {
+        if (config == null) config = Config.none();
         checkInput(input, router ? "router config" : "model path");
+        String configJson = config.toJson();
+        if (configJson != null) checkInput(configJson, "config");
         Native n = Native.get();
         try (Arena arena = Arena.ofConfined()) {
-            String configJson = config.toJson();
-            if (configJson != null) checkInput(configJson, "config");
             MemorySegment out = arena.allocate(PTR);
             MemorySegment error = arena.allocate(PTR);
             MemorySegment cfg = configJson == null ? MemorySegment.NULL : arena.allocateFrom(configJson);
@@ -154,21 +171,21 @@ public final class Laya implements AutoCloseable {
             check(status, error);
             MemorySegment raw = out.get(PTR, 0);
             if (raw.equals(MemorySegment.NULL))
-                throw new LayaException(LayaException.MODEL_ERROR, "Native engine returned null");
-            return new Laya(raw, n.CLOSE);
+                throw new LayaException(Status.MODEL_ERROR, "Native engine returned null");
+            return new Engine(raw, n.CLOSE);
         } catch (Throwable t) {
             throw sneaky(t);
         }
     }
 
     private static void checkInput(String s, String what) {
-        if (s.indexOf('\0') >= 0) throw new LayaException(LayaException.INVALID_ARGUMENT, "Input contains a NUL byte");
+        if (s.indexOf('\0') >= 0) throw new LayaArgumentException("Input contains a NUL byte");
         // allocateFrom would silently turn lone surrogates into '?'.
         try {
             StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(s));
         } catch (CharacterCodingException e) {
-            throw new LayaException(LayaException.INVALID_ARGUMENT, what + " is not valid Unicode");
+            throw new LayaArgumentException(what + " is not valid Unicode");
         }
     }
 
@@ -179,10 +196,10 @@ public final class Laya implements AutoCloseable {
     private <T> T withHandle(Body<T> body) {
         // Fail fast once close is pending rather than queueing behind the writer, which would block
         // (or deadlock a callback waiting on another thread's call); re-checked under the lock.
-        if (closing) throw new LayaClosedException();
+        if (closing) throw new EngineClosedException();
         lock.readLock().lock();
         try {
-            if (closing || released) throw new LayaClosedException();
+            if (closing || released) throw new EngineClosedException();
             return body.apply(handle);
         } catch (Throwable t) {
             throw sneaky(t);
@@ -194,13 +211,17 @@ public final class Laya implements AutoCloseable {
     }
 
     private String run(String request, CallOptions options) {
+        if (closing) throw new EngineClosedException();
         Objects.requireNonNull(request, "request");
         if (options == null) options = CallOptions.none();
         checkInput(request, "request");
         CallOptions opts = options;
-        Native n = Native.get();
+        CancellationToken token = opts.cancellation();
+        // Order: closed, conversions (above), cancelled, then the native call.
+        if (token != null && token.isCancelled())
+            throw new LayaException(Status.CANCELLED, "The call was cancelled before it started");
         return withHandle(h -> {
-            CancellationToken token = opts.cancellation();
+            Native n = Native.get();
             try (Arena arena = Arena.ofShared()) {
                 MemorySegment flag = null;
                 MemorySegment call = (MemorySegment) n.DEFAULT_CALL_OPTIONS.invoke((SegmentAllocator) arena);
@@ -246,7 +267,7 @@ public final class Laya implements AutoCloseable {
         try {
             check(status, error);
             if (out.equals(MemorySegment.NULL))
-                throw new LayaException(LayaException.INFERENCE_ERROR, "Native result was null");
+                throw new LayaException(Status.INFERENCE_ERROR, "Native result was null");
             return text(out);
         } finally {
             if (!out.equals(MemorySegment.NULL)) Native.free(out);
@@ -263,7 +284,7 @@ public final class Laya implements AutoCloseable {
                 Native.free(error);
             }
         }
-        if (status != 0) throw new LayaException(status, message != null ? message : "Laya operation failed");
+        if (status != 0) throw new LayaException(Status.of(status), message != null ? message : "Engine operation failed");
     }
 
     private static String text(MemorySegment cString) {
