@@ -35,7 +35,7 @@ func open(t *testing.T) *Engine {
 	return e
 }
 
-func status(t *testing.T, err error) int32 {
+func status(t *testing.T, err error) Status {
 	t.Helper()
 	var e *Error
 	if !errors.As(err, &e) {
@@ -74,7 +74,7 @@ func TestRejectsNul(t *testing.T) {
 }
 
 func TestPanicInEventContained(t *testing.T) {
-	router, err := OpenRouter(`{"models":{"unused":"go.mod"}}`, nil)
+	router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestPanicInEventContained(t *testing.T) {
 }
 
 func TestCloseIdempotent(t *testing.T) {
-	router, err := OpenRouter(`{"models":{"unused":"go.mod"}}`, nil)
+	router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,14 +101,103 @@ func TestCloseIdempotent(t *testing.T) {
 	if status(t, err) != StatusInvalidArgument || !errors.Is(err, ErrClosed) {
 		t.Fatal("want ErrClosed (status 1) after close")
 	}
-	_, err = router.Info()
-	if status(t, err) != StatusInvalidArgument {
-		t.Fatal("want status 1 after close")
+	_, err2 := router.Info()
+	var first, second *Error
+	if status(t, err2) != StatusInvalidArgument || !errors.Is(err2, ErrClosed) {
+		t.Fatal("want ErrClosed (status 1) after close")
+	}
+	if !errors.As(err, &first) || !errors.As(err2, &second) || first == second {
+		t.Fatal("closed errors must be distinct *Error values")
+	}
+	first.Message = "changed"
+	if second.Message == "changed" || ErrClosed.Error() == "changed" {
+		t.Fatal("closed errors share state")
 	}
 }
 
+// Closed, then argument conversions, then an already-done context, then the
+// native call.
+func TestErrorOrder(t *testing.T) {
+	router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	events := 0
+	opts := &CallOptions{OnEvent: func(string) { events++ }}
+	// A NUL request beats a cancelled context.
+	if _, err := router.ExecuteContext(cancelled, "{\x00}", opts); status(t, err) != StatusInvalidArgument || errors.Is(err, context.Canceled) {
+		t.Fatalf("NUL vs cancelled: %v", err)
+	}
+	// A cancelled context fails at once: no native call, so no events.
+	if _, err := router.ExecuteContext(cancelled, choice, opts); !errors.Is(err, context.Canceled) || events != 0 {
+		t.Fatalf("cancelled: %v, %d events", err, events)
+	}
+	router.Close()
+	// Closed beats both.
+	if _, err := router.ExecuteContext(cancelled, "{\x00}", opts); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed first: %v", err)
+	}
+}
+
+func TestConfigJSON(t *testing.T) {
+	data, err := (&Config{Threads: 2, MaxWindowsPerCall: 4096, Overflow: "scan", Temperatures: map[string]float64{"noul": 2, "choice": 1.5}}).marshal()
+	want := `{"threads":2,"max_windows_per_call":4096,"overflow":"scan","temperatures":{"choice":1.5,"noul":2}}`
+	if err != nil || string(data) != want {
+		t.Fatalf("%s %v", data, err)
+	}
+	if data, _ := (&Config{}).marshal(); string(data) != "{}" {
+		t.Fatalf("zero value sends %s", data)
+	}
+	for name, c := range map[string]*Config{
+		"overflow":  {Overflow: "a\xffb"},
+		"temp key":  {Temperatures: map[string]float64{"a\xff": 1}},
+		"temp NaN":  {Temperatures: map[string]float64{"choice": math.NaN()}},
+		"temp +Inf": {Temperatures: map[string]float64{"choice": math.Inf(1)}},
+	} {
+		if _, err := c.marshal(); status(t, err) != StatusInvalidArgument {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if _, err := Open("model.gguf", &Config{Overflow: "\xff"}); status(t, err) != StatusInvalidArgument {
+		t.Fatalf("Open: %v", err)
+	}
+}
+
+func TestRouterConfigJSON(t *testing.T) {
+	got, err := (&RouterConfig{
+		Models: map[string]Route{
+			"b": {Path: "b.gguf", Config: &Config{ContextTokens: 256}},
+			"a": {Path: "a.gguf"},
+		},
+		MaxLoaded: 2,
+		Auto:      &AutoRoutes{English: "a", Default: "b"},
+	}).marshal()
+	want := `{"models":{"a":"a.gguf","b":{"path":"b.gguf","config":{"context_tokens":256}}},"max_loaded":2,"auto":{"english":"a","default":"b"}}`
+	if err != nil || got != want {
+		t.Fatalf("%s %v", got, err)
+	}
+	for name, r := range map[string]*RouterConfig{
+		"nil":       nil,
+		"id":        {Models: map[string]Route{"a\xff": {Path: "a"}}},
+		"path":      {Models: map[string]Route{"a": {Path: "a\xff"}}},
+		"auto":      {Models: map[string]Route{"a": {Path: "a"}}, Auto: &AutoRoutes{English: "\xff"}},
+		"route cfg": {Models: map[string]Route{"a": {Path: "a", Config: &Config{Overflow: "\xff"}}}},
+	} {
+		if _, err := OpenRouter(r, nil); status(t, err) != StatusInvalidArgument {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	router, err := OpenRouter(&RouterConfig{Models: map[string]Route{"unused": {Path: "go.mod"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router.Close()
+}
+
 func TestNulRequest(t *testing.T) {
-	router, err := OpenRouter(`{"models":{"unused":"go.mod"}}`, nil)
+	router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +254,7 @@ func TestRealFeatures(t *testing.T) {
 			t.Error(err)
 		}
 	}}))
-	router, err := OpenRouter(`{"models":{"english":"`+quote(path)+`"},"max_loaded":1}`, &Config{Threads: 2})
+	router, err := OpenRouterJSON(`{"models":{"english":"`+quote(path)+`"},"max_loaded":1}`, &Config{Threads: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +302,7 @@ func TestSharedAcrossGoroutines(t *testing.T) {
 	baseline := mustOK(t)(e.Execute(choice))
 	// Two names for one file with one slot: concurrent calls evict each other.
 	q := quote(path)
-	router, err := OpenRouter(`{"models":{"a":"`+q+`","b":"`+q+`"},"max_loaded":1}`, &Config{Threads: 2})
+	router, err := OpenRouterJSON(`{"models":{"a":"`+q+`","b":"`+q+`"},"max_loaded":1}`, &Config{Threads: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +385,7 @@ func TestCloseInsideCallback(t *testing.T) {
 	}
 	result, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(s string) {
 		if strings.Contains(s, `"event":"start"`) {
-			e.CloseDeferred()
+			e.Close()
 		}
 	}})
 	if err != nil || result != baseline {
@@ -362,7 +451,7 @@ func TestContextErrorsMatch(t *testing.T) {
 		errors.Is(&Error{Status: StatusCancelled}, context.DeadlineExceeded) {
 		t.Fatal("Is mapping wrong")
 	}
-	router, err := OpenRouter(`{"models":{"unused":"go.mod"}}`, nil)
+	router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,12 +471,9 @@ func TestContextErrorsMatch(t *testing.T) {
 func TestConfigRejected(t *testing.T) {
 	path := model(t)
 	for name, c := range map[string]*Config{
-		"threads":       {Threads: 257},
-		"context small": {ContextTokens: 8},
-		"context huge":  {ContextTokens: 1 << 30},
-		"temp zero":     {Temperatures: map[string]float64{"choice": 0}},
-		"temp negative": {Temperatures: map[string]float64{"choice": -1}},
-		"temp NaN":      {Temperatures: map[string]float64{"choice": math.NaN()}},
+		"threads":   {Threads: 257},
+		"windows":   {MaxWindowsPerCall: 4097},
+		"temp zero": {Temperatures: map[string]float64{"choice": 0}},
 	} {
 		e, err := Open(path, c)
 		if err == nil {
@@ -398,7 +484,7 @@ func TestConfigRejected(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
-	if _, err := OpenRouter(`{"models":{"a":{"path":"`+quote(path)+`","config":{"bogus":1}}}}`, nil); status(t, err) != StatusInvalidArgument {
+	if _, err := OpenRouterJSON(`{"models":{"a":{"path":"`+quote(path)+`","config":{"bogus":1}}}}`, nil); status(t, err) != StatusInvalidArgument {
 		t.Fatalf("route config: %v", err)
 	}
 }
@@ -466,7 +552,7 @@ func TestInfoFields(t *testing.T) {
 }
 
 func TestRouterAutoValidation(t *testing.T) {
-	open := func(json string) (*Engine, error) { return OpenRouter(json, &Config{Threads: 2}) }
+	open := func(json string) (*Engine, error) { return OpenRouterJSON(json, &Config{Threads: 2}) }
 	for _, bad := range []string{
 		`{"models":{"a":"laya_test.go"},"auto":{"english":"a"}}`,
 		`{"models":{"a":"laya_test.go"},"auto":{"english":"a","default":"missing"}}`,
@@ -515,7 +601,7 @@ func TestFinalizerReleasesDroppedEngine(t *testing.T) {
 
 	var handle unsafe.Pointer
 	func() {
-		router, err := OpenRouter(`{"models":{"unused":"go.mod"}}`, nil)
+		router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -535,5 +621,31 @@ func TestFinalizerReleasesDroppedEngine(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("finalizer never released the dropped engine")
 		}
+	}
+}
+
+// Close from an OnEvent callback does not deadlock: it closes at once and the
+// running call releases the handle when it returns. (Model-free: the router's
+// request is rejected after the start event.)
+func TestCloseFromCallbackDefers(t *testing.T) {
+	router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var closeErr error
+	_, err = router.ExecuteContext(context.Background(), "{}", &CallOptions{OnEvent: func(string) { closeErr = router.Close() }})
+	if closeErr != nil || status(t, err) != StatusInvalidArgument {
+		t.Fatalf("close %v, call %v", closeErr, err)
+	}
+	select {
+	case <-router.c.done:
+	default:
+		t.Fatal("handle not released when the call returned")
+	}
+	if _, err := router.Execute("{}"); !errors.Is(err, ErrClosed) {
+		t.Fatal("want ErrClosed")
+	}
+	if router.Close() != nil {
+		t.Fatal("second Close failed")
 	}
 }

@@ -24,15 +24,16 @@ func run() error {
 	if len(args) > 1 && !strings.HasPrefix(args[1], "--") {
 		at = 2
 		var body struct {
-			Threads       uint32             `json:"threads"`
-			ContextTokens uint32             `json:"context_tokens"`
-			Overflow      string             `json:"overflow"`
-			Temperatures  map[string]float64 `json:"temperatures"`
+			Threads           uint32             `json:"threads"`
+			ContextTokens     uint32             `json:"context_tokens"`
+			MaxWindowsPerCall uint32             `json:"max_windows_per_call"`
+			Overflow          string             `json:"overflow"`
+			Temperatures      map[string]float64 `json:"temperatures"`
 		}
 		if err := json.Unmarshal([]byte(args[1]), &body); err != nil {
 			return err
 		}
-		config = laya.Config{Threads: body.Threads, ContextTokens: body.ContextTokens, Overflow: body.Overflow, Temperatures: body.Temperatures}
+		config = laya.Config{Threads: body.Threads, ContextTokens: body.ContextTokens, MaxWindowsPerCall: body.MaxWindowsPerCall, Overflow: body.Overflow, Temperatures: body.Temperatures}
 	}
 	var files []string
 	requests, fresh := false, false
