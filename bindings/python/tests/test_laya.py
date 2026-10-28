@@ -41,8 +41,9 @@ class LibraryChoice(unittest.TestCase):
                 raise OSError(error)
             return 'library'
         with mock.patch.dict(os.environ, env or {}, clear=False):
-            if not env:
-                os.environ.pop('DUCKTAPE_LAYA_LIB_DIR', None)
+            for variable in ('DUCKTAPE_LAYA_LIBRARY', 'DUCKTAPE_LAYA_LIB_DIR'):
+                if variable not in (env or {}):
+                    os.environ.pop(variable, None)
             try:
                 return calls, _native._open(cdll, machine, plat, bundled)
             except laya.LayaLoadError as caught:
@@ -74,6 +75,26 @@ class LibraryChoice(unittest.TestCase):
             self.assertEqual(calls, [])
             self.assertIn('DUCKTAPE_LAYA_LIB_DIR is set but', str(error))
             self.assertEqual(error.status, laya.Status.UNSUPPORTED_PLATFORM)
+            # DUCKTAPE_LAYA_LIBRARY names the file itself and wins over the directory.
+            file = pathlib.Path(directory, 'custom.so')
+            file.write_bytes(b'')
+            calls, result = self._open('linux', bundled, env={'DUCKTAPE_LAYA_LIBRARY': str(file),
+                                                              'DUCKTAPE_LAYA_LIB_DIR': '/nonexistent'})
+            self.assertEqual((calls, result), ([(str(file), {})], 'library'))
+            # Relative overrides are refused without loading anything.
+            for variable in ('DUCKTAPE_LAYA_LIBRARY', 'DUCKTAPE_LAYA_LIB_DIR'):
+                calls, error = self._open('linux', bundled, env={variable: 'relative'})
+                self.assertEqual(calls, [])
+                self.assertIn(f'{variable} must be an absolute path', str(error))
+                self.assertEqual(error.status, laya.Status.UNSUPPORTED_PLATFORM)
+
+    def test_check_version(self):
+        from ducktape_laya import _native
+        _native.check_version('{"package_version":"1.2.3","abi_version":2}', '1.2.3')
+        for info in ('{"package_version":"1.2.4"}', '{}', 'not json', '[]'):
+            with self.assertRaisesRegex(laya.LayaLoadError, 'another copy of the library') as caught:
+                _native.check_version(info, '1.2.3')
+            self.assertEqual(caught.exception.status, laya.Status.UNSUPPORTED_PLATFORM)
 
     def test_windows_fallback_searches_only_safe_directories(self):
         import pathlib
@@ -111,18 +132,11 @@ class LibraryChoice(unittest.TestCase):
                 calls, result = self._open('darwin', bundled, machine='x86_64')
                 self.assertEqual(calls, [(installed, {})])
                 verify.assert_called_with('library', installed)
-            # The explicit directory is made absolute before it is loaded and verified.
+            # The explicit directory is loaded and verified by its absolute path.
             os.makedirs(os.path.join(directory, 'lib'))
             pathlib.Path(directory, 'lib', _native._NAME).write_bytes(b'')
-            cwd = os.getcwd()
-            os.chdir(directory)
-            try:
-                calls, _ = self._open('darwin', bundled, machine='arm64', env={'DUCKTAPE_LAYA_LIB_DIR': 'lib'})
-            finally:
-                os.chdir(cwd)
-            self.assertEqual(len(calls), 1)
-            self.assertTrue(os.path.isabs(calls[0][0]))
-            self.assertTrue(calls[0][0].endswith(os.path.join('lib', _native._NAME)))
+            calls, _ = self._open('darwin', bundled, machine='arm64', env={'DUCKTAPE_LAYA_LIB_DIR': os.path.join(directory, 'lib')})
+            self.assertEqual(calls, [(os.path.join(directory, 'lib', _native._NAME), {})])
 
     def test_macos_refuses_a_swapped_library(self):
         from unittest import mock
@@ -144,10 +158,24 @@ class Basics(unittest.TestCase):
             laya.Engine.open('missing.gguf', threads=2)
         self.assertNotEqual(caught.exception.status, 0)
 
-    def test_rejects_nul(self):
-        with self.assertRaises(laya.LayaError) as caught:
-            laya.Engine.open('a\0b', threads=2)
-        self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+    def test_rejects_nul_before_loading_the_library(self):
+        from unittest import mock
+        with mock.patch.object(laya, '_library', side_effect=AssertionError('library loaded')):
+            for path in ('a\0b', b'a\0b'):
+                with self.assertRaises(laya.LayaError) as caught:
+                    laya.Engine.open(path)
+                self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX paths are raw bytes')
+    def test_paths_reach_the_core_as_bytes(self):
+        import pathlib
+        raw = os.fsencode(os.path.join(os.path.dirname(__file__), 'missing-\udcff.gguf'))
+        for path in (raw, os.fsdecode(raw), pathlib.PurePath(os.fsdecode(raw)), b'/nonexistent/m.gguf'):
+            with self.assertRaises(laya.LayaError) as caught:
+                laya.Engine.open(path)
+            self.assertEqual(caught.exception.status, laya.Status.MODEL_ERROR)
+        with self.assertRaises(TypeError):
+            laya.Engine.open(42)
 
     def test_constructor_is_private(self):
         with self.assertRaises(TypeError):
@@ -164,28 +192,71 @@ class Basics(unittest.TestCase):
             self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
             self.assertEqual([event['event'] for event in calls], ['start', 'error'])
 
-    def test_explicit_library_dir_is_honoured(self):
+    def _child(self, code, **env):
         import subprocess, sys
-        env = dict(os.environ, DUCKTAPE_LAYA_LIB_DIR='/nonexistent')
-        result = subprocess.run([sys.executable, '-c', 'import ducktape_laya; ducktape_laya.runtime_info()'],
-                                env=env, capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('DUCKTAPE_LAYA_LIB_DIR is set', result.stderr)
-        self.assertIn('ducktape_laya.LayaLoadError: DUCKTAPE_LAYA_LIB_DIR is set', result.stderr)
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('DUCKTAPE_LAYA_LIB')}
+        return subprocess.run([sys.executable, '-c', code], env=dict(environment, **env), capture_output=True, text=True)
 
-    def test_invalid_open_options(self):
-        for kwargs in ({'threads': -1}, {'threads': 257}, {'threads': True}):
-            with self.assertRaises(ValueError):
+    def test_explicit_library_is_honoured(self):
+        info = 'import ducktape_laya; ducktape_laya.runtime_info()'
+        for variable, value, message in (('DUCKTAPE_LAYA_LIB_DIR', '/nonexistent', 'DUCKTAPE_LAYA_LIB_DIR is set'),
+                                         ('DUCKTAPE_LAYA_LIBRARY', '/nonexistent/lib.so', 'DUCKTAPE_LAYA_LIBRARY is set'),
+                                         ('DUCKTAPE_LAYA_LIBRARY', 'relative.so', 'DUCKTAPE_LAYA_LIBRARY must be an absolute path')):
+            result = self._child(info, **{variable: value})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('ducktape_laya.LayaLoadError: ' + message, result.stderr)
+
+    def test_argument_errors_come_before_the_library_loads(self):
+        # With a relative override the library can never load, so only an argument error can surface.
+        result = self._child('import ducktape_laya as l\n'
+                             'try:\n    l.Engine.open("a\\0b")\nexcept l.LayaError as e:\n    print(type(e).__name__, e.status.name)',
+                             DUCKTAPE_LAYA_LIBRARY='relative.so')
+        self.assertEqual(result.stdout.strip(), 'LayaError INVALID_ARGUMENT', result.stderr)
+
+    def test_open_options_are_conversions_only(self):
+        for kwargs in ({'threads': True}, {'threads': '2'}, {'context_tokens': '64'}, {'max_windows_per_call': 1.5}):
+            with self.assertRaises(TypeError) as caught:
                 laya.Engine.open('x.gguf', **kwargs)
-        with self.assertRaises(TypeError):
-            laya.Engine.open('x.gguf', context_tokens='64')
+            self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
+        # Range and name errors are the core's: they are sent as given, 0 and negative numbers included.
+        text = lambda **kwargs: laya._open_config(*(kwargs.get(k) for k in (
+            'threads', 'context_tokens', 'temperatures', 'overflow', 'max_windows_per_call')))
+        self.assertIsNone(text())
+        self.assertEqual(json.loads(text(threads=0, max_windows_per_call=0, overflow='bogus', context_tokens=-1)),
+                         {'threads': 0, 'context_tokens': -1, 'overflow': 'bogus', 'max_windows_per_call': 0})
+        self.assertEqual(list(json.loads(text(temperatures={'noul': 1.5}, max_windows_per_call=64))),
+                         ['temperatures', 'max_windows_per_call'])
         with self.assertRaises(laya.LayaError) as caught:  # unknown config key
             laya.Engine.open_router({'models': {'unused': __file__}}, temperatures={'x': 'y'})
         self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
 
+    def test_status_is_typed(self):
+        self.assertIs(laya.LayaError(1, 'x').status, laya.Status.INVALID_ARGUMENT)
+        self.assertIs(laya.LayaError(99, 'x').status, laya.Status.INFERENCE_ERROR)
+
+    def test_error_order(self):
+        router = laya.Engine.open_router({'models': {'unused': __file__}})
+        events = []
+        cancelled = laya.CancellationToken()
+        cancelled.cancel()
+        try:
+            # Argument errors beat an already-cancelled token; a cancelled token fails with no native call and no events.
+            with self.assertRaises(ValueError):
+                router.execute(REQUEST, timeout=-1, cancel=cancelled, on_event=events.append)
+            with self.assertRaises(laya.LayaError) as caught:
+                router.execute('{}', cancel=cancelled, on_event=events.append)
+            self.assertEqual(caught.exception.status, laya.Status.CANCELLED)
+            self.assertEqual(events, [])
+        finally:
+            router.close()
+        # Closed beats everything else.
+        with self.assertRaises(laya.EngineClosedError):
+            router.execute(REQUEST, timeout=-1, cancel=cancelled)
+
     def test_router_config_rejects_nan(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as caught:
             laya.Engine.open_router({'models': {'unused': __file__}, 'max_loaded': float('nan')})
+        self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
 
     def test_unserializable_request_is_invalid(self):
         engine = laya.Engine.open_router({'models': {'unused': __file__}})
@@ -280,9 +351,6 @@ class RealModel(unittest.TestCase):
         with self.assertRaises(laya.LayaError) as caught:
             laya.Engine.open(MODEL, threads=1, context_tokens=10 ** 9)
         self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
-        for threads in (-1, 257):
-            with self.assertRaises(ValueError):
-                laya.Engine.open(MODEL, threads=threads)
 
     def test_open_overflow(self):
         long_request = {'state': 'refund ' * 800, 'questions': {'refund': {
@@ -290,8 +358,9 @@ class RealModel(unittest.TestCase):
         # The policy reaches the engine: the default (reject) would refuse this request.
         with laya.Engine.open(MODEL, threads=2, overflow='truncate_end') as engine:
             self.assertIn('answers', engine.execute(long_request))
-        with self.assertRaises(ValueError):
+        with self.assertRaises(laya.LayaError) as caught:
             laya.Engine.open(MODEL, threads=2, overflow='bogus')
+        self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
 
     def test_request_settings_rejected(self):
         request = json.loads(REQUEST)
@@ -320,7 +389,7 @@ class RealModel(unittest.TestCase):
 
     def test_cancellation_and_deadline(self):
         engine = self.engine
-        cancelled = laya.CancelToken()
+        cancelled = laya.CancellationToken()
         cancelled.cancel()
         with self.assertRaises(laya.LayaError) as caught:
             engine.execute(REQUEST, cancel=cancelled)
@@ -329,7 +398,7 @@ class RealModel(unittest.TestCase):
             engine.execute(REQUEST, timeout=0.001)
         self.assertEqual(caught.exception.status, laya.Status.DEADLINE_EXCEEDED)
         self.assertEqual(engine.execute(REQUEST), self.baseline)
-        self.assertEqual(engine.execute(REQUEST, cancel=laya.CancelToken()), self.baseline)
+        self.assertEqual(engine.execute(REQUEST, cancel=laya.CancellationToken()), self.baseline)
         self.assertEqual(engine.execute(REQUEST, timeout=0), self.baseline)  # 0 means no deadline
         for bad in (-1, float('inf'), float('nan'), 86401):
             with self.assertRaises(ValueError):
@@ -337,7 +406,7 @@ class RealModel(unittest.TestCase):
         with self.assertRaises(TypeError):
             engine.execute(REQUEST, cancel=threading.Event())
         # Cancelled from another thread while the call runs (or is about to).
-        token, started = laya.CancelToken(), threading.Event()
+        token, started = laya.CancellationToken(), threading.Event()
         threading.Thread(target=lambda: (started.wait(), token.cancel())).start()
         with self.assertRaises(laya.LayaError) as caught:
             engine.execute(LONG, cancel=token, on_event=lambda _: started.set())

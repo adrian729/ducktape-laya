@@ -15,11 +15,22 @@ class Status(enum.IntEnum):
 
 
 class LayaError(Exception):
-    """A native failure; ``status`` is the C ABI status code."""
+    """A native failure; ``status`` is the C ABI status as a ``Status``."""
     __module__ = 'ducktape_laya'
     def __init__(self, status, message):
         super().__init__(message)
-        self.status = status
+        try:
+            self.status = Status(status)
+        except ValueError:  # impossible under ABI 2; keep the message
+            self.status = Status.INFERENCE_ERROR
+
+
+def argument_error(kind, message):
+    """A binding-checked argument error: the language's standard exception carrying ``status``
+    ``INVALID_ARGUMENT``, as the native core would report it."""
+    error = kind(message)
+    error.status = Status.INVALID_ARGUMENT
+    return error
 
 
 class LayaLoadError(LayaError, OSError):
