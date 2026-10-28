@@ -865,22 +865,8 @@ mod tests {
         assert_eq!(engine.execute(NOUL).unwrap(), baseline);
     }
     #[test]
-    fn status_values_match_header() {
-        // Typed out again until the binding-abi policy check compares them with the header.
-        assert_eq!(
-            [
-                Status::Ok,
-                Status::InvalidArgument,
-                Status::ModelError,
-                Status::InferenceError,
-                Status::OutOfMemory,
-                Status::Cancelled,
-                Status::DeadlineExceeded,
-                Status::UnsupportedPlatform
-            ]
-            .map(|status| status as i32),
-            [0, 1, 2, 3, 4, 5, 6, 7]
-        );
+    fn status_from_raw() {
+        // The values themselves are compared with the header by the binding-abi policy check.
         assert_eq!(Status::from_raw(5), Status::Cancelled);
         assert_eq!(Status::from_raw(99), Status::InferenceError);
     }
