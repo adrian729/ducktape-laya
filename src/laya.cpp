@@ -119,6 +119,7 @@ struct router_state {
 struct dtl_engine {
     std::unique_ptr<model_engine> single;
     std::string overflow; // a single model's default policy
+    size_t max_windows = 256; // forward passes one call may plan
     std::unique_ptr<router_state> router;
 };
 extern "C" {
@@ -133,6 +134,7 @@ dtl_status dtl_open(const char *path, const char *config_json, dtl_engine **out,
         auto engine = std::make_unique<dtl_engine>();
         engine->single = load_model(resolved, config);
         engine->overflow = config.overflow;
+        engine->max_windows = config.max_windows_per_call;
         *out = engine.release();
     });
 }
@@ -166,7 +168,7 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
             const auto resolved = regular_file(text);
             if (resolved.empty())
                 throw failure(DTL_MODEL_ERROR, "Model path is not a local regular file: " + id);
-            router_state::route route{resolved, {}, engine_config(config, shared)};
+            router_state::route route{resolved, {}, engine_config(config, shared, true)};
             // The path is raw bytes (not necessarily UTF-8), so it is not put into JSON.
             json key = {{"threads", route.config.threads}, {"context_tokens", route.config.context_tokens},
                         {"temperatures", route.config.temperatures}};  // overflow is applied per call, not per loaded model
@@ -184,6 +186,7 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
         }
         auto engine = std::make_unique<dtl_engine>();
         engine->router = std::move(r);
+        engine->max_windows = shared.max_windows_per_call;
         *out = engine.release();
     });
 }
@@ -192,6 +195,7 @@ dtl_status dtl_info(dtl_engine *engine, char **result, char **error) {
     return boundary(error, [&] {
         require(result, "result_json is required");
         auto info = dtl::runtime_info();
+        if (engine) info["max_windows_per_call"] = engine->max_windows;
         if (engine && engine->single) {
             std::lock_guard<std::mutex> lock(engine->single->mutex);
             info["model"] = engine->single->runtime.info();
@@ -223,7 +227,7 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
                 for (auto &q : p.questions) {
                     control.check();
                     single.prepare(q, state, engine->overflow, control);
-                    count_windows(windows, q);
+                    count_windows(windows, q, engine->max_windows);
                 }
             }
             for (auto &p : work) results.push_back(evaluate(single, p, control));
@@ -265,7 +269,7 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
                 for (auto &q : p.questions) {
                     control.check();
                     model.prepare(q, state, route.config.overflow, control);
-                    count_windows(windows, q);
+                    count_windows(windows, q, engine->max_windows);
                 }
                 auto answer = evaluate(model, p, control); answer["model"] = id;
                 if (!chosen[i].second.is_null()) answer["usage"]["routing"] = chosen[i].second;

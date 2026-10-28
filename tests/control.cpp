@@ -49,6 +49,9 @@ int main(int argc, char **argv) {
         // A valid request reaches the (non-GGUF) model and fails there, not in validation.
         CHECK(status([&] { router.execute(R"({"model":"a","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_MODEL_ERROR);
         CHECK(status([&] { router.execute(R"({"model":"auto","lang":"fr","overflow":"scan","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_MODEL_ERROR);
+        // The ceiling spans routes, so only the router's shared config takes it.
+        CHECK(status([&] { ducktape::engine::open_router(self(R"({"models":{"a":{"path":"SELF","config":{"max_windows_per_call":8}}}})")); }) == DTL_INVALID_ARGUMENT);
+        CHECK(status([&] { ducktape::engine::open_router(self(R"({"models":{"a":"SELF"}})"), R"({"max_windows_per_call":8})"); }) == DTL_OK);
         auto manual = ducktape::engine::open_router(self(R"({"models":{"a":"SELF"}})"));
         CHECK(status([&] { manual.execute(R"({"model":"auto","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})"); }) == DTL_INVALID_ARGUMENT);
         for (const std::string &config : {self(R"({"models":{"auto":"SELF"}})"), self(R"({"models":{"a":"SELF"},"auto":{"english":"a"}})"),
@@ -57,13 +60,14 @@ int main(int argc, char **argv) {
         // The one copy of the open config rejections (abi-errors and feature-errors no longer repeat them).
         for (const char *config : {R"({"threads":257})", R"({"threads":-1})", R"({"threads":"2"})", R"({"context_tokens":31})",
                                    R"({"context_tokens":0})", R"({"context_tokens":"64"})", R"({"overflow":"clip"})",
-                                   R"({"temperatures":{"noul.2":1e39}})", R"({"bogus":1})", R"([])", "{"})
+                                   R"({"temperatures":{"noul.2":1e39}})", R"({"bogus":1})", R"([])", "{",
+                                   R"({"max_windows_per_call":0})", R"({"max_windows_per_call":4097})", R"({"max_windows_per_call":"8"})"})
             CHECK(status([&] { ducktape::engine::open(self("SELF"), config); }) == DTL_INVALID_ARGUMENT);
         CHECK(status([&] { ducktape::engine::open(self("SELF"), R"({"overflow":"scan","context_tokens":256})"); }) == DTL_MODEL_ERROR);
         // Runtime info advertises the features and limits the core enforces.
         const auto info = ducktape::info();
         for (const char *needle : {"\"language_routing\"", "\"overflow_policies\":[\"reject\",\"truncate_end\",\"truncate_start\",\"scan\"]",
-                                   "\"minimum_context_tokens\":32", "\"scan_windows\":1024", "\"default_context_tokens\":512"})
+                                   "\"minimum_context_tokens\":32", "\"scan_windows\":1024", "\"default_context_tokens\":512", "\"default_windows_per_call\":256"})
             CHECK(info.find(needle) != std::string::npos);
     }
     if (argc != 2) return 0;

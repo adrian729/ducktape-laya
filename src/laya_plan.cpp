@@ -10,9 +10,10 @@
 namespace dtl::detail {
 // Bounds the forward passes one call plans: 128 questions with 1024 scan windows
 // each would otherwise be accepted from a small request.
-void count_windows(size_t &total, const question &q) {
+void count_windows(size_t &total, const question &q, size_t limit) {
     total += q.overflow_report().value("windows", size_t(0));
-    require(total <= max_call_windows, "the call needs more than " + std::to_string(max_call_windows) + " forward passes");
+    require(total <= limit, "the call needs more than " + std::to_string(limit) + " forward passes" +
+            (limit < max_call_windows ? " (max_windows_per_call)" : ""));
 }
 void schema_metadata(const json &value, const std::string &where) {
     for (const char *name : {"title", "description"})

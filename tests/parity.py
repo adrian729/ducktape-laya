@@ -48,7 +48,7 @@ SMOKE_FIXTURES = ('primitive.json', 'structured.json', 'batch.json', 'integer-ke
 SMOKE_LONG_STATE = ('coverage.json', (5, 6), ('C', 'C++'))
 # Second pass: open config (context, overflow, calibration temperatures) through every binding.
 OPEN_CONFIG = {'threads': 4, 'context_tokens': 256, 'overflow': 'truncate_end',
-               'temperatures': {'choice': 1.3, 'noul.2': 1.2}}
+               'temperatures': {'choice': 1.3, 'noul.2': 1.2}, 'max_windows_per_call': 64}
 OPEN_CONFIG_FIXTURE = ROOT / 'tests/fixtures/options.json'
 
 

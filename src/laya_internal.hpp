@@ -34,7 +34,7 @@ void keys(const json &value, std::initializer_list<const char *> allowed, const 
 std::vector<question> parse_questions(const json &body);
 temperature_map temperatures(const json &value, const std::string &where);
 std::string overflow_policy(const json &value, const std::string &where);
-dtl::engine_config engine_config(const json &value, dtl::engine_config base = {});
+dtl::engine_config engine_config(const json &value, dtl::engine_config base = {}, bool route = false);
 // laya_plan.cpp: planned requests, loaded models and evaluation.
 struct planned {
     json body;
@@ -54,7 +54,7 @@ struct model_engine {
     }
 };
 std::vector<planned> plans(const json &body, bool routed);
-void count_windows(size_t &total, const question &q);
+void count_windows(size_t &total, const question &q, size_t limit);
 std::unique_ptr<model_engine> load_model(const std::string &path, const dtl::engine_config &config);
 json evaluate(model_engine &engine, planned &p, const dtl::execution &control);
 } // namespace dtl::detail

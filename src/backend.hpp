@@ -20,6 +20,7 @@ struct engine_config {
     size_t context_tokens = 0;      // 0: 512, capped by the trained length
     std::string overflow = "reject";// default overflow policy for requests
     temperature_map temperatures;   // overrides the GGUF calibration, key by key
+    size_t max_windows_per_call = 256; // forward passes one call may plan (engine-wide; not a route setting)
 };
 struct question {
     std::string id, type;

@@ -115,9 +115,15 @@ std::string overflow_policy(const json &value, const std::string &where) {
             where + " must be reject, truncate_end, truncate_start or scan");
     return value.get<std::string>();
 }
-dtl::engine_config engine_config(const json &value, dtl::engine_config base) {
+dtl::engine_config engine_config(const json &value, dtl::engine_config base, bool route) {
     if (value.is_null()) return base;
-    keys(value, {"threads", "context_tokens", "temperatures", "overflow"}, "config");
+    keys(value, {"threads", "context_tokens", "temperatures", "overflow", "max_windows_per_call"}, "config");
+    if (value.contains("max_windows_per_call")) {
+        require(!route, "max_windows_per_call applies to the whole engine");
+        require(unsigned_in(value["max_windows_per_call"], 1, max_call_windows),
+                "max_windows_per_call must be an integer of 1.." + std::to_string(max_call_windows));
+        base.max_windows_per_call = value["max_windows_per_call"].get<size_t>();
+    }
     if (value.contains("overflow")) base.overflow = overflow_policy(value["overflow"], "config.overflow");
     if (value.contains("threads")) {
         require(unsigned_in(value["threads"], 0, 256), "threads must be 0..256");

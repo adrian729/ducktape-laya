@@ -27,6 +27,6 @@ json runtime_info() {
         {"overflow_policies", {"reject", "truncate_end", "truncate_start", "scan"}},
         {"limits", {{"request_bytes", 1048576}, {"object_members", 1024}, {"questions_per_request", 32}, {"requests_per_batch", 32},
                     {"questions_per_batch", 128}, {"default_context_tokens", 512}, {"minimum_context_tokens", 32},
-                    {"scan_windows", 1024}, {"windows_per_call", 4096}, {"routes", 16}, {"loaded_models", 4}}}};
+                    {"scan_windows", 1024}, {"windows_per_call", 4096}, {"default_windows_per_call", 256}, {"routes", 16}, {"loaded_models", 4}}}};
 }
 } // namespace dtl

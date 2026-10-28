@@ -72,6 +72,26 @@ void overflow_policies(context &c) {
         }
         expect(c.rejected([&] { json r = json::parse(c.sized(words)); r["overflow"] = "scan"; r["max_windows"] = 1; return r.dump(); }(),
                           "max_windows", &small), "too many windows rejected");
+        {   // The per-call ceiling counts every planned pass, scan or not, before inference.
+            const std::string scan = [&] { json r = json::parse(c.sized(words)); r["overflow"] = "scan"; return r.dump(); }();
+            auto ceiling = [&](size_t n) {
+                return ducktape::engine::open(c.model, R"({"threads":2,"context_tokens":64,"max_windows_per_call":)" + std::to_string(n) + "}");
+            };
+            expect(small.info().find("\"max_windows_per_call\":256") != std::string::npos, "the default ceiling is reported");
+            auto exact = ceiling(windows), below = ceiling(windows - 1);
+            expect(json::parse(exact.execute(scan))["answers"]["refund"]["window"]["count"] == windows, "a call at the ceiling runs");
+            expect(c.rejected(scan, "max_windows_per_call", &below), "a scan over the ceiling is rejected");
+            json batch = json::array({json::parse(c.sized(1)), json::parse(c.sized(1)), json::parse(c.sized(1))});
+            auto two = ceiling(2);
+            expect(c.rejected(batch.dump(), "max_windows_per_call", &two), "single-window passes count toward the ceiling");
+            batch.erase(batch.begin() + 2);
+            expect(json::parse(two.execute(batch.dump())).size() == 2, "two passes fit a ceiling of two");
+            auto router = ducktape::engine::open_router(json({{"models", {{"a", c.model}}}}).dump(),
+                                                        R"({"threads":2,"context_tokens":64,"max_windows_per_call":2})");
+            json routed = json::array({json::parse(c.sized(1)), json::parse(c.sized(1)), json::parse(c.sized(1))});
+            for (auto &r : routed) r["model"] = "a";
+            expect(c.rejected(routed.dump(), "max_windows_per_call", &router), "the router's shared ceiling bounds the call");
+        }
         for (json bad : {json({{"overflow", "clip"}}), json({{"max_windows", 0}}), json({{"overflow", 1}})}) {
             json r = json::parse(c.sized(1));
             for (auto &[k, v] : bad.items()) r[k] = v;
