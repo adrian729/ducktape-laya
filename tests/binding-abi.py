@@ -119,12 +119,10 @@ def java_layout():
     m = re.search(r'CALL_OPTIONS = MemoryLayout\.structLayout\(([^;]*)\);', text, re.S)
     if not m:
         return None, f'{path.relative_to(ROOT)}: no CALL_OPTIONS layout'
-    widths = []
-    for item in (x.strip() for x in m[1].split(',') if x.strip()):
-        widths.append({'ValueLayout.JAVA_INT': 4, 'ValueLayout.JAVA_LONG': 8, 'PTR': 8}.get(item, item))
-    names = re.search(r'dtl_call_options:([^*]*)\.', text)
-    order = [x.strip() for x in names[1].split(',')] if names else []
-    return list(zip(order, widths)) if len(order) == len(widths) else [(None, w) for w in widths], None
+    # Each element is a width constant named after its field: ValueLayout.JAVA_INT.withName("struct_size").
+    widths = {'ValueLayout.JAVA_INT': 4, 'ValueLayout.JAVA_LONG': 8, 'PTR': 8}
+    items = re.findall(r'([\w.]+)\.withName\("(\w+)"\)', m[1])
+    return [(name, widths.get(kind, kind)) for kind, name in items], None
 
 
 def python_layout():
