@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "type": "choice", "instructions": question, "criteria": criteria
     }}});
     println!("Running Laya...");
-    let engine = Engine::open(&model, &Config::default().threads(2))?;
+    let engine = Engine::open_with(&model, &Config::default().threads(2))?;
     let result: Value = serde_json::from_str(&engine.execute(&request.to_string())?)?;
     let answer = &result["answers"]["decision"];
     println!(

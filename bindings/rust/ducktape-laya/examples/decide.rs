@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("Usage: decide model.gguf < request.json")?;
     let mut request = String::new();
     std::io::stdin().read_to_string(&mut request)?;
-    let engine = ducktape_laya::Engine::open(&path, &ducktape_laya::Config::default())?;
+    let engine = ducktape_laya::Engine::open(&path)?;
     println!("{}", engine.execute(&request)?);
     Ok(())
 }
