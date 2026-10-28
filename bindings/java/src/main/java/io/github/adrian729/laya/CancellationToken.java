@@ -8,8 +8,8 @@ import java.util.List;
 
 /**
  * Thread-safe cancellation flag. {@link #cancel()} stops every call currently using the token and
- * every later call until {@link #reset()}; reset affects future calls only. Cancellation is
- * cooperative: native workers poll a per-call flag, so no code runs on their threads.
+ * every later call; a cancelled token stays cancelled, so use a new token for new calls.
+ * Cancellation is cooperative: native workers poll a per-call flag, so no code runs on their threads.
  */
 public final class CancellationToken {
     private static final VarHandle FLAG = ValueLayout.JAVA_INT.varHandle();
@@ -20,14 +20,7 @@ public final class CancellationToken {
     public void cancel() {
         synchronized (this) {
             cancelled = true;
-            for (MemorySegment flag : active) FLAG.setRelease(flag, 0L, LayaException.CANCELLED);
-        }
-    }
-
-    /** Affects calls that start afterwards; a call already cancelled stays cancelled. */
-    public void reset() {
-        synchronized (this) {
-            cancelled = false;
+            for (MemorySegment flag : active) FLAG.setRelease(flag, 0L, Status.CANCELLED.code());
         }
     }
 
@@ -40,7 +33,7 @@ public final class CancellationToken {
     /** Registers a call's 4-byte flag; set at once if already cancelled. */
     void register(MemorySegment flag) {
         synchronized (this) {
-            if (cancelled) FLAG.setRelease(flag, 0L, LayaException.CANCELLED);
+            if (cancelled) FLAG.setRelease(flag, 0L, Status.CANCELLED.code());
             active.add(flag);
         }
     }

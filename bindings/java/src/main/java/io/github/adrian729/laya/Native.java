@@ -38,11 +38,22 @@ final class Native {
         return null;
     }
     static final AddressLayout PTR = ValueLayout.ADDRESS;
-    /** dtl_call_options: struct_size, reserved, request_id, timeout_ms, on_event, event_user_data, should_cancel, cancel_user_data. */
+    /** dtl_call_options. */
     static final StructLayout CALL_OPTIONS = MemoryLayout.structLayout(
-        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
-        PTR, PTR, PTR, PTR);
-    static final long REQUEST_ID = 8, TIMEOUT_MS = 16, ON_EVENT = 24, EVENT_USER_DATA = 32, SHOULD_CANCEL = 40, CANCEL_USER_DATA = 48;
+        ValueLayout.JAVA_INT.withName("struct_size"), ValueLayout.JAVA_INT.withName("reserved"),
+        ValueLayout.JAVA_LONG.withName("request_id"), ValueLayout.JAVA_LONG.withName("timeout_ms"),
+        PTR.withName("on_event"), PTR.withName("event_user_data"),
+        PTR.withName("should_cancel"), PTR.withName("cancel_user_data"));
+    static final long REQUEST_ID = offset("request_id"), TIMEOUT_MS = offset("timeout_ms"), ON_EVENT = offset("on_event"),
+        EVENT_USER_DATA = offset("event_user_data"), SHOULD_CANCEL = offset("should_cancel"),
+        CANCEL_USER_DATA = offset("cancel_user_data");
+
+    private static long offset(String field) {
+        return CALL_OPTIONS.byteOffset(MemoryLayout.PathElement.groupElement(field));
+    }
+
+    /** This package's version; the loaded library must report the same package_version. Checked by scripts/release_support.py. */
+    static final String PACKAGE_VERSION = "0.3.0";
 
     private static final Linker LINKER = Linker.nativeLinker();
 
@@ -56,29 +67,19 @@ final class Native {
     /** Address of dtl_cancel_flag, used as the should_cancel callback. */
     final MemorySegment CANCEL_FLAG;
 
-    /** Loads lazily on first use; a failure is cached and rethrown as a fresh LayaException per call. */
-    private static final class Holder {
-        static final Native INSTANCE;
-        static final Throwable FAILURE;
+    private static Native instance; // guarded by Native.class
 
-        static {
-            Native n = null;
-            Throwable failure = null;
-            try {
-                n = new Native(load());
-            } catch (Throwable t) {
-                failure = t;
-            }
-            INSTANCE = n;
-            FAILURE = failure;
+    /** Loads on first use. Only a success is cached: a failure is thrown as a fresh LayaLoadException and the next call tries again. */
+    static synchronized Native get() {
+        if (instance != null) return instance;
+        try {
+            instance = new Native(load());
+        } catch (LayaLoadException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new LayaLoadException("Cannot load the ducktape-laya native library: " + t.getMessage(), t);
         }
-    }
-
-    static Native get() {
-        if (Holder.INSTANCE != null) return Holder.INSTANCE;
-        Throwable f = Holder.FAILURE;
-        throw new LayaException(LayaException.UNSUPPORTED_PLATFORM,
-            "Cannot load the ducktape-laya native library: " + f.getMessage(), f);
+        return instance;
     }
 
     private Native(SymbolLookup lookup) throws Throwable {
@@ -93,10 +94,33 @@ final class Native {
         MethodHandle abi = bind(lookup, "dtl_abi_version", FunctionDescriptor.of(ValueLayout.JAVA_INT));
         int version = (int) abi.invokeExact();
         if (version != 2) throw incompatible("reports ABI version " + version + ", expected 2");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment result = arena.allocate(PTR);
+            MemorySegment error = arena.allocate(PTR);
+            int status = (int) INFO.invokeExact(MemorySegment.NULL, result, error);
+            MemorySegment out = result.get(PTR, 0);
+            MemorySegment err = error.get(PTR, 0);
+            try {
+                if (status != 0 || out.equals(MemorySegment.NULL)) throw incompatible("dtl_info failed with status " + status);
+                checkVersion(out.reinterpret(Long.MAX_VALUE).getString(0), PACKAGE_VERSION);
+            } finally {
+                if (!out.equals(MemorySegment.NULL)) FREE.invokeExact(out);
+                if (!err.equals(MemorySegment.NULL)) FREE.invokeExact(err);
+            }
+        }
     }
 
-    private static LayaException incompatible(String why) {
-        return new LayaException(LayaException.UNSUPPORTED_PLATFORM,
+    /** Throws LayaLoadException unless the runtime info JSON (dtl_info(NULL)) reports package_version equal to expected. */
+    static void checkVersion(String infoJson, String expected) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"package_version\"\\s*:\\s*\"([^\"]*)\"").matcher(infoJson);
+        String version = m.find() ? m.group(1) : "unknown";
+        if (!version.equals(expected))
+            throw new LayaLoadException("The ducktape-laya native library is version " + version + ", but this package is "
+                + expected + "; another copy of the library was loaded instead of the one shipped with the package");
+    }
+
+    private static LayaLoadException incompatible(String why) {
+        return new LayaLoadException(
             "Incompatible or too old ducktape-laya native library (" + why + ")");
     }
 
@@ -107,19 +131,17 @@ final class Native {
 
     /** Released packages; any other platform needs a library built from source. */
     static final String RELEASED = "packages exist for Linux x86-64 and arm64, macOS arm64 and x86-64 and Windows x64; on other platforms build the "
-        + "library from source and set -Dducktape.laya.library or DUCKTAPE_LAYA_LIB_DIR";
+        + "library from source and set DUCKTAPE_LAYA_LIBRARY or DUCKTAPE_LAYA_LIB_DIR";
 
     private static SymbolLookup load() {
         Arena global = Arena.global();
-        String path = System.getProperty("ducktape.laya.library");
-        if (path != null && !path.isEmpty()) return open(Path.of(path), global);
-        String dir = System.getenv("DUCKTAPE_LAYA_LIB_DIR");
-        if (dir != null && !dir.isEmpty()) return open(Path.of(dir, LIB), global);
+        Path override = override(System.getenv("DUCKTAPE_LAYA_LIBRARY"), System.getenv("DUCKTAPE_LAYA_LIB_DIR"));
+        if (override != null) return open(override, global);
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
         String platform = platform(os, arch);
         if (platform == null)
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Unsupported platform " + os + "/" + arch + ": ducktape-laya " + RELEASED);
+            throw new LayaLoadException("Unsupported platform " + os + "/" + arch + ": ducktape-laya " + RELEASED);
         if (platform.startsWith("linux") && isMusl()) {
             // The bundled library needs glibc; only a musl build on the loader path can load.
             SymbolLookup system = systemLibrary(platform, global);
@@ -130,8 +152,26 @@ final class Native {
         if (bundled != null) return bundled;
         SymbolLookup system = systemLibrary(platform, global);
         if (system != null) return system;
-        throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "The ducktape-laya jar bundles no library for " + platform
-            + " and " + systemSearch(platform) + "; set -Dducktape.laya.library or DUCKTAPE_LAYA_LIB_DIR");
+        throw new LayaLoadException("The ducktape-laya jar bundles no library for " + platform
+            + " and " + systemSearch(platform) + "; set DUCKTAPE_LAYA_LIBRARY or DUCKTAPE_LAYA_LIB_DIR");
+    }
+
+    /** The library file the environment names: DUCKTAPE_LAYA_LIBRARY (a file), else DUCKTAPE_LAYA_LIB_DIR (a directory), both absolute; null when neither is set. */
+    static Path override(String library, String dir) {
+        if (library != null && !library.isEmpty()) return absolute("DUCKTAPE_LAYA_LIBRARY", library);
+        if (dir != null && !dir.isEmpty()) return absolute("DUCKTAPE_LAYA_LIB_DIR", dir).resolve(LIB);
+        return null;
+    }
+
+    private static Path absolute(String name, String value) {
+        Path path;
+        try {
+            path = Path.of(value);
+        } catch (InvalidPathException e) {
+            throw new LayaLoadException(name + " is not a valid path: " + e.getMessage(), e);
+        }
+        if (!path.isAbsolute()) throw new LayaLoadException(name + " must be an absolute path, got " + value);
+        return path;
     }
 
     /** Where {@link #systemLibrary} looks, for error messages. */
@@ -176,11 +216,11 @@ final class Native {
         return "it needs macOS 14 or newer";
     }
 
-    static LayaException muslUnsupported() {
-        return new LayaException(LayaException.UNSUPPORTED_PLATFORM,
+    static LayaLoadException muslUnsupported() {
+        return new LayaLoadException(
             "The bundled ducktape-laya library needs glibc, and this looks like a musl system (for example Alpine), "
             + "and no musl build of libducktape_laya.so.1 is on the loader path; use a glibc-based image, or set "
-            + "-Dducktape.laya.library or DUCKTAPE_LAYA_LIB_DIR to a musl build");
+            + "DUCKTAPE_LAYA_LIBRARY or DUCKTAPE_LAYA_LIB_DIR to a musl build");
     }
 
     /** True on a musl system: a musl dynamic loader is present and no glibc one is. */
@@ -208,12 +248,12 @@ final class Native {
     private static SymbolLookup open(Path path, Arena arena) {
         // macOS dyld would otherwise fall back to DYLD_LIBRARY_PATH for a missing path.
         if (!Files.isRegularFile(path))
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot load " + path + ": no such file");
+            throw new LayaLoadException("Cannot load " + path + ": no such file");
         SymbolLookup lookup;
         try {
             lookup = SymbolLookup.libraryLookup(path, arena);
         } catch (RuntimeException e) {
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot load " + path + ": " + e.getMessage(), e);
+            throw new LayaLoadException("Cannot load " + path + ": " + e.getMessage(), e);
         }
         requireImage(lookup, path, arena);
         return lookup;
@@ -238,13 +278,13 @@ final class Native {
                 MemorySegment name = info.get(PTR, 0);
                 if (found != 0 && name.address() != 0) loaded = name.reinterpret(Long.MAX_VALUE).getString(0);
             }
-        } catch (LayaException e) {
+        } catch (LayaLoadException e) {
             throw e;
         } catch (Throwable t) {
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot check which file provides " + expected + ": " + t, t);
+            throw new LayaLoadException("Cannot check which file provides " + expected + ": " + t, t);
         }
         if (loaded == null || !realPath(Path.of(loaded)).equals(realPath(expected)))
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Refusing the ducktape-laya native library: " + expected
+            throw new LayaLoadException("Refusing the ducktape-laya native library: " + expected
                 + " was requested but dtl_abi_version comes from " + loaded + "; DYLD_LIBRARY_PATH may have replaced it. Unset DYLD_LIBRARY_PATH.");
     }
 
@@ -265,7 +305,7 @@ final class Native {
             if (in == null) return null;
             bytes = in.readAllBytes();
         } catch (IOException e) {
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot read bundled library: " + e.getMessage(), e);
+            throw new LayaLoadException("Cannot read bundled library: " + e.getMessage(), e);
         }
         Path dir = null;
         Path file;
@@ -279,14 +319,14 @@ final class Native {
             }
         } catch (IOException e) {
             if (dir != null) deleteTree(dir);
-            throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Cannot extract bundled library: " + e.getMessage(), e);
+            throw new LayaLoadException("Cannot extract bundled library: " + e.getMessage(), e);
         }
         try {
             SymbolLookup lookup;
             try {
                 lookup = SymbolLookup.libraryLookup(file, arena);
             } catch (RuntimeException e) {
-                throw new LayaException(LayaException.UNSUPPORTED_PLATFORM, "Found the bundled library " + resource
+                throw new LayaLoadException("Found the bundled library " + resource
                     + " but it could not be loaded (extracted to " + file + "): " + e.getMessage() + " (" + loadHint(platform) + ")", e);
             }
             requireImage(lookup, file, arena);
@@ -562,6 +602,6 @@ final class Native {
     static RuntimeException sneaky(Throwable t) {
         if (t instanceof RuntimeException r) return r;
         if (t instanceof Error e) throw e;
-        return new LayaException(LayaException.INFERENCE_ERROR, "Native call failed: " + t, t);
+        return new LayaException(Status.INFERENCE_ERROR, "Native call failed: " + t, t);
     }
 }

@@ -73,7 +73,7 @@ internal static unsafe partial class Native
     /// <summary>Native <c>dtl_cancel_flag</c>: a should_cancel that never calls into managed code.</summary>
     internal static delegate* unmanaged<void*, uint> CancelFlag;
 
-    /// <summary>Loads and validates the native library. Success is cached; failures are rethrown on every call.</summary>
+    /// <summary>Loads and validates the native library. Success is cached; a failure is not, so the next call tries again.</summary>
     internal static void Ensure()
     {
         if (Volatile.Read(ref _ready)) return;
@@ -92,10 +92,65 @@ internal static unsafe partial class Native
         }
     }
 
-    static LayaException Incompatible(string why) =>
-        new((int)LayaStatus.UnsupportedPlatform, $"The ducktape_laya native library is incompatible or too old: {why}.");
+    static LayaLoadException Incompatible(string why) =>
+        new($"The ducktape_laya native library is incompatible or too old: {why}.");
 
-    static LayaException LoadError(string message, Exception? inner = null) => new((int)LayaStatus.UnsupportedPlatform, message, inner);
+    static LayaLoadException LoadError(string message, Exception? inner = null) => new(message, inner);
+
+    /// <summary>This package's version: the informational version without the build metadata after '+'.</summary>
+    internal static string PackageVersion()
+    {
+        var text = typeof(Native).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
+        var plus = text.IndexOf('+');
+        return plus < 0 ? text : text[..plus];
+    }
+
+    /// <summary>Throws status 7 unless the runtime info JSON (<c>dtl_info(NULL)</c>) reports <c>package_version</c> equal to <paramref name="expected"/>.</summary>
+    internal static void CheckVersion(string infoJson, string expected)
+    {
+        string version = "unknown";
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(infoJson);
+            if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("package_version", out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String)
+                version = v.GetString()!;
+        }
+        catch (System.Text.Json.JsonException) { }
+        if (version != expected)
+            throw LoadError($"The native ducktape_laya library is version {version}, but this package is {expected}; "
+                + "another copy of the library was loaded instead of the one shipped with the package.");
+    }
+
+    // dtl_info(NULL) of a loaded library, as text.
+    static string ReadRuntimeInfo(IntPtr handle)
+    {
+        if (!NativeLibrary.TryGetExport(handle, "dtl_info", out var info) || !NativeLibrary.TryGetExport(handle, "dtl_free", out var free))
+            throw Incompatible("it does not export dtl_info and dtl_free");
+        byte* result = null, error = null;
+        var status = ((delegate* unmanaged<void*, byte**, byte**, int>)info)(null, &result, &error);
+        try
+        {
+            if (status != 0 || result == null) throw Incompatible($"dtl_info failed with status {status}");
+            return Marshal.PtrToStringUTF8((IntPtr)result) ?? "";
+        }
+        finally
+        {
+            ((delegate* unmanaged<void*, void>)free)(result);
+            ((delegate* unmanaged<void*, void>)free)(error);
+        }
+    }
+
+    /// <summary>The file an override names: <c>DUCKTAPE_LAYA_LIBRARY</c> (a file), else <c>DUCKTAPE_LAYA_LIB_DIR</c> (a directory) plus the platform's
+    /// file name; null when neither is set. Both must be absolute paths (status 7).</summary>
+    internal static string? OverridePath(string? library, string? dir)
+    {
+        if (!string.IsNullOrEmpty(library))
+            return System.IO.Path.IsPathRooted(library) ? library : throw LoadError($"DUCKTAPE_LAYA_LIBRARY must be an absolute path, got {library}.");
+        if (!string.IsNullOrEmpty(dir))
+            return System.IO.Path.IsPathRooted(dir) ? System.IO.Path.Combine(dir, FileName) : throw LoadError($"DUCKTAPE_LAYA_LIB_DIR must be an absolute path, got {dir}.");
+        return null;
+    }
 
     const string LibSystem = "/usr/lib/libSystem.B.dylib";
 
@@ -143,6 +198,7 @@ internal static unsafe partial class Native
         if (version != 2) throw Incompatible($"it reports ABI version {version}, expected 2");
         if (!NativeLibrary.TryGetExport(handle, "dtl_cancel_flag", out var cancel))
             throw Incompatible("it does not export dtl_cancel_flag");
+        CheckVersion(ReadRuntimeInfo(handle), PackageVersion());
         return cancel;
     }
 
@@ -181,26 +237,25 @@ internal static unsafe partial class Native
         return musl && !glibc;
     }
 
-    internal static LayaException MuslUnsupported() => LoadError(
+    internal static LayaLoadException MuslUnsupported() => LoadError(
         "The bundled ducktape_laya library needs glibc, and this looks like a musl system (for example Alpine), and no musl build of "
-        + "libducktape_laya.so.1 is on the loader path; use a glibc-based image, or set DUCKTAPE_LAYA_LIB_DIR to a musl build.");
+        + "libducktape_laya.so.1 is on the loader path; use a glibc-based image, or set DUCKTAPE_LAYA_LIBRARY or DUCKTAPE_LAYA_LIB_DIR to a musl build.");
 
     // macOS never loads a bare name (dyld would search DYLD_LIBRARY_PATH, the rpaths and the current directory):
     // installed libraries are loaded by absolute path from Homebrew's directory and the CMake install default.
     static readonly string[] MacOSLibraryDirs = ["/opt/homebrew/lib", "/usr/local/lib"];
 
     // Released packages; any other platform needs a library built from source.
-    const string Released = "packages exist for Linux x86-64 and arm64, macOS arm64 and x86-64 and Windows x64; on other platforms build the library from source and set DUCKTAPE_LAYA_LIB_DIR";
+    const string Released = "packages exist for Linux x86-64 and arm64, macOS arm64 and x86-64 and Windows x64; on other platforms build the library from source and set DUCKTAPE_LAYA_LIBRARY or DUCKTAPE_LAYA_LIB_DIR";
 
     static (IntPtr, IntPtr) Load()
     {
         // An explicit override is honoured or fails; it never falls back to other locations.
-        var dir = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR");
-        if (!string.IsNullOrEmpty(dir))
+        var library = Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIBRARY");
+        if (OverridePath(library, Environment.GetEnvironmentVariable("DUCKTAPE_LAYA_LIB_DIR")) is { } file)
         {
-            var file = System.IO.Path.Combine(dir, FileName);
             if (OperatingSystem.IsMacOS()) file = System.IO.Path.GetFullPath(file);
-            return Checked(LoadFile(file, "DUCKTAPE_LAYA_LIB_DIR is set but", null), file);
+            return Checked(LoadFile(file, string.IsNullOrEmpty(library) ? "DUCKTAPE_LAYA_LIB_DIR is set but" : "DUCKTAPE_LAYA_LIBRARY is set but", null), file);
         }
         // On a glibc system, the copy shipped with the package (runtimes/<rid>/native/, or next to the assembly) comes
         // first, so an unrelated installed version of the library cannot shadow it; present, it must load. On musl
@@ -233,14 +288,14 @@ internal static unsafe partial class Native
         throw LoadError(RuntimeId() is null
             ? $"Unsupported platform {RuntimeInformation.OSDescription} {RuntimeInformation.ProcessArchitecture}: ducktape-laya {Released}."
             : $"{FileName} was not found: the application has no bundled copy (runtimes/{RuntimeId()}/native/) and the system loader has none. "
-              + $"Install the DucktapeLaya package for this platform, or set DUCKTAPE_LAYA_LIB_DIR (ducktape-laya {Released}).", missing);
+              + $"Install the DucktapeLaya package for this platform, or set DUCKTAPE_LAYA_LIBRARY or DUCKTAPE_LAYA_LIB_DIR (ducktape-laya {Released}).", missing);
     }
 
     // expected is the file that must provide the library (checked on macOS only).
     static (IntPtr, IntPtr) Checked(IntPtr handle, string? expected)
     {
         try { return (handle, Validate(handle, OperatingSystem.IsMacOS() ? expected : null)); }
-        catch (LayaException)
+        catch (LayaLoadException)
         {
             NativeLibrary.Free(handle);
             throw;

@@ -36,7 +36,7 @@
         <version>3.2.0</version>
         <executions>
           <execution>
-            <id>layatest</id>
+            <id>enginetest</id>
             <phase>test</phase>
             <goals><goal>exec</goal></goals>
             <configuration>
@@ -45,7 +45,7 @@
                 <argument>--enable-native-access=ALL-UNNAMED</argument>
                 <argument>-cp</argument>
                 <argument>${project.build.outputDirectory}${path.separator}${project.build.testOutputDirectory}</argument>
-                <argument>io.github.adrian729.laya.LayaTest</argument>
+                <argument>io.github.adrian729.laya.EngineTest</argument>
               </arguments>
             </configuration>
           </execution>
