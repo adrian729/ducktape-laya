@@ -329,6 +329,7 @@ public class EngineTests
             options.Timeout = null;
             var oce = Assert.Throws<OperationCanceledException>(() => engine.Execute("{}", options, cancelled.Token));
             Assert.Equal(cancelled.Token, oce.CancellationToken);
+            Assert.Equal(Status.Cancelled, Assert.IsType<LayaException>(oce.InnerException).Status);
             Assert.Empty(events);
             // Closed beats everything.
             engine.Dispose();

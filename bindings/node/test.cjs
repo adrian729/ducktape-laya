@@ -147,7 +147,9 @@ test('runtime and model diagnostics share native identity', { skip: !process.env
     const info = await engine.info();
     assert.equal(info.model.decision_type, 'laya');
     assert.ok(info.model.temperatures.noul > 0);
-    delete info.model; assert.deepEqual(info, runtime);
+    // An engine adds its model and its own max_windows_per_call to the runtime's identity.
+    assert.equal(info.max_windows_per_call, 256);
+    delete info.model; delete info.max_windows_per_call; assert.deepEqual(info, runtime);
   } finally { await engine.close(); }
   await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED' });
 });

@@ -202,8 +202,9 @@ class Basics(unittest.TestCase):
 
     def test_explicit_library_is_honoured(self):
         info = 'import ducktape_laya; ducktape_laya.runtime_info()'
-        for variable, value, message in (('DUCKTAPE_LAYA_LIB_DIR', '/nonexistent', 'DUCKTAPE_LAYA_LIB_DIR is set'),
-                                         ('DUCKTAPE_LAYA_LIBRARY', '/nonexistent/lib.so', 'DUCKTAPE_LAYA_LIBRARY is set'),
+        missing = os.path.abspath(os.sep + 'nonexistent')  # absolute on this OS (with a drive on Windows)
+        for variable, value, message in (('DUCKTAPE_LAYA_LIB_DIR', missing, 'DUCKTAPE_LAYA_LIB_DIR is set'),
+                                         ('DUCKTAPE_LAYA_LIBRARY', os.path.join(missing, 'lib.so'), 'DUCKTAPE_LAYA_LIBRARY is set'),
                                          ('DUCKTAPE_LAYA_LIBRARY', 'relative.so', 'DUCKTAPE_LAYA_LIBRARY must be an absolute path')):
             result = self._child(info, **{variable: value})
             self.assertNotEqual(result.returncode, 0)

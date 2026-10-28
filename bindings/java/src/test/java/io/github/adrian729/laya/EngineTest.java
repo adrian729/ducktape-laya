@@ -446,7 +446,9 @@ public final class EngineTest {
         RouterConfig router = new RouterConfig(Map.of(
             "b", new RouterConfig.Route(Path.of("/m/b.gguf"), Config.none().withContextTokens(64)),
             "a", new RouterConfig.Route(Path.of("/m/a.gguf"))), 2, new RouterConfig.Auto("a", "b"));
-        eq("{\"models\":{\"a\":{\"path\":\"/m/a.gguf\"},\"b\":{\"path\":\"/m/b.gguf\",\"config\":{\"context_tokens\":64}}},"
+        // Paths are written as the OS renders them (backslashes on Windows, escaped in JSON).
+        String a = Path.of("/m/a.gguf").toString().replace("\\", "\\\\"), b = Path.of("/m/b.gguf").toString().replace("\\", "\\\\");
+        eq("{\"models\":{\"a\":{\"path\":\"" + a + "\"},\"b\":{\"path\":\"" + b + "\",\"config\":{\"context_tokens\":64}}},"
             + "\"max_loaded\":2,\"auto\":{\"english\":\"a\",\"default\":\"b\"}}", router.toJson(), "router json");
         eq("{\"models\":{}}", new RouterConfig(Map.of()).toJson(), "empty router");
     }

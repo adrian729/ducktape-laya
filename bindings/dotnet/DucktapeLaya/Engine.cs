@@ -159,7 +159,9 @@ public sealed unsafe class Engine : IDisposable
         if (_closing) throw new EngineClosedException();
         var bytes = Encode(request, "request");
         var timeoutMs = TimeoutMs(timeout);
-        token.ThrowIfCancellationRequested();
+        // The same shape as a cancellation during the call: the inner LayaException carries the status.
+        if (token.IsCancellationRequested)
+            throw new OperationCanceledException("The call was cancelled", new LayaException(Status.Cancelled, "The call was cancelled"), token);
         var native = Native.dtl_default_call_options();
         native.RequestId = requestId;
         native.TimeoutMs = timeoutMs;

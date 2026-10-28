@@ -47,7 +47,7 @@ public class Probe {
             System.err.println("the bundled library loaded on musl");
             System.exit(1);
         } catch (io.github.adrian729.laya.LayaException e) {
-            if (e.status() != 7 || !e.getMessage().contains("needs glibc, and this looks like a musl system")) {
+            if (e.status() != io.github.adrian729.laya.Status.UNSUPPORTED_PLATFORM || !e.getMessage().contains("needs glibc, and this looks like a musl system")) {
                 e.printStackTrace();
                 System.exit(1);
             }
