@@ -50,30 +50,39 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 )
 
-// Native status codes (dtl_status).
+// Status is a native status code (dtl_status). The values are written out so
+// the binding-abi policy check can compare them with ducktape_laya.h.
+type Status int32
+
 const (
-	StatusOK                  = 0
-	StatusInvalidArgument     = 1
-	StatusModelError          = 2
-	StatusInferenceError      = 3
-	StatusOutOfMemory         = 4
-	StatusCancelled           = 5
-	StatusDeadlineExceeded    = 6
-	StatusUnsupportedPlatform = 7
+	StatusOK                  Status = 0
+	StatusInvalidArgument     Status = 1
+	StatusModelError          Status = 2
+	StatusInferenceError      Status = 3
+	StatusOutOfMemory         Status = 4
+	StatusCancelled           Status = 5
+	StatusDeadlineExceeded    Status = 6
+	StatusUnsupportedPlatform Status = 7
 )
 
 const maxTimeoutMs = 86400000
 
-// Error is a failed native operation.
+// Error is a failed operation: a native failure, or an argument or lifecycle
+// error the binding reports with the status the core would use.
 type Error struct {
-	Status  int32
+	Status  Status
 	Message string
+	err     error
 }
 
 func (e *Error) Error() string { return e.Message }
+
+// Unwrap returns the sentinel behind the error (ErrClosed), if any.
+func (e *Error) Unwrap() error { return e.err }
 
 // Is lets errors.Is match status 5 with context.Canceled and status 6 with
 // context.DeadlineExceeded.
@@ -89,16 +98,21 @@ func (e *Error) Is(target error) bool {
 
 func ctxError(err error) *Error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return &Error{StatusDeadlineExceeded, "Laya call deadline exceeded"}
+		return &Error{Status: StatusDeadlineExceeded, Message: "Laya call deadline exceeded"}
 	}
-	return &Error{StatusCancelled, "Laya call cancelled"}
+	return &Error{Status: StatusCancelled, Message: "Laya call cancelled"}
 }
 
-func invalid(msg string) *Error { return &Error{StatusInvalidArgument, msg} }
+func invalid(msg string) *Error { return &Error{Status: StatusInvalidArgument, Message: msg} }
 
-// ErrClosed is returned by calls made after Close. Match it with errors.Is; it
-// is also an *Error with StatusInvalidArgument.
-var ErrClosed error = &Error{StatusInvalidArgument, "Engine is closed"}
+// ErrClosed is the sentinel behind every error returned by a call on a closed
+// engine. Match it with errors.Is. Each such error is a fresh *Error with
+// StatusInvalidArgument that wraps ErrClosed; nothing shared is returned.
+var ErrClosed = errors.New("laya: engine is closed")
+
+func closedError() *Error {
+	return &Error{Status: StatusInvalidArgument, Message: "Engine is closed", err: ErrClosed}
+}
 
 func cstring(s string) (*C.char, error) {
 	if strings.IndexByte(s, 0) >= 0 {
@@ -118,13 +132,13 @@ func check(status C.dtl_status, msg *C.char) error {
 	if msg != nil {
 		text = C.GoString(msg)
 	}
-	return &Error{int32(status), text}
+	return &Error{Status: Status(status), Message: text}
 }
 
 // checkABI refuses a library built for a different C ABI version.
 func checkABI() error {
 	if v := uint32(C.dtl_abi_version()); v != 2 {
-		return &Error{StatusUnsupportedPlatform, fmt.Sprintf("Native ducktape-laya ABI %d is not supported (expected 2)", v)}
+		return &Error{Status: StatusUnsupportedPlatform, Message: fmt.Sprintf("Native ducktape-laya ABI %d is not supported (expected 2)", v)}
 	}
 	return nil
 }
@@ -142,7 +156,7 @@ func readInfo(handle unsafe.Pointer) (string, error) {
 		return "", err
 	}
 	if result == nil {
-		return "", &Error{StatusInferenceError, "Native result was null"}
+		return "", &Error{Status: StatusInferenceError, Message: "Native result was null"}
 	}
 	return C.GoString(result), nil
 }
@@ -158,14 +172,14 @@ type CallOptions struct {
 	// OnEvent receives passive events synchronously on the calling
 	// goroutine's thread, outside native locks. Panics are contained. It may
 	// reenter the engine, but must not wait for a call that waits on this one.
-	// Do not call Close from inside it (Close waits for the running call and
-	// would deadlock); use CloseDeferred instead.
+	// Close called from inside it, on the same goroutine, does not wait for
+	// the running call: the engine is closed at once and released when the
+	// call returns.
 	OnEvent func(eventJSON string)
 }
 
 // Engine owns a native model engine or router. It is safe for concurrent use;
-// native calls on one handle are serialized. Call Close (or CloseDeferred) for
-// prompt release; a finalizer releases the handle as a safety net if an Engine
+// native calls on one handle are serialized. Call Close for prompt release; a finalizer releases the handle as a safety net if an Engine
 // becomes unreachable without being closed.
 type Engine struct {
 	c *engineCore
@@ -180,9 +194,12 @@ type engineCore struct {
 	idle     *sync.Cond
 	active   int
 	closed   bool
-	deferred bool // CloseDeferred: the last running call releases
-	handle   unsafe.Pointer
-	done     chan struct{} // closed once the handle has been released
+	deferred bool // closed from a callback: the last running call releases
+	// callbacks counts, per goroutine id, the calls whose OnEvent may run on
+	// that goroutine; Close from such a goroutine must not wait.
+	callbacks map[uint64]int
+	handle    unsafe.Pointer
+	done      chan struct{} // closed once the handle has been released
 }
 
 func newEngine(handle unsafe.Pointer) *Engine {
@@ -193,61 +210,171 @@ func newEngine(handle unsafe.Pointer) *Engine {
 	return e
 }
 
-// Config holds open-time settings. A nil *Config or zero fields select the
-// engine defaults; only set fields are sent to the native library.
+// Config holds open-time settings. A nil *Config selects the engine defaults.
+// Go's documented exception to the other bindings: a zero field means unset
+// and is not sent, so 0 cannot be passed to the core to be rejected. Every
+// value that is sent is validated by the core (status 1), not here; the
+// binding rejects only what JSON cannot carry (invalid UTF-8, non-finite
+// numbers).
 type Config struct {
-	// Threads is 0 (automatic: at most 4 and at most the CPUs the process may use) or 1..256.
+	// Threads is 1..256; 0 keeps the default (automatic: at most 4 and at
+	// most the CPUs the process may use).
 	Threads uint32
 	// ContextTokens is the capacity reserved for one prompt (32 up to the
 	// model's trained length; default 512). 0 keeps the default.
 	ContextTokens uint32
+	// MaxWindowsPerCall bounds the forward passes one call may plan (1..4096;
+	// default 256). 0 keeps the default. A router takes it only in its shared
+	// config, where it bounds the whole call.
+	MaxWindowsPerCall uint32
 	// Overflow is the engine-wide policy for prompts over the token limit:
 	// "reject" (default), "truncate_end", "truncate_start" or "scan". A
 	// request's own "overflow" wins. Empty keeps the default.
 	Overflow string
 	// Temperatures overrides calibration temperatures keyed like the GGUF
-	// metadata, e.g. "choice", "choice.3_5", "noul.2". Values must be finite
-	// and > 0.
+	// metadata, e.g. "choice", "choice.3_5", "noul.2".
 	Temperatures map[string]float64
 }
 
-// configJSON serializes c with sorted temperature keys; nil when there is
-// nothing to send.
+// configBody is the JSON shape of a Config (native keys).
+type configBody struct {
+	Threads           uint32             `json:"threads,omitempty"`
+	ContextTokens     uint32             `json:"context_tokens,omitempty"`
+	MaxWindowsPerCall uint32             `json:"max_windows_per_call,omitempty"`
+	Overflow          string             `json:"overflow,omitempty"`
+	Temperatures      map[string]float64 `json:"temperatures,omitempty"`
+}
+
+// marshal serializes c with sorted temperature keys. json.Marshal would
+// replace invalid UTF-8 with U+FFFD, so the strings are checked first.
+func (c *Config) marshal() ([]byte, error) {
+	if !utf8.ValidString(c.Overflow) {
+		return nil, invalid("Invalid config: overflow is not valid UTF-8")
+	}
+	for key := range c.Temperatures {
+		if !utf8.ValidString(key) {
+			return nil, invalid("Invalid config: a temperature key is not valid UTF-8")
+		}
+	}
+	data, err := json.Marshal(configBody{c.Threads, c.ContextTokens, c.MaxWindowsPerCall, c.Overflow, c.Temperatures}) // map keys are emitted sorted
+	if err != nil {
+		return nil, invalid("Invalid config: " + err.Error())
+	}
+	return data, nil
+}
+
+// configJSON is nil when there is nothing to send.
 func configJSON(c *Config) (*C.char, error) {
 	if c == nil {
 		return nil, nil
 	}
-	var body struct {
-		Threads       uint32             `json:"threads,omitempty"`
-		ContextTokens uint32             `json:"context_tokens,omitempty"`
-		Overflow      string             `json:"overflow,omitempty"`
-		Temperatures  map[string]float64 `json:"temperatures,omitempty"`
-	}
-	body.Threads, body.ContextTokens, body.Overflow, body.Temperatures = c.Threads, c.ContextTokens, c.Overflow, c.Temperatures
-	data, err := json.Marshal(body) // map keys are emitted sorted
+	data, err := c.marshal()
 	if err != nil {
-		return nil, invalid("Invalid config: " + err.Error())
+		return nil, err
 	}
 	return cstring(string(data))
 }
 
-// Open loads a local GGUF model. config may be nil for defaults.
+// AutoRoutes names the routes `"model": "auto"` chooses between by the
+// state's language.
+type AutoRoutes struct {
+	English string
+	Default string
+}
+
+// Route is one router entry. Path travels in JSON, so it must be valid UTF-8.
+// A non-nil Config overrides the router's shared config key by key; it must
+// not set MaxWindowsPerCall.
+type Route struct {
+	Path   string
+	Config *Config
+}
+
+// RouterConfig describes a bounded, lazy local model registry. MaxLoaded 0
+// keeps the library default (1), like the other zero values.
+type RouterConfig struct {
+	Models    map[string]Route
+	MaxLoaded int
+	Auto      *AutoRoutes
+}
+
+// marshal serializes r with sorted route ids. Ids, paths and auto names must
+// be valid UTF-8 (json.Marshal would replace the rest).
+func (r *RouterConfig) marshal() (string, error) {
+	if r == nil {
+		return "", invalid("Router config is nil")
+	}
+	models := make(map[string]json.RawMessage, len(r.Models))
+	for id, route := range r.Models {
+		if !utf8.ValidString(id) || !utf8.ValidString(route.Path) {
+			return "", invalid("Route id or path is not valid UTF-8")
+		}
+		var raw []byte
+		var err error
+		if route.Config == nil {
+			raw, err = json.Marshal(route.Path)
+		} else {
+			var config []byte
+			if config, err = route.Config.marshal(); err == nil {
+				raw, err = json.Marshal(struct {
+					Path   string          `json:"path"`
+					Config json.RawMessage `json:"config"`
+				}{route.Path, config})
+			}
+		}
+		if err != nil {
+			return "", invalid("Invalid router config: " + err.Error())
+		}
+		models[id] = raw
+	}
+	type auto struct {
+		English string `json:"english"`
+		Default string `json:"default"`
+	}
+	body := struct {
+		Models    map[string]json.RawMessage `json:"models"`
+		MaxLoaded int                        `json:"max_loaded,omitempty"`
+		Auto      *auto                      `json:"auto,omitempty"`
+	}{Models: models, MaxLoaded: r.MaxLoaded}
+	if r.Auto != nil {
+		if !utf8.ValidString(r.Auto.English) || !utf8.ValidString(r.Auto.Default) {
+			return "", invalid("Auto route name is not valid UTF-8")
+		}
+		body.Auto = &auto{r.Auto.English, r.Auto.Default}
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return "", invalid("Invalid router config: " + err.Error())
+	}
+	return string(data), nil
+}
+
+// Open loads a local GGUF model. config may be nil for defaults. The path
+// reaches the core as bytes, whatever its encoding.
 func Open(modelPath string, config *Config) (*Engine, error) {
 	return openNative(modelPath, config, false, "Native engine returned null")
 }
 
-// OpenRouter opens a bounded, lazy local model registry described by
-// routerJSON (see docs/API.md). config applies to every route; a route's own
-// config overrides it key by key. Requests must name a route in "model", or
-// use "model": "auto" when routerJSON has an "auto" config.
-func OpenRouter(routerJSON string, config *Config) (*Engine, error) {
+// OpenRouter opens a bounded, lazy local model registry. config applies to
+// every route; a route's own config overrides it key by key. Requests must
+// name a route in "model", or use "model": "auto" when router.Auto is set.
+func OpenRouter(router *RouterConfig, config *Config) (*Engine, error) {
+	text, err := router.marshal()
+	if err != nil {
+		return nil, err
+	}
+	return openNative(text, config, true, "Native router returned null")
+}
+
+// OpenRouterJSON is OpenRouter with the router described by JSON text (see
+// docs/API.md).
+func OpenRouterJSON(routerJSON string, config *Config) (*Engine, error) {
 	return openNative(routerJSON, config, true, "Native router returned null")
 }
 
+// openNative converts its arguments before the ABI check, so a bad argument
+// is reported the same way whatever the library.
 func openNative(first string, config *Config, router bool, nullMsg string) (*Engine, error) {
-	if err := checkABI(); err != nil {
-		return nil, err
-	}
 	arg, err := cstring(first)
 	if err != nil {
 		return nil, err
@@ -259,6 +386,9 @@ func openNative(first string, config *Config, router bool, nullMsg string) (*Eng
 	}
 	if cfg != nil {
 		defer C.free(unsafe.Pointer(cfg))
+	}
+	if err := checkABI(); err != nil {
+		return nil, err
 	}
 	var raw unsafe.Pointer
 	var msg *C.char
@@ -272,7 +402,7 @@ func openNative(first string, config *Config, router bool, nullMsg string) (*Eng
 		return nil, err
 	}
 	if raw == nil {
-		return nil, &Error{StatusModelError, nullMsg}
+		return nil, &Error{Status: StatusModelError, Message: nullMsg}
 	}
 	return newEngine(raw), nil
 }
@@ -281,7 +411,7 @@ func (e *engineCore) begin() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return ErrClosed
+		return closedError()
 	}
 	e.active++
 	return nil
@@ -318,15 +448,22 @@ func (e *engineCore) release() {
 	close(e.done)
 }
 
-// Close rejects new calls (they fail with ErrClosed), waits for all in-flight
-// calls to finish, then releases the native handle. It is idempotent, and
-// concurrent Close calls all return only after the handle is released.
+// Close rejects new calls (they fail with an error that wraps ErrClosed),
+// waits for all in-flight calls to finish, then releases the native handle. It
+// is idempotent, and concurrent Close calls all return only after the handle
+// is released.
 //
-// Close must not be called from inside an OnEvent callback of the same
-// engine: it would wait for its own call and deadlock. Use CloseDeferred
-// there.
+// Called from inside an OnEvent callback of the same engine, on the
+// callback's goroutine, Close would wait for its own call. There it does not
+// wait: it closes the engine at once and returns nil, and the running call
+// releases the handle when it returns.
 func (e *Engine) Close() error {
 	c := e.c
+	if c.inCallback() {
+		c.closeDeferred()
+		runtime.KeepAlive(e)
+		return nil
+	}
 	c.mu.Lock()
 	c.closed = true
 	for c.active > 0 {
@@ -339,13 +476,9 @@ func (e *Engine) Close() error {
 	return nil
 }
 
-// CloseDeferred marks the engine closed so new calls fail with ErrClosed and
-// returns immediately without waiting. The last running call releases the
-// handle (or it is released at once if none is running). It is the way to
-// close from inside an OnEvent callback, where Close would wait for its own
-// call and deadlock.
-func (e *Engine) CloseDeferred() {
-	c := e.c
+// closeDeferred marks the engine closed so new calls fail and returns without
+// waiting. The last running call releases the handle (at once if none runs).
+func (c *engineCore) closeDeferred() {
 	c.mu.Lock()
 	c.closed = true
 	c.deferred = true
@@ -354,7 +487,57 @@ func (e *Engine) CloseDeferred() {
 	if idle {
 		c.release()
 	}
-	runtime.KeepAlive(e)
+}
+
+// goroutineID reads the current goroutine's id from the stack header
+// ("goroutine N [running]:"); Go has no API for it.
+func goroutineID() uint64 {
+	var buf [64]byte
+	text := buf[:runtime.Stack(buf[:], false)]
+	text = text[len("goroutine "):]
+	var id uint64
+	for _, ch := range text {
+		if ch < '0' || ch > '9' {
+			break
+		}
+		id = id*10 + uint64(ch-'0')
+	}
+	return id
+}
+
+// inCallback reports whether the calling goroutine is running a call of this
+// engine that has an OnEvent callback (native callbacks run on the calling
+// goroutine, so Close there is a Close from a callback).
+func (c *engineCore) inCallback() bool {
+	c.mu.Lock()
+	any := len(c.callbacks) > 0
+	c.mu.Unlock()
+	if !any {
+		return false
+	}
+	id := goroutineID()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.callbacks[id] > 0
+}
+
+// enterCallbacks registers the calling goroutine for the duration of a call
+// with an OnEvent; the returned function unregisters it.
+func (c *engineCore) enterCallbacks() func() {
+	id := goroutineID()
+	c.mu.Lock()
+	if c.callbacks == nil {
+		c.callbacks = map[uint64]int{}
+	}
+	c.callbacks[id]++
+	c.mu.Unlock()
+	return func() {
+		c.mu.Lock()
+		if c.callbacks[id]--; c.callbacks[id] == 0 {
+			delete(c.callbacks, id)
+		}
+		c.mu.Unlock()
+	}
 }
 
 // Info reports model metadata for a single engine; routers report runtime
@@ -377,8 +560,9 @@ func (e *Engine) Execute(request string) (string, error) {
 // ExecuteContext is Execute with cooperative cancellation and deadline. A
 // cancelled ctx yields an *Error with StatusCancelled (errors.Is
 // context.Canceled), an expired deadline StatusDeadlineExceeded (errors.Is
-// context.DeadlineExceeded). An already-done ctx returns immediately without
-// a native call. No partial result is returned.
+// context.DeadlineExceeded). Errors are reported in this order: closed engine,
+// argument conversions (NUL), an already-done ctx (no native call, no events),
+// then the native call. No partial result is returned.
 func (e *Engine) ExecuteContext(ctx context.Context, request string, opts *CallOptions) (string, error) {
 	defer runtime.KeepAlive(e)
 	return e.c.call(ctx, request, opts)
@@ -395,23 +579,26 @@ func (e *engineCore) call(ctx context.Context, request string, opts *CallOptions
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := ctx.Err(); err != nil {
-		return "", ctxError(err)
+	// Order: closed, then argument conversions, then an already-done context
+	// (no native call, no events), then the native call.
+	if err := e.begin(); err != nil {
+		return "", err
 	}
+	defer e.end()
 	req, err := cstring(request)
 	if err != nil {
 		return "", err
 	}
 	defer C.free(unsafe.Pointer(req))
-	if err := e.begin(); err != nil {
-		return "", err
+	if err := ctx.Err(); err != nil {
+		return "", ctxError(err)
 	}
-	defer e.end()
 	var requestID uint64
 	var observer unsafe.Pointer
 	if opts != nil {
 		requestID = opts.RequestID
 		if onEvent := opts.OnEvent; onEvent != nil {
+			defer e.enterCallbacks()()
 			handle := cgo.NewHandle(onEvent)
 			defer handle.Delete()
 			slot := (*C.uintptr_t)(C.malloc(C.size_t(unsafe.Sizeof(C.uintptr_t(0)))))
@@ -462,7 +649,7 @@ func (e *engineCore) call(ctx context.Context, request string, opts *CallOptions
 		return "", err
 	}
 	if result == nil {
-		return "", &Error{StatusInferenceError, "Native result was null"}
+		return "", &Error{Status: StatusInferenceError, Message: "Native result was null"}
 	}
 	return C.GoString(result), nil
 }
