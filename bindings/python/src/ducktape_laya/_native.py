@@ -1,5 +1,6 @@
 """ctypes declarations for the ABI 2 C interface in ducktape_laya.h."""
 import ctypes
+import json
 import os
 import pathlib
 import platform
@@ -71,20 +72,23 @@ def _load_path(cdll, path, plat):
 
 def _open(cdll=ctypes.CDLL, machine=None, plat=None, bundled=None):
     plat = plat or sys.platform
-    explicit = os.environ.get('DUCKTAPE_LAYA_LIB_DIR')
-    if explicit:  # an explicit choice is honoured or fails; never a silent fallback
-        path = pathlib.Path(explicit, _NAME)
-        if plat == 'darwin':
-            path = pathlib.Path(os.path.abspath(path))
-        # macOS dyld would otherwise fall back to DYLD_LIBRARY_PATH for a missing path.
-        if not path.is_file():
-            raise LayaLoadError(f'DUCKTAPE_LAYA_LIB_DIR is set but {path} does not exist')
+    # An explicit choice is honoured or fails; never a silent fallback. Both variables must be absolute
+    # (a relative path would depend on the working directory).
+    for variable, directory in (('DUCKTAPE_LAYA_LIBRARY', False), ('DUCKTAPE_LAYA_LIB_DIR', True)):
+        explicit = os.environ.get(variable)
+        if not explicit:
+            continue
+        path = pathlib.Path(explicit, _NAME) if directory else pathlib.Path(explicit)
+        if not os.path.isabs(explicit):
+            raise LayaLoadError(f'{variable} must be an absolute path, got {explicit}')
+        if not path.is_file():  # also stops macOS dyld from falling back to DYLD_LIBRARY_PATH
+            raise LayaLoadError(f'{variable} is set but {path} does not exist')
         try:
             return _load_path(cdll, str(path), plat)
         except LayaLoadError:  # a library dyld replaced (also an OSError)
             raise
         except OSError as error:
-            raise LayaLoadError(f'DUCKTAPE_LAYA_LIB_DIR is set but {path} could not be loaded: {error}') from error
+            raise LayaLoadError(f'{variable} is set but {path} could not be loaded: {error}') from error
     target, is_bundled = _target(machine, plat, bundled)
     if is_bundled or plat == 'darwin':
         what = 'The bundled library' if is_bundled else 'The installed library'
@@ -125,7 +129,19 @@ def _target(machine=None, plat=None, bundled=None):
     return _VERSIONED, False
 
 
-def load():
+def check_version(info_json, expected):
+    """Refuse a library of another package version than this package (for example one the loader found
+    elsewhere); ``info_json`` is the text ``dtl_info(NULL)`` returns."""
+    try:
+        version = json.loads(info_json).get('package_version')
+    except (ValueError, AttributeError):
+        version = None
+    if version != expected:
+        raise LayaLoadError(f'The native ducktape-laya library is version {version}, but this package is {expected}; '
+                            f'another copy of the library was loaded instead of the one shipped with the package')
+
+
+def load(expected_version):
     lib = _open()
     handle = ctypes.c_void_p
     status = ctypes.c_int32
@@ -148,4 +164,13 @@ def load():
         function.restype, function.argtypes = restype, argtypes
     if lib.dtl_abi_version() != 2:
         raise LayaLoadError(f'Native ducktape-laya ABI {lib.dtl_abi_version()} is not supported (expected 2)')
+    result, error = ctypes.c_void_p(), ctypes.c_void_p()
+    status = lib.dtl_info(None, ctypes.byref(result), ctypes.byref(error))
+    text = ctypes.string_at(result.value).decode('utf-8', 'replace') if result.value else None
+    for pointer in (result, error):
+        if pointer.value:
+            lib.dtl_free(pointer)
+    if status or text is None:
+        raise LayaLoadError(f'Native ducktape-laya library {lib._name} failed its version query (status {status})')
+    check_version(text, expected_version)
     return lib

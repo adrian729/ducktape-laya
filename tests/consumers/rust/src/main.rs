@@ -1,7 +1,8 @@
 // Usage: decide model.gguf [config.json] [--requests FILE... [--fresh-engine]] < request.json
 // With --requests: one engine for all files (one per file with --fresh-engine), one result line per file.
 use std::io::Read;
-const USAGE: &str = "Usage: decide model.gguf [config.json] [--requests FILE... [--fresh-engine]] < request.json";
+const USAGE: &str =
+    "Usage: decide model.gguf [config.json] [--requests FILE... [--fresh-engine]] < request.json";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let path = args.first().ok_or(USAGE)?;
@@ -46,15 +47,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(policy) = body["overflow"].as_str() {
         config = config.overflow(policy);
     }
+    if let Some(n) = body["max_windows_per_call"].as_u64() {
+        config = config.max_windows_per_call(n as u32);
+    }
     if let Some(map) = body["temperatures"].as_object() {
+        let mut entries = Vec::new();
         for (key, value) in map {
-            config = config.temperature(key.clone(), value.as_f64().ok_or("bad temperature")?);
+            entries.push((key.clone(), value.as_f64().ok_or("bad temperature")?));
         }
+        config = config.temperatures(entries);
     }
     let Some(files) = files else {
         let mut request = String::new();
         std::io::stdin().read_to_string(&mut request)?;
-        let engine = ducktape_laya::Engine::open(path, &config)?;
+        let engine = ducktape_laya::Engine::open_with(path, &config)?;
         println!("{}", engine.execute(&request)?);
         return Ok(());
     };
@@ -62,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for file in files {
         let request = std::fs::read_to_string(&file)?;
         if engine.is_none() {
-            engine = Some(ducktape_laya::Engine::open(path, &config)?);
+            engine = Some(ducktape_laya::Engine::open_with(path, &config)?);
         }
         println!("{}", engine.as_ref().unwrap().execute(&request)?);
         if fresh {
