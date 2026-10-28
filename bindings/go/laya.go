@@ -41,6 +41,7 @@ static dtl_status run(void *handle, const char *request, uint64_t request_id,
 import "C"
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -490,19 +491,25 @@ func (c *engineCore) closeDeferred() {
 }
 
 // goroutineID reads the current goroutine's id from the stack header
-// ("goroutine N [running]:"); Go has no API for it.
-func goroutineID() uint64 {
+// ("goroutine N [running]:"); Go has no API for it. ok is false when the header
+// has another form, and callers then treat the goroutine as outside any
+// callback, so Close waits as it would without this detection.
+func goroutineID() (id uint64, ok bool) {
 	var buf [64]byte
 	text := buf[:runtime.Stack(buf[:], false)]
-	text = text[len("goroutine "):]
-	var id uint64
-	for _, ch := range text {
+	const prefix = "goroutine "
+	if !bytes.HasPrefix(text, []byte(prefix)) {
+		return 0, false
+	}
+	digits := 0
+	for _, ch := range text[len(prefix):] {
 		if ch < '0' || ch > '9' {
 			break
 		}
 		id = id*10 + uint64(ch-'0')
+		digits++
 	}
-	return id
+	return id, digits > 0
 }
 
 // inCallback reports whether the calling goroutine is running a call of this
@@ -515,7 +522,10 @@ func (c *engineCore) inCallback() bool {
 	if !any {
 		return false
 	}
-	id := goroutineID()
+	id, ok := goroutineID()
+	if !ok {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.callbacks[id] > 0
@@ -524,7 +534,10 @@ func (c *engineCore) inCallback() bool {
 // enterCallbacks registers the calling goroutine for the duration of a call
 // with an OnEvent; the returned function unregisters it.
 func (c *engineCore) enterCallbacks() func() {
-	id := goroutineID()
+	id, ok := goroutineID()
+	if !ok {
+		return func() {}
+	}
 	c.mu.Lock()
 	if c.callbacks == nil {
 		c.callbacks = map[uint64]int{}

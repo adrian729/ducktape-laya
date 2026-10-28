@@ -16,14 +16,18 @@ function isMusl(dirs = ['/lib', '/lib64']) {
   return musl && !glibc;
 }
 // host describes the running system; tests substitute parts of it to simulate another one.
-// Overrides come from the environment only and must be absolute: DUCKTAPE_LAYA_LIBRARY names the addon file,
-// DUCKTAPE_LAYA_LIB_DIR a directory holding ducktape_laya.node.
+// Overrides come from the environment only and must be absolute (an empty one is unset, as in the other bindings):
+// DUCKTAPE_LAYA_LIBRARY names the addon file, DUCKTAPE_LAYA_LIB_DIR a directory holding ducktape_laya.node, either
+// directly (a build tree) or in ducktape-laya/node (an installed libdir, the directory the other bindings take).
 function resolveAddon({ platform: os = process.platform, arch = process.arch, env = process.env, musl = isMusl } = {}) {
   for (const name of ['DUCKTAPE_LAYA_LIBRARY', 'DUCKTAPE_LAYA_LIB_DIR']) {
     const value = env[name];
-    if (value === undefined) continue;
+    if (!value) continue;
     if (!path.isAbsolute(value)) throw unsupported(`${name} must be an absolute path, got ${JSON.stringify(value)}`);
-    return name === 'DUCKTAPE_LAYA_LIBRARY' ? value : path.join(value, 'ducktape_laya.node');
+    if (name === 'DUCKTAPE_LAYA_LIBRARY') return value;
+    const direct = path.join(value, 'ducktape_laya.node');
+    const installed = path.join(value, 'ducktape-laya', 'node', 'ducktape_laya.node');
+    return !fs.existsSync(direct) && fs.existsSync(installed) ? installed : direct;
   }
   const platform = `${os}-${arch}`;
   if (!PLATFORMS.includes(platform)) {

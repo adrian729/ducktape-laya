@@ -98,7 +98,13 @@ def _encode_path(path):
     except TypeError:
         raise argument_error(TypeError, 'model path must be a str, bytes or os.PathLike') from None
     if isinstance(path, str):
-        path = _encode(path, 'model path') if os.name == 'nt' else os.fsencode(path)
+        if os.name == 'nt':
+            path = _encode(path, 'model path')
+        else:
+            try:
+                path = os.fsencode(path)  # surrogateescape round-trips undecodable bytes; a lone surrogate cannot be encoded
+            except UnicodeEncodeError:
+                raise LayaError(Status.INVALID_ARGUMENT, 'model path is not valid Unicode') from None
     elif os.name == 'nt':
         try:
             path.decode('utf-8')

@@ -176,6 +176,9 @@ class Basics(unittest.TestCase):
             self.assertEqual(caught.exception.status, laya.Status.MODEL_ERROR)
         with self.assertRaises(TypeError):
             laya.Engine.open(42)
+        with self.assertRaises(laya.LayaError) as caught:  # a lone surrogate has no bytes
+            laya.Engine.open('missing-\ud800.gguf')
+        self.assertEqual(caught.exception.status, laya.Status.INVALID_ARGUMENT)
 
     def test_constructor_is_private(self):
         with self.assertRaises(TypeError):

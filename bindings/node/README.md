@@ -8,7 +8,7 @@ Local [Laya](https://github.com/NandhaKishorM/laya) decisions for Node.js and El
 - Linux x86-64 with AVX, AVX2, FMA, F16C, BMI2 and SSE4.2 and glibc 2.38+ (Ubuntu 24.04+). From 0.3.0 the package also carries Linux arm64 (Armv8.2-A with dot product and FP16), macOS arm64 and x64 (macOS 14+; arm64 needs dot product and FP16) and Windows x64 (which needs the Microsoft Visual C++ Redistributable), and picks the addon for the running platform. musl (Alpine) is not supported: loading fails with `ERR_LAYA_UNSUPPORTED`. Full matrix: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md) and the [repository README](https://github.com/adrian729/ducktape-laya#requirements).
 - A Laya GGUF model, downloaded separately. `python3 node_modules/ducktape-laya/download-model.py resources` downloads the pinned English model into `resources/` and verifies its hash ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
-On another platform, build the addon from a checkout ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md)) and set `DUCKTAPE_LAYA_LIBRARY` to the addon's absolute path (or `DUCKTAPE_LAYA_LIB_DIR` to the absolute path of the directory holding `ducktape_laya.node`; a relative path is a load error); on Windows keep `ducktape_laya.dll` next to `ducktape_laya.node`.
+On another platform, build the addon from a checkout ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md)) and set `DUCKTAPE_LAYA_LIBRARY` to the addon's absolute path (or `DUCKTAPE_LAYA_LIB_DIR` to the absolute path of the directory holding `ducktape_laya.node`, or of an installed libdir with it in `ducktape-laya/node`; a relative path is a load error); on Windows keep `ducktape_laya.dll` next to `ducktape_laya.node`.
 
 ```sh
 npm install ducktape-laya
@@ -71,7 +71,7 @@ Router requests name a route in `model`, or send `model: 'auto'` (with an option
 
 For a router, `config` applies to every route, and a route's own `config` (`threads`, `context_tokens`, `overflow`, `temperatures`) overrides it key by key.
 
-To use a build of the addon of your own, set `DUCKTAPE_LAYA_LIBRARY` to the addon's absolute path, or `DUCKTAPE_LAYA_LIB_DIR` to the absolute path of the directory with `ducktape_laya.node`. Both are read from the environment only, and a relative path is a `LayaLoadError`.
+To use a build of the addon of your own, set `DUCKTAPE_LAYA_LIBRARY` to the addon's absolute path, or `DUCKTAPE_LAYA_LIB_DIR` to the absolute path of the directory with `ducktape_laya.node` (or of an installed libdir, which keeps it in `ducktape-laya/node`). Both are read from the environment only; an empty one is unset, and a relative path is a `LayaLoadError`.
 
 ## Executing
 

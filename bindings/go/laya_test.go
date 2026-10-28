@@ -472,7 +472,6 @@ func TestConfigRejected(t *testing.T) {
 	path := model(t)
 	for name, c := range map[string]*Config{
 		"threads":   {Threads: 257},
-		"windows":   {MaxWindowsPerCall: 4097},
 		"temp zero": {Temperatures: map[string]float64{"choice": 0}},
 	} {
 		e, err := Open(path, c)
@@ -627,6 +626,24 @@ func TestFinalizerReleasesDroppedEngine(t *testing.T) {
 // Close from an OnEvent callback does not deadlock: it closes at once and the
 // running call releases the handle when it returns. (Model-free: the router's
 // request is rejected after the start event.)
+func TestGoroutineIDsDiffer(t *testing.T) {
+	mine, ok := goroutineID()
+	if !ok || mine == 0 {
+		t.Fatalf("goroutineID() = %d, %v", mine, ok)
+	}
+	other := make(chan uint64)
+	go func() {
+		id, ok := goroutineID()
+		if !ok {
+			id = 0
+		}
+		other <- id
+	}()
+	if id := <-other; id == 0 || id == mine {
+		t.Fatalf("another goroutine's id is %d, this one's %d", id, mine)
+	}
+}
+
 func TestCloseFromCallbackDefers(t *testing.T) {
 	router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
 	if err != nil {

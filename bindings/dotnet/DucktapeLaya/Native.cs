@@ -146,9 +146,9 @@ internal static unsafe partial class Native
     internal static string? OverridePath(string? library, string? dir)
     {
         if (!string.IsNullOrEmpty(library))
-            return System.IO.Path.IsPathRooted(library) ? library : throw LoadError($"DUCKTAPE_LAYA_LIBRARY must be an absolute path, got {library}.");
+            return System.IO.Path.IsPathFullyQualified(library) ? library : throw LoadError($"DUCKTAPE_LAYA_LIBRARY must be an absolute path, got {library}.");
         if (!string.IsNullOrEmpty(dir))
-            return System.IO.Path.IsPathRooted(dir) ? System.IO.Path.Combine(dir, FileName) : throw LoadError($"DUCKTAPE_LAYA_LIB_DIR must be an absolute path, got {dir}.");
+            return System.IO.Path.IsPathFullyQualified(dir) ? System.IO.Path.Combine(dir, FileName) : throw LoadError($"DUCKTAPE_LAYA_LIB_DIR must be an absolute path, got {dir}.");
         return null;
     }
 

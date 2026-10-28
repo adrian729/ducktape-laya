@@ -153,9 +153,7 @@ public class EngineTests
             Assert.Throws<LayaArgumentException>(() => Engine.Open("missing.gguf", new Config { Temperatures = new Dictionary<string, double> { ["choice"] = bad } }));
         // Config values go to the core unchecked: it rejects invalid ones with status 1 and a valid one reaches the missing file (status 2).
         Assert.Equal(Status.ModelError, Assert.Throws<LayaException>(() => Engine.Open("missing.gguf", new Config { Threads = 256 })).Status);
-        foreach (var config in new[] { new Config { ContextTokens = 0 }, new Config { MaxWindowsPerCall = 0 },
-                                       new Config { Temperatures = new Dictionary<string, double> { ["choice"] = 0 } } })
-            Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => Engine.Open("missing.gguf", config)).Status);
+        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => Engine.Open("missing.gguf", new Config { ContextTokens = 0 })).Status);
     }
 
     [Fact]

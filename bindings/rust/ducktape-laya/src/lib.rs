@@ -300,14 +300,14 @@ impl RouterConfig {
         Ok(format!("{{{}}}", parts.join(",")))
     }
 }
-/// What [`Engine::open_router`] accepts: router JSON text (`&str`, `String`) or a
-/// [`RouterConfig`] (`&RouterConfig`).
+/// What [`Engine::open_router`] accepts: router JSON text (`&str`, `&String`,
+/// `String`, anything `AsRef<str>` by reference) or a [`RouterConfig`] (`&RouterConfig`).
 pub trait RouterSource {
     fn router_json(&self) -> Result<String, Error>;
 }
-impl RouterSource for &str {
+impl<T: AsRef<str> + ?Sized> RouterSource for &T {
     fn router_json(&self) -> Result<String, Error> {
-        Ok((*self).to_owned())
+        Ok((*self).as_ref().to_owned())
     }
 }
 impl RouterSource for String {
@@ -778,7 +778,7 @@ mod tests {
         }
         let router = format!(r#"{{"models":{{"a":"{}"}}}}"#, escape(&path));
         assert_eq!(
-            Engine::open_router_with(router.as_str(), &two().threads(257))
+            Engine::open_router_with(&router, &two().threads(257))
                 .err()
                 .unwrap()
                 .status,
@@ -788,7 +788,7 @@ mod tests {
             r#"{{"models":{{"a":{{"path":"{}","config":{{"threads":999}}}}}}}}"#,
             escape(&path)
         );
-        assert!(Engine::open_router_with(bad.as_str(), &two()).is_err());
+        assert!(Engine::open_router_with(&bad, &two()).is_err());
     }
     #[test]
     fn router_auto_validation() {

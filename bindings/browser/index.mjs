@@ -112,7 +112,6 @@ export class Engine {
     if (!['wasm','webgpu','auto'].includes(backend)) throw invalid(TypeError, 'Invalid backend');
     if (onDiagnostic !== undefined && typeof onDiagnostic !== 'function') throw invalid(TypeError, 'onDiagnostic must be a function');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
-    if (signal?.aborted) throw abortedError();
     // Conversions only: the config goes to the core, which validates every value (before any download, see worker.mjs).
     const configOf = (value, what) => {
       if (value === undefined || value === null) return undefined;
@@ -127,6 +126,7 @@ export class Engine {
     const sharedConfig = configOf(config, 'config');
     wellFormedJson([entries.map(([id, model]) => [id, model.url, model.sha256]), target.maxLoaded], 'router config');
     const auto = target.auto === undefined ? undefined : JSON.parse(wellFormedJson(target.auto, 'router config'));
+    if (signal?.aborted) throw abortedError();  // after the conversions: closed, arguments, then cancellation
     const attempts = backend === 'auto' ? ['webgpu','wasm'] : [backend];
     let last;
     for (const selected of attempts) {

@@ -367,7 +367,15 @@ test('overrides must be absolute paths: a relative one is a load error', async (
   const env = { DUCKTAPE_LAYA_LIB_DIR: '/opt/laya' };
   assert.equal(resolveAddon({ env }), path.join('/opt/laya', 'ducktape_laya.node'));
   assert.equal(resolveAddon({ env: { ...env, DUCKTAPE_LAYA_LIBRARY: '/elsewhere/a.node' } }), '/elsewhere/a.node');
-  assert.throws(() => resolveAddon({ env: { DUCKTAPE_LAYA_LIBRARY: '' } }), { status: 7 });
+  assert.equal(resolveAddon({ env: { ...env, DUCKTAPE_LAYA_LIBRARY: '' } }), path.join('/opt/laya', 'ducktape_laya.node'));
+  // An installed libdir keeps the addon in ducktape-laya/node.
+  const libdir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ducktape-laya-libdir-'));
+  try {
+    const installed = path.join(libdir, 'ducktape-laya', 'node', 'ducktape_laya.node');
+    fs.mkdirSync(path.dirname(installed), { recursive: true });
+    fs.writeFileSync(installed, '');
+    assert.equal(resolveAddon({ env: { DUCKTAPE_LAYA_LIB_DIR: libdir } }), installed);
+  } finally { fs.rmSync(libdir, { recursive: true, force: true }); }
 });
 
 test('musl detection reads the dynamic loaders in the given directories', () => {

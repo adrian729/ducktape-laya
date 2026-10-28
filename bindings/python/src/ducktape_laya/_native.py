@@ -79,7 +79,7 @@ def _open(cdll=ctypes.CDLL, machine=None, plat=None, bundled=None):
         if not explicit:
             continue
         path = pathlib.Path(explicit, _NAME) if directory else pathlib.Path(explicit)
-        if not os.path.isabs(explicit):
+        if not pathlib.Path(explicit).is_absolute():  # on Windows a drive and a root, unlike os.path.isabs before 3.13
             raise LayaLoadError(f'{variable} must be an absolute path, got {explicit}')
         if not path.is_file():  # also stops macOS dyld from falling back to DYLD_LIBRARY_PATH
             raise LayaLoadError(f'{variable} is set but {path} does not exist')

@@ -41,7 +41,8 @@ DTL_API uint32_t dtl_abi_version(void);
  *     model are bounded to [0.5, 5].
  *   "max_windows_per_call": 1..4096, default 256; the most forward passes one
  *     call may plan (a question without "scan" is one window, a single-option
- *     choice none). A call over it fails with status 1 before inference. */
+ *     choice none). A call over it fails with status 1: on a single engine
+ *     before any inference, on a router before the request that exceeds it. */
 DTL_API dtl_status dtl_open(const char *model_path, const char *config_json,
                             dtl_engine **out, char **error);
 /* router_json: {"models": {"id": "path.gguf" | {"path": "...", "config": {...}}},

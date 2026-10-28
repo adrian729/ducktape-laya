@@ -67,6 +67,9 @@ test('open takes a model and options; a router takes models, max_loaded and auto
 test('error order: closed, then argument errors, then cancellation, then admission', async () => {
   const { Engine, workers } = await harness();
   const aborted = AbortSignal.abort();
+  // Opening converts its arguments before it looks at the signal, as calls do.
+  await assert.rejects(Engine.open('model.gguf', { signal: aborted, config: { threads: 2 } }), { name: 'RangeError', status: 1 });
+  await assert.rejects(Engine.open('model.gguf', { signal: aborted }), { status: 5 });
   const engine = await Engine.open('model.gguf', { maxPending: 1 });
   const sentCount = () => workers[0].sent.length;
   await assert.rejects(engine.execute('{}', { signal: aborted, timeoutMs: -1 }), { name: 'RangeError', status: 1 });
@@ -163,7 +166,7 @@ const single = (extra = {}, sha256) => ({ backend: 'wasm', moduleUrl: 'https://e
 const wasm = single();
 
 test('worker forwards the auto routes into the router config', async () => {
-  const { calls, namespace } = await workerHarness();
+  const { calls, runtime, namespace } = await workerHarness();
   await namespace.init(single({ routed: true, auto: { english: 'a', default: 'b' }, maxLoaded: 2, config: { context_tokens: 64 },
     assets: { a: { url: 'https://example.test/a.gguf' }, b: { url: 'https://example.test/b.gguf', config: { overflow: 'scan' } } } }));
   const opens = calls.filter(call => call.name === 'dtl_open_router');
@@ -177,6 +180,9 @@ test('worker forwards the auto routes into the router config', async () => {
   }
   assert.match(JSON.parse(opens[0].args[0]).models.a, /^\/validate-/);
   assert.match(JSON.parse(opens[1].args[0]).models.a, /^\/model-/);
+  // A successful validation closes its engine (the only close so far) and leaves no placeholder behind.
+  assert.equal(calls.filter(call => call.name === 'dtl_close').length, 1);
+  assert.deepEqual([...runtime.FS.files.keys()].filter(path => path.startsWith('/validate-')), []);
 });
 
 test('worker converts the absolute wall-clock deadline to remaining milliseconds', async () => {
