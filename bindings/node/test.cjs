@@ -2,25 +2,24 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { Laya, Status } = require('./index.cjs');
+const { Engine, Status, LayaError, LayaLoadError, EngineClosedError } = require('./index.cjs');
 test('missing model rejects asynchronously', async () => {
-  await assert.rejects(Laya.open('/nonexistent/ducktape-laya.gguf'), error => error.status === 2);
+  await assert.rejects(Engine.open('/nonexistent/ducktape-laya.gguf'), error => error.status === 2);
 });
 test('invalid options reject', async () => {
-  await assert.rejects(Laya.open('x', { threads: -1 }), /threads/);
-  await assert.rejects(Laya.open('x', { maxPending: 0 }), /maxPending/);
+  await assert.rejects(Engine.open('x', { maxPending: 0 }), /maxPending/);
   const circular = {}; circular.self = circular;
-  await assert.rejects(Laya.openRouter(circular), /circular/i);
-  await assert.rejects(Laya.openRouter({ models: {} }), e => e.status === 1);
+  await assert.rejects(Engine.openRouter(circular), /circular/i);
+  await assert.rejects(Engine.openRouter({ models: {} }), e => e.status === 1);
   // The addon's own argument checks carry a status too: an open config over 1 MiB.
   const temperatures = Object.fromEntries(Array.from({ length: 600 }, (_, i) => [`k${i}${'x'.repeat(1900)}`, 1]));
-  await assert.rejects(Laya.openRouter({ models: { unused: __filename } }, { temperatures }),
+  await assert.rejects(Engine.openRouter({ models: { unused: __filename } }, { config: { temperatures } }),
     e => e.status === 1 && /1 MiB/.test(e.message));
 });
 test('serialization reentry cannot bypass queue or close boundaries', async () => {
   // Lazy routing permits validation tests without loading a model.
   const config = { models: { unused: __filename } };
-  const engine = await Laya.openRouter(config, { maxPending: 1 });
+  const engine = await Engine.openRouter(config, { maxPending: 1 });
   try {
     let nested;
     await assert.rejects(engine.execute({ toJSON() {
@@ -29,7 +28,7 @@ test('serialization reentry cannot bypass queue or close boundaries', async () =
     }}), /queue is full/);
     await nested;
   } finally { await engine.close(); }
-  const closing = await Laya.openRouter(config);
+  const closing = await Engine.openRouter(config);
   try {
     await assert.rejects(closing.execute({ toJSON() {
       closing.close();
@@ -38,7 +37,7 @@ test('serialization reentry cannot bypass queue or close boundaries', async () =
   } finally { await closing.close(); }
 });
 test('inference, queue bound and drain on close', { skip: !process.env.LAYA_MODEL }, async () => {
-  const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2, maxPending: 1 });
+  const engine = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2 }, maxPending: 1 });
   const request = fs.readFileSync(path.join(__dirname, '../../tests/fixtures/primitive.json'), 'utf8');
   try {
     await assert.rejects(engine.execute('{'), error => error.status === 1);
@@ -56,7 +55,7 @@ test('inference, queue bound and drain on close', { skip: !process.env.LAYA_MODE
 });
 
 test('batch, structured projection, hooks and worker responsiveness', { skip: !process.env.LAYA_MODEL }, async () => {
-  const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2 });
+  const engine = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2 } });
   const request = JSON.parse(fs.readFileSync(path.join(__dirname, '../../tests/fixtures/primitive.json'), 'utf8'));
   const structured = { state: request.state, schema: { type: 'object', properties: {
     refund: { type: 'boolean', description: 'Does the customer request a refund?' },
@@ -99,7 +98,7 @@ test('batch, structured projection, hooks and worker responsiveness', { skip: !p
 });
 
 test('router shares native model selection and drains accepted batch on close', { skip: !process.env.LAYA_MODEL }, async () => {
-  const router = await Laya.openRouter({ models: { english: process.env.LAYA_MODEL, alias: process.env.LAYA_MODEL }, max_loaded: 1 }, { threads: 2 });
+  const router = await Engine.openRouter({ models: { english: process.env.LAYA_MODEL, alias: process.env.LAYA_MODEL }, max_loaded: 1 }, { config: { threads: 2 } });
   const request = { state: 'Please refund me.', questions: { q: { type: 'noul', instructions: 'Is a refund requested?' } } };
   try {
     await assert.rejects(router.execute(request), e => e.status === 1);
@@ -114,7 +113,7 @@ test('router shares native model selection and drains accepted batch on close', 
 });
 
 test('cooperative cancellation, deadline, bounded cancelled queue and shutdown', { skip: !process.env.LAYA_MODEL }, async () => {
-  const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2, maxPending: 2 });
+  const engine = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2 }, maxPending: 2 });
   const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
   const baseline = await engine.execute(request);
   await assert.rejects(engine.execute(request, { timeoutMs: 1 }), { status: 6 });
@@ -131,7 +130,7 @@ test('cooperative cancellation, deadline, bounded cancelled queue and shutdown',
   await Promise.all([first, cancelled, full]);
   // Drain the cancelled queue entry before the next independent check.
   await engine.close();
-  const closing = await Laya.open(process.env.LAYA_MODEL, { threads: 2 });
+  const closing = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2 } });
   const a = closing.execute(request), b = closing.execute(request);
   const stopped = Promise.all([assert.rejects(a, { status: 5 }), assert.rejects(b, { status: 5 })]);
   const close = closing.close({ cancelPending: true });
@@ -140,10 +139,10 @@ test('cooperative cancellation, deadline, bounded cancelled queue and shutdown',
 });
 
 test('runtime and model diagnostics share native identity', { skip: !process.env.LAYA_MODEL }, async () => {
-  const runtime = Laya.runtimeInfo();
+  const runtime = Engine.runtimeInfo();
   assert.equal(runtime.abi_version, 2); assert.equal(runtime.cpu_supported, true);
   assert.equal(runtime.limits.questions_per_batch, 128);
-  const engine = await Laya.open(process.env.LAYA_MODEL);
+  const engine = await Engine.open(process.env.LAYA_MODEL);
   try {
     const info = await engine.info();
     assert.equal(info.model.decision_type, 'laya');
@@ -153,19 +152,18 @@ test('runtime and model diagnostics share native identity', { skip: !process.env
   await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED' });
 });
 
-test('Status is frozen and validation errors carry status and codes', async () => {
+test('Status is frozen and argument errors carry status and codes', async () => {
   assert.ok(Object.isFrozen(Status));
-  assert.deepEqual(Status, { OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
-  await assert.rejects(Laya.open('x', { threads: -1 }), { name: 'RangeError', status: 1 });
-  await assert.rejects(Laya.open('x\0'), { name: 'TypeError', status: 1 });
+  await assert.rejects(Engine.open('x', { maxPending: 0 }), { name: 'RangeError', status: 1 });
+  await assert.rejects(Engine.open('x\0'), { name: 'TypeError', status: 1 });
   const circular = {}; circular.self = circular;
-  await assert.rejects(Laya.openRouter(circular), { name: 'TypeError', status: 1 });
-  const engine = await Laya.openRouter({ models: { unused: __filename } }, { maxPending: 1 });
+  await assert.rejects(Engine.openRouter(circular), { name: 'TypeError', status: 1 });
+  const engine = await Engine.openRouter({ models: { unused: __filename } }, { maxPending: 1 });
   try {
     await assert.rejects(engine.execute('\0'), { name: 'TypeError', status: 1 });
     await assert.rejects(engine.execute('{}', { timeoutMs: -1 }), { name: 'RangeError', status: 1 });
     const first = engine.execute('{}').catch(() => {});
-    await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_QUEUE_FULL', status: 1, message: 'Laya queue is full' });
+    await assert.rejects(engine.execute('{}'), e => e instanceof LayaError && e.name === 'LayaError' && e.code === 'ERR_LAYA_QUEUE_FULL' && e.status === 1 && e.message === 'Laya queue is full');
     await first;
   } finally { await engine.close(); }
 });
@@ -178,7 +176,7 @@ function withWorkers() {
   threads.Worker = class extends OriginalWorker { constructor(...args) { super(...args); workers.push(this); } };
   const indexPath = require.resolve('./index.cjs');
   delete require.cache[indexPath];
-  try { return { Laya: require('./index.cjs').Laya, workers }; }
+  try { return { Engine: require('./index.cjs').Engine, workers }; }
   finally { threads.Worker = OriginalWorker; delete require.cache[indexPath]; }
 }
 // Resolves when the worker has exited; fails after timeoutMs.
@@ -191,8 +189,8 @@ function exited(worker, timeoutMs = 10000) {
 }
 
 test('close resolves after the worker has died and stays idempotent', async () => {
-  const { Laya: FreshLaya, workers } = withWorkers();
-  const engine = await FreshLaya.openRouter({ models: { unused: __filename } });
+  const { Engine: FreshEngine, workers } = withWorkers();
+  const engine = await FreshEngine.openRouter({ models: { unused: __filename } });
   await workers[0].terminate();
   await assert.rejects(engine.info(), { code: 'ERR_LAYA_WORKER_EXITED', status: 3, message: 'Engine worker has exited' });
   const close = engine.close();
@@ -202,7 +200,7 @@ test('close resolves after the worker has died and stays idempotent', async () =
 });
 
 test('execute is the only call', async () => {
-  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  const engine = await Engine.openRouter({ models: { unused: __filename } });
   try {
     for (const name of ['decide', 'decideStructured', 'decideBatch']) assert.equal(engine[name], undefined);
     assert.equal(typeof engine.execute, 'function');
@@ -210,35 +208,31 @@ test('execute is the only call', async () => {
   } finally { await engine.close(); }
 });
 
-test('open options contextTokens and temperatures are validated and serialized', async () => {
-  for (const contextTokens of [0, -1, 1.5, '512', NaN]) await assert.rejects(Laya.open('x', { contextTokens }), { name: 'RangeError', status: 1 });
-  for (const temperatures of [null, [], 'x', { choice: 0 }, { choice: -1 }, { choice: NaN }, { choice: '1' }]) {
-    await assert.rejects(Laya.open('x', { temperatures }), { status: 1 });
-  }
+test('open config is passed to the core unvalidated and per-route config is native-keyed', async () => {
   const models = { m: __filename };
-  // Native validation of the serialized config: unknown keys are rejected at open. Router routes load
+  // The core validates the serialized config: unknown keys are rejected at open. Router routes load
   // lazily, so model-dependent bounds (context_tokens) are checked when a route first loads.
-  await assert.rejects(Laya.openRouter({ models }, { threads: 2, temperatures: { 'bogus!': 1.5 } }), { status: 1 });
-  await assert.rejects(Laya.openRouter({ models: { m: { path: __filename, config: { surprise: 1 } } } }), { status: 1 });
-  await (await Laya.openRouter({ models }, { contextTokens: 256, threads: 1, temperatures: { choice: 1.5, 'noul.2': 2 } })).close();
-  await (await Laya.openRouter({ models: { m: { path: __filename, config: { context_tokens: 64, temperatures: { choice: 1.2 } } } } })).close();
-});
-
-test('open option overflow is validated', async () => {
-  for (const overflow of ['', 'bogus', null, 1, 'TRUNCATE_END']) await assert.rejects(Laya.open('x', { overflow }), { name: 'RangeError', status: 1 });
+  await assert.rejects(Engine.openRouter({ models }, { config: { threads: 2, temperatures: { 'bogus!': 1.5 } } }), { status: 1 });
+  await assert.rejects(Engine.openRouter({ models }, { config: { surprise: 1 } }), { status: 1 });
+  await assert.rejects(Engine.openRouter({ models: { m: { path: __filename, config: { surprise: 1 } } } }), { status: 1 });
+  await (await Engine.openRouter({ models }, { config: { context_tokens: 256, threads: 1, temperatures: { choice: 1.5, 'noul.2': 2 } } })).close();
+  await (await Engine.openRouter({ models: { m: { path: __filename, config: { context_tokens: 64, temperatures: { choice: 1.2 } } } } })).close();
+  // Binding-only conversions: a config that is not an object, and values JSON cannot carry.
+  for (const config of [5, 'x', []]) await assert.rejects(Engine.open('x', { config }), { name: 'TypeError', status: 1 });
+  await assert.rejects(Engine.open('x', { config: { temperatures: { choice: NaN } } }), { name: 'TypeError', status: 1, message: /non-finite/ });
 });
 
 test('open option overflow reaches the model', { skip: !process.env.LAYA_MODEL }, async () => {
   const request = { state: 'refund '.repeat(800), questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
-  const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2, overflow: 'truncate_end' });
+  const engine = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2, overflow: 'truncate_end' } });
   // The policy reaches the engine: the default (reject) would refuse this request.
   try { assert.ok((await engine.execute(request)).answers.refund); } finally { await engine.close(); }
-  await assert.rejects(Laya.open(process.env.LAYA_MODEL, { threads: 2, overflow: 'bogus' }), { status: 1 });
+  await assert.rejects(Engine.open(process.env.LAYA_MODEL, { config: { threads: 2, overflow: 'bogus' } }), { status: 1 });
 });
 
 test('context tokens, temperatures and max_tokens reach the model', { skip: !process.env.LAYA_MODEL }, async () => {
   const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
-  const engine = await Laya.open(process.env.LAYA_MODEL, { threads: 2, contextTokens: 256, temperatures: { 'noul.2': 2 } });
+  const engine = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2, context_tokens: 256, temperatures: { 'noul.2': 2 } } });
   try {
     const info = await engine.info();
     assert.equal(info.model.context_tokens, 256);
@@ -253,15 +247,15 @@ test('context tokens, temperatures and max_tokens reach the model', { skip: !pro
     await engine.execute(request, { requestId: 4242, onEvent: e => { ids.push(e.request_id); } });
     assert.deepEqual(ids, [4242, 4242]);
   } finally { await engine.close(); }
-  await assert.rejects(Laya.open(process.env.LAYA_MODEL, { contextTokens: 1e9 }), { status: 1 });
-  await assert.rejects(Laya.open(process.env.LAYA_MODEL, { contextTokens: 8 }), { status: 1 });
-  await assert.rejects(Laya.open(process.env.LAYA_MODEL, { temperatures: { 'noul.2': 1.5, nonsense: 1 } }), { status: 1 });
+  await assert.rejects(Engine.open(process.env.LAYA_MODEL, { config: { context_tokens: 1e9 } }), { status: 1 });
+  await assert.rejects(Engine.open(process.env.LAYA_MODEL, { config: { context_tokens: 8 } }), { status: 1 });
+  await assert.rejects(Engine.open(process.env.LAYA_MODEL, { config: { temperatures: { 'noul.2': 1.5, nonsense: 1 } } }), { status: 1 });
 });
 
 test('router route config below the minimum is rejected', { skip: !process.env.LAYA_MODEL }, async () => {
   const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
   // A route below the 32-token minimum is rejected (at open, or at first load for older cores).
-  const bad = await Laya.openRouter({ models: { tiny: { path: process.env.LAYA_MODEL, config: { context_tokens: 8 } }, ok: process.env.LAYA_MODEL } }, { threads: 2 }).catch(error => {
+  const bad = await Engine.openRouter({ models: { tiny: { path: process.env.LAYA_MODEL, config: { context_tokens: 8 } }, ok: process.env.LAYA_MODEL } }, { config: { threads: 2 } }).catch(error => {
     assert.equal(error.status, 1); return undefined;
   });
   if (bad) try {
@@ -271,11 +265,11 @@ test('router route config below the minimum is rejected', { skip: !process.env.L
 });
 test('invalid Unicode is rejected instead of replaced', async () => {
   const lone = 'a\ud800b';
-  await assert.rejects(Laya.open(lone), e => e.status === 1 && /model path is not valid Unicode/.test(e.message));
-  await assert.rejects(Laya.open('x', { temperatures: { [lone]: 1 } }), e => e.status === 1 && /not valid Unicode/.test(e.message));
-  await assert.rejects(Laya.openRouter({ models: { [lone]: __filename } }), e => e.status === 1 && /router config is not valid Unicode/.test(e.message));
-  await assert.rejects(Laya.openRouter({ models: { a: lone } }), e => e.status === 1 && /router config is not valid Unicode/.test(e.message));
-  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  await assert.rejects(Engine.open(lone), e => e.status === 1 && /model path is not valid Unicode/.test(e.message));
+  await assert.rejects(Engine.open('x', { config: { temperatures: { [lone]: 1 } } }), e => e.status === 1 && /not valid Unicode/.test(e.message));
+  await assert.rejects(Engine.openRouter({ models: { [lone]: __filename } }), e => e.status === 1 && /router config is not valid Unicode/.test(e.message));
+  await assert.rejects(Engine.openRouter({ models: { a: lone } }), e => e.status === 1 && /router config is not valid Unicode/.test(e.message));
+  const engine = await Engine.openRouter({ models: { unused: __filename } });
   try {
     await assert.rejects(engine.execute({ state: lone, questions: {} }), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
     await assert.rejects(engine.execute({ state: {}, questions: { [lone]: {} } }), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
@@ -285,11 +279,11 @@ test('invalid Unicode is rejected instead of replaced', async () => {
   } finally { await engine.close(); }
 });
 test('invalid router config names the router config', async () => {
-  await assert.rejects(Laya.openRouter('x\0'), /router config/);
-  await assert.rejects(Laya.open('x\0'), /model path/);
+  await assert.rejects(Engine.openRouter('x\0'), /router config/);
+  await assert.rejects(Engine.open('x\0'), /model path/);
 });
 test('no onEvent delivery after the call settled', async () => {
-  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  const engine = await Engine.openRouter({ models: { unused: __filename } });
   try {
     const events = [];
     const controller = new AbortController();
@@ -302,9 +296,9 @@ test('no onEvent delivery after the call settled', async () => {
 });
 test('JSON serialization failures are argument errors with status', async () => {
   const circular = {}; circular.self = circular;
-  await assert.rejects(Laya.openRouter(circular), e => e instanceof TypeError && e.status === Status.INVALID_ARGUMENT);
-  await assert.rejects(Laya.openRouter({ models: { a: 1n } }), e => e.status === Status.INVALID_ARGUMENT);
-  const engine = await Laya.openRouter({ models: { unused: __filename } });
+  await assert.rejects(Engine.openRouter(circular), e => e instanceof TypeError && e.status === Status.INVALID_ARGUMENT);
+  await assert.rejects(Engine.openRouter({ models: { a: 1n } }), e => e.status === Status.INVALID_ARGUMENT);
+  const engine = await Engine.openRouter({ models: { unused: __filename } });
   try {
     await assert.rejects(engine.execute({ state: circular, questions: {} }), e => e instanceof TypeError && e.status === Status.INVALID_ARGUMENT);
     await assert.rejects(engine.execute({ state: 1n, questions: {} }), e => e instanceof TypeError && e.status === Status.INVALID_ARGUMENT);
@@ -314,36 +308,66 @@ test('router auto config and lang are validated by the native core', async () =>
   const models = { english: __filename, other: __filename };
   const request = { state: 'hi', questions: { q: { type: 'noul', instructions: 'x' } } };
   for (const auto of [{ english: 'english' }, { english: 'english', default: 'missing' }, { english: 'english', default: 'other', extra: 1 }, 'english']) {
-    await assert.rejects(Laya.openRouter({ models, auto }), e => e.status === Status.INVALID_ARGUMENT && /auto/.test(e.message), JSON.stringify(auto));
+    await assert.rejects(Engine.openRouter({ models, auto }), e => e.status === Status.INVALID_ARGUMENT && /auto/.test(e.message), JSON.stringify(auto));
   }
-  const router = await Laya.openRouter({ models });
+  const router = await Engine.openRouter({ models });
   try {
     await assert.rejects(router.execute({ ...request, model: 'auto' }), e => e.status === 1 && /auto/.test(e.message));
     await assert.rejects(router.execute({ ...request, model: 'english', lang: 'en' }), e => e.status === 1 && /lang/.test(e.message));
   } finally { await router.close(); }
 });
 test('calls after close() report ERR_LAYA_CLOSED once the worker has exited', async () => {
-  const { Laya: FreshLaya, workers } = withWorkers();
-  const engine = await FreshLaya.openRouter({ models: { unused: __filename } });
+  const { Engine: FreshEngine, workers } = withWorkers();
+  const engine = await FreshEngine.openRouter({ models: { unused: __filename } });
   await engine.close();
   await exited(workers[0]);
   await assert.rejects(engine.info(), { code: 'ERR_LAYA_CLOSED', status: 1 });
   await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_CLOSED', status: 1 });
 });
 
-test('addon load failures carry status 7 and ERR_LAYA_UNSUPPORTED', async () => {
-  const addonPath = path.join(__dirname, 'does-not-exist.node');
-  await assert.rejects(Laya.open('x', { addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
-  await assert.rejects(Laya.openRouter({ models: { unused: __filename } }, { addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
-  assert.throws(() => Laya.runtimeInfo({ addonPath }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
+// Runs fn with the override variables set (undefined deletes), then restores them.
+async function withEnv(vars, fn) {
+  const saved = Object.fromEntries(Object.keys(vars).map(name => [name, process.env[name]]));
+  const set = values => { for (const [name, value] of Object.entries(values)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } };
+  set(vars);
+  try { return await fn(); } finally { set(saved); }
+}
+test('addon load failures are LayaLoadError with status 7 and ERR_LAYA_UNSUPPORTED', async () => {
+  const missing = path.join(__dirname, 'does-not-exist.node');
+  const load = { name: 'LayaLoadError', status: 7, code: 'ERR_LAYA_UNSUPPORTED' };
+  await withEnv({ DUCKTAPE_LAYA_LIBRARY: missing, DUCKTAPE_LAYA_LIB_DIR: undefined }, async () => {
+    await assert.rejects(Engine.open('x'), e => e instanceof LayaLoadError && e instanceof LayaError);
+    await assert.rejects(Engine.open('x'), load);
+    await assert.rejects(Engine.openRouter({ models: { unused: __filename } }), load);
+    assert.throws(() => Engine.runtimeInfo(), load);
+  });
+  await withEnv({ DUCKTAPE_LAYA_LIBRARY: undefined, DUCKTAPE_LAYA_LIB_DIR: __dirname }, async () => {
+    await assert.rejects(Engine.open('x'), load);
+  });
   // An addon that exists but cannot be loaded is reported as found, with the loader's reason.
   const broken = path.join(require('node:os').tmpdir(), `ducktape-laya-broken-${process.pid}.node`);
   fs.writeFileSync(broken, 'not an addon');
   try {
     const found = /^The native Laya addon was found but could not be loaded: \S.* \(it needs [^)]+\)$/s;
-    assert.throws(() => Laya.runtimeInfo({ addonPath: broken }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED', message: found });
-    await assert.rejects(Laya.open('x', { addonPath: broken }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED', message: found });
+    await withEnv({ DUCKTAPE_LAYA_LIBRARY: broken }, async () => {
+      assert.throws(() => Engine.runtimeInfo(), { ...load, message: found });
+      await assert.rejects(Engine.open('x'), { ...load, message: found });
+    });
   } finally { fs.rmSync(broken, { force: true }); }
+});
+
+test('overrides must be absolute paths: a relative one is a load error', async () => {
+  for (const name of ['DUCKTAPE_LAYA_LIBRARY', 'DUCKTAPE_LAYA_LIB_DIR']) {
+    await withEnv({ DUCKTAPE_LAYA_LIBRARY: undefined, DUCKTAPE_LAYA_LIB_DIR: undefined, [name]: 'relative/ducktape_laya.node' }, async () => {
+      await assert.rejects(Engine.open('x'), { name: 'LayaLoadError', status: 7, message: new RegExp(`${name} must be an absolute path`) });
+      assert.throws(() => Engine.runtimeInfo(), { name: 'LayaLoadError', status: 7 });
+    });
+  }
+  const resolveAddon = require('./resolve-addon.cjs');
+  const env = { DUCKTAPE_LAYA_LIB_DIR: '/opt/laya' };
+  assert.equal(resolveAddon({ env }), path.join('/opt/laya', 'ducktape_laya.node'));
+  assert.equal(resolveAddon({ env: { ...env, DUCKTAPE_LAYA_LIBRARY: '/elsewhere/a.node' } }), '/elsewhere/a.node');
+  assert.throws(() => resolveAddon({ env: { DUCKTAPE_LAYA_LIBRARY: '' } }), { status: 7 });
 });
 
 test('musl detection reads the dynamic loaders in the given directories', () => {
@@ -378,29 +402,28 @@ test('on musl the resolver and every entry point report that the glibc addon can
   const resolveAddon = require('./resolve-addon.cjs');
   const musl = /needs glibc, and this looks like a musl system/;
   for (const arch of ['x64', 'arm64']) {
-    assert.throws(() => resolveAddon(undefined, { platform: 'linux', arch, env: {}, musl: () => true }), { status: 7, message: musl });
+    assert.throws(() => resolveAddon({ platform: 'linux', arch, env: {}, musl: () => true }), { status: 7, message: musl });
   }
   // glibc: the packaged addon path (missing in a checkout); other systems are never checked for musl.
-  assert.throws(() => resolveAddon(undefined, { platform: 'linux', arch: 'x64', env: {}, musl: () => false }), { status: 7, message: /is missing/ });
-  for (const arch of ['arm64', 'x64']) assert.throws(() => resolveAddon(undefined, { platform: 'darwin', arch, env: {}, musl: () => true }), { status: 7, message: /Native Laya addon for darwin-\w+ is missing/ });
-  assert.throws(() => resolveAddon(undefined, { platform: 'darwin', arch: 'ia32', env: {}, musl: () => false }), { status: 7, message: /macOS arm64 and x64/ });
-  // An explicit addon (a musl build) is used as given.
-  assert.equal(resolveAddon('/opt/musl/ducktape_laya.node', { platform: 'linux', arch: 'x64', env: {}, musl: () => true }), path.resolve('/opt/musl/ducktape_laya.node'));
-  assert.equal(resolveAddon(undefined, { platform: 'linux', arch: 'x64', env: { DUCKTAPE_LAYA_ADDON: '/opt/musl/a.node' }, musl: () => true }), path.resolve('/opt/musl/a.node'));
+  assert.throws(() => resolveAddon({ platform: 'linux', arch: 'x64', env: {}, musl: () => false }), { status: 7, message: /is missing/ });
+  for (const arch of ['arm64', 'x64']) assert.throws(() => resolveAddon({ platform: 'darwin', arch, env: {}, musl: () => true }), { status: 7, message: /Native Laya addon for darwin-\w+ is missing/ });
+  assert.throws(() => resolveAddon({ platform: 'darwin', arch: 'ia32', env: {}, musl: () => false }), { status: 7, message: /macOS arm64 and x64/ });
+  // An explicit addon (a musl build) is used as given, and only when absolute.
+  assert.equal(resolveAddon({ platform: 'linux', arch: 'x64', env: { DUCKTAPE_LAYA_LIBRARY: '/opt/musl/a.node' }, musl: () => true }), '/opt/musl/a.node');
   // Through the public API, in a child process whose resolver sees a musl system.
   const { execFileSync } = require('node:child_process');
   const script = `
     const resolver = require.resolve(${JSON.stringify(path.join(__dirname, 'resolve-addon.cjs'))});
     const real = require(resolver);
-    require.cache[resolver].exports = Object.assign((o, h) => real(o, { ...h, musl: () => true, platform: 'linux', arch: 'x64' }), real);
-    const { Laya } = require(${JSON.stringify(path.join(__dirname, 'index.cjs'))});
+    require.cache[resolver].exports = Object.assign(h => real({ ...h, musl: () => true, platform: 'linux', arch: 'x64' }), real);
+    const { Engine } = require(${JSON.stringify(path.join(__dirname, 'index.cjs'))});
     const results = [];
-    try { Laya.runtimeInfo(); } catch (e) { results.push([e.status, e.code, e.message]); }
-    Laya.open('model.gguf').catch(e => results.push([e.status, e.code, e.message]))
-      .then(() => Laya.openRouter({ models: { a: 'model.gguf' } })).catch(e => results.push([e.status, e.code, e.message]))
+    try { Engine.runtimeInfo(); } catch (e) { results.push([e.status, e.code, e.message]); }
+    Engine.open('model.gguf').catch(e => results.push([e.status, e.code, e.message]))
+      .then(() => Engine.openRouter({ models: { a: 'model.gguf' } })).catch(e => results.push([e.status, e.code, e.message]))
       .then(() => process.stdout.write(JSON.stringify(results)));`;
   const env = { ...process.env };
-  delete env.DUCKTAPE_LAYA_ADDON;
+  delete env.DUCKTAPE_LAYA_LIBRARY; delete env.DUCKTAPE_LAYA_LIB_DIR;
   const results = JSON.parse(execFileSync(process.execPath, ['-e', script], { env, encoding: 'utf8' }));
   assert.equal(results.length, 3);
   for (const [status, code, message] of results) {
@@ -410,30 +433,66 @@ test('on musl the resolver and every entry point report that the glibc addon can
   }
 });
 
-test('runtimeInfo maps an addon that reports the wrong ABI to ERR_LAYA_UNSUPPORTED', () => {
+test('runtimeInfo maps an addon that reports the wrong ABI to LayaLoadError', async () => {
   // A stand-in addon module whose info() fails like the addon's own library check.
   const fake = path.join(require('node:os').tmpdir(), `ducktape-laya-fake-${process.pid}.cjs`);
   fs.writeFileSync(fake, "module.exports = { info() { throw Object.assign(new Error('Native ducktape-laya ABI 3 is not supported (expected 2)'), { status: 7 }); } };");
   try {
-    assert.throws(() => Laya.runtimeInfo({ addonPath: fake }), { status: 7, code: 'ERR_LAYA_UNSUPPORTED', message: /ABI 3/ });
+    await withEnv({ DUCKTAPE_LAYA_LIBRARY: fake }, () => assert.throws(() => Engine.runtimeInfo(), { name: 'LayaLoadError', status: 7, code: 'ERR_LAYA_UNSUPPORTED', message: /ABI 3/ }));
   } finally { fs.rmSync(fake, { force: true }); delete require.cache[fake]; }
 });
 
-test('addonPath must be a non-empty string: an argument error, not a load failure', async () => {
-  for (const addonPath of [42, '', 'a\0b', {}]) {
-    assert.throws(() => Laya.runtimeInfo({ addonPath }), { name: 'TypeError', status: 1 });
-    await assert.rejects(Laya.open('x', { addonPath }), { name: 'TypeError', status: 1 });
-  }
+test('null options mean the defaults; a non-object is an argument error with status 1', async () => {
+  await (await Engine.openRouter({ models: { unused: __filename } }, null)).close();
+  await (await Engine.openRouter({ models: { unused: __filename } }, { config: null })).close();
+  await assert.rejects(Engine.open('x', 5), { name: 'TypeError', status: 1 });
+  await assert.rejects(Engine.open('x', { config: 5 }), { name: 'TypeError', status: 1 });
+  const engine = await Engine.openRouter({ models: { unused: __filename } });
+  try {
+    await assert.rejects(engine.execute('{}', 5), { name: 'TypeError', status: 1 });
+    await assert.rejects(engine.execute('{', null), { status: 1 });
+    await assert.rejects(engine.close(5), { name: 'TypeError', status: 1 });
+    await engine.close(null);
+    await assert.rejects(engine.execute('{}'), EngineClosedError);
+  } finally { await engine.close(); }
 });
 
-test('null or non-object options are argument errors with status 1', async () => {
-  await assert.rejects(Laya.open('x', null), { name: 'TypeError', status: 1 });
-  await assert.rejects(Laya.openRouter({ models: { unused: __filename } }, null), { name: 'TypeError', status: 1 });
-  assert.throws(() => Laya.runtimeInfo(null), { name: 'TypeError', status: 1 });
-  const engine = await Laya.openRouter({ models: { unused: __filename } });
+test('paths: a Buffer and a file: URL reach the core, a NUL or a wrong type does not', async () => {
+  const missing = path.join(__dirname, 'no', 'such', 'model.gguf');
+  const { pathToFileURL } = require('node:url');
+  for (const target of [Buffer.from(missing), new Uint8Array(Buffer.from(missing)), pathToFileURL(missing)]) {
+    await assert.rejects(Engine.open(target), e => e.status === 2 && e.message.includes(missing));
+  }
+  // Bytes that are not UTF-8 are kept as they are.
+  await assert.rejects(Engine.open(Buffer.from([0x2f, 0xff, 0xfe])), { status: 2 });
+  await assert.rejects(Engine.open(Buffer.from('a\0b')), { name: 'TypeError', status: 1 });
+  await assert.rejects(Engine.open(new URL('https://example.test/model.gguf')), { name: 'TypeError', status: 1 });
+  await assert.rejects(Engine.open(5), { name: 'TypeError', status: 1 });
+});
+
+test('error order: closed, then argument errors, then cancellation, then admission', async () => {
+  const { Engine: Fresh, workers } = withWorkers();
+  const aborted = AbortSignal.abort();
+  const engine = await Fresh.openRouter({ models: { unused: __filename } }, { maxPending: 1 });
+  const messages = [];
+  workers[0].on('message', message => messages.push(message));
   try {
-    await assert.rejects(engine.execute('{}', null), { name: 'TypeError', status: 1 });
-    await assert.rejects(engine.close(null), { name: 'TypeError', status: 1 });
-    await assert.rejects(engine.close(5), { name: 'TypeError', status: 1 });
+    // Open: an argument error wins over a cancelled signal; cancellation alone fails at once with no worker message.
+    await assert.rejects(engine.execute('{}', { signal: aborted, timeoutMs: -1 }), { name: 'RangeError', status: 1 });
+    const before = messages.length;
+    const sent = [];
+    const post = workers[0].postMessage.bind(workers[0]);
+    workers[0].postMessage = message => { sent.push(message); return post(message); };
+    await assert.rejects(engine.execute('{}', { signal: aborted }), { status: Status.CANCELLED });
+    assert.deepEqual(sent, []);
+    assert.equal(messages.length, before);
+    // A cancelled call fails before admission, even when the queue is full.
+    const first = engine.execute('{}').catch(() => {});
+    await assert.rejects(engine.execute('{}', { signal: aborted }), { status: Status.CANCELLED });
+    await first;
   } finally { await engine.close(); }
+  // Closed wins over a bad option and a cancelled signal.
+  for (const options of [{ timeoutMs: -1, signal: aborted }, { signal: aborted }, 5]) {
+    await assert.rejects(engine.execute('{}', options), e => e.name === 'EngineClosedError' && e.code === 'ERR_LAYA_CLOSED' && e.status === 1);
+  }
 });

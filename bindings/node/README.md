@@ -8,7 +8,7 @@ Local [Laya](https://github.com/NandhaKishorM/laya) decisions for Node.js and El
 - Linux x86-64 with AVX, AVX2, FMA, F16C, BMI2 and SSE4.2 and glibc 2.38+ (Ubuntu 24.04+). From 0.3.0 the package also carries Linux arm64 (Armv8.2-A with dot product and FP16), macOS arm64 and x64 (macOS 14+; arm64 needs dot product and FP16) and Windows x64 (which needs the Microsoft Visual C++ Redistributable), and picks the addon for the running platform. musl (Alpine) is not supported: loading fails with `ERR_LAYA_UNSUPPORTED`. Full matrix: [platforms](https://github.com/adrian729/ducktape-laya/blob/main/docs/PLATFORMS.md) and the [repository README](https://github.com/adrian729/ducktape-laya#requirements).
 - A Laya GGUF model, downloaded separately. `python3 node_modules/ducktape-laya/download-model.py resources` downloads the pinned English model into `resources/` and verifies its hash ([models](https://github.com/adrian729/ducktape-laya/blob/main/docs/MODELS.md)).
 
-On another platform, build the addon from a checkout ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md)) and pass `addonPath` or set `DUCKTAPE_LAYA_ADDON`; on Windows keep `ducktape_laya.dll` next to `ducktape_laya.node`.
+On another platform, build the addon from a checkout ([building](https://github.com/adrian729/ducktape-laya/blob/main/docs/BUILDING.md)) and set `DUCKTAPE_LAYA_LIBRARY` to the addon's absolute path (or `DUCKTAPE_LAYA_LIB_DIR` to the absolute path of the directory holding `ducktape_laya.node`; a relative path is a load error); on Windows keep `ducktape_laya.dll` next to `ducktape_laya.node`.
 
 ```sh
 npm install ducktape-laya
@@ -17,10 +17,10 @@ npm install ducktape-laya
 ## Usage
 
 ```js
-const { Laya } = require('ducktape-laya');
+const { Engine } = require('ducktape-laya');
 
 async function main() {
-  const engine = await Laya.open('/absolute/path/to/Laya-Q8_0.gguf', { threads: 2 });
+  const engine = await Engine.open('/absolute/path/to/Laya-Q8_0.gguf', { config: { threads: 2 } });
   try {
     const result = await engine.execute({
       state: 'Please refund the duplicate charge.',
@@ -36,40 +36,42 @@ async function main() {
 main().catch(error => { console.error(error); process.exitCode = 1; });
 ```
 
-From an ES module, `import { Laya } from 'ducktape-laya';` works too, and top-level `await` is then allowed.
+From an ES module, `import { Engine } from 'ducktape-laya';` works too, and top-level `await` is then allowed.
 
 `close()` is required: the worker keeps the process alive until it is closed.
 
 ## Opening
 
-`Laya.open(modelPath, options)` loads one model. `Laya.openRouter(config, options)` opens a lazy registry of local models; `config` is an object or JSON string:
+`Engine.open(modelPath, options)` loads one model; `modelPath` is a string, a `file:` `URL`, or a `Buffer` or `Uint8Array` holding the path's bytes (a POSIX path need not be UTF-8). `Engine.openRouter(router, options)` opens a lazy registry of local models; `router` is an object or JSON string:
 
 ```js
-const router = await Laya.openRouter({
+const router = await Engine.openRouter({
   models: {
     en: '/app/resources/Laya-Q8_0.gguf',
     ml: { path: '/app/resources/laya-multilingual-f16.gguf', config: { context_tokens: 1024 } }
   },
   max_loaded: 2,
   auto: { english: 'en', default: 'ml' }
-});
+}, { config: { threads: 2 } });
 await router.execute({ ...request, model: 'auto' }); // or model: 'en'
 ```
 
 Router requests name a route in `model`, or send `model: 'auto'` (with an optional `lang`) to choose by the state's language when `auto` is configured. `auto` cannot be a route ID. `max_loaded` (1–4, default 1) bounds the loaded models.
 
-Options for both:
+`options` is optional and may be `null`. The native settings sit in a nested `config` object with the native keys (the same names as the C API); the binding does not validate them, the core rejects a bad value with status 1. Options of the binding itself are camelCase beside it:
 
 | Option | Meaning |
 |---|---|
-| `threads` | 0 (automatic: at most 4 and at most the CPUs the process may use) or 1–256 |
-| `contextTokens` | Prompt capacity: 32 up to the model's maximum (`trained_context_tokens`, 8,192 for the shipped files), default 512 |
-| `overflow` | Default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan` |
-| `temperatures` | Calibration overrides keyed like `choice`, `choice.3_5` or `noul.2`; finite and above 0 |
+| `config.threads` | 0 (automatic: at most 4 and at most the CPUs the process may use) or 1–256 |
+| `config.context_tokens` | Prompt capacity: 32 up to the model's maximum (`trained_context_tokens`, 8,192 for the shipped files), default 512 |
+| `config.overflow` | Default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan` |
+| `config.temperatures` | Calibration overrides keyed like `choice`, `choice.3_5` or `noul.2`; finite and above 0 |
+| `config.max_windows_per_call` | The most forward passes one call may plan: 1–4096, default 256. For a router it applies to the whole call, so it belongs in the shared `config` and a route's own `config` cannot set it |
 | `maxPending` | Accepted calls (each call or whole batch is one), 1–1024, default 16 |
-| `addonPath` | A specific `ducktape_laya.node`; `DUCKTAPE_LAYA_ADDON` does the same |
 
-For a router, the options apply to every route, and a route's own `config` (`threads`, `context_tokens`, `overflow`, `temperatures`) overrides them.
+For a router, `config` applies to every route, and a route's own `config` (`threads`, `context_tokens`, `overflow`, `temperatures`) overrides it key by key.
+
+To use a build of the addon of your own, set `DUCKTAPE_LAYA_LIBRARY` to the addon's absolute path, or `DUCKTAPE_LAYA_LIB_DIR` to the absolute path of the directory with `ducktape_laya.node`. Both are read from the environment only, and a relative path is a `LayaLoadError`.
 
 ## Executing
 
@@ -84,11 +86,11 @@ For a router, the options apply to every route, and a route's own `config` (`thr
 
 Cancellation is cooperative; a rejected call returns no partial result. After an abort or deadline settles a call, its `onEvent` receives no more events.
 
-`Laya.runtimeInfo()` returns the runtime's identity, features and limits without loading a model; `await engine.info()` adds the model's metadata for a single-model engine.
+`Engine.runtimeInfo()` returns the runtime's identity, features and limits without loading a model; `await engine.info()` adds the model's metadata for a single-model engine.
 
 ## Errors and closing
 
-Errors are `Error` objects and all carry `status` (the C ABI status, also exported as `Status`); argument errors carry `status` 1. Queue and lifecycle failures also carry `code`: `ERR_LAYA_QUEUE_FULL` and `ERR_LAYA_CLOSED` (status 1) or `ERR_LAYA_WORKER_EXITED` (status 3). A missing, unloadable or wrong-ABI addon (including a glibc addon on a musl system), or an addon whose library is not the one it was built with, fails with status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`, as does every other status-7 error, such as a CPU without the required features; an addon that exists but cannot be loaded is reported as found, with the loader's reason. After `close()`, every call (including `info()`) rejects with `ERR_LAYA_CLOSED`. A `null` or non-object options argument (including to `close()`) and an `addonPath` that is not a non-empty string are status-1 `TypeError`s. On Linux the addon loads the library next to it even when another `libducktape_laya.so.1` is on `LD_LIBRARY_PATH`. Strings that are not well-formed Unicode are rejected.
+Errors the package raises are `LayaError` objects (exported, with `LayaLoadError` and `EngineClosedError`) carrying `status`, one of the C ABI statuses also exported as `Status`, and sometimes a `code`. Argument errors (types, units, NUL, strings that are not well-formed Unicode, non-finite numbers, binding options) are `TypeError` or `RangeError` objects that also carry `status` 1. Lifecycle failures carry `code`: `ERR_LAYA_QUEUE_FULL` (status 1), `ERR_LAYA_WORKER_EXITED` (status 3) and, as `EngineClosedError`, `ERR_LAYA_CLOSED` (status 1). A missing, unloadable or wrong-ABI addon (including a glibc addon on a musl system), or an addon whose library is not the one it was built with, fails with a `LayaLoadError`: status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`, as does every other status-7 error, such as a CPU without the required features; an addon that exists but cannot be loaded is reported as found, with the loader's reason. After `close()`, every call (including `info()`) rejects with `EngineClosedError`. A call is checked in this order: closed, then its arguments, then an already-cancelled `signal` (rejects with status 5 at once, without reaching the worker), then the queue limit, then the model. A `null` options argument means the defaults; any other non-object (including for `close()`) is a status-1 `TypeError`. On Linux the addon loads the library next to it even when another `libducktape_laya.so.1` is on `LD_LIBRARY_PATH`.
 
 `close()` stops admission and drains accepted calls; `close({ cancelPending: true })` cancels them first. Repeated calls return the same promise, and closing succeeds even if the worker already exited.
 

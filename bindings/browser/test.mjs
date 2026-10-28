@@ -23,32 +23,71 @@ async function harness({ silentInit = false } = {}) {
     initializeImportMeta(meta) { meta.url = 'https://example.test/index.mjs'; },
   });
   await module.link(() => {}); await module.evaluate();
-  return { Laya: module.namespace.Laya, workers };
+  return { Engine: module.namespace.Engine, workers };
 }
 
 test('invalid Unicode is rejected instead of replaced', async () => {
-  const { Laya, workers } = await harness();
+  const { Engine, workers } = await harness();
   const lone = 'a\ud800b';
-  await assert.rejects(Laya.open({ modelUrl: 'model.gguf', temperatures: { [lone]: 1 } }), e => e.status === 1 && /not valid Unicode/.test(e.message));
-  await assert.rejects(Laya.openRouter({ [lone]: { url: 'a.gguf' } }), e => e.status === 1 && /not valid Unicode/.test(e.message));
-  await assert.rejects(Laya.openRouter({ a: { url: lone } }), e => e.status === 1 && /not valid Unicode/.test(e.message));
+  await assert.rejects(Engine.open('model.gguf', { config: { temperatures: { [lone]: 1 } } }), e => e.status === 1 && /not valid Unicode/.test(e.message));
+  await assert.rejects(Engine.openRouter({ models: { [lone]: 'a.gguf' } }), e => e.status === 1 && /not valid Unicode/.test(e.message));
+  await assert.rejects(Engine.openRouter({ models: { a: lone } }), e => e.status === 1 && /not valid Unicode/.test(e.message));
   assert.equal(workers.length, 0);
-  const engine = await Laya.open({ modelUrl: 'model.gguf' });
+  const engine = await Engine.open('model.gguf');
   await assert.rejects(engine.execute({ state: lone, questions: {} }), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
   await assert.rejects(engine.execute(`{"state":"${lone}"}`), e => e.status === 1 && /request is not valid Unicode/.test(e.message));
   for (const value of [NaN, Infinity])
     await assert.rejects(engine.execute({ state: { amount: value }, questions: {} }), e => e.status === 1 && /non-finite number/.test(e.message));
 });
 
-test('per-route overflow is validated', async () => {
-  const { Laya, workers } = await harness();
-  await assert.rejects(Laya.openRouter({ a: { url: 'a.gguf', overflow: 'nope' } }), /overflow/);
-  assert.equal(workers.length, 0);
+test('open takes a model and options; a router takes models, max_loaded and auto; null options are the defaults', async () => {
+  const { Engine, workers } = await harness();
+  await Engine.open({ url: 'model.gguf', sha256: 'a'.repeat(64) }, null);
+  await Engine.openRouter({ models: { a: 'a.gguf', b: { url: 'b.gguf', config: { context_tokens: 64 } } }, max_loaded: 2, auto: { english: 'a', default: 'b' } }, { config: null });
+  const [single, routed] = workers.map(worker => worker.sent.find(message => message.kind === 'init').options);
+  assert.equal(single.assets.model.url, 'https://example.test/model.gguf');
+  assert.equal(single.assets.model.sha256, 'a'.repeat(64));
+  assert.equal(single.routed, false);
+  assert.equal(routed.routed, true); assert.equal(routed.maxLoaded, 2);
+  assert.equal(JSON.stringify(routed.assets.b.config), '{"context_tokens":64}');
+  assert.equal(JSON.stringify(routed.auto), '{"english":"a","default":"b"}');
+  // Binding-only conversions; config values themselves belong to the core.
+  for (const model of [undefined, null, '', {}, { url: 5 }]) await assert.rejects(Engine.open(model), { name: 'TypeError', status: 1 });
+  await assert.rejects(Engine.open('m.gguf', { config: { threads: 2 } }), { name: 'RangeError', status: 1 });
+  await assert.rejects(Engine.openRouter({ models: { a: { url: 'a.gguf', config: { threads: 0 } } } }), { name: 'RangeError', status: 1 });
+  await assert.rejects(Engine.openRouter({ models: { a: 'a.gguf' }, other: 1 }), { name: 'TypeError', status: 1 });
+  await assert.rejects(Engine.open('m.gguf', { config: [] }), { name: 'TypeError', status: 1 });
+  await assert.rejects(Engine.open({ url: 'm.gguf', sha256: 'zz' }), { name: 'TypeError', status: 1 });
+  await assert.rejects(Engine.open('m.gguf', { backend: 'cuda' }), { name: 'TypeError', status: 1 });
+  // An invalid config value is not the page's to judge: it reaches the worker.
+  await Engine.open('m.gguf', { config: { context_tokens: 0, surprise: true } });
+  assert.equal(JSON.stringify(workers.at(-1).sent.find(message => message.kind === 'init').options.config), '{"context_tokens":0,"surprise":true}');
+});
+
+test('error order: closed, then argument errors, then cancellation, then admission', async () => {
+  const { Engine, workers } = await harness();
+  const aborted = AbortSignal.abort();
+  const engine = await Engine.open('model.gguf', { maxPending: 1 });
+  const sentCount = () => workers[0].sent.length;
+  await assert.rejects(engine.execute('{}', { signal: aborted, timeoutMs: -1 }), { name: 'RangeError', status: 1 });
+  const before = sentCount();
+  await assert.rejects(engine.execute('{}', { signal: aborted }), { status: 5 });
+  assert.equal(sentCount(), before, 'an already-cancelled call sends nothing');
+  const first = engine.execute('{}');
+  await assert.rejects(engine.execute('{}', { signal: aborted }), { status: 5 });
+  await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_QUEUE_FULL' });
+  const closing = engine.close({ cancelPending: true });
+  await assert.rejects(first, { status: 5 });
+  workers[0].onmessage({ data: { id: workers[0].sent.find(message => message.kind === 'close').id, result: null } });
+  await closing;
+  for (const options of [{ timeoutMs: -1, signal: aborted }, { signal: aborted }, 5]) {
+    await assert.rejects(engine.execute('{}', options), e => e.name === 'EngineClosedError' && e.code === 'ERR_LAYA_CLOSED' && e.status === 1);
+  }
 });
 
 test('no onEvent delivery after the call settled', async () => {
-  const { Laya, workers } = await harness();
-  const engine = await Laya.open({ modelUrl: 'model.gguf' });
+  const { Engine, workers } = await harness();
+  const engine = await Engine.open('model.gguf');
   const events = [];
   const controller = new AbortController();
   const call = engine.execute({ state: {}, questions: {} }, { signal: controller.signal, onEvent: event => { events.push(event); } });
@@ -61,25 +100,25 @@ test('no onEvent delivery after the call settled', async () => {
 });
 
 test('JSON serialization failures are argument errors with status', async () => {
-  const { Laya, workers } = await harness();
+  const { Engine, workers } = await harness();
   const circular = {}; circular.self = circular;
-  await assert.rejects(Laya.open({ modelUrl: 'model.gguf', temperatures: circular }), e => e.status === 1);
-  await assert.rejects(Laya.open({ modelUrl: 'model.gguf', auto: { english: 1n } }), e => e.name === 'TypeError' && e.status === 1);
+  await assert.rejects(Engine.open('model.gguf', { config: { temperatures: circular } }), e => e.status === 1);
+  await assert.rejects(Engine.openRouter({ models: { a: 'a.gguf' }, auto: { english: 1n } }), e => e.name === 'TypeError' && e.status === 1);
   assert.equal(workers.length, 0);
-  const engine = await Laya.open({ modelUrl: 'model.gguf' });
+  const engine = await Engine.open('model.gguf');
   await assert.rejects(engine.execute({ state: circular, questions: {} }), e => e.name === 'TypeError' && e.status === 1);
   await assert.rejects(engine.execute({ state: 1n, questions: {} }), e => e.name === 'TypeError' && e.status === 1);
 });
 
 test('initialization timeout carries the deadline status', async () => {
-  const { Laya } = await harness({ silentInit: true });
-  await assert.rejects(Laya.open({ modelUrl: 'model.gguf', initializationTimeoutMs: 5 }),
+  const { Engine } = await harness({ silentInit: true });
+  await assert.rejects(Engine.open('model.gguf', { initializationTimeoutMs: 5 }),
     e => e.status === 6 && /timed out/.test(e.message));
 });
 
 test('page deadline is wall-clock so the worker realm can measure it', async () => {
-  const { Laya, workers } = await harness();
-  const engine = await Laya.open({ modelUrl: 'model.gguf' });
+  const { Engine, workers } = await harness();
+  const engine = await Engine.open('model.gguf');
   const before = Date.now();
   const call = engine.execute({ state: {}, questions: {} }, { timeoutMs: 60000 });
   const sent = workers[0].sent.find(message => message.kind === 'execute');
@@ -88,18 +127,22 @@ test('page deadline is wall-clock so the worker realm can measure it', async () 
   await call;
 });
 
-async function workerHarness(abi = 2, { create, fetch: fetchAsset, openStatus = 0 } = {}) {
-  let top = 64;
+async function workerHarness(abi = 2, { create, fetch: fetchAsset, openStatus = 0, validateStatus = 0 } = {}) {
+  let top = 64, validated = false;
   const calls = [], strings = new Map(), heap = new Uint32Array(4096);
   const runtime = {
     HEAPU32: heap, _dtl_abi_version: () => abi, _dtl_default_call_options(pointer) { heap[pointer >>> 2] = 40; },
     lengthBytesUTF8: text => Buffer.byteLength(text), stringToUTF8: (text, pointer) => { strings.set(pointer, text); },
     _malloc: size => { const pointer = top; top += (size + 7) & ~7; return pointer; }, _free() {}, _dtl_free() {},
     UTF8ToString: () => JSON.stringify({ backend: 'wasm-cpu' }), addFunction: () => 11, removeFunction() {},
-    FS: { files: new Map(), writeFile(path, bytes) { this.files.set(path, bytes); }, unlink() {} },
+    FS: { files: new Map(), writeFile(path, bytes) { this.files.set(path, bytes); }, unlink(path) { this.files.delete(path); } },
     async ccall(name, type, types, args) {
       calls.push({ name, args: [...args], words: name === 'dtl_execute' ? [...heap.slice(args[2] >>> 2, (args[2] >>> 2) + 10)] : undefined });
-      if (name === 'dtl_open' || name === 'dtl_open_router') { heap[args[2] >>> 2] = openStatus ? 0 : 1000; return openStatus; }
+      if (name === 'dtl_open' || name === 'dtl_open_router') {
+        // The first router open is the validation over placeholder files; the next one is the real open.
+        const status = name === 'dtl_open_router' && !validated ? (validated = true, validateStatus) : openStatus;
+        heap[args[2] >>> 2] = status ? 0 : 1000; return status;
+      }
       return 0;
     },
   };
@@ -115,20 +158,30 @@ async function workerHarness(abi = 2, { create, fetch: fetchAsset, openStatus = 
 const response = (chunks, length, status = 200, encoding = null, tracker = {}) => async () => ({ ok: status === 200, status,
   headers: { get: name => name === 'content-length' && length !== undefined ? String(length) : name === 'content-encoding' ? encoding : null },
   body: { cancel: async () => { tracker.cancelled = true; }, getReader: () => { let next = 0; return { read: async () => next < chunks.length ? { done: false, value: chunks[next++] } : { done: true }, cancel: async () => { tracker.cancelled = true; } }; } } });
-const wasm = { backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, modelUrl: 'https://example.test/m.gguf' };
+const single = (extra = {}, sha256) => ({ backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, routed: false,
+  assets: { model: { url: 'https://example.test/m.gguf', sha256 } }, ...extra });
+const wasm = single();
 
 test('worker forwards the auto routes into the router config', async () => {
   const { calls, namespace } = await workerHarness();
-  await namespace.init({ backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024,
-    auto: { english: 'a', default: 'b' },
-    models: { a: { url: 'https://example.test/a.gguf' }, b: { url: 'https://example.test/b.gguf' } } });
-  const open = calls.find(call => call.name === 'dtl_open_router');
-  assert.deepEqual(JSON.parse(open.args[0]).auto, { english: 'a', default: 'b' });
+  await namespace.init(single({ routed: true, auto: { english: 'a', default: 'b' }, maxLoaded: 2, config: { context_tokens: 64 },
+    assets: { a: { url: 'https://example.test/a.gguf' }, b: { url: 'https://example.test/b.gguf', config: { overflow: 'scan' } } } }));
+  const opens = calls.filter(call => call.name === 'dtl_open_router');
+  assert.equal(opens.length, 2, 'a validation open, then the real one');
+  for (const open of opens) {
+    const router = JSON.parse(open.args[0]);
+    assert.deepEqual(router.auto, { english: 'a', default: 'b' });
+    assert.equal(router.max_loaded, 2);
+    assert.deepEqual(router.models.b.config, { overflow: 'scan' });
+    assert.deepEqual(JSON.parse(open.args[1]), { context_tokens: 64, threads: 1 });
+  }
+  assert.match(JSON.parse(opens[0].args[0]).models.a, /^\/validate-/);
+  assert.match(JSON.parse(opens[1].args[0]).models.a, /^\/model-/);
 });
 
 test('worker converts the absolute wall-clock deadline to remaining milliseconds', async () => {
   const { calls, namespace } = await workerHarness();
-  await namespace.init({ backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, modelUrl: 'https://example.test/m.gguf' });
+  await namespace.init(wasm);
   await namespace.call('dtl_execute', '{}', { id: 1, observe: false, deadline: Date.now() + 5000 });
   const timeout = calls.find(call => call.name === 'dtl_execute').words[4];
   assert.ok(timeout > 3000 && timeout <= 5000, `remaining ${timeout}`);
@@ -136,18 +189,18 @@ test('worker converts the absolute wall-clock deadline to remaining milliseconds
 
 test('an incompatible runtime ABI fails with status 7 and the unsupported code', async () => {
   const { namespace } = await workerHarness(3);
-  await assert.rejects(namespace.init({ backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, modelUrl: 'https://example.test/m.gguf' }),
+  await assert.rejects(namespace.init(wasm),
     { status: 7, message: /Incompatible Laya WASM ABI/ });
 });
 
 test('the page maps status 7 worker errors to ERR_LAYA_UNSUPPORTED', async () => {
   const workers = [];
   globalThis.Worker = class { constructor() { workers.push(this); } postMessage(message) { this.sent = message; } terminate() {} };
-  const { Laya } = await import('./index.mjs?unsupported');
-  const opening = Laya.open({ modelUrl: 'https://example.test/m.gguf', moduleUrl: 'https://example.test/laya.mjs' });
+  const { Engine } = await import('./index.mjs?unsupported');
+  const opening = Engine.open('https://example.test/m.gguf', { moduleUrl: 'https://example.test/laya.mjs' });
   await new Promise(resolve => setTimeout(resolve, 0));
   workers[0].onmessage({ data: { id: workers[0].sent.id, error: 'Incompatible Laya WASM ABI', status: 7 } });
-  await assert.rejects(opening, { status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
+  await assert.rejects(opening, { name: 'LayaLoadError', status: 7, code: 'ERR_LAYA_UNSUPPORTED' });
 });
 
 test('model assets are read into one buffer whatever Content-Length says', async () => {
@@ -170,7 +223,7 @@ test('model asset failures carry their status and are final for backend auto', a
   ];
   for (const [fetchAsset, status, message] of cases) {
     const { namespace } = await workerHarness(2, { fetch: fetchAsset });
-    await assert.rejects(namespace.init({ ...wasm, sha256: 'a'.repeat(64) }), error => error.status === status && message.test(error.message) && error.final === true);
+    await assert.rejects(namespace.init(single({}, 'a'.repeat(64))), error => error.status === status && message.test(error.message) && error.final === true);
   }
 });
 
@@ -200,11 +253,16 @@ test('with a Content-Encoding the declared length is no bound: the stream decide
   assert.ok(failed.cancelled, 'the body is cancelled after an allocation failure');
 });
 
-test('an invalid config is final for backend auto; a model load failure is not', async () => {
-  for (const [status, final] of [[1, true], [2, false]]) {
-    const { namespace } = await workerHarness(2, { openStatus: status });
-    await assert.rejects(namespace.init(wasm), error => error.status === status && (error.final === true) === final);
-  }
+test('an invalid config fails with status 1 before any asset fetch and is final for backend auto; a model load failure is not', async () => {
+  let fetches = 0;
+  const counted = (...args) => { fetches++; return response([new Uint8Array(4)], 4)(...args); };
+  const invalid = await workerHarness(2, { validateStatus: 1, fetch: counted });
+  await assert.rejects(invalid.namespace.init(wasm), error => error.status === 1 && error.final === true);
+  assert.equal(fetches, 0, 'no asset was fetched');
+  assert.equal(invalid.runtime.FS.files.size, 0, 'the placeholders are removed');
+  assert.ok(invalid.calls.some(call => call.name === 'dtl_open_router'));
+  const failed = await workerHarness(2, { openStatus: 2 });
+  await assert.rejects(failed.namespace.init(wasm), error => error.status === 2 && error.final !== true);
 });
 
 test('WebAssembly memory exhaustion at instantiation is status 4, other instantiation failures status 7', async () => {

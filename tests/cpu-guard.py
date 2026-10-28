@@ -114,10 +114,10 @@ def main():
                 case['node'] = {'status': 'not_built'}
                 continue
             node = subprocess.run([qemu, '-cpu', cpu, node_binary, '-e',
-                                   'require(process.argv[1]).Laya.open(process.argv[2], {addonPath: process.argv[3]})'
+                                   'require(process.argv[1]).Engine.open(process.argv[2])'
                                    '.then(() => process.exit(10), e => { console.log(JSON.stringify({status: e.status, message: e.message})); })',
-                                   str(ROOT / 'bindings/node/index.cjs'), str(model), str(addon)],
-                                  env=env, capture_output=True, text=True, timeout=1800)
+                                   str(ROOT / 'bindings/node/index.cjs'), str(model)],
+                                  env={**env, 'DUCKTAPE_LAYA_LIBRARY': str(addon.resolve())}, capture_output=True, text=True, timeout=1800)
             case['node'] = json.loads(node.stdout) if node.returncode == 0 and node.stdout.strip() else {'exit': node.returncode, 'stderr': node.stderr[-500:]}
             if case['node'].get('status') != 7: failures.append(f'{cpu}: Node open did not reject with status 7: {case["node"]}')
         if not a.skip_control:

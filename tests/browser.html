@@ -1,6 +1,8 @@
 <!doctype html><meta charset="utf-8"><title>Laya browser conformance</title>
 <script type="module">
-import { Laya } from '/browser/index.mjs';
+import { Engine } from '/browser/index.mjs';
+// This page keeps its option bags: modelUrl and sha256 name the model, the rest are the open options.
+const open = ({ modelUrl, sha256, ...options }) => Engine.open(sha256 ? { url: modelUrl, sha256 } : modelUrl, options);
 window.state = { status: 'ready' };
 const MODEL_SHA256 = 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2';
 const sha256 = async text => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))),
@@ -21,7 +23,7 @@ const openObserved = async options => {
     }
   };
   try {
-    const pending = Laya.open(options);
+    const pending = open(options);
     globalThis.Worker = OriginalWorker;
     return { engine: await pending, replies };
   } finally { globalThis.Worker = OriginalWorker; }
@@ -81,19 +83,19 @@ window.startControls = async (backend = 'webgpu') => {
   let engine;
   try {
     const abort = new AbortController(); abort.abort();
-    try { await Laya.open({ ...options, signal: abort.signal }); throw new Error('Accepted aborted init'); }
+    try { await open({ ...options, signal: abort.signal }); throw new Error('Accepted aborted init'); }
     catch (error) { if (error.status !== 5) throw error; }
     check('aborted initialization');
-    try { await Laya.open({ ...options, maxModelBytes: 1 }); throw new Error('Ignored byte budget'); }
+    try { await open({ ...options, maxModelBytes: 1 }); throw new Error('Ignored byte budget'); }
     catch (error) { if (error.status !== 1 || !error.message.includes('maxModelBytes')) throw error; }
     check('asset budget');
-    engine = await Laya.open({ ...options, maxPending: 1 });
+    engine = await open({ ...options, maxPending: 1 });
     const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
     await expectStatus(engine.execute(request, { signal: abort.signal }), 5); check('pre-cancellation');
     await expectStatus(engine.execute(request, { timeoutMs: 1 }), 6); check('deadline');
     // Host rejection can precede the worker acknowledgment. Draining close proves cleanup.
     await engine.close({ cancelPending: true }); check('cancelled close');
-    engine = await Laya.openRouter({ a: { url: '/model.gguf' }, b: { url: '/model.gguf' } }, { ...options, maxModelBytes: 449397600, maxLoaded: 1 });
+    engine = await Engine.openRouter({ models: { a: '/model.gguf', b: '/model.gguf' }, max_loaded: 1 }, { ...options, maxModelBytes: 449397600 });
     const events = [];
     const result = await engine.execute([{ ...request, model: 'a' }, { ...request, model: 'b' }], { onEvent: e => events.push(e) });
     if (JSON.stringify(result[0].answers) !== JSON.stringify(result[1].answers) || result[0].model !== 'a' || result[1].model !== 'b') throw new Error('Alias router result changed');
@@ -102,7 +104,7 @@ window.startControls = async (backend = 'webgpu') => {
     const first = engine.close(); if (first !== engine.close()) throw new Error('close not idempotent'); await first;
     check('idempotent shutdown');
     // Force a failed GPU initialization, then validate explicit automatic CPU fallback.
-    engine = await Laya.open({ ...options, backend: 'auto', webgpuModuleUrl: '/missing.mjs' });
+    engine = await open({ ...options, backend: 'auto', webgpuModuleUrl: '/missing.mjs' });
     if (engine.capabilities.backend !== 'wasm') throw new Error('Fallback not selected');
     await expectStatus(engine.execute(request, { timeoutMs: 1 }), 6);
     check('WASM fallback and deadline');
@@ -125,7 +127,7 @@ window.startDeviceLoss = async () => {
   const OriginalWorker = globalThis.Worker;
   globalThis.Worker = class extends OriginalWorker { constructor(...args) { super(...args); worker = this; } };
   try {
-    const pending = Laya.open({ backend: 'webgpu', modelUrl: '/model.gguf', webgpuModuleUrl: '/webgpu/laya.mjs', workerUrl: '/lost-worker.mjs' });
+    const pending = open({ backend: 'webgpu', modelUrl: '/model.gguf', webgpuModuleUrl: '/webgpu/laya.mjs', workerUrl: '/lost-worker.mjs' });
     globalThis.Worker = OriginalWorker;
     engine = await pending;
     window.loss.phase = 'executing';
@@ -173,11 +175,11 @@ window.startGpuMemory = async () => {
       globalThis.Worker = class extends OriginalWorker {
         constructor(...args) { super(...args); this.postMessage({ kind: 'cancel', id: -1, testFailBuffer: { label, skip } }); }
       };
-      try { await expectFailure('open: ' + name, Laya.open({ ...options, modelUrl: '/model.gguf' }), stage); }
+      try { await expectFailure('open: ' + name, open({ ...options, modelUrl: '/model.gguf' }), stage); }
       finally { globalThis.Worker = OriginalWorker; }
     }
     globalThis.Worker = class extends OriginalWorker { constructor(...args) { super(...args); worker = this; } };
-    try { router = await Laya.openRouter({ a: { url: '/model.gguf' }, b: { url: '/model.gguf', contextTokens: 256 } }, { ...options, maxLoaded: 1 }); }
+    try { router = await Engine.openRouter({ models: { a: '/model.gguf', b: { url: '/model.gguf', config: { context_tokens: 256 } } }, max_loaded: 1 }, options); }
     finally { globalThis.Worker = OriginalWorker; }
     const expected = JSON.stringify((await router.execute({ ...request, model: 'a' })).answers);
     worker.postMessage({ kind: 'cancel', id: -1, testFailBuffer: { label: 'tensor_buf', skip: 0 } });
@@ -187,7 +189,7 @@ window.startGpuMemory = async () => {
     await router.execute({ ...request, model: 'b' });
     window.gpuMemory.checks.push({ case: 'same router keeps answering after the failure', answers: JSON.parse(again) });
     await router.close(); router = undefined;
-    const engine = await Laya.open({ ...options, workerUrl: undefined, onDiagnostic: undefined, modelUrl: '/model.gguf' });
+    const engine = await open({ ...options, workerUrl: undefined, onDiagnostic: undefined, modelUrl: '/model.gguf' });
     const answers = JSON.stringify((await engine.execute(request)).answers);
     await engine.close();
     if (answers !== expected) throw new Error(`Answers differ in a new engine: ${answers} != ${expected}`);
@@ -209,14 +211,14 @@ window.startAssets = async () => {
       [{ modelUrl: '/model.gguf', backend: 'wasm', wasmUrl: '/fixtures/primitive.json' }, ''],
     ]) {
       const label = expected || JSON.stringify(options);
-      try { const engine = await Laya.open({ initializationTimeoutMs: 240000, ...options }); await engine.close(); throw new Error('Unexpected initialization success: ' + label); }
+      try { const engine = await open({ initializationTimeoutMs: 240000, ...options }); await engine.close(); throw new Error('Unexpected initialization success: ' + label); }
       catch (error) {
         if (error.message.startsWith('Unexpected initialization success') || !error.message.includes(expected)) throw error;
         window.assets.checks.push({ case: label, error: error.message });
       }
     }
     // The page still opens a working engine after every failed initialization.
-    const engine = await Laya.open({ modelUrl: '/model.gguf', backend: 'wasm' });
+    const engine = await open({ modelUrl: '/model.gguf', backend: 'wasm' });
     await engine.execute({ state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } });
     await engine.close();
     window.assets.checks.push({ case: 'recovery after failed initialization' });
@@ -235,7 +237,7 @@ window.startMemory = async () => {
     const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
     const options = { backend: 'wasm', moduleUrl: '/constrained/laya.mjs', initializationTimeoutMs: 240000 };
     try {
-      const engine = await Laya.open({ ...options, modelUrl: '/model.gguf' });
+      const engine = await open({ ...options, modelUrl: '/model.gguf' });
       await engine.close(); throw new Error('Unexpected initialization success');
     } catch (error) {
       if (error.message === 'Unexpected initialization success') throw error;
@@ -244,13 +246,13 @@ window.startMemory = async () => {
     // Routers load lazily: the first routed request loads the model and must reject.
     let router;
     try {
-      router = await Laya.openRouter({ a: { url: '/model.gguf' } }, options);
+      router = await Engine.openRouter({ models: { a: '/model.gguf' } }, options);
       await router.execute({ ...request, model: 'a' }); throw new Error('Unexpected routed success');
     } catch (error) {
       if (error.message === 'Unexpected routed success') throw error;
       window.memory.checks.push({ case: 'router first request', status: error.status ?? null, error: error.message });
     } finally { if (router) await router.close().catch(() => {}); }
-    const engine = await Laya.open({ modelUrl: '/model.gguf', backend: 'wasm' });
+    const engine = await open({ modelUrl: '/model.gguf', backend: 'wasm' });
     await engine.execute(request);
     await engine.close();
     window.memory.checks.push({ case: 'recovery with the product build' });

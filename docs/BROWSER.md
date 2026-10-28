@@ -16,12 +16,11 @@ The browser uses the same C++ core, llama.cpp pin, GGUF, request planning, calib
 Serve the extracted package under an application-controlled URL, preserving its relative paths. A bundler may copy it into the application's public assets. For example, with the package at `/vendor/laya/`:
 
 ```js
-import { Laya } from '/vendor/laya/index.mjs';
-const engine = await Laya.open({
-  modelUrl: '/models/Laya-Q8_0.gguf',
+import { Engine } from '/vendor/laya/index.mjs';
+const engine = await Engine.open({
+  url: '/models/Laya-Q8_0.gguf',
   sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2',
-  backend: 'auto',
-});
+}, { backend: 'auto' });
 const result = await engine.execute(request, { timeoutMs: 10000, signal });
 await engine.close();
 ```
@@ -30,25 +29,31 @@ await engine.close();
 
 ## Open options
 
-`Laya.open(options)` takes the model asset (`modelUrl`, optional `sha256`) together with the open options; `Laya.openRouter(models, options)` takes the same options without the model asset. The full option table (`backend`, `contextTokens`, `overflow`, `temperatures`, `maxPending`, `maxModelBytes`, `maxLoaded`, `auto`, `initializationTimeoutMs`, `signal`, `onDiagnostic` and the asset URL overrides) is in the [package README](../bindings/browser/README.md#opening); the native meaning of each key is in the [API guide](API.md#engine-configuration). The engine always runs one thread. Initialization that exceeds `initializationTimeoutMs` rejects with `status` 6.
+`Engine.open(model, options)` takes the model (a URL, or `{ url, sha256? }`) and the options; `Engine.openRouter(router, options)` takes `{ models, max_loaded?, auto? }` and the same options. The native settings go in `options.config` with the native keys (`threads`, `context_tokens`, `overflow`, `temperatures`, `max_windows_per_call`), and the binding's own options are camelCase beside it (`backend`, `maxPending`, `maxModelBytes`, `initializationTimeoutMs`, `signal`, `onDiagnostic` and the asset URL overrides). The full table is in the [package README](../bindings/browser/README.md#opening); the native meaning of each key is in the [API guide](API.md#engine-configuration). `null` options mean the defaults. The engine always runs one thread: `config.threads` may only be 1 or absent. Initialization that exceeds `initializationTimeoutMs` rejects with `status` 6.
 
-`engine.execute(request, options)` takes one request (object or JSON string) or an array of up to 32, with the call options `signal`, `timeoutMs`, `onEvent` and `requestId` as in Node. Request objects are serialized with `JSON.stringify`, which reorders integer-like keys and writes `149.0` as `149`; pass a JSON string when the literal text matters.
+The page does not validate the config. The worker instantiates the runtime and, before it downloads anything, opens the same configuration (every route's `config` and the shared one) over empty placeholder files and closes it again: the core checks every key without loading a model, so an invalid config rejects with status 1 and wastes no download. Status 1 is final for `backend: 'auto'`.
 
-`openRouter({id: {url, sha256, contextTokens, overflow, temperatures}}, options)` maps logical routes to assets. A model's own `contextTokens`, `overflow` and `temperatures` override the shared options for that route, like a native route `config`. Identical URL/hash pairs are downloaded once and use one canonical model path. The `auto: {english, default}` option enables `"model": "auto"` (see [API.md](API.md#choosing-the-model-by-language)):
+`engine.execute(request, options)` takes one request (object or JSON string) or an array of up to 32, with the call options `signal`, `timeoutMs`, `onEvent` and `requestId` as in Node. Calls are checked in this order: closed, then argument errors, then an already-cancelled `signal` (status 5 at once, without a message to the worker), then the queue limit, then the model. Request objects are serialized with `JSON.stringify`, which reorders integer-like keys and writes `149.0` as `149`; pass a JSON string when the literal text matters.
+
+`openRouter({ models: { id: url | { url, sha256, config } }, max_loaded, auto }, options)` maps logical routes to assets. A route's own `config` overrides the shared `options.config` key by key, like a native route `config`. Identical URL/hash pairs are downloaded once and use one canonical model path. The `auto: {english, default}` key enables `"model": "auto"` (see [API.md](API.md#choosing-the-model-by-language)):
 
 ```js
-const router = await Laya.openRouter({
-  en: { url: '/models/Laya-Q8_0.gguf', sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2' },
-  ml: { url: '/models/laya-multilingual-f16.gguf', sha256: '2742df1845b29bff811082916da331b34ca214816f4fa65d7f56dd09a8f942db',
-        contextTokens: 1024 },
-}, { auto: { english: 'en', default: 'ml' }, maxLoaded: 2, maxModelBytes: 1200 * 1024 * 1024 });
+const router = await Engine.openRouter({
+  models: {
+    en: { url: '/models/Laya-Q8_0.gguf', sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2' },
+    ml: { url: '/models/laya-multilingual-f16.gguf', sha256: '2742df1845b29bff811082916da331b34ca214816f4fa65d7f56dd09a8f942db',
+          config: { context_tokens: 1024 } },
+  },
+  max_loaded: 2,
+  auto: { english: 'en', default: 'ml' },
+}, { maxModelBytes: 1200 * 1024 * 1024 });
 ```
 
 Native routing validation/cache limits remain authoritative. `maxModelBytes` limits total fetched model bytes (default 1 GiB), not peak process/GPU RAM. The English (449 MB) and multilingual (658 MB) models together exceed the default, so raise it for a router that holds both. Download buffers, filesystem storage, weights and inference buffers add memory overhead.
 
 ### Memory limits
 
-This is a wasm32 build with a 4 GiB heap ceiling: the loaded weights and inference buffers of every loaded model must fit in it. Inference memory grows with `contextTokens` ([memory measurements](PERFORMANCE.md) are for native builds), so a large `contextTokens`, especially with several loaded models, can exceed the heap. When the browser cannot grow the heap, large allocations (weights, inference buffers) fail with a native status; a failed small ggml allocation aborts the WebAssembly runtime, which rejects the pending work with status 3 and closes that engine. Other engines and the page are unaffected, and the host can open a new engine.
+This is a wasm32 build with a 4 GiB heap ceiling: the loaded weights and inference buffers of every loaded model must fit in it. Inference memory grows with `context_tokens` ([memory measurements](PERFORMANCE.md) are for native builds), so a large `context_tokens`, especially with several loaded models, can exceed the heap. When the browser cannot grow the heap, large allocations (weights, inference buffers) fail with a native status; a failed small ggml allocation aborts the WebAssembly runtime, which rejects the pending work with status 3 and closes that engine. Other engines and the page are unaffected, and the host can open a new engine.
 
 With WebGPU, a model's weights and inference buffers are GPU buffers. A buffer the GPU cannot create fails opening the engine with status 2, and a router request that loads a model with status 2; the router stays usable. Other WebGPU errors, device loss, a GPU wait longer than 30 s, and a failure to create the few-kilobyte buffer that reads results back during a request end that worker's WebAssembly instance instead (status 3, engine closed).
 

@@ -1,63 +1,63 @@
 'use strict';
 const { Worker } = require('node:worker_threads');
 const path = require('node:path');
+const { fileURLToPath } = require('node:url');
 const resolveAddon = require('./resolve-addon.cjs');
-class Laya {
+/** Every error this package raises. `status` is a `Status` value; `code` is a stable string where there is one. */
+class LayaError extends Error {
+  constructor(message, status, code) {
+    super(message);
+    this.status = status;
+    if (code !== undefined) this.code = code;
+  }
+}
+LayaError.prototype.name = 'LayaError';
+/** The native addon or library could not be found or loaded (status 7). */
+class LayaLoadError extends LayaError {
+  constructor(message) { super(message, 7, 'ERR_LAYA_UNSUPPORTED'); }
+}
+LayaLoadError.prototype.name = 'LayaLoadError';
+/** A call on a closing or closed engine (status 1). */
+class EngineClosedError extends LayaError {
+  constructor(message = 'Engine is closing or closed') { super(message, 1, 'ERR_LAYA_CLOSED'); }
+}
+EngineClosedError.prototype.name = 'EngineClosedError';
+class Engine {
   #worker; #pending = new Map(); #next = 0; #closing = false; #closePromise;
   #maxPending; #dead = false;
   constructor(token, worker, maxPending) {
-    if (token !== internal) throw new TypeError('Use Laya.open()');
+    if (token !== internal) throw new TypeError('Use Engine.open()');
     this.#worker = worker; this.#maxPending = maxPending;
   }
-  static runtimeInfo(options) {
-    const { addonPath } = optionsObject(options);
-    checkAddonPath(addonPath);
+  static runtimeInfo() {
     let text;
-    try { text = require(resolveAddon(addonPath)).info(); }
+    try { text = require(resolveAddon()).info(); }
     catch (error) { throw nativeError(addonLoadMessage(error), error.status ?? 7); }
     return JSON.parse(text);
   }
   info() { return this.#send('info').then(JSON.parse); }
-  static open(modelPath, options) { return Laya.#open(modelPath, options, false); }
-  static async openRouter(config, options) {
-    let text = config;
-    if (typeof config !== 'string') text = wellFormedJson(config, 'router config');
-    return Laya.#open(text, options, true);
+  /** `modelPath`: a string, a Buffer or Uint8Array of path bytes, or a `file:` URL. */
+  static open(modelPath, options) { return Engine.#open(modelPath, options, false); }
+  /** `router`: a RouterConfig object or its JSON text. */
+  static async openRouter(router, options) {
+    let text = router;
+    if (typeof router !== 'string') text = wellFormedJson(router, 'router config');
+    return Engine.#open(text, options, true);
   }
-  static async #open(modelPath, options, router) {
-    const { threads, contextTokens, overflow, temperatures, maxPending = 16, addonPath } = optionsObject(options);
-    const what = router ? 'router config' : 'model path';
-    if (typeof modelPath !== 'string' || modelPath.includes('\0') || Buffer.byteLength(modelPath) > 1048576) throw invalid(TypeError, `Invalid ${what}`);
-    if (!modelPath.isWellFormed()) throw invalid(TypeError, `${what} is not valid Unicode`);
-    const config = {};
-    if (threads !== undefined) {
-      if (!Number.isInteger(threads) || threads < 0 || threads > 256) throw invalid(RangeError, 'threads must be 0..256');
-      config.threads = threads;
-    }
-    if (contextTokens !== undefined) {
-      if (!Number.isSafeInteger(contextTokens) || contextTokens < 1) throw invalid(RangeError, 'contextTokens must be a positive integer');
-      config.context_tokens = contextTokens;
-    }
-    if (overflow !== undefined) {
-      if (!['reject', 'truncate_end', 'truncate_start', 'scan'].includes(overflow)) throw invalid(RangeError, 'overflow must be reject, truncate_end, truncate_start or scan');
-      config.overflow = overflow;
-    }
-    if (temperatures !== undefined) {
-      if (temperatures === null || typeof temperatures !== 'object' || Array.isArray(temperatures)) throw invalid(TypeError, 'temperatures must be an object');
-      for (const value of Object.values(temperatures)) {
-        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw invalid(RangeError, 'temperatures must be finite positive numbers');
-      }
-      config.temperatures = temperatures;
-    }
+  static async #open(target, options, router) {
+    // Conversions first (types, units, NUL, Unicode, binding-only options), then the addon; the core validates every config value.
+    const { config, maxPending = 16 } = optionsObject(options);
+    const modelPath = router ? textArg(target, 'router config') : pathArg(target);
+    if (config !== undefined && config !== null && (typeof config !== 'object' || Array.isArray(config))) throw invalid(TypeError, 'config must be an object');
+    const configJson = config === undefined || config === null ? null : wellFormedJson(config, 'config');
     if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw invalid(RangeError, 'maxPending must be 1..1024');
-    checkAddonPath(addonPath);
     let resolved;
-    try { resolved = resolveAddon(addonPath); }
+    try { resolved = resolveAddon(); }
     catch (error) { throw nativeError(error.message, error.status ?? 7); }
     const worker = new Worker(path.join(__dirname, 'worker.cjs'), { workerData: {
-      modelPath, config: Object.keys(config).length ? wellFormedJson(config, 'config') : null, router, addonPath: resolved
+      modelPath, config: configJson, router, addonPath: resolved
     }});
-    const engine = new Laya(internal, worker, maxPending);
+    const engine = new Engine(internal, worker, maxPending);
     await new Promise((resolve, reject) => {
       let ready = false;
       worker.on('message', (message) => {
@@ -93,14 +93,13 @@ class Laya {
   }
   #send(kind, request, onEvent, { signal, timeoutMs = 0, requestId } = {}) {
     // A closed engine reports ERR_LAYA_CLOSED even after its worker has exited.
-    if (this.#closing && kind !== 'close') return Promise.reject(closedError());
+    if (this.#closing && kind !== 'close') return Promise.reject(new EngineClosedError());
     if (this.#dead) return Promise.reject(exitedError('Engine worker has exited'));
     // JSON.stringify can run application getters/toJSON methods that submit work
-    // or close this engine. Check again at the actual enqueue boundary.
-    if (kind !== 'close') {
-      if (this.#pending.size >= this.#maxPending) return Promise.reject(queueFullError());
-    }
-    if (signal?.aborted) return Promise.reject(Object.assign(new Error('Request cancelled'), { status: 5 }));
+    // or close this engine, so the order is checked again here, at the enqueue boundary:
+    // an already-cancelled call fails at once, before admission.
+    if (signal?.aborted) return Promise.reject(new LayaError('Request cancelled', 5));
+    if (kind !== 'close' && this.#pending.size >= this.#maxPending) return Promise.reject(queueFullError());
     const id = ++this.#next;
     const cancellation = new Int32Array(new SharedArrayBuffer(4));
     const deadline = timeoutMs ? process.hrtime.bigint() + BigInt(timeoutMs) * 1000000n : 0n;
@@ -111,7 +110,7 @@ class Laya {
         Atomics.compareExchange(cancellation, 0, 0, status);
         cleanup();
         entry.onEvent = undefined; // the promise settles now; drop late events
-        reject(Object.assign(new Error(status === 6 ? 'Request deadline exceeded' : 'Request cancelled'), { status }));
+        reject(new LayaError(status === 6 ? 'Request deadline exceeded' : 'Request cancelled', status));
       };
       const abort = () => stop(5);
       const entry = { resolve, reject, onEvent, cleanup, stop, kind };
@@ -126,13 +125,14 @@ class Laya {
   }
   /** Runs one request object (or JSON string) or an array of requests. */
   async execute(request, options) {
+    // Order: closed, then conversions, then an already-cancelled signal, then admission, then the native call.
+    if (this.#closing) throw new EngineClosedError();
+    if (this.#dead) throw exitedError('Engine worker has exited');
     const { onEvent, signal, timeoutMs = 0, requestId } = optionsObject(options);
     if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw invalid(RangeError, 'timeoutMs must be 0..86400000');
     if (requestId !== undefined && (!Number.isSafeInteger(requestId) || requestId < 0)) throw invalid(RangeError, 'requestId must be a non-negative safe integer');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
     if (onEvent !== undefined && typeof onEvent !== 'function') throw invalid(TypeError, 'onEvent must be a function');
-    if (this.#closing) throw closedError();
-    if (this.#pending.size >= this.#maxPending) throw queueFullError();
     // A JSON string preserves the caller's literal key order, including numeric labels.
     const text = typeof request === 'string' ? request : wellFormedJson(request, 'request');
     if (typeof text === 'string' && !text.isWellFormed()) throw invalid(TypeError, 'request is not valid Unicode');
@@ -159,25 +159,38 @@ class Laya {
     return this.#closePromise;
   }
 }
-const internal = Symbol('Laya');
-// Options default to {}; null or a non-object is an argument error with status 1.
+const internal = Symbol('Engine');
+// Options default to {}; undefined and null mean the defaults, any other non-object is an argument error with status 1.
 const optionsObject = options => {
-  if (options === undefined) return {};
-  if (options === null || typeof options !== 'object') throw invalid(TypeError, 'options must be an object');
+  if (options === undefined || options === null) return {};
+  if (typeof options !== 'object') throw invalid(TypeError, 'options must be an object');
   return options;
 };
 // Every error this package raises carries a status: lifecycle and queue errors as the other bindings
 // report a closed engine (1, INVALID_ARGUMENT), a failed worker as an inference failure (3).
-const closedError = () => Object.assign(new Error('Engine is closing or closed'), { status: 1, code: 'ERR_LAYA_CLOSED' });
-const queueFullError = () => Object.assign(new Error('Laya queue is full'), { status: 1, code: 'ERR_LAYA_QUEUE_FULL' });
-const exitedError = message => Object.assign(new Error(message), { status: 3, code: 'ERR_LAYA_WORKER_EXITED' });
-// Load and ABI failures (status 7) also carry a stable code.
-const nativeError = (message, status) => Object.assign(new Error(message), { status }, status === 7 ? { code: 'ERR_LAYA_UNSUPPORTED' } : {});
+const queueFullError = () => new LayaError('Laya queue is full', 1, 'ERR_LAYA_QUEUE_FULL');
+const exitedError = message => new LayaError(message, 3, 'ERR_LAYA_WORKER_EXITED');
+// Load and ABI failures (status 7) are LayaLoadError with a stable code.
+const nativeError = (message, status) => status === 7 ? new LayaLoadError(message) : new LayaError(message, status);
 const invalid = (Type, message) => Object.assign(new Type(message), { status: 1 });
-const checkAddonPath = addonPath => {
-  if (addonPath !== undefined && (typeof addonPath !== 'string' || !addonPath || addonPath.includes('\0'))) throw invalid(TypeError, 'addonPath must be a non-empty string');
-};
 const addonLoadMessage = resolveAddon.loadMessage;
+// A router config's JSON text.
+const textArg = (text, what) => {
+  if (typeof text !== 'string' || text.includes('\0') || Buffer.byteLength(text) > 1048576) throw invalid(TypeError, `Invalid ${what}`);
+  if (!text.isWellFormed()) throw invalid(TypeError, `${what} is not valid Unicode`);
+  return text;
+};
+// A model path: a string, a `file:` URL, or the bytes of a path in a Buffer or Uint8Array (kept as given).
+const pathArg = value => {
+  if (value instanceof URL) {
+    try { value = fileURLToPath(value); } catch (error) { throw invalid(TypeError, `Invalid model path: ${error.message}`); }
+  }
+  if (value instanceof Uint8Array) {
+    if (value.includes(0) || value.byteLength > 1048576) throw invalid(TypeError, 'Invalid model path');
+    return Uint8Array.from(value);
+  }
+  return textArg(value, 'model path');
+};
 // JSON.stringify escapes lone surrogates instead of failing, which the native
 // side would then silently replace, and writes non-finite numbers as null;
 // reject both before serializing.
@@ -195,4 +208,4 @@ const wellFormedJson = (value, what) => {
   }
 };
 const Status = Object.freeze({ OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
-module.exports = { Laya, Status };
+module.exports = { Engine, Status, LayaError, LayaLoadError, EngineClosedError };
