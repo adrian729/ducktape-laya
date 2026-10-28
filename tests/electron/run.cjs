@@ -21,12 +21,12 @@ async function main() {
     if (result.status) throw new Error(result.stderr);
     writeFileSync(path.join(app, 'main.cjs'), `
 const { app } = require('electron');
-const { Laya } = require('ducktape-laya');
+const { Engine } = require('ducktape-laya');
 app.disableHardwareAcceleration();
 app.whenReady().then(async () => {
   let engine;
   try {
-    engine = await Laya.open(process.env.DTL_ELECTRON_MODEL);
+    engine = await Engine.open(process.env.DTL_ELECTRON_MODEL);
     const result = await engine.execute({ state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } });
     if (!(result.answers.refund.noul >= 0 && result.answers.refund.noul <= 1)) throw new Error('Invalid probabilities');
     await engine.close();
@@ -39,7 +39,7 @@ app.whenReady().then(async () => {
     // Worker_threads cannot rely on Electron's main-thread ASAR filesystem hooks.
     await createPackageWithOptions(app, asar, { unpackDir: 'node_modules/ducktape-laya' });
     const env = { ...process.env, DTL_ELECTRON_MODEL: model };
-    delete env.DUCKTAPE_LAYA_ADDON; delete env.DUCKTAPE_LAYA_LIB_DIR; delete env.ELECTRON_RUN_AS_NODE;
+    delete env.DUCKTAPE_LAYA_LIBRARY; delete env.DUCKTAPE_LAYA_LIB_DIR; delete env.ELECTRON_RUN_AS_NODE;
     for (const application of [app, asar]) {
       result = spawnSync(require('electron'), ['--ozone-platform=headless', '--disable-gpu', application], { env, encoding: 'utf8', timeout: 180000 });
       if (result.status !== 0) throw new Error(`Electron ${application}: ${result.error || result.stderr}\n${result.stdout}`);

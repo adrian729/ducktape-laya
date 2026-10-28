@@ -16,7 +16,6 @@ export interface Usage { input_tokens: number; output_tokens: 0; state_tokens?: 
 /** Why `"model": "auto"` chose its route. */
 export interface Routing { reason: 'lang' | 'english_text' | 'no_letters' | 'non_latin_script' | 'too_short' | 'other_language' | 'non_english_letters' | 'no_english_words'; lang?: string; script?: string; language?: string }
 export interface Result { answers: Record<string, Answer>; usage: Usage; model?: string }
-
 export type Property =
   | { type: 'string'; enum: string[]; description?: string; title?: string }
   | { type: 'boolean'; description?: string; title?: string }
@@ -28,10 +27,8 @@ export interface DecisionSchema {
 export interface StructuredRequest { state: Json; schema: DecisionSchema; boolean_threshold?: number; model?: string; lang?: string; max_tokens?: number; temperatures?: Record<string, number>; overflow?: Overflow; max_windows?: number }
 export interface StructuredResult extends Result { values: Record<string, string | number | boolean> }
 export interface ObserverEvent { event: 'start' | 'end' | 'error'; request_id: number; status: number; elapsed_ms: number }
-export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; onEvent?: (event: ObserverEvent) => void | Promise<void> }
 /** `requestId` (non-negative safe integer) is reported as `request_id` in events; defaults to a generated id. */
-export interface ExecuteOptions extends CallOptions { requestId?: number }
-
+export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; requestId?: number; onEvent?: (event: ObserverEvent) => void | Promise<void> }
 export interface RuntimeInfo {
   schema_version: 1; package_version: string; abi_version: number; llama_cpp_commit: string;
   runtime_patches: { path: string; sha256: string; purpose: string }[];
@@ -42,8 +39,29 @@ export interface RuntimeInfo {
   model?: { architecture: string; name: string; decision_type: string; max_head_tokens: number; context_tokens: number; trained_context_tokens: number; temperatures: Record<string, number>; metadata_temperatures: Record<string, number> };
 }
 
-/** Shape of errors thrown by this package; `status` is a `Status` value, `code` a stable string. */
-export interface LayaError extends Error {
-  status: number;
-  code?: 'ERR_LAYA_CLOSED' | 'ERR_LAYA_QUEUE_FULL' | 'ERR_LAYA_WORKER_EXITED' | 'ERR_LAYA_UNSUPPORTED';
+/** The native status values. */
+export type StatusCode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+/** Native status codes carried on `error.status`. Mirrors the C ABI `dtl_status`. */
+export declare const Status: Readonly<{
+  OK: 0; INVALID_ARGUMENT: 1; MODEL_ERROR: 2; INFERENCE_ERROR: 3;
+  OUT_OF_MEMORY: 4; CANCELLED: 5; DEADLINE_EXCEEDED: 6; UNSUPPORTED_PLATFORM: 7;
+}>;
+export type LayaErrorCode = 'ERR_LAYA_CLOSED' | 'ERR_LAYA_QUEUE_FULL' | 'ERR_LAYA_WORKER_EXITED' | 'ERR_LAYA_UNSUPPORTED';
+/** Every error this package raises, except that argument errors are `TypeError` or `RangeError` objects that also carry `status` 1. */
+export class LayaError extends Error {
+  constructor(message: string, status: StatusCode, code?: LayaErrorCode);
+  status: StatusCode;
+  code?: LayaErrorCode;
+}
+/** The addon or the native library cannot be found or loaded: status 7, code `ERR_LAYA_UNSUPPORTED`. */
+export class LayaLoadError extends LayaError {
+  constructor(message: string);
+  status: 7;
+  code: 'ERR_LAYA_UNSUPPORTED';
+}
+/** A call on a closing or closed engine: status 1, code `ERR_LAYA_CLOSED`. */
+export class EngineClosedError extends LayaError {
+  constructor(message?: string);
+  status: 1;
+  code: 'ERR_LAYA_CLOSED';
 }

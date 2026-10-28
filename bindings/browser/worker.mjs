@@ -140,44 +140,65 @@ async function init(options) {
     try { const event = JSON.parse(runtime.UTF8ToString(text)); if (active) postMessage({ id: active.id, event }); } catch {}
   }, 'vii');
   cancellation = runtime.addFunction(() => active ? ((active.flag ? Atomics.load(active.flag, 0) : 0) || active.status || 0) : 0, 'ii');
-  routed = !!options.models;
-  const assets = options.models || { model: { url: options.modelUrl, sha256: options.sha256 } };
+  routed = options.routed;
+  const assets = options.assets;
+  // Single-threaded worker; no COOP/COEP requirement. The page has already refused a threads value other than 1.
+  const config = JSON.stringify({ ...options.config, threads: 1 });
+  // The router JSON for the given model paths: every route keeps its own config, passed through.
+  const routerJson = pathOf => {
+    const routes = Object.create(null);
+    for (const [id, descriptor] of Object.entries(assets)) routes[id] = descriptor.config ? { path: pathOf(descriptor), config: descriptor.config } : pathOf(descriptor);
+    return JSON.stringify({ models: routes, ...(options.maxLoaded !== undefined ? { max_loaded: options.maxLoaded } : {}),
+      ...(options.auto !== undefined ? { auto: options.auto } : {}) });
+  };
+  // Calls dtl_open or dtl_open_router. `keep` stores the engine as the handle; otherwise it is closed again.
+  const open = async (kind, input, keep) => {
+    const out = runtime._malloc(4), error = runtime._malloc(4);
+    if (!out || !error) { if (out) runtime._free(out); if (error) runtime._free(error); throw fail('Out of WASM memory', 4); }
+    try {
+      runtime.HEAPU32[out >>> 2] = runtime.HEAPU32[error >>> 2] = 0;
+      const status = await runtime.ccall(kind, 'number', ['string','string','number','number'], [input, config, out, error], { async: true });
+      const opened = runtime.HEAPU32[out >>> 2];
+      const message = runtime.HEAPU32[error >>> 2];
+      try {
+        if (status) {
+          // An invalid config or route (status 1) is invalid on every backend: backend 'auto' does not retry it.
+          throw (status === 1 ? assetError : fail)(message ? runtime.UTF8ToString(message) : 'Model loading failed', status);
+        }
+        if (keep) handle = opened;
+        else if (opened) await runtime.ccall('dtl_close', null, ['number'], [opened], { async: true });
+      } finally { runtime._dtl_free(message); }
+    } finally { runtime._free(out); runtime._free(error); }
+  };
+  // The core validates every config and route key before it loads a model, so a bad config fails here, before any
+  // download: open the same router over 0-byte placeholder files (routes load lazily), then close it.
+  {
+    const placeholders = new Map(), written = [];
+    try {
+      const placeholder = descriptor => {
+        const identity = JSON.stringify([descriptor.url, descriptor.sha256 || null]);
+        if (!placeholders.has(identity)) {
+          const path = `/validate-${placeholders.size}.gguf`;
+          runtime.FS.writeFile(path, new Uint8Array(0)); written.push(path); placeholders.set(identity, path);
+        }
+        return placeholders.get(identity);
+      };
+      await open('dtl_open_router', routerJson(placeholder), false);
+    } finally { for (const path of written) runtime.FS.unlink(path); }
+  }
   let remaining = options.maxModelBytes;
-  const models = Object.create(null), loaded = new Map();
-  for (const [id, descriptor] of Object.entries(assets)) {
+  const paths = new Map();
+  for (const descriptor of Object.values(assets)) {
     const identity = JSON.stringify([descriptor.url, descriptor.sha256 || null]);
-    if (loaded.has(identity)) { models[id] = loaded.get(identity); continue; }
+    if (paths.has(identity)) continue;
     const bytes = await asset(descriptor.url, remaining, descriptor.sha256);
     remaining -= bytes.length;
     const path = `/model-${files.length}.gguf`;
     runtime.FS.writeFile(path, bytes, { canOwn: true });
-    files.push(path); models[id] = path; loaded.set(identity, path);
+    files.push(path); paths.set(identity, path);
   }
-  const out = runtime._malloc(4), error = runtime._malloc(4);
-  if (!out || !error) throw fail('Out of WASM memory', 4);
-  try {
-    runtime.HEAPU32[out >>> 2] = runtime.HEAPU32[error >>> 2] = 0;
-    // Single-threaded worker; no COOP/COEP requirement.
-    const config = { threads: 1 };
-    if (options.contextTokens !== undefined) config.context_tokens = options.contextTokens;
-    if (options.overflow !== undefined) config.overflow = options.overflow;
-    if (options.temperatures !== undefined) config.temperatures = options.temperatures;
-    const routes = Object.create(null);
-    for (const [id, path] of Object.entries(models)) {
-      const route = {};
-      if (assets[id]?.contextTokens !== undefined) route.context_tokens = assets[id].contextTokens;
-      if (assets[id]?.overflow !== undefined) route.overflow = assets[id].overflow;
-      if (assets[id]?.temperatures !== undefined) route.temperatures = assets[id].temperatures;
-      routes[id] = Object.keys(route).length ? { path, config: route } : path;
-    }
-    const input = routed ? JSON.stringify({ models: routes, max_loaded: options.maxLoaded ?? 1, ...(options.auto ? { auto: options.auto } : {}) }) : files[0];
-    const status = await runtime.ccall(routed ? 'dtl_open_router' : 'dtl_open', 'number', ['string','string','number','number'], [input, JSON.stringify(config), out, error], { async: true });
-    handle = runtime.HEAPU32[out >>> 2];
-    const message = runtime.HEAPU32[error >>> 2];
-    // An invalid config or route (status 1) is invalid on every backend: backend 'auto' does not retry it.
-    try { if (status) throw (status === 1 ? assetError : fail)(message ? runtime.UTF8ToString(message) : 'Model loading failed', status); }
-    finally { runtime._dtl_free(message); }
-  } finally { runtime._free(out); runtime._free(error); }
+  const pathOf = descriptor => paths.get(JSON.stringify([descriptor.url, descriptor.sha256 || null]));
+  await open(routed ? 'dtl_open_router' : 'dtl_open', routed ? routerJson(pathOf) : pathOf(assets.model), true);
   return { backend: options.backend, abi: 2, threads: 1, runningCancellation: globalThis.crossOriginIsolated === true && options.backend === 'wasm', deadlines: true };
 }
 onmessage = ({ data }) => {

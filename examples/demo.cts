@@ -1,5 +1,5 @@
 const { createInterface }: typeof import('node:readline') = require('node:readline');
-const { Laya }: typeof import('../bindings/node') = require('../bindings/node');
+const { Engine }: typeof import('../bindings/node') = require('../bindings/node');
 
 (async () => {
   const model = process.argv[2] || process.env.LAYA_MODEL;
@@ -25,7 +25,7 @@ const { Laya }: typeof import('../bindings/node') = require('../bindings/node');
     }}};
   } finally { form.close(); }
   console.log('Running Laya...');
-  const engine = await Laya.open(model, { threads: 2 });
+  const engine = await Engine.open(model, { config: { threads: 2 } });
   try {
     const { answers: { decision } } = await engine.execute(request);
     if (decision.type !== 'choice') throw Error('Expected a choice response.');

@@ -10,7 +10,11 @@ async function open(requested, actual) {
     HEAPU32: new Uint32Array(1024), _dtl_abi_version: () => 2, _dtl_default_call_options(pointer) { this.HEAPU32[pointer >>> 2] = 40; },
     _malloc: () => { allocation += 32; return allocation; }, _free() {}, _dtl_free() {},
     UTF8ToString: () => JSON.stringify({ backend: actual }), addFunction: () => 1,
+    FS: { writeFile() {}, unlink() {} },
     ccall(name, type, types, args) {
+      // Only dtl_info before the backend check; the config validation (an open over placeholders) and its close come after it.
+      if (name === 'dtl_open_router') { this.HEAPU32[args[2] >>> 2] = 1000; return 0; }
+      if (name === 'dtl_close') return 0;
       assert.equal(name, 'dtl_info');
       this.HEAPU32[args[1] >>> 2] = 512;
       return 0;
@@ -33,7 +37,7 @@ async function open(requested, actual) {
   await worker.link(() => {});
   await worker.evaluate();
   try {
-    await worker.namespace.init({ backend: requested, moduleUrl: 'https://example.test/laya.mjs', modelUrl: 'model' });
+    await worker.namespace.init({ backend: requested, moduleUrl: 'https://example.test/laya.mjs', routed: false, assets: { model: { url: 'model' } } });
   } catch (error) { return { error, fetched }; }
   assert.fail('Expected a mismatch or intercepted model fetch');
 }
@@ -81,7 +85,8 @@ test('worker passes ABI 2 open config and the wasm32 call-options layout', async
   const worker = new vm.SourceTextModule(workerSource + '\nexport { init, call };', { context, importModuleDynamically: async () => module });
   await worker.link(() => {}); await worker.evaluate();
   const base = { backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024 };
-  await worker.namespace.init({ ...base, modelUrl: 'https://example.test/m.gguf', contextTokens: 256, temperatures: { 'choice.3_5': 1.7 } });
+  const model = { model: { url: 'https://example.test/m.gguf' } };
+  await worker.namespace.init({ ...base, routed: false, assets: model, config: { context_tokens: 256, temperatures: { 'choice.3_5': 1.7 } } });
   const open = calls.find(call => call.name === 'dtl_open');
   assert.deepEqual(JSON.parse(open.args[1]), { threads: 1, context_tokens: 256, temperatures: { 'choice.3_5': 1.7 } });
   const info = JSON.parse(JSON.stringify(calls)).filter(call => call.name === 'dtl_info');
@@ -96,7 +101,7 @@ test('worker passes ABI 2 open config and the wasm32 call-options layout', async
   await worker.namespace.call('dtl_execute', '{}', { id: 4, observe: false, deadline: 0 });
   const second = calls.filter(call => call.name === 'dtl_execute')[1];
   assert.deepEqual(second.words.slice(2, 4), [4, 0]); assert.equal(second.words[6], 0);
-  await worker.namespace.init({ ...base, modelUrl: 'https://example.test/m.gguf', overflow: 'scan' });
+  await worker.namespace.init({ ...base, routed: false, assets: model, config: { overflow: 'scan' } });
   assert.deepEqual(JSON.parse(calls.filter(call => call.name === 'dtl_open')[1].args[1]), { threads: 1, overflow: 'scan' });
 });
 
@@ -117,10 +122,11 @@ test('worker serializes per-route router config', async () => {
   await module.link(() => {}); await module.evaluate();
   const worker = new vm.SourceTextModule(workerSource + '\nexport { init };', { context, importModuleDynamically: async () => module });
   await worker.link(() => {}); await worker.evaluate();
-  await worker.namespace.init({ backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, contextTokens: 128,
-    models: { a: { url: 'https://example.test/a.gguf', contextTokens: 1024 }, b: { url: 'https://example.test/b.gguf', temperatures: { noul: 2 } } } });
-  const open = calls.find(call => call.name === 'dtl_open_router');
+  await worker.namespace.init({ backend: 'wasm', moduleUrl: 'https://example.test/laya.mjs', maxModelBytes: 1024, routed: true, config: { context_tokens: 128 },
+    assets: { a: { url: 'https://example.test/a.gguf', config: { context_tokens: 1024 } }, b: { url: 'https://example.test/b.gguf', config: { temperatures: { noul: 2 } } } } });
+  // The first open validates the config over placeholder files; the last one is the real open.
+  const open = calls.filter(call => call.name === 'dtl_open_router').at(-1);
   assert.deepEqual(JSON.parse(open.args[0]), { models: { a: { path: '/model-0.gguf', config: { context_tokens: 1024 } },
-    b: { path: '/model-1.gguf', config: { temperatures: { noul: 2 } } } }, max_loaded: 1 });
+    b: { path: '/model-1.gguf', config: { temperatures: { noul: 2 } } } } });
   assert.deepEqual(JSON.parse(open.args[1]), { threads: 1, context_tokens: 128 });
 });
