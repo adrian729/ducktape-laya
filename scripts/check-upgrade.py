@@ -150,7 +150,7 @@ try:
         report['runs'][label + '-build']['reused_build'] = owner if reused else None
         report['runs'][label + '-build']['runtime_source'] = upstream.name
         env = dict(os.environ, LAYA_MODEL=str(weights), LD_LIBRARY_PATH=str(build),
-                   DUCKTAPE_LAYA_LIB_DIR=str(build), DUCKTAPE_LAYA_ADDON=str(build / 'ducktape_laya.node'),
+                   DUCKTAPE_LAYA_LIB_DIR=str(build),
                    CARGO_TARGET_DIR=str(build / 'rust-tests'))
         run(label + '-native', ['ctest', '--test-dir', str(build), '--output-on-failure'], core, env)
         run(label + '-rust', ['cargo', 'test', '--locked', '--offline', '--manifest-path', str(core / 'bindings/rust/Cargo.toml')], core, env)

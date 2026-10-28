@@ -44,7 +44,7 @@ The build produces `ducktape_laya.dll` and its import library `ducktape_laya.lib
 Add `-DDUCKTAPE_BUILD_NODE=ON -DNODE_INCLUDE_DIR=/path/to/include/node` (the Node-API headers of your Node version). On Windows the addon also links `node.lib`: `python scripts/fetch-node-sdk.py build-node-sdk --lib` downloads the headers and `node.lib` for the running Node version, checks them against pinned SHA-256 values, and prints the `NODE_INCLUDE_DIR` and `NODE_LIB` values to pass. Run the checkout's binding with the built addon:
 
 ```sh
-export DUCKTAPE_LAYA_ADDON="$PWD/build/ducktape_laya.node"
+export DUCKTAPE_LAYA_LIBRARY="$PWD/build/ducktape_laya.node"
 node bindings/node/decide.cjs /path/to/Laya-Q8_0.gguf < examples/request.json
 ```
 

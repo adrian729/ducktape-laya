@@ -110,7 +110,7 @@ def check_jar_decoys(jar, probe, native, target, directory, env):
     real = directory / 'real'
     real.mkdir()
     shutil.copy(library_directory(native, target) / target.library, real / target.library)
-    result = subprocess.run([*base, f'-Dducktape.laya.library={real / target.library}', str(probe)], cwd=decoys['cwd'], env=run_env,
+    result = subprocess.run([*base, str(probe)], cwd=decoys['cwd'], env=dict(run_env, DUCKTAPE_LAYA_LIBRARY=str(real / target.library)),
                             capture_output=True, text=True)
     if result.returncode:
         refused = 'DYLD_LIBRARY_PATH' in result.stderr and 'Refusing' in result.stderr
@@ -200,7 +200,7 @@ def check_node_resolution(app, native, target, directory, env):
     decoy.mkdir()
     for name in target.node_libraries:
         shutil.copy(library_directory(native, target) / target.library, decoy / name)
-    script = ("require('ducktape-laya').Laya.runtimeInfo(); const fs = require('node:fs');"
+    script = ("require('ducktape-laya').Engine.runtimeInfo(); const fs = require('node:fs');"
               "process.stdout.write([...new Set(fs.readFileSync('/proc/self/maps', 'utf8').split('\\n')"
               ".map(line => line.slice(line.indexOf('/'))).filter(file => file.includes('/libducktape_laya.so')))].join('\\n'))")
     files = subprocess.check_output(['node', '-e', script], cwd=app, env=with_library_path(env, decoy, target), text=True).split()
@@ -222,7 +222,7 @@ def check_node_resolution_macos(app, native, target, directory, env):
         raise SystemExit(f'{addon}: expected only @loader_path rpaths, found {rpaths}')
     decoys = macos_decoys(native, target, directory)
     script = ("const path = require('node:path'); let refused = '';"
-              f"try {{ require({json.dumps(str(app / 'node_modules/ducktape-laya'))}).Laya.runtimeInfo(); }} catch (error) {{ refused = error.message; }}"
+              f"try {{ require({json.dumps(str(app / 'node_modules/ducktape-laya'))}).Engine.runtimeInfo(); }} catch (error) {{ refused = error.message; }}"
               "const files = [...new Set(process.report.getReport().sharedObjects.filter(file => path.basename(file).startsWith('libducktape_laya')))];"
               "process.stdout.write(JSON.stringify({ refused, files }))")
     expected = [(addon.parent / target.node_libraries[0]).resolve()]
@@ -269,7 +269,7 @@ def probe_npm(directory, native):
                     str(artifacts / f'ducktape-laya-{version}.tgz')], cwd=app, check=True, capture_output=True)
     reported = subprocess.check_output(['node', '-e', "const r = require('ducktape-laya/resolve-addon.cjs')(); "
                                         f"if (!r.includes(require('node:path').join('native', '{target.npm}', 'ducktape_laya.node'))) throw new Error(r); "
-                                        "process.stdout.write(String(require('ducktape-laya').Laya.runtimeInfo().abi_version))"],
+                                        "process.stdout.write(String(require('ducktape-laya').Engine.runtimeInfo().abi_version))"],
                                        cwd=app, env=env, text=True)
     if target.os == 'linux':
         node_resolution = check_node_resolution(app, native, target, directory, env)
@@ -295,7 +295,7 @@ def probe_jar(directory, native):
     # The Maven jar extracts its bundled library when no library is configured.
     java = directory / 'Probe.java'
     java.write_text('public class Probe { public static void main(String[] a) {\n'
-                    '  String info = io.github.adrian729.laya.Laya.runtimeInfo();\n'
+                    '  String info = io.github.adrian729.laya.Engine.runtimeInfo();\n'
                     '  System.out.print(info.replaceAll("(?s).*.abi_version.:[ ]*([0-9]+).*", "$1")); } }\n')
     reported = subprocess.check_output(['java', '--enable-native-access=ALL-UNNAMED', '-cp',
                                         str(artifacts / f'ducktape-laya-{version}.jar'), str(java)],
@@ -328,7 +328,7 @@ def probe_nupkg(directory, native):
 using System.Runtime.InteropServices;
 [DllImport("/usr/lib/libSystem.B.dylib")] static extern uint _dyld_image_count();
 [DllImport("/usr/lib/libSystem.B.dylib")] static extern IntPtr _dyld_get_image_name(uint index);
-var info = JsonDocument.Parse(Ducktape.Laya.LayaEngine.RuntimeInfo());
+var info = JsonDocument.Parse(Ducktape.Laya.Engine.RuntimeInfo());
 if (args.Length > 0 && args[0] == "--loaded-from")
 {
     var loaded = new List<string>();

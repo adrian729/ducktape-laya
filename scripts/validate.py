@@ -403,7 +403,7 @@ class Validation:
         # LD_LIBRARY_PATH (Linux) and DYLD_LIBRARY_PATH (macOS) let the Rust and Go test programs, linked against
         # @rpath/libducktape_laya.1.dylib without a run path on macOS, find the library in the build directory.
         env = dict(os.environ, LD_LIBRARY_PATH=str(build), DYLD_LIBRARY_PATH=str(build), DUCKTAPE_LAYA_LIB_DIR=str(build),
-                   DUCKTAPE_LAYA_ADDON=str(build / 'ducktape_laya.node'), PYTHONPATH=str(ROOT / 'bindings/python/src'),
+                   PYTHONPATH=str(ROOT / 'bindings/python/src'),
                    DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1', GOTOOLCHAIN='local',
                    CGO_CFLAGS='-I' + str(ROOT / 'include'), CGO_LDFLAGS='-L' + str(build), **CCACHE_ENVIRONMENT)
         env.pop('LAYA_MODEL', None)
@@ -690,7 +690,7 @@ class Validation:
             for label, command in (('java-compile', ['javac', '--release', '22', lint, '-d', classes, *sources('main')]),
                                    ('java-test-compile', ['javac', '--release', '22', lint, '-cp', classes, '-d', tests, *sources('test')]),
                                    ('java', ['java', '--enable-native-access=ALL-UNNAMED', '-cp', os.pathsep.join(map(str, (classes, tests))),
-                                             'io.github.adrian729.laya.LayaTest'])):
+                                             'io.github.adrian729.laya.EngineTest'])):
                 if self.run(label, command, check=False):
                     return 1
             return 0

@@ -44,7 +44,6 @@ if ! cmake -S "$root" -B "$root/build" -DCMAKE_BUILD_TYPE=Release "${args[@]}" >
 fi
 export LD_LIBRARY_PATH="$root/build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export DUCKTAPE_LAYA_LIB_DIR="$root/build"
-export DUCKTAPE_LAYA_ADDON="$root/build/ducktape_laya.node"
 case "$language" in
   c|cpp) exec "$root/build/$target" "$model" ;;
   rust) exec cargo run --locked --quiet --manifest-path "$root/bindings/rust/Cargo.toml" -p ducktape-laya --example demo -- "$model" ;;

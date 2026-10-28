@@ -28,6 +28,19 @@ Agreement with the original Laya is checked per platform against the same limits
 | --- | --- | --- | --- | --- | --- |
 | Windows x64 (clang-cl; released from 0.3.0) | English Q8_0 | `json_escaping/spam` | 0.0541 (Linux x86-64: 0.0373) | 0.06 | The Windows C runtime's `erff` (GEGLU-erf) and `sinf`/`cosf` (RoPE cache) round some last bits differently from glibc. Upstream llama.cpp calls the platform math library on CPU, so this is upstream behaviour; the ggml kernels are the same as on Linux, and agreement with upstream llama.cpp is exact. Q8_0 activation quantization amplifies the difference on this answer. |
 
+## Migrating from 0.3.0 to the next release
+
+The C ABI is unchanged (version 2). The bindings were renamed and reshaped to one API ([the full list](../CHANGELOG.md#unreleased), [conventions](API.md#interfaces)); there are no aliases. The sections below for 0.2.0 and 0.1.0 describe those releases and keep their original names.
+
+- **Every binding:** the engine is `Engine`, its settings `Config`, `CallOptions` and `RouterConfig`, its statuses `Status`; the library overrides are `DUCKTAPE_LAYA_LIBRARY` and `DUCKTAPE_LAYA_LIB_DIR`, both absolute. A call planning more than 256 forward passes fails unless you raise `max_windows_per_call` (up to 4096). Bindings no longer validate config values; the core rejects them with status 1.
+- **Node.js:** `Laya` is `Engine` (`Engine.open(path, { config: { threads: 2 }, maxPending })`); catch `LayaError`, `LayaLoadError` and `EngineClosedError` by class; `DUCKTAPE_LAYA_ADDON`, `addonPath` and the `runtimeInfo` options are gone (use `DUCKTAPE_LAYA_LIBRARY`, the addon file); `null` options mean the defaults (they used to throw).
+- **Browser:** `open(model, options)` and `openRouter({models, max_loaded, auto}, options)` with native settings in `options.config`.
+- **Python:** `CancelToken` is `CancellationToken`; open options default to `None` and `threads=0` is sent to the core; `LayaError.status` is a `Status`.
+- **Rust:** `Engine::open(path)` and `open_with(path, &Config)`; `status::X` is the `Status` enum; `Config::temperatures(iter)` replaces `temperature(k, v)`; `CallOptions::cancellation_token(&CancellationToken)` replaces `cancel_flag`, and a host deadline can no longer be stored in the flag (use `timeout_ms`).
+- **Java:** `Laya` is `Engine`, `LayaClosedException` is `EngineClosedException`, `LayaException.status()` returns a `Status` (the int constants are gone), `CancellationToken.reset()` is gone, and `-Dducktape.laya.library` is replaced by `DUCKTAPE_LAYA_LIBRARY`.
+- **.NET:** `LayaEngine`, `LayaConfig`, `LayaCallOptions` and `LayaStatus` are `Engine`, `Config`, `CallOptions` and `Status`; `LayaException.Code` is gone (use `Status`); a closed engine throws `EngineClosedException`.
+- **Go:** `OpenRouter` takes a `*RouterConfig` (`OpenRouterJSON` takes JSON text); `Error.Status` is a `Status`; `CloseDeferred` is gone because `Close` from a callback no longer waits.
+
 ## Migrating from 0.2.0 to 0.3.0
 
 0.3.0 keeps C ABI 2 and `libducktape_laya.so.1`: a program built against 0.2.0 runs with the new library without a rebuild, and the C and C++ signatures are unchanged. C, C++, Rust and Go users upgrade the native library (and the crate or Go module for their fixes); the other bindings bundle their library and are upgraded as packages. The changes below are in the bindings' error reporting and library lookup, and in the prompts of some structured values; the full list is in the [changelog](../CHANGELOG.md#030-2026-10-26).

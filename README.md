@@ -59,9 +59,9 @@ The same request in three languages: one `noul` question about a short text.
 Node.js (an ES module; `require('ducktape-laya')` works too):
 
 ```js
-import { Laya } from 'ducktape-laya';
+import { Engine } from 'ducktape-laya';
 
-const engine = await Laya.open('/path/to/Laya-Q8_0.gguf');
+const engine = await Engine.open('/path/to/Laya-Q8_0.gguf');
 try {
   const result = await engine.execute({
     state: 'Please refund the duplicate charge.',
@@ -89,9 +89,9 @@ with ducktape_laya.Engine.open("/path/to/Laya-Q8_0.gguf") as engine:
 Rust, inside a function that returns a `Result` (results are JSON text):
 
 ```rust
-use ducktape_laya::{Config, Engine};
+use ducktape_laya::Engine;
 
-let engine = Engine::open("/path/to/Laya-Q8_0.gguf", &Config::default())?;
+let engine = Engine::open("/path/to/Laya-Q8_0.gguf")?;
 let result_json = engine.execute(
     r#"{"state":"Please refund the duplicate charge.",
         "questions":{"refund":{"type":"noul","instructions":"Does the customer request a refund?"}}}"#,

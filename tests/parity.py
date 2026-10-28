@@ -85,7 +85,6 @@ def environment(build):
     else:
         env['LD_LIBRARY_PATH'] = str(build) + ':' + env.get('LD_LIBRARY_PATH', '')
     env['DUCKTAPE_LAYA_LIB_DIR'] = str(build)
-    env['DUCKTAPE_LAYA_ADDON'] = str(build / 'ducktape_laya.node')
     env['PYTHONPATH'] = str(ROOT / 'bindings/python/src')
     env.update(DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
     env.update(CGO_CFLAGS='-I' + str(ROOT / 'include'), CGO_LDFLAGS='-L' + str(build), GOTOOLCHAIN='local')

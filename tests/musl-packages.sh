@@ -22,12 +22,12 @@ node)
   echo '{"private":true}' > linux/package.json
   (cd app && npm install --offline --ignore-scripts --no-audit --no-fund "$assembled/ducktape-laya-$version.tgz" >/dev/null)
   (cd app && node -e '
-    const { Laya } = require("ducktape-laya");
+    const { Engine } = require("ducktape-laya");
     const expected = e => e && e.status === 7 && e.code === "ERR_LAYA_UNSUPPORTED" && /needs glibc, and this looks like a musl system/.test(e.message);
     let error;
-    try { Laya.runtimeInfo(); } catch (e) { error = e; }
+    try { Engine.runtimeInfo(); } catch (e) { error = e; }
     if (!expected(error)) { console.error("runtimeInfo:", error); process.exit(1); }
-    Laya.open("model.gguf").then(() => { console.error("open succeeded"); process.exit(1); }, e => {
+    Engine.open("model.gguf").then(() => { console.error("open succeeded"); process.exit(1); }, e => {
       if (!expected(e)) { console.error("open:", e); process.exit(1); }
       console.log("node: " + e.message);
     });')
@@ -43,7 +43,7 @@ java)
 public class Probe {
     public static void main(String[] args) {
         try {
-            io.github.adrian729.laya.Laya.runtimeInfo();
+            io.github.adrian729.laya.Engine.runtimeInfo();
             System.err.println("the bundled library loaded on musl");
             System.exit(1);
         } catch (io.github.adrian729.laya.LayaException e) {

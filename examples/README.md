@@ -24,7 +24,7 @@ These programs read one request from standard input and print the result; they r
 
 - C and C++: [decide.c](decide.c) and [decide.cpp](decide.cpp), built as `laya-decide` and `laya-decide-cpp` with `-DDUCKTAPE_BUILD_EXAMPLES=ON`: `build/laya-decide /path/to/Laya-Q8_0.gguf < examples/request.json`.
 - Rust: `cargo run --example decide -- /path/to/Laya-Q8_0.gguf < ../../../examples/request.json` in `bindings/rust/ducktape-laya`, with `DUCKTAPE_LAYA_LIB_DIR` set.
-- Node.js: `node bindings/node/decide.cjs /path/to/Laya-Q8_0.gguf < examples/request.json`, with `DUCKTAPE_LAYA_ADDON` naming the built addon.
+- Node.js: `node bindings/node/decide.cjs /path/to/Laya-Q8_0.gguf < examples/request.json`, with `DUCKTAPE_LAYA_LIBRARY` naming the built addon (an absolute path).
 
 ## Interactive demos
 

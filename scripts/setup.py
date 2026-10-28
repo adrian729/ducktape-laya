@@ -117,8 +117,8 @@ def notes(prefix, model_dir, libdir, node_package, download_requested, dry_run):
         print('\nNode.js (run in your application directory):')
         print(f'  npm install --save {q(str(node_package))}')
         print('  In your JavaScript source:')
-        print("  const { Laya } = require('ducktape-laya');")
-        print(f'  const engine = await Laya.open({json.dumps(str(model))});')
+        print("  const { Engine } = require('ducktape-laya');")
+        print(f'  const engine = await Engine.open({json.dumps(str(model))});')
     else:
         print('\nNode.js: rerun setup with --node to build a local npm-installable package.')
     if not download_requested:
