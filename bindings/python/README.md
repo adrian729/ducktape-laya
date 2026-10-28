@@ -29,10 +29,6 @@ with ducktape_laya.Engine.open("/path/to/Laya-Q8_0.gguf") as engine:
 
 Requests are JSON values or JSON strings (a string is sent as is); results are parsed JSON. `execute` accepts primitive and structured requests and lists of up to 32 requests. Optional per-request `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` are plain request keys. The request format is in the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).
 
-## Evaluating a question
-
-`python -m ducktape_laya.evaluate MODEL examples.jsonl questions.json` runs your questions on labelled examples and compares them with a text-length baseline and your current rule, with thresholds chosen on held-out halves; `--controls order,shuffle` adds option-order and shuffled-words checks. Input formats and what to look for: [using Laya in an application](https://github.com/adrian729/ducktape-laya/blob/main/docs/USAGE.md#measure-it-on-your-task).
-
 ## Configuration
 
 Open options are keyword-only; `None` means unset (the library default) and any other value, 0 included, is sent as given and validated by the library, which rejects bad values with status 1: `Engine.open(path, threads=None, context_tokens=None, temperatures=None, overflow=None, max_windows_per_call=None)`. `path` is a `str`, `bytes` or `os.PathLike`; on POSIX the bytes reach the file system unchanged, so any file name works.

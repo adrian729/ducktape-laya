@@ -1,7 +1,12 @@
-"""The evaluation tool's metrics and controls, with a stand-in engine (no model)."""
+"""scripts/evaluate-questions.py: its metrics and controls, with a stand-in engine (no model or package)."""
+import importlib.util
+import pathlib
 import unittest
 
-from ducktape_laya import evaluate
+_SCRIPT = pathlib.Path(__file__).resolve().parents[1] / 'scripts/evaluate-questions.py'
+_SPEC = importlib.util.spec_from_file_location('evaluate_questions', _SCRIPT)
+evaluate = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(evaluate)
 
 
 class FakeEngine:

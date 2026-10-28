@@ -56,7 +56,7 @@ FULL_POLICY_CHECKS = ('result-comparison', 'qualification-policy', 'docs-links',
                       'abi-layouts', 'binding-abi', 'typescript-consumers', 'packaging-identities', 'package-assembly', 'fetch-ci-evidence',
                       'release-targets', 'release-assets', 'browser-backend-identities', 'browser-lifecycle', 'browser-binding',
                       'model-download', 'runtime-sources', 'merge-validation', 'validate', 'check-sanitizers', 'verify', 'qualify-host',
-                      'ci-contracts')
+                      'ci-contracts', 'evaluate-questions')
 # The platform allow-list: {label: (sys.platform values, reason)}; policy labels are checked as policy:<label>.
 FULL_ALLOWED_SKIPS = {'examples-smoke': (('win32',), 'compiles the examples with a POSIX driver'),
                       'policy:release-targets': (('win32',), None), 'policy:release-assets': (('win32',), None)}

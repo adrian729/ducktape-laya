@@ -21,11 +21,16 @@ Laya reads a text and answers a question about it with a probability, without ge
 | Waiting for the user | AUC 0.84. At precision 0.9, recall at most 0.27 with the threshold picked on the same messages; picked on one half, it reached precision 0.83 at recall 0.25 on the other | `?` rule: precision 0.95, recall 0.51. Text length alone: AUC 0.76 |
 | Ticket size | 52% exact (typed `score`, split into thirds by rank); `choice` answered "light" for at most 1 of 33 | Always "standard": 36%. Description length in thirds: 42% |
 
-Before choosing Laya, check the task against what it showed it can and cannot do:
+**Do not use Laya for these.** Each failed on real data, and no phrasing, setting or correction tried here fixed it:
 
-- **It fits** when the answer is stated by the words of the text (a topic, a mention, a request that names what it asks for), when a ranking or a coarse filter is enough, when a few seconds per text are acceptable, and when you can label one or two hundred examples to choose a threshold.
-- **It does not fit** when a cheap rule already catches most cases with high precision and you need both high precision and high recall; when the answer depends on reading intent rather than words (a request phrased as a statement against a report, a rhetorical question against a real one, who is asked to act); when the text's length goes with the answer for reasons that do not hold in your data; when the output must be read as a probability without calibration; or for estimating size, effort or difficulty from a description.
-- **Ask whether something else knows the answer exactly.** For "is the agent waiting", the agent itself can say so (a tool call, a marker in its output) at no cost and with no error. A model is worth adding where no such signal exists.
+- **Grading size, effort, difficulty or priority from a description.** On the tickets it did no better than description length, `choice` almost never picked the lowest tier, and `score` used less than half of its scale (limitation 6).
+- **Replacing a rule, or an exact signal, where you need both high precision and high recall.** A threshold aimed at precision 0.9 reached precision 0.83 and recall 0.25 on held-out data, against the `?` rule's 0.95 and 0.51. If something can report the answer exactly (here, the agent marking that it is waiting), use that instead.
+- **Telling apart texts that use the same words with different intent:** a request against a report of the same action, a rhetorical question against a real one, who is asked to act. The difference between such sentences moved the probability by only 0.05 to 0.25, and shuffling a text's words kept most of its signal (limitations 2 and 3).
+- **Reading the output as a probability, or cutting at 0.5.** Probabilities are compressed and shifted by question (limitation 4).
+
+**Use it with care** when text length differs between your classes (it follows length: check AUC within length), when a `choice` has options that differ in length or wording style (it can lean to one), and with the multilingual model on English text.
+
+**It can fit** when the answer is stated by the words of the text (a topic, a mention, a request that names what it asks for), when a ranking or a coarse filter is enough (for example ordering items for human review), when a few seconds per text are acceptable, and when you can label one or two hundred examples to choose a threshold. These are the conditions under which it ranked well here, not measured successes: the [example presets](../examples/README.md) (support triage, email triage, prompt-injection screening, moderation) have not been measured on real data either. Measure before relying on it.
 
 ## Known limitations
 
@@ -68,10 +73,10 @@ Measured effects on the waiting task (typed-decisions model unless stated; AUC o
 
 ## Measure it on your task
 
-Label one or two hundred real examples first (more if positives are rare), then run the evaluation tool that ships with the Python package:
+Label one or two hundred real examples first (more if positives are rare), then run [`scripts/evaluate-questions.py`](../scripts/evaluate-questions.py) from this repository. It is a single file that needs only the Python package (`pip install ducktape-laya`):
 
 ```sh
-python -m ducktape_laya.evaluate MODEL.gguf examples.jsonl questions.json --controls order,shuffle --json report.json
+python3 evaluate-questions.py MODEL.gguf examples.jsonl questions.json --controls order,shuffle --json report.json
 ```
 
 `examples.jsonl` holds one `{"state": ..., "label": ...}` per line, and optionally `"rule": true/false` with your current rule's verdict. Labels that are `true`/`false` make a yes/no evaluation; option keys make a `choice` evaluation; numbers an ordinal one. `questions.json` maps names to questions in the request format, so several phrasings run side by side; a `choice` used for a yes/no task names its positive option with `"positive": "A"`. The tool reports, for each question:

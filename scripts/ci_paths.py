@@ -173,6 +173,7 @@ POLICY_CHECKS = {
                          'scripts/release_targets.py', 'scripts/validate.py', 'scripts/artifact_support.py', 'release/*'] + _RELEASE_SUPPORT,
     'validate': ['tests/validate.py', 'release/*'] + _VALIDATE + _RELEASE_SUPPORT,
     'check-sanitizers': ['tests/check-sanitizers.py', 'scripts/check-sanitizers.py'] + _RELEASE_SUPPORT,
+    'evaluate-questions': ['tests/evaluate-questions.py', 'scripts/evaluate-questions.py'],
     'verify': ['tests/verify.py', 'scripts/verify.py', 'scripts/ci_paths.py', 'scripts/ci_budgets.py', 'scripts/ci-changes.py'],
     'qualify-host': ['tests/qualify-host.py', 'scripts/qualify-host.py', 'scripts/check-candidate.py', 'release/*', 'models/*.json',
                      # what check-candidate.py imports (the test reads its reuse rules)

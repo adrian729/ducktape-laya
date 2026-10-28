@@ -210,7 +210,8 @@ HOST_FULL_RUNS = ('native', 'examples-smoke', 'abi', 'check-binary', 'rust', 'no
 POLICY_LABELS = ('result-comparison', 'qualification-policy', 'docs-links', 'docs-links-self-test', 'release-notes', 'ci-changes',
                  'abi-layouts', 'binding-abi', 'typescript-consumers', 'packaging-identities', 'package-assembly', 'fetch-ci-evidence', 'release-targets',
                  'release-assets', 'browser-backend-identities', 'browser-lifecycle', 'browser-binding', 'model-download',
-                 'runtime-sources', 'merge-validation', 'validate', 'check-sanitizers', 'verify', 'qualify-host', 'ci-contracts')
+                 'runtime-sources', 'merge-validation', 'validate', 'check-sanitizers', 'verify', 'qualify-host', 'ci-contracts',
+                 'evaluate-questions')
 # Skips a required run label may have instead of a run: {label: (platforms, the reason validate.py records)}.
 PLATFORM_SKIPS = {'examples-smoke': (('windows-x64',), 'compiles the examples with a POSIX driver')}
 # The reason the merge records for a policy check that the CI run's tooling job ran instead of the platform's shards.

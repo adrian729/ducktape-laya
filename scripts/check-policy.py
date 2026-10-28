@@ -68,6 +68,7 @@ COMMANDS = {
     'verify': [PY, 'tests/verify.py'],
     'qualify-host': [PY, 'tests/qualify-host.py'],
     'ci-contracts': [PY, 'tests/ci-contracts.py'],
+    'evaluate-questions': [PY, 'tests/evaluate-questions.py'],
 }
 # The release checker and the release assets run on the Linux release host and in attest-release.
 WINDOWS_SKIPS = {label: 'release checks run on the Linux release host and in attest-release (bash, jq, sha256sum)'

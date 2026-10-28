@@ -1,6 +1,10 @@
+#!/usr/bin/env python3
 """Measure questions on your own labelled examples before relying on them.
 
-    python -m ducktape_laya.evaluate MODEL EXAMPLES.jsonl QUESTIONS.json [options]
+    python3 scripts/evaluate-questions.py MODEL EXAMPLES.jsonl QUESTIONS.json [options]
+
+It needs the Python package (`pip install ducktape-laya`, or a checkout's binding on
+PYTHONPATH with DUCKTAPE_LAYA_LIBRARY naming the built library) and nothing else.
 
 EXAMPLES.jsonl has one example per line: ``{"state": ..., "label": ...}``. The
 labels decide the evaluation:
@@ -41,7 +45,6 @@ import sys
 import time
 import zlib
 
-from ducktape_laya import Engine
 
 
 def _text(state):
@@ -388,7 +391,7 @@ def summary(report):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog='python -m ducktape_laya.evaluate', description=__doc__.split('\n\n')[0])
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('model', help='the GGUF model file')
     parser.add_argument('examples', help='JSONL file of {"state": ..., "label": ..., "rule": optional bool}')
     parser.add_argument('questions', help='JSON file mapping names to questions')
@@ -403,6 +406,7 @@ def main(argv=None):
     if controls - {'order', 'shuffle'}:
         parser.error(f'unknown control: {", ".join(sorted(controls - {"order", "shuffle"}))}')
     examples, questions = _examples(args.examples), _load(args.questions)
+    from ducktape_laya import Engine
     with Engine.open(args.model, threads=args.threads, context_tokens=args.context_tokens, overflow=args.overflow) as engine:
         report = evaluate(engine, examples, questions, controls=controls, precision=args.precision, progress=True)
     if args.json_path:
