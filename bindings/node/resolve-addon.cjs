@@ -16,20 +16,27 @@ function isMusl(dirs = ['/lib', '/lib64']) {
   return musl && !glibc;
 }
 // host describes the running system; tests substitute parts of it to simulate another one.
-function resolveAddon(override, { platform: os = process.platform, arch = process.arch, env = process.env, musl = isMusl } = {}) {
-  if (override || env.DUCKTAPE_LAYA_ADDON) return path.resolve(override || env.DUCKTAPE_LAYA_ADDON);
+// Overrides come from the environment only and must be absolute: DUCKTAPE_LAYA_LIBRARY names the addon file,
+// DUCKTAPE_LAYA_LIB_DIR a directory holding ducktape_laya.node.
+function resolveAddon({ platform: os = process.platform, arch = process.arch, env = process.env, musl = isMusl } = {}) {
+  for (const name of ['DUCKTAPE_LAYA_LIBRARY', 'DUCKTAPE_LAYA_LIB_DIR']) {
+    const value = env[name];
+    if (value === undefined) continue;
+    if (!path.isAbsolute(value)) throw unsupported(`${name} must be an absolute path, got ${JSON.stringify(value)}`);
+    return name === 'DUCKTAPE_LAYA_LIBRARY' ? value : path.join(value, 'ducktape_laya.node');
+  }
   const platform = `${os}-${arch}`;
   if (!PLATFORMS.includes(platform)) {
-    throw unsupported(`Unsupported native platform: ${os}/${arch}; packages exist for Linux x64 and arm64, macOS arm64 and x64, and Windows x64; on other platforms build the addon from source and set addonPath or DUCKTAPE_LAYA_ADDON`);
+    throw unsupported(`Unsupported native platform: ${os}/${arch}; packages exist for Linux x64 and arm64, macOS arm64 and x64, and Windows x64; on other platforms build the addon from source and set DUCKTAPE_LAYA_LIBRARY to its absolute path`);
   }
   if (os === 'linux' && musl()) {
-    throw unsupported(`The native Laya addon for ${platform} needs glibc, and this looks like a musl system (for example Alpine). Use a glibc-based image, or set addonPath / DUCKTAPE_LAYA_ADDON to a musl build.`);
+    throw unsupported(`The native Laya addon for ${platform} needs glibc, and this looks like a musl system (for example Alpine). Use a glibc-based image, or set DUCKTAPE_LAYA_LIBRARY to the absolute path of a musl build.`);
   }
   // Electron packagers must unpack the package's native directory. Resolve the
   // physical path before handing it to Node's worker/addon loader.
   const packaged = path.join(__dirname, 'native', platform, 'ducktape_laya.node').replace(/\.asar([/\\])/, '.asar.unpacked$1');
   if (fs.existsSync(packaged)) return packaged;
-  throw unsupported(`Native Laya addon for ${platform} is missing. Install a package built for this platform, or set addonPath / DUCKTAPE_LAYA_ADDON for a development build.`);
+  throw unsupported(`Native Laya addon for ${platform} is missing. Install a package built for this platform, or set DUCKTAPE_LAYA_LIBRARY (the addon's absolute path) or DUCKTAPE_LAYA_LIB_DIR (its directory) for a development build.`);
 }
 // Why an addon that exists may fail to load on each platform.
 const HINTS = { linux: 'it needs glibc 2.38+ and libstdc++ with GLIBCXX_3.4.29', win32: 'it needs the Microsoft Visual C++ Redistributable', darwin: 'it needs macOS 14 or newer' };

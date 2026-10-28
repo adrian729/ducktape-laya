@@ -1,35 +1,40 @@
-import type { Overflow, Request, StructuredRequest, Result, StructuredResult, ExecuteOptions, RuntimeInfo } from './protocol.js';
-export type { Json, Question, Answer, Window, Overflow, Usage, Request, Result, Routing, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, ExecuteOptions, RuntimeInfo, LayaError } from './protocol.js';
-/** contextTokens/overflow/temperatures override the open options for this route only. */
-export interface ModelAsset { url: string; sha256?: string; contextTokens?: number; overflow?: Overflow; temperatures?: Record<string, number> }
-export interface BrowserOptions {
-  modelUrl: string; sha256?: string;
+import type { Overflow, Request, StructuredRequest, Result, StructuredResult, CallOptions, RuntimeInfo } from './protocol.js';
+export type { Json, Question, Answer, Window, Overflow, Usage, Request, Result, Routing, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, RuntimeInfo, StatusCode, LayaErrorCode } from './protocol.js';
+export { Status, LayaError, LayaLoadError, EngineClosedError } from './protocol.js';
+
+/**
+ * The native open config, with the native keys; the core validates every value (status 1), before any model is downloaded.
+ * `threads` may only be 1: the browser runs one thread. `max_windows_per_call` (1..4096, default 256) is engine level, so a router
+ * accepts it in the shared config only.
+ */
+export interface Config { threads?: 1; context_tokens?: number; overflow?: Overflow; temperatures?: Record<string, number>; max_windows_per_call?: number }
+/** A model to download: a URL, or a URL with the SHA-256 (64 hexadecimal characters) its bytes must have. */
+export type Model = string | { url: string; sha256?: string };
+/** A router route: a model, with a config of its own that overrides the shared `config` key by key. */
+export type Route = string | { url: string; sha256?: string; config?: Omit<Config, 'max_windows_per_call'> };
+export interface RouterConfig { models: Record<string, Route>; max_loaded?: number;
+  /** Routes for `"model": "auto"` (confidently English text to `english`, everything else to `default`). */
+  auto?: { english: string; default: string } }
+export interface OpenOptions {
+  /** The native open config (a router applies it to every route). */
+  config?: Config | null;
   moduleUrl?: string; wasmUrl?: string; workerUrl?: string;
   backend?: 'wasm' | 'webgpu' | 'auto'; webgpuModuleUrl?: string; webgpuWasmUrl?: string;
   onDiagnostic?: (message: string) => void;
-  /** Native open config: prompt capacity (default 512, max the model's trained length) and calibration overrides. */
-  contextTokens?: number; overflow?: Overflow; temperatures?: Record<string, number>;
-  maxPending?: number; maxModelBytes?: number; maxLoaded?: number;
-  /** Router only: routes for `"model": "auto"` (confidently English text to `english`, everything else to `default`). */
-  auto?: { english: string; default: string };
+  maxPending?: number; maxModelBytes?: number;
   initializationTimeoutMs?: number; signal?: AbortSignal;
 }
-export class Laya {
+export class Engine {
   private constructor();
   info(): Promise<RuntimeInfo>;
   readonly capabilities: { backend: 'wasm' | 'webgpu'; abi: number; threads: 1; runningCancellation: boolean; deadlines: true };
-  static open(options: BrowserOptions): Promise<Laya>;
-  static openRouter(models: Record<string, ModelAsset>, options?: Omit<BrowserOptions, 'modelUrl' | 'sha256'>): Promise<Laya>;
+  static open(model: Model, options?: OpenOptions | null): Promise<Engine>;
+  static openRouter(router: RouterConfig, options?: OpenOptions | null): Promise<Engine>;
   /** The only call: one request (object or JSON string) or an array of requests; arrays return arrays in order. */
-  execute(request: Request, options?: ExecuteOptions): Promise<Result>;
-  execute(request: StructuredRequest, options?: ExecuteOptions): Promise<StructuredResult>;
-  execute(request: (Request | StructuredRequest)[], options?: ExecuteOptions): Promise<(Result | StructuredResult)[]>;
-  execute(request: string, options?: ExecuteOptions): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
+  execute(request: Request, options?: CallOptions | null): Promise<Result>;
+  execute(request: StructuredRequest, options?: CallOptions | null): Promise<StructuredResult>;
+  execute(request: (Request | StructuredRequest)[], options?: CallOptions | null): Promise<(Result | StructuredResult)[]>;
+  execute(request: string, options?: CallOptions | null): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
   /** Terminates the worker and frees the model; call it when done. Idempotent; resolves even if the worker already failed. */
-  close(options?: { cancelPending?: boolean }): Promise<void>;
+  close(options?: { cancelPending?: boolean } | null): Promise<void>;
 }
-/** Native status codes carried on `error.status`. Mirrors the C ABI `dtl_status`. */
-export declare const Status: Readonly<{
-  OK: 0; INVALID_ARGUMENT: 1; MODEL_ERROR: 2; INFERENCE_ERROR: 3;
-  OUT_OF_MEMORY: 4; CANCELLED: 5; DEADLINE_EXCEEDED: 6; UNSUPPORTED_PLATFORM: 7;
-}>;

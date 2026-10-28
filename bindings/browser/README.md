@@ -17,13 +17,12 @@ Serve the package directory under an application URL, keeping its relative paths
 ## Usage
 
 ```js
-import { Laya } from '/vendor/laya/index.mjs';
+import { Engine } from '/vendor/laya/index.mjs';
 
-const engine = await Laya.open({
-  modelUrl: '/models/Laya-Q8_0.gguf',
+const engine = await Engine.open({
+  url: '/models/Laya-Q8_0.gguf',
   sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2',
-  backend: 'auto',
-});
+}, { backend: 'auto' });
 try {
   const result = await engine.execute({
     state: 'Please refund the duplicate charge.',
@@ -37,25 +36,34 @@ try {
 
 ## Opening
 
-`Laya.open(options)` takes the model asset and the options together. `Laya.openRouter(models, options)` maps route IDs to assets, `{ url, sha256, contextTokens, overflow, temperatures }`, where a model's own settings override the shared options for that route.
+`Engine.open(model, options)` loads one model; `model` is a URL string or `{ url, sha256? }`. `Engine.openRouter(router, options)` takes `{ models, max_loaded?, auto? }`, where `models` maps route IDs to a URL or `{ url, sha256?, config? }` and a route's own `config` overrides the shared one key by key. `options` is optional and may be `null`:
+
+```js
+const router = await Engine.openRouter({
+  models: {
+    en: { url: '/models/Laya-Q8_0.gguf', sha256: 'c06528c5746d3bb8baa72a27938be95abbfd0b226f8471e8a9e365ed0bb066d2' },
+    ml: { url: '/models/laya-multilingual-f16.gguf', sha256: '2742df1845b29bff811082916da331b34ca214816f4fa65d7f56dd09a8f942db',
+          config: { context_tokens: 1024 } },
+  },
+  max_loaded: 2,
+  auto: { english: 'en', default: 'ml' },
+}, { maxModelBytes: 1200 * 1024 * 1024 });
+```
+
+The native settings go in `options.config`, with the native keys (`threads`, `context_tokens`, `overflow`, `temperatures`, `max_windows_per_call`); `max_loaded` and `auto` are the router's native keys too. The binding does not validate them: the core does, before any model is downloaded (it opens the same configuration over empty placeholder files first), and a bad value rejects with status 1. The only checks of the page are conversions and `config.threads`, which may only be 1 (or absent): the browser runs one thread. Options of the binding are camelCase:
 
 | Option | Meaning |
 |---|---|
-| `modelUrl`, `sha256` | `open` only: the model URL and its optional SHA-256 |
-| `backend` | `wasm` (default, single-threaded CPU), `webgpu`, or `auto` (WebGPU, then WASM if WebGPU initialization fails; a model asset failure is not retried) |
-| `contextTokens` | Prompt capacity: 32 up to the model's maximum (`trained_context_tokens`, 8,192 for the shipped files), default 512 |
-| `overflow` | Default policy for prompts over the limit: `reject` (default), `truncate_end`, `truncate_start` or `scan` |
-| `temperatures` | Calibration overrides keyed like `choice`, `choice.3_5` or `noul.2`; finite and above 0 |
+| `config` | The native open config (a router applies it to every route): `threads` (1), `context_tokens` (32 up to the model's maximum, default 512), `overflow` (`reject` default, `truncate_end`, `truncate_start`, `scan`), `temperatures` (keyed like `choice`, `choice.3_5` or `noul.2`), `max_windows_per_call` (1–4096, default 256; shared config only) |
+| `backend` | `wasm` (default, single-threaded CPU), `webgpu`, or `auto` (WebGPU, then WASM if WebGPU initialization fails; a model asset failure or an invalid config is not retried) |
 | `maxPending` | Accepted calls, 1–1024, default 16 |
 | `maxModelBytes` | Total model bytes fetched, default 1 GiB |
-| `maxLoaded` | Router only: models kept loaded, 1–4, default 1 |
-| `auto` | Router only: `{ english, default }` routes for `model: 'auto'` |
 | `initializationTimeoutMs` | 1–86400000, default 120000 per backend attempt; expiry rejects with `status` 6 |
 | `signal` | Aborts initialization (status 5) |
 | `onDiagnostic` | Receives low-level runtime text, otherwise suppressed |
 | `moduleUrl`, `wasmUrl`, `webgpuModuleUrl`, `webgpuWasmUrl`, `workerUrl` | Override asset locations |
 
-Router requests name a route in `model`, or send `model: 'auto'` (with an optional `lang`) to choose by the state's language. The English (449 MB) and multilingual (658 MB) models together exceed the default `maxModelBytes`, so raise it to route between them. The build is wasm32 with a heap of at most 4 GiB: weights and inference buffers of every loaded model must fit, and inference memory grows with `contextTokens`.
+Router requests name a route in `model`, or send `model: 'auto'` (with an optional `lang`) to choose by the state's language. The English (449 MB) and multilingual (658 MB) models together exceed the default `maxModelBytes`, so raise it to route between them. The build is wasm32 with a heap of at most 4 GiB: weights and inference buffers of every loaded model must fit, and inference memory grows with `context_tokens`.
 
 `engine.capabilities` reports the selected backend and whether running CPU calls can be cancelled (only on cross-origin-isolated pages with the WASM backend).
 
@@ -65,7 +73,7 @@ Router requests name a route in `model`, or send `model: 'auto'` (with an option
 
 ## Errors and closing
 
-Every error carries `status` (exported as `Status`). Argument errors, including `null` or non-object options to `open`, `openRouter`, `execute` and `close`, carry `status` 1; queue and lifecycle failures also carry `code`: `ERR_LAYA_QUEUE_FULL` and `ERR_LAYA_CLOSED` (status 1), `ERR_LAYA_WORKER_EXITED` (status 3). A model asset that cannot be fetched or fails its `sha256` rejects with status 2, assets over `maxModelBytes` with status 1, and an aborted `signal` with status 5; with `backend: 'auto'` these are not retried with WASM, while a WebGPU failure is. A runtime that cannot be loaded or has the wrong ABI fails with status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED` (every status-7 error carries that code), unless the browser could not reserve its WebAssembly memory, which is status 4. Strings that are not well-formed Unicode are rejected. A GPU device loss or a runtime abort fails pending work and closes that engine; open a new one.
+Errors the package raises are `LayaError` objects (exported, with `LayaLoadError` and `EngineClosedError`) carrying `status` (exported as `Status`) and sometimes a `code`. Argument errors, including a non-object `options` to `open`, `openRouter`, `execute` and `close` (`null` means the defaults), are `TypeError` or `RangeError` objects that carry `status` 1; queue and lifecycle failures carry `code`: `ERR_LAYA_QUEUE_FULL` (status 1), `ERR_LAYA_WORKER_EXITED` (status 3) and, as `EngineClosedError`, `ERR_LAYA_CLOSED` (status 1). A call is checked in this order: closed, then its arguments, then an already-cancelled `signal` (rejects with status 5 at once, sending nothing to the worker), then the queue limit, then the model. An invalid config rejects with status 1, a model asset that cannot be fetched or fails its `sha256` with status 2, assets over `maxModelBytes` with status 1, and an aborted `signal` with status 5; with `backend: 'auto'` these are not retried with WASM, while a WebGPU failure is. A runtime that cannot be loaded or has the wrong ABI fails with a `LayaLoadError`: status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED` (every status-7 error is one), unless the browser could not reserve its WebAssembly memory, which is status 4. Strings that are not well-formed Unicode are rejected. A GPU device loss or a runtime abort fails pending work and closes that engine; open a new one.
 
 `close()` drains accepted calls and terminates the worker; `close({ cancelPending: true })` cancels them first. Repeated calls return the same promise.
 

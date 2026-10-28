@@ -27,6 +27,18 @@ static std::string string_arg(napi_env env, napi_value v) {
     if (text.find('\0') != std::string::npos) throw std::runtime_error("Input contains a NUL byte");
     return text;
 }
+// A model path: a string, or the raw bytes of a Buffer or Uint8Array (a POSIX path need not be UTF-8).
+static std::string path_arg(napi_env env, napi_value v) {
+    bool typed; ok(napi_is_typedarray(env, v, &typed));
+    if (!typed) return string_arg(env, v);
+    napi_typedarray_type type; size_t length, offset; void *data; napi_value buffer;
+    ok(napi_get_typedarray_info(env, v, &type, &length, &data, &buffer, &offset));
+    if (type != napi_uint8_array) throw std::runtime_error("Input must be a string, Buffer or Uint8Array");
+    if (length > 1048576) throw std::runtime_error("Input exceeds 1 MiB");
+    std::string text(static_cast<const char *>(data), length);
+    if (text.find('\0') != std::string::npos) throw std::runtime_error("Input contains a NUL byte");
+    return text;
+}
 static void check(dtl_status s, char *error) {
     std::unique_ptr<char, decltype(&dtl_free)> owned(error, dtl_free);
     if (s) throw native_error(s, error ? error : "Laya operation failed");
@@ -102,7 +114,7 @@ static napi_value open_engine(napi_env env, napi_callback_info info) {
         size_t argc = 3; napi_value args[3]; ok(napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
         if (argc != 3) throw std::runtime_error("Expected path/router JSON, config JSON and router flag");
         bool router; ok(napi_get_value_bool(env, args[2], &router));
-        auto path = string_arg(env, args[0]);
+        auto path = path_arg(env, args[0]);
         napi_valuetype type; ok(napi_typeof(env, args[1], &type));
         std::string config; if (type == napi_string) config = string_arg(env, args[1]);
         auto h = std::make_unique<holder>(); char *error = nullptr;
