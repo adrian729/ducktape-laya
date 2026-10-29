@@ -249,18 +249,14 @@ jobs:
           [ "${#wheels[@]}" = "$expected" ] || { echo "Expected $expected wheels, found: ${wheels[*]}"; exit 1; }
           scripts/verify-release-assets.sh "$TAG" dist "${wheels[@]}"
       # No skip-existing: that would also pass over a wheel PyPI holds with other bytes. This asks
-      # PyPI what the version has; a wheel there with the SHA256SUMS hash is skipped (so a run that
-      # failed after uploading some wheels can be retried), any other file there fails the job, and
-      # only the missing wheels are uploaded. Trusted publishing, as before.
+      # PyPI what the version has; a wheel there with the verified wheel's hash is skipped (so a run
+      # that failed after uploading some wheels can be retried), any other file there fails the job,
+      # and only the missing wheels are uploaded. Trusted publishing, as before.
       - name: Compare with PyPI
         id: plan
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D sums -p SHA256SUMS
-          python3 scripts/pypi-missing-wheels.py --package ducktape-laya --version "${TAG#v}" --dist dist --sums sums/SHA256SUMS
+        run: python3 -I scripts/pypi-missing-wheels.py --package ducktape-laya --version "${TAG#v}" --dist dist
       - if: steps.plan.outputs.upload == 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:

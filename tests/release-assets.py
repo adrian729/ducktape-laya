@@ -560,11 +560,9 @@ class PyPI(unittest.TestCase):
         self.wheels = {f'ducktape_laya-1.2.3-py3-none-{tag}.whl': f'wheel {tag}'.encode() for tag in ('manylinux_2_38_x86_64', 'manylinux_2_38_aarch64', 'win_amd64')}
         for name, data in self.wheels.items():
             (self.dist / name).write_bytes(data)
-        self.sums = self.work / 'SHA256SUMS'
-        self.sums.write_text(''.join(f'{hashlib.sha256(data).hexdigest()}  {name}\n' for name, data in self.wheels.items()) + 'f' * 64 + '  gates.json\n')
 
     def run_script(self, payload=None, status=None):
-        command = [sys.executable, str(self.SCRIPT), '--package', 'ducktape-laya', '--version', '1.2.3', '--dist', str(self.dist), '--sums', str(self.sums)]
+        command = [sys.executable, str(self.SCRIPT), '--package', 'ducktape-laya', '--version', '1.2.3', '--dist', str(self.dist)]
         if payload is not None:
             (self.work / 'pypi.json').write_text(json.dumps(payload))
             command += ['--pypi-json', str(self.work / 'pypi.json')]
@@ -615,11 +613,6 @@ class PyPI(unittest.TestCase):
         self.assertIn('not part of this release', result.stderr)
         self.assertNotEqual(result.returncode, 0)
         result, _ = self.run_script(status=500)
-        self.assertNotEqual(result.returncode, 0)
-        # A local wheel that differs from SHA256SUMS never goes up.
-        (self.dist / list(self.wheels)[0]).write_bytes(b'tampered')
-        result, _ = self.run_script(status=404)
-        self.assertIn('does not match SHA256SUMS', result.stderr)
         self.assertNotEqual(result.returncode, 0)
 
 

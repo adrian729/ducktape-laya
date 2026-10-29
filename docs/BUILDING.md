@@ -104,6 +104,8 @@ This is the loop after every change. The `dev` preset builds in `build-dev` with
 
 Together they make a one-file edit rebuild in seconds. Dev builds are never packaged or used as evidence: `validate.py`, `check-reproducibility.py`, `check-upgrade.py` and `build-browser.py` configure with `DUCKTAPE_DEV_BUILD=OFF` and `DUCKTAPE_DEV_PCH=OFF`, `package-native.py` and `package-browser.py` refuse a build with either on, `check-candidate.py` refuses such a report, and the packagers refuse the unmapped source paths a dev build compiles in.
 
+A faster linker is optional: with mold or lld installed, `cmake --preset dev -DCMAKE_LINKER_TYPE=MOLD` (or `LLD`; CMake 3.29 or later) links with it. The gain is small, since the dev preset relinks only the library: on an 8-thread Linux laptop mold relinked it in 0.37 s against 0.46 s with the default linker.
+
 For the real-model tests, configure the same build directory with the model and run the `dev-real` preset (every registered test, one at a time unless you pass `-j`):
 
 ```sh
