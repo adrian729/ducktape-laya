@@ -2,6 +2,7 @@
 // A request's state as its prompts carry it, prepared once per request and model.
 #include "backend.hpp"
 #include "python_json.hpp"
+#include <optional>
 #include <string>
 namespace dtl {
 // Replaces every occurrence of the model's marker (mask) text in string values with a space,
@@ -25,27 +26,25 @@ inline void sanitize(json &value, const std::string &marker) {
         for (auto &child : value) sanitize(child, marker);
     }
 }
-// Every question of a request reads the same state. It is serialized (structured values as
-// the original Laya writes them, see python_json.hpp) and sanitized on the first question
-// that needs it, and the text is reused for the request's other questions on the same
-// backend; another backend (marker) prepares it again.
+// Every question of a request reads the same state, and all of them run on one backend. It is
+// serialized (structured values as the original Laya writes them, see python_json.hpp) and
+// sanitized on the first question that needs it, and the text is reused for the others.
 struct request_state {
     explicit request_state(const json &state) : source(state) {}
-    // The state text for the backend `owner` with marker text `marker`: a string, or null.
-    const json &text(const void *owner, const std::string &marker) {
-        if (prepared_by != owner) {
-            json value = source.is_string() || source.is_null() ? source : json(python_json(source));
+    // The state as text, with the marker text `marker` replaced. The request requires a
+    // non-null state, so this is always a string.
+    const std::string &text(const std::string &marker) {
+        if (!prepared) {
+            json value = source.is_string() ? source : json(python_json(source));
             sanitize(value, marker);
             prepared = std::move(value);
-            prepared_by = owner;
             ++serializations;
         }
-        return prepared;
+        return prepared->get_ref<const std::string &>();
     }
     const json &source;
     size_t serializations = 0; // how often the state was prepared (tests)
 private:
-    const void *prepared_by = nullptr;
-    json prepared;
+    std::optional<json> prepared;
 };
 }

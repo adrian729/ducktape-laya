@@ -41,8 +41,8 @@ std::vector<question> parse_questions(const json &body) {
     require(body.contains("state") && !body["state"].is_null(), "state is required");
     require(!body.contains("images") && !body.contains("files"), "Media is unsupported");
     require(body.contains("questions") && body["questions"].is_object() &&
-            !body["questions"].empty() && body["questions"].size() <= 32,
-            "questions must be an object with 1..32 entries");
+            !body["questions"].empty() && body["questions"].size() <= max_request_questions,
+            "questions must be an object with 1.." + std::to_string(max_request_questions) + " entries");
     std::vector<question> result;
     for (auto &[id, q] : body["questions"].items()) {
         require(q.is_object() && q.contains("instructions") && !q["instructions"].is_null(),
@@ -155,7 +155,8 @@ dtl::engine_config engine_config(const json &value, dtl::engine_config base, boo
     }
     if (value.contains("context_tokens")) {
         // The model's trained length bounds it from above when the model loads.
-        require(unsigned_in(value["context_tokens"], 32, UINT32_MAX), "context_tokens must be an integer of at least 32");
+        require(unsigned_in(value["context_tokens"], min_context_tokens, UINT32_MAX),
+                "context_tokens must be an integer of at least " + std::to_string(min_context_tokens));
         base.context_tokens = value["context_tokens"].get<size_t>();
     }
     if (value.contains("temperatures"))

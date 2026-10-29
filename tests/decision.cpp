@@ -203,23 +203,20 @@ int main(int argc, char **argv) {
                dtl::automatic_threads(16, 3, 16) == 3 && dtl::automatic_threads(2, 3, 16) == 2 &&
                dtl::automatic_threads(8, 0, 0) == 1 && dtl::automatic_threads(0, 1, 0) == 1 &&
                dtl::automatic_threads(3, 0, 8) == 3 && dtl::automatic_threads(0, 2, 8) == 2, "automatic thread count");
-        // A request's state is prepared (serialized, marker replaced) once per request and backend.
+        // A request's state is prepared (serialized, marker replaced) once per request.
         {
             json state = json::parse(R"({"note":"see [MASK] here","n":1e15,"list":[1,2.5,true,null]})");
             dtl::request_state request(state);
-            int backend_a = 0, backend_b = 0;
-            const json &first = request.text(&backend_a, "[MASK]");
-            expect(first.get<std::string>() == "{\"note\": \"see   here\", \"n\": 1000000000000000.0, \"list\": [1, 2.5, true, null]}",
+            const std::string &first = request.text("[MASK]");
+            expect(first == "{\"note\": \"see   here\", \"n\": 1000000000000000.0, \"list\": [1, 2.5, true, null]}",
                    "state serialized as the original Laya does, marker replaced by a space");
             state["note"] = "changed";
-            const json &again = request.text(&backend_a, "[MASK]");
-            expect(&again == &first && again.get<std::string>().find("see") != std::string::npos && request.serializations == 1,
+            const std::string &again = request.text("[MASK]");
+            expect(&again == &first && again.find("see") != std::string::npos && request.serializations == 1,
                    "later questions reuse the prepared state without serializing it again");
-            expect(request.text(&backend_b, "<mask>").get<std::string>().find("changed") != std::string::npos && request.serializations == 2,
-                   "another backend prepares the state for its own marker");
-            json text = "plain [MASK] text", none = nullptr;
-            dtl::request_state plain(text), missing(none);
-            expect(plain.text(&backend_a, "[MASK]") == "plain   text" && missing.text(&backend_a, "[MASK]").is_null(), "string and null states");
+            json text = "plain [MASK] text";
+            dtl::request_state plain(text);
+            expect(plain.text("[MASK]") == "plain   text", "string state");
         }
         std::cout << "decision rule tests passed\n";
         return 0;

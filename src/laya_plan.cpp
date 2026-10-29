@@ -34,7 +34,8 @@ planned plan(json body, bool routed) {
         schema_metadata(schema, "schema");
         require(schema.contains("type") && schema["type"] == "object", "schema.type must be object");
         require(schema.contains("properties") && schema["properties"].is_object() &&
-                !schema["properties"].empty() && schema["properties"].size() <= 32, "schema needs 1..32 properties");
+                !schema["properties"].empty() && schema["properties"].size() <= max_request_questions,
+                "schema needs 1.." + std::to_string(max_request_questions) + " properties");
         if (schema.contains("additionalProperties"))
             require(schema["additionalProperties"] == false, "additionalProperties must be false");
         if (schema.contains("required")) {
@@ -105,8 +106,8 @@ planned plan(json body, bool routed) {
     if (body.contains("overflow")) overflow = overflow_policy(body["overflow"], "overflow");
     size_t max_windows = 32;
     if (body.contains("max_windows")) {
-        require(unsigned_in(body["max_windows"], 1, 1024),
-                "max_windows must be 1..1024");
+        require(unsigned_in(body["max_windows"], 1, max_scan_windows),
+                "max_windows must be 1.." + std::to_string(max_scan_windows));
         max_windows = body["max_windows"].get<size_t>();
     }
     for (auto &q : out.questions) {
@@ -117,20 +118,24 @@ planned plan(json body, bool routed) {
 }
 std::vector<planned> plans(const json &body, bool routed) {
     const auto requests = body.is_array() ? body : json::array({body});
-    require(!requests.empty() && requests.size() <= 32, "Batch must contain 1..32 requests");
+    require(!requests.empty() && requests.size() <= max_batch_requests,
+            "Batch must contain 1.." + std::to_string(max_batch_requests) + " requests");
     std::vector<planned> result;
     size_t count = 0;
     for (auto &request : requests) {
         result.push_back(plan(request, routed));
         count += result.back().questions.size();
-        require(count <= 128, "Batch exceeds 128 questions");
+        require(count <= max_batch_questions, "Batch exceeds " + std::to_string(max_batch_questions) + " questions");
     }
     return result;
 }
-json evaluate(model_engine &engine, planned &p, const dtl::execution &control) {
+json evaluate(model_engine *engine, planned &p, const dtl::execution &control) {
     json answers = json::object();
     size_t tokens = 0;
-    for (const auto &q : p.questions) { answers[q.id] = engine.runtime.run(q, &control); tokens += q.token_count(); }
+    for (const auto &q : p.questions) {
+        answers[q.id] = engine ? engine->runtime.run(q, &control) : dtl::single_option_answer(q.options);
+        tokens += q.token_count();
+    }
     json result = {{"answers", answers}, {"usage", {{"input_tokens", tokens}, {"output_tokens", 0}}}};
     // Callers who allowed overflow handling always learn what it did.
     if (!p.questions.empty() && p.questions.front().overflow != "reject") {

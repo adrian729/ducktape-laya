@@ -40,10 +40,12 @@ User-facing changes per release. Each section lists breaking changes first; "Rel
 - **`add_subdirectory` keeps the parent's `BUILD_SHARED_LIBS`,** which the build used to force off in the parent's cache.
 - **Node.js and browser:** errors raised inside the Node addon (an open config over 1 MiB, an invalid argument) carry a status, and `NaN` or `Infinity` in a request object is rejected with status 1, where `JSON.stringify` would write `null`.
 - **Python:** a request that cannot be serialized as JSON raises `LayaError` with status 1.
+- **Routers do not load a model for single-option requests.** A request whose questions are all single-option `choice` questions is answered without loading, or evicting, its route's model once that model has been loaded before: `max_tokens` is still checked against its `context_tokens`. A batch of such requests alternating between routes no longer reloads a model per request.
 
 ### Release tooling
 
 - A `binding-abi` policy check keeps each binding's status codes and call-options layout equal to `include/ducktape_laya.h`.
+- The PyPI publish job compares PyPI's files with the hashes of the wheels it verified against their attestations, not with a downloaded `SHA256SUMS`, which is not attested itself.
 
 ## 0.3.0 (2026-10-26)
 

@@ -257,6 +257,17 @@ void observers_routing_and_config(context &c) {
     answer = json::parse(router.execute(routed.dump()));
     answer.erase("model");
     expect(answer == singles[0], "non-ASCII route");
+    // Single-option choices need no model: once a route's model has been loaded, such a request
+    // is checked against its context_tokens and answered without a load (a.gguf is gone, and
+    // a was evicted); a route never loaded still loads, to learn its context_tokens.
+    const json trivial = {{"model", "a"}, {"state", "Anything."}, {"overflow", "truncate_end"},
+                          {"questions", {{"only", {{"type", "choice"}, {"instructions", "There is exactly one option."},
+                                                     {"criteria", {{"solo", "the only choice"}}}}}}}};
+    answer = json::parse(router.execute(trivial.dump()));
+    expect(answer["answers"]["only"]["choice"] == "solo" && answer["usage"]["input_tokens"] == 0 && answer["usage"]["windows"] == 0,
+           "single-option request on an evicted route, without a load");
+    invalid([&] { router.execute(with(trivial, "max_tokens", 513).dump()); });
+    invalid([&] { router.execute(with(trivial, "model", "bad").dump()); }, DTL_MODEL_ERROR);
     c.checkpoint("routing and eviction");
     // ABI 2 settings. Open config: temperatures override the model's calibration; the
     // same override in a request gives the identical result, and a request wins over the engine.

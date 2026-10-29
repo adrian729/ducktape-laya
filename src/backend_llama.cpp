@@ -86,6 +86,9 @@ size_t question::token_count() const {
     if (prepared) for (const auto &w : prepared->windows) n += w.tokens.size();
     return n;
 }
+void check_max_tokens(const question &q, size_t capacity) {
+    require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
+}
 json question::overflow_report() const {
     if (!prepared) return json::object();
     return {{"state_tokens", prepared->state_tokens}, {"state_tokens_dropped", prepared->state_dropped},
@@ -144,12 +147,13 @@ struct backend::impl {
             throw failure(DTL_MODEL_ERROR, "Invalid mask token");
         marker_text.assign(piece, n);
         trained = static_cast<size_t>(std::max<int32_t>(0, llama_model_n_ctx_train(model.get())));
-        if (trained < 32) throw failure(DTL_MODEL_ERROR, "Trained context length is missing or below 32 tokens");
+        if (trained < min_context_tokens)
+            throw failure(DTL_MODEL_ERROR, "Trained context length is missing or below " + std::to_string(min_context_tokens) + " tokens");
         max_head = std::stoul(meta(model.get(), prefix + "max_head_tokens"));
         if (!max_head || max_head > trained) throw failure(DTL_MODEL_ERROR, "Invalid head token budget");
-        capacity = config.context_tokens ? config.context_tokens : std::min<size_t>(512, trained);
+        capacity = config.context_tokens ? config.context_tokens : std::min(default_context_tokens, trained);
         require(capacity >= 32 && capacity <= trained,
-                "context_tokens must be 32.." + std::to_string(trained) + " for this model");
+                "context_tokens must be " + std::to_string(min_context_tokens) + ".." + std::to_string(trained) + " for this model");
         prefix += "temperature.";
         for (int32_t i = 0; i < llama_model_meta_count(model.get()); ++i) {
             char key[256];
@@ -219,8 +223,7 @@ struct backend::impl {
         throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
     }
     void prepare(question &q, request_state &request, const execution *control) {
-        if (q.overflow.empty()) q.overflow = "reject";
-        require(q.max_tokens <= capacity, "max_tokens exceeds this engine's context_tokens (" + std::to_string(capacity) + ")");
+        check_max_tokens(q, capacity);
         if (q.options.size() == 1) return; // answered without inference; uses no tokens
         q.prepared = std::make_unique<prepared_question>();
         auto &prepared = *q.prepared;
@@ -230,18 +233,15 @@ struct backend::impl {
         auto as_text = [](json &value) { if (!value.is_string() && !value.is_null()) value = python_json(value); };
         // The state is the same for every question of a request: it is serialized and
         // sanitized once per request and model, on the first question that needs it.
-        const json &state = request.text(this, marker_text);
+        const std::string &state_text = request.text(marker_text);
+        // The state sits between two separators, so its tokens do not depend on the
+        // question: it is rendered empty and tokenized on its own, once for all questions
+        // sharing it.
         json input = {{"id",q.id}, {"type",q.type}, {"instructions",q.instructions},
-                      {"state",nullptr}, {"options",q.options}, {"images",json::array()}};
+                      {"state",""}, {"options",q.options}, {"images",json::array()}};
         as_text(input["instructions"]);
         for (auto &option : input["options"]) as_text(option["description"]);
         sanitize(input, marker_text);
-        // The state sits between two separators, so its tokens do not depend on the
-        // question: it is tokenized on its own, once for all questions sharing it.
-        const bool separate_state = state.is_string();
-        static const std::string no_state;
-        const std::string &state_text = separate_state ? state.get_ref<const std::string &>() : no_state;
-        if (separate_state) input["state"] = "";
         // Serialization can expand a structured state (1e15 is written 1000000000000000.0),
         // so the text to tokenize is bounded like the rendered prompt, not only the request.
         require(state_text.size() <= max_request * 2, "Serialized state is too large");
@@ -304,8 +304,10 @@ struct backend::impl {
         std::vector<size_t> head_markers;
         for (const auto &o : options) { head_markers.push_back(head.size()); head.insert(head.end(), o.begin(), o.end()); }
         head.push_back(sep);
-        require(!separate_state || opts_end + 2 == tokens.size(), "Invalid decision prompt layout");
-        if (separate_state && state_text != cached_state_text) {
+        // With the state rendered empty, the options' separator is followed only by the final
+        // one; anything else (a separator inside the last option) is rejected here.
+        require(opts_end + 2 == tokens.size(), "Invalid decision prompt layout");
+        if (state_text != cached_state_text) {
             // Replace the cache only once tokenization and both copies succeeded, so text and
             // tokens always match. The tokens are copied to their exact size: the buffer
             // tokenize_into fills has room for text.size() + 2.
@@ -316,8 +318,7 @@ struct backend::impl {
             cached_state_tokens.swap(tokens);
             cached_state_text.swap(text);
         }
-        const std::vector<llama_token> state_tokens = separate_state ? cached_state_tokens
-            : std::vector<llama_token>(tokens.begin() + opts_end + 1, tokens.end() - 1);
+        const std::vector<llama_token> &state_tokens = cached_state_tokens;
         prepared.state_tokens = state_tokens.size();
         prepared.head_shortened = head_cut;
         // The question, options and final separator must fit on their own, even with an
@@ -433,6 +434,7 @@ json backend::info() const {
             {"trained_context_tokens", impl_->trained},
             {"temperatures", impl_->temperatures}, {"metadata_temperatures", impl_->metadata_temperatures}};
 }
+size_t backend::capacity() const { return impl_->capacity; }
 void backend::prepare(question &q, request_state &state, const execution *control) { impl_->prepare(q, state, control); }
 json backend::run(const question &q, const execution *control) { return impl_->run(q, control); }
 } // namespace dtl

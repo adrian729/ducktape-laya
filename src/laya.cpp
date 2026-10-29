@@ -99,6 +99,9 @@ struct router_state {
     std::string auto_english, auto_default; // routes for "model": "auto"; empty when not configured
     std::map<std::string, std::unique_ptr<model_engine>> loaded; // by canonical path and config
     std::list<std::string> lru;
+    // context_tokens of each model loaded so far, by cache key: with it, a request of
+    // single-option choices is checked and answered without loading (or evicting) a model.
+    std::map<std::string, size_t> capacities;
     size_t max_loaded = 1;
     std::mutex mutex;
     model_engine &load(const route &r) {
@@ -113,13 +116,14 @@ struct router_state {
         } else {
             lru.splice(lru.end(), lru, std::find(lru.begin(), lru.end(), r.cache_key));
         }
+        capacities[r.cache_key] = it->second->runtime.capacity();
         return *it->second;
     }
 };
 struct dtl_engine {
     std::unique_ptr<model_engine> single;
     std::string overflow; // a single model's default policy
-    size_t max_windows = 256; // forward passes one call may plan
+    size_t max_windows = dtl::default_call_windows; // forward passes one call may plan
     std::unique_ptr<router_state> router;
 };
 extern "C" {
@@ -146,11 +150,11 @@ dtl_status dtl_open_router(const char *router_json, const char *config_json, dtl
         auto body = read_json(router_json);
         keys(body, {"models", "max_loaded", "auto"}, "router config");
         require(body.contains("models") && body["models"].is_object() && !body["models"].empty() &&
-                body["models"].size() <= 16, "models must contain 1..16 routes");
+                body["models"].size() <= dtl::max_routes, "models must contain 1.." + std::to_string(dtl::max_routes) + " routes");
         auto r = std::make_unique<router_state>();
         if (body.contains("max_loaded")) {
-            require(unsigned_in(body["max_loaded"], 1, 4),
-                    "max_loaded must be 1..4");
+            require(unsigned_in(body["max_loaded"], 1, dtl::max_loaded_models),
+                    "max_loaded must be 1.." + std::to_string(dtl::max_loaded_models));
             r->max_loaded = body["max_loaded"].get<size_t>();
         }
         for (auto &[id, entry] : body["models"].items()) {
@@ -230,7 +234,7 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
                     count_windows(windows, q, engine->max_windows);
                 }
             }
-            for (auto &p : work) results.push_back(evaluate(single, p, control));
+            for (auto &p : work) results.push_back(evaluate(&single, p, control));
         } else {
             auto &router = *engine->router;
             std::vector<std::pair<std::string, json>> chosen; // route ID and, for "auto", why
@@ -264,11 +268,19 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
                 const auto &id = chosen[i].first;
                 control.check();
                 const auto &route = router.routes.at(id);
-                auto &model = router.load(route);
+                const auto known = router.capacities.find(route.cache_key);
+                const bool without_model = known != router.capacities.end() &&
+                    std::all_of(p.questions.begin(), p.questions.end(), answered_without_model);
+                model_engine *model = without_model ? nullptr : &router.load(route);
                 dtl::request_state state(p.body["state"]);
                 for (auto &q : p.questions) {
                     control.check();
-                    model.prepare(q, state, route.config.overflow, control);
+                    if (model) {
+                        model->prepare(q, state, route.config.overflow, control);
+                    } else {
+                        if (q.overflow.empty()) q.overflow = route.config.overflow;
+                        dtl::check_max_tokens(q, known->second);
+                    }
                     count_windows(windows, q, engine->max_windows);
                 }
                 auto answer = evaluate(model, p, control); answer["model"] = id;

@@ -1,6 +1,7 @@
 #include "runtime_info.hpp"
 #include "ducktape_laya.h"
 #include "build_config.hpp"
+#include "errors.hpp"
 #include "platform.hpp"
 #include <string>
 namespace dtl {
@@ -25,8 +26,10 @@ json runtime_info() {
         {"features", {"structured_decisions", "sequential_batches", "routing", "language_routing", "overflow_policies",
                       "observers", "cooperative_cancellation", "deadlines"}},
         {"overflow_policies", {"reject", "truncate_end", "truncate_start", "scan"}},
-        {"limits", {{"request_bytes", 1048576}, {"object_members", 1024}, {"questions_per_request", 32}, {"requests_per_batch", 32},
-                    {"questions_per_batch", 128}, {"default_context_tokens", 512}, {"minimum_context_tokens", 32},
-                    {"scan_windows", 1024}, {"windows_per_call", 4096}, {"default_windows_per_call", 256}, {"routes", 16}, {"loaded_models", 4}}}};
+        {"limits", {{"request_bytes", max_request}, {"object_members", max_object_members}, {"questions_per_request", max_request_questions},
+                    {"requests_per_batch", max_batch_requests}, {"questions_per_batch", max_batch_questions},
+                    {"default_context_tokens", default_context_tokens}, {"minimum_context_tokens", min_context_tokens},
+                    {"scan_windows", max_scan_windows}, {"windows_per_call", max_call_windows},
+                    {"default_windows_per_call", default_call_windows}, {"routes", max_routes}, {"loaded_models", max_loaded_models}}}};
 }
 } // namespace dtl

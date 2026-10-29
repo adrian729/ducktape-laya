@@ -1,6 +1,7 @@
 #pragma once
 // Private boundary: no llama/ggml/Jinja types in shared orchestration or bindings.
 #include <nlohmann/json.hpp>
+#include "errors.hpp"
 #ifndef DTL_NLOHMANN_NOTHROW_DESTROY
 #error "Build must use the patched nlohmann/json.hpp (patches/llama.cpp/nlohmann-nothrow-destroy.patch)"
 #endif
@@ -17,10 +18,10 @@ using temperature_map = std::map<std::string, float>;
 // Engine settings from the open config (dtl_open, router routes).
 struct engine_config {
     uint32_t threads = 0;
-    size_t context_tokens = 0;      // 0: 512, capped by the trained length
+    size_t context_tokens = 0;      // 0: default_context_tokens, capped by the trained length
     std::string overflow = "reject";// default overflow policy for requests
     temperature_map temperatures;   // overrides the GGUF calibration, key by key
-    size_t max_windows_per_call = 256; // forward passes one call may plan (engine-wide; not a route setting)
+    size_t max_windows_per_call = default_call_windows; // forward passes one call may plan (engine-wide; not a route setting)
 };
 struct question {
     std::string id, type;
@@ -45,6 +46,8 @@ private:
     friend class backend;
 };
 struct request_state; // request_state.hpp
+// Fails unless the question's max_tokens fits an engine's context_tokens (capacity).
+void check_max_tokens(const question &q, size_t capacity);
 // Calls are serialized by the shared engine/router. All prepared inputs are
 // consumed by the same backend that prepared them, before that backend closes.
 class backend {
@@ -52,6 +55,7 @@ public:
     backend(const char *path, const engine_config &config);
     ~backend();
     json info() const;
+    size_t capacity() const; // context_tokens
     // control stops a long tokenization (cancellation, deadline); nullptr: not stoppable.
     void prepare(question &q, request_state &state, const execution *control = nullptr);
     json run(const question &q, const execution *control = nullptr);
