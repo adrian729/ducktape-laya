@@ -6,13 +6,21 @@ import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.invoke.VarHandle;
 import java.lang.ref.Cleaner;
 import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 
@@ -22,8 +30,15 @@ import java.util.function.Consumer;
  * Closing a handle from inside its own event callback releases it once the running call finishes.
  */
 public final class Engine implements AutoCloseable {
+    private static final VarHandle FLAG = ValueLayout.JAVA_INT.varHandle();
     private static final MethodHandle EVENT_TARGET;
     private static final Cleaner CLEANER = Cleaner.create();
+    /** Runs {@link #executeAsync} calls: blocking native calls must not occupy the common pool. */
+    private static final ExecutorService ASYNC = Executors.newCachedThreadPool(task -> {
+        Thread thread = new Thread(task, "laya-async");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     static {
         try {
@@ -59,6 +74,8 @@ public final class Engine implements AutoCloseable {
     private final Cleaner.Cleanable cleanable;
     private volatile boolean closing;
     private boolean released; // guarded by the write lock
+    private final Set<MemorySegment> flags = new HashSet<>(); // cancel flags of the calls in flight; guarded by itself
+    private boolean cancelAll; // guarded by flags
 
     private Engine(MemorySegment handle, MethodHandle close) {
         this.handle = handle;
@@ -121,23 +138,80 @@ public final class Engine implements AutoCloseable {
     /**
      * Executes one request or a bounded JSON array of them (per-request "max_tokens" and
      * "temperatures" go in the request JSON). {@code onEvent} runs on the calling thread. Null options mean {@link CallOptions#none()}.
+     * The timeout counts from this call.
      */
     public String execute(String request) {
-        return run(request, CallOptions.none());
+        return run(request, CallOptions.none(), System.nanoTime(), null);
     }
 
     public String execute(String request, CallOptions options) {
-        return run(request, options);
+        return run(request, options, System.nanoTime(), null);
     }
 
     /**
-     * Waits for in-flight calls, then releases the native handle. Idempotent. Called from inside one
-     * of this handle's own calls (an event callback), it cannot wait for that call: it rejects new
-     * calls and returns, and the last running call releases the handle when it finishes.
+     * {@link #execute(String, CallOptions)} on a binding-owned pool of daemon threads. The timeout
+     * counts from this call. Failures (a closed engine, argument errors, a cancelled token, native
+     * errors) complete the future exceptionally with the exception {@code execute} would throw.
+     * {@code future.cancel(...)} (either value) cancels this call only, never a token shared through
+     * the options: the native call stops at its next safe point and the future completes with a
+     * {@link java.util.concurrent.CancellationException}; {@link #close()} still waits for the native call.
      */
+    public CompletableFuture<String> executeAsync(String request) {
+        return executeAsync(request, CallOptions.none(), ASYNC);
+    }
+
+    public CompletableFuture<String> executeAsync(String request, CallOptions options) {
+        return executeAsync(request, options, ASYNC);
+    }
+
+    public CompletableFuture<String> executeAsync(String request, CallOptions options, Executor executor) {
+        long entry = System.nanoTime();
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(executor, "executor");
+        CancellationToken scoped = new CancellationToken();
+        CompletableFuture<String> future = new CompletableFuture<>() {
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                boolean cancelled = super.cancel(mayInterruptIfRunning);
+                if (cancelled) scoped.cancel();
+                return cancelled;
+            }
+        };
+        try {
+            executor.execute(() -> {
+                try {
+                    future.complete(run(request, options, entry, scoped));
+                } catch (Throwable t) {
+                    future.completeExceptionally(t);
+                }
+            });
+        } catch (Throwable t) {
+            future.completeExceptionally(t);
+        }
+        return future;
+    }
+
+    /** Waits for in-flight calls, then releases the native handle; see {@link #close(boolean)}. */
     @Override
     public void close() {
+        close(false);
+    }
+
+    /**
+     * Waits for in-flight calls, then releases the native handle. Idempotent. With {@code cancelPending},
+     * every call that has entered and not yet returned is cancelled first (it fails with
+     * {@link Status#CANCELLED}), so the wait is short. Called from inside one of this handle's own
+     * calls (an event callback), it cannot wait for that call: it rejects new calls, cancels the
+     * running ones if asked and returns, and the last running call releases the handle when it finishes.
+     */
+    public void close(boolean cancelPending) {
         closing = true;
+        if (cancelPending) {
+            synchronized (flags) {
+                cancelAll = true;
+                for (MemorySegment flag : flags) FLAG.setRelease(flag, 0L, Status.CANCELLED.code());
+            }
+        }
         // The write lock waits for every read hold, including this thread's own.
         if (lock.getReadHoldCount() > 0) return;
         lock.writeLock().lock();
@@ -210,41 +284,56 @@ public final class Engine implements AutoCloseable {
         }
     }
 
-    private String run(String request, CallOptions options) {
+    private String run(String request, CallOptions options, long entry, CancellationToken scoped) {
         if (closing) throw new EngineClosedException();
         Objects.requireNonNull(request, "request");
         if (options == null) options = CallOptions.none();
         checkInput(request, "request");
         CallOptions opts = options;
         CancellationToken token = opts.cancellation();
-        // Order: closed, conversions (above), cancelled, then the native call.
-        if (token != null && token.isCancelled())
+        // Order: closed, conversions (above), cancelled, expired, then the native call.
+        if ((token != null && token.isCancelled()) || (scoped != null && scoped.isCancelled()))
             throw new LayaException(Status.CANCELLED, "The call was cancelled before it started");
         return withHandle(h -> {
             Native n = Native.get();
+            long timeoutMs = 0;
+            if (!opts.timeout().isZero()) {
+                Duration remaining = opts.timeout().minusNanos(System.nanoTime() - entry);
+                if (remaining.isZero() || remaining.isNegative())
+                    throw new LayaException(Status.DEADLINE_EXCEEDED, "The deadline passed before the call started");
+                timeoutMs = CallOptions.millis(remaining);
+            }
             try (Arena arena = Arena.ofShared()) {
-                MemorySegment flag = null;
                 MemorySegment call = (MemorySegment) n.DEFAULT_CALL_OPTIONS.invoke((SegmentAllocator) arena);
                 call.set(ValueLayout.JAVA_LONG, REQUEST_ID, opts.requestId());
-                call.set(ValueLayout.JAVA_LONG, TIMEOUT_MS, opts.timeoutMillis());
+                call.set(ValueLayout.JAVA_LONG, TIMEOUT_MS, timeoutMs);
                 if (opts.onEvent() != null)
                     call.set(PTR, ON_EVENT, Linker.nativeLinker().upcallStub(
                         MethodHandles.insertArguments(EVENT_TARGET, 0, opts.onEvent()),
                         FunctionDescriptor.ofVoid(PTR, PTR), arena));
-                if (token != null) {
-                    flag = arena.allocate(4, 4);
-                    flag.set(ValueLayout.JAVA_INT, 0, 0);
-                    call.set(PTR, SHOULD_CANCEL, n.CANCEL_FLAG);
-                    call.set(PTR, CANCEL_USER_DATA, flag);
-                    token.register(flag);
+                // A flag of this call alone, which close(true) and the tokens set; a token is linked to it, never passed as the flag.
+                MemorySegment flag = arena.allocate(4, 4);
+                flag.set(ValueLayout.JAVA_INT, 0, 0);
+                call.set(PTR, SHOULD_CANCEL, n.CANCEL_FLAG);
+                call.set(PTR, CANCEL_USER_DATA, flag);
+                synchronized (flags) {
+                    if (cancelAll) FLAG.setRelease(flag, 0L, Status.CANCELLED.code());
+                    flags.add(flag);
                 }
+                if (token != null) token.register(flag);
+                if (scoped != null) scoped.register(flag);
                 MemorySegment result = arena.allocate(PTR);
                 MemorySegment error = arena.allocate(PTR);
                 try {
                     int status = (int) n.EXECUTE.invokeExact(h, arena.allocateFrom(request), call, result, error);
                     return finish(status, result, error);
                 } finally {
-                    if (flag != null) token.unregister(flag); // before the arena frees it
+                    // Before the arena frees the flag.
+                    if (scoped != null) scoped.unregister(flag);
+                    if (token != null) token.unregister(flag);
+                    synchronized (flags) {
+                        flags.remove(flag);
+                    }
                 }
             }
         });
@@ -292,9 +381,10 @@ public final class Engine implements AutoCloseable {
     }
 
     // Upcalls: must never throw, or the JVM aborts.
-    private static void event(Consumer<String> callback, MemorySegment text, MemorySegment user) {
+    private static void event(Consumer<Event> callback, MemorySegment text, MemorySegment user) {
         try {
-            callback.accept(text(text));
+            Event event = Event.parse(text(text));
+            if (event != null) callback.accept(event);
         } catch (Throwable ignored) {
             // observer failures never change inference results
         }

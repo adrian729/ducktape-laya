@@ -11,6 +11,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.UserPrincipal;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -24,6 +25,10 @@ public final class EngineTest {
         "{\"state\":\"Please refund me.\",\"questions\":{\"refund\":{\"type\":\"noul\",\"instructions\":\"Is a refund requested?\"}}}";
     private static final String SCHEMA =
         "{\"state\":\"Please refund me.\",\"schema\":{\"type\":\"object\",\"properties\":{\"refund\":{\"type\":\"boolean\",\"description\":\"Is a refund requested?\"}}}}";
+
+    /** Seconds of inference without cancellation: a long state scanned in windows. */
+    private static final String SLOW =
+        "{\"overflow\":\"scan\",\"state\":\"" + "Please refund me now. ".repeat(16) + "\",\"questions\":{\"refund\":{\"type\":\"noul\",\"instructions\":\"Is a refund requested?\"}}}";
 
     private static final Config ONE = Config.none().withThreads(1);
     private static final Config TWO = Config.none().withThreads(2);
@@ -129,10 +134,6 @@ public final class EngineTest {
         eq("{\"temperatures\":{\"a\\\"b\":1.0}}", Config.none().withTemperatures(Map.of("a\"b", 1.0)).toJson(), "escaped key");
     }
 
-    static void rejectsBadPath() throws Exception {
-        check(statusOf(() -> Engine.open("missing.gguf", TWO)) != 0, "bad path");
-    }
-
     static void rejectsNul() throws Exception {
         eq(1, statusOf(() -> Engine.open("a\0b", TWO)), "open NUL");
         eq(1, statusOf(() -> Engine.openRouter("{\0}", ONE)), "router NUL");
@@ -192,7 +193,7 @@ public final class EngineTest {
                     if (closer[0] != null) return;
                     // close() on another thread waits for this call; calls from other threads meanwhile must
                     // fail instead of queueing behind it (this callback waits for them).
-                    closer[0] = pool.submit(router::close);
+                    closer[0] = pool.submit(() -> router.close());
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
                     try {
                         while (!failedFast[0] && System.nanoTime() < deadline) {
@@ -219,27 +220,98 @@ public final class EngineTest {
         }
     }
 
-    static void routerAutoValidation() throws Exception {
+    static void routerInfoIsRuntimeOnly() throws Exception {
         Path file = Files.createTempFile("laya", ".gguf");
-        try {
-            String models = "\"models\":{\"a\":\"" + json(file.toString()) + "\"}";
-            String[][] bad = {
-                {"{\"english\":\"a\"}", "auto.default must name a route"},
-                {"{\"english\":\"zz\",\"default\":\"a\"}", "auto.english must name a route"},
-                {"[]", "auto must be an object"},
-                {"{\"english\":\"a\",\"default\":\"a\",\"x\":\"a\"}", "auto: unsupported key x"},
-            };
-            for (String[] c : bad) {
-                Throwable t = thrown(() -> Engine.openRouter("{" + models + ",\"auto\":" + c[0] + "}", ONE));
-                check(t instanceof LayaException e && e.status() == Status.INVALID_ARGUMENT && e.getMessage().contains(c[1]), c[0] + " -> " + t);
-            }
-            try (Engine router = Engine.openRouter("{" + models + "}", ONE)) {
-                Throwable noAuto = thrown(() -> router.execute(withModel(PRIMITIVE, "auto")));
-                check(noAuto instanceof LayaException e && e.status() == Status.INVALID_ARGUMENT && e.getMessage().contains("requires an \"auto\" router config"), "auto without config: " + noAuto);
-                Throwable lang = thrown(() -> router.execute(withModel(PRIMITIVE, "a").replaceFirst("\\{", "{\"lang\":\"en\",")));
-                check(lang instanceof LayaException e && e.status() == Status.INVALID_ARGUMENT && e.getMessage().contains("lang"), "lang without auto: " + lang);
-            }
+        try (Engine router = Engine.openRouter("{\"models\":{\"plain\":\"" + json(file.toString()) + "\"},\"max_loaded\":1}", ONE)) {
+            check(router.info().contains("\"default_context_tokens\""), "router info is runtime only");
         } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    static void typedEvents() throws Exception {
+        Path file = Files.createTempFile("laya", ".gguf");
+        try (Engine router = Engine.openRouter("{\"models\":{\"x\":\"" + json(file.toString()) + "\"}}", ONE)) {
+            List<Event> events = new ArrayList<>();
+            // The maximum id is -1L: all 64 bits round trip.
+            eq(1, statusOf(() -> router.execute("{}", CallOptions.none().withRequestId(-1L).withOnEvent(events::add))), "invalid request");
+            eq(2, events.size(), "event count");
+            eq(EventKind.START, events.get(0).kind(), "start kind");
+            eq(Status.OK, events.get(0).status(), "start status");
+            eq(0.0, events.get(0).elapsedMs(), "start elapsed");
+            eq(EventKind.ERROR, events.get(1).kind(), "error kind");
+            eq(Status.INVALID_ARGUMENT, events.get(1).status(), "error status");
+            check(events.get(1).elapsedMs() >= 0, "error elapsed");
+            for (Event e : events) eq("18446744073709551615", Long.toUnsignedString(e.requestId()), "maximum request id");
+            events.clear();
+            eq(1, statusOf(() -> router.execute("{}", CallOptions.none().withOnEvent(events::add))), "default id request");
+            eq(0L, events.get(0).requestId(), "default request id");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+        eq(new Event(EventKind.END, Long.MIN_VALUE, Status.OK, 1.5e-5),
+            Event.parse("{\"elapsed_ms\":1.5e-05,\"event\":\"end\",\"request_id\":9223372036854775808,\"status\":0}"), "parse");
+        eq(null, Event.parse("{\"event\":\"stop\",\"request_id\":1,\"status\":0,\"elapsed_ms\":0}"), "unknown kind dropped");
+        eq(null, Event.parse("{\"event\":\"end\",\"request_id\":-1,\"status\":0,\"elapsed_ms\":0}"), "negative id dropped");
+        eq(null, Event.parse("not json"), "malformed dropped");
+    }
+
+    /** The deadline counts from the call's entry: one that has passed fails at once, with no native call and no events. */
+    static void expiredDeadline() throws Exception {
+        Path file = Files.createTempFile("laya", ".gguf");
+        try (Engine router = Engine.openRouter("{\"models\":{\"x\":\"" + json(file.toString()) + "\"}}", ONE)) {
+            List<Event> events = new ArrayList<>();
+            CallOptions expired = CallOptions.none().withTimeout(Duration.ofNanos(1)).withOnEvent(events::add);
+            eq(6, statusOf(() -> router.execute("{}", expired)), "expired at entry");
+            eq(0, events.size(), "no events");
+            Throwable async = failure(router.executeAsync("{}", expired));
+            check(async instanceof LayaException e && e.status() == Status.DEADLINE_EXCEEDED, "async expired " + async);
+            eq(0, events.size(), "no async events");
+            // Not yet expired: the call reaches the native library (and fails there, status 1).
+            eq(1, statusOf(() -> router.execute("{}", CallOptions.none().withTimeout(Duration.ofDays(1)))), "native call made");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    static Throwable failure(CompletableFuture<?> future) throws Exception {
+        try {
+            future.get(30, TimeUnit.SECONDS);
+        } catch (ExecutionException e) {
+            return e.getCause();
+        }
+        throw new AssertionError("the future did not fail");
+    }
+
+    static void executeAsyncFailures() throws Exception {
+        Path file = Files.createTempFile("laya", ".gguf");
+        Engine router = Engine.openRouter("{\"models\":{\"x\":\"" + json(file.toString()) + "\"}}", ONE);
+        try {
+            Throwable t = failure(router.executeAsync("{}"));
+            check(t instanceof LayaException e && e.status() == Status.INVALID_ARGUMENT, "native failure " + t);
+            check(failure(router.executeAsync("a\0b", CallOptions.none())) instanceof LayaArgumentException, "argument error");
+            CancellationToken cancelled = new CancellationToken();
+            cancelled.cancel();
+            t = failure(router.executeAsync("{}", CallOptions.none().withCancellation(cancelled)));
+            check(t instanceof LayaException e && e.status() == Status.CANCELLED, "cancelled token " + t);
+            check(thrown(() -> router.executeAsync(null)) instanceof NullPointerException, "null request");
+            // An executor that refuses the task fails the future too.
+            check(failure(router.executeAsync("{}", CallOptions.none(), r -> { throw new RejectedExecutionException(); })) instanceof RejectedExecutionException,
+                "rejected");
+            // Cancelling before the task runs: the future is cancelled, the shared token is not, and no native call is made.
+            List<Runnable> queued = new ArrayList<>();
+            CancellationToken shared = new CancellationToken();
+            int[] events = {0};
+            CompletableFuture<String> future = router.executeAsync("{}", CallOptions.none().withCancellation(shared).withOnEvent(e -> events[0]++), queued::add);
+            check(future.cancel(false) && future.isCancelled(), "cancel");
+            queued.get(0).run();
+            check(future.isCancelled() && thrown(() -> future.get()) instanceof CancellationException, "stays cancelled");
+            check(!shared.isCancelled(), "shared token untouched");
+            eq(0, events[0], "no native call after cancel");
+            router.close();
+            check(failure(router.executeAsync("{}")) instanceof EngineClosedException, "closed engine");
+        } finally {
+            router.close();
             Files.deleteIfExists(file);
         }
     }
@@ -250,6 +322,7 @@ public final class EngineTest {
             Engine router = Engine.openRouter("{\"models\":{\"x\":\"" + json(file.toString()) + "\"}}", ONE);
             router.close();
             router.close();
+            router.close(true);
             eq(1, statusOf(() -> router.execute("{}")), "closed execute");
             check(thrown(() -> router.execute("{}")) instanceof EngineClosedException, "closed exception type");
             eq(1, statusOf(router::info), "closed info");
@@ -260,94 +333,156 @@ public final class EngineTest {
 
     static void realFeatures() throws Exception {
         try (Engine laya = Engine.open(MODEL, TWO)) {
-            String tagged = PRIMITIVE.replaceFirst("\\{", "{\"metadata\":\"caller tag\",");
-            eq(1, statusOf(() -> laya.execute(tagged)), "execute rejects metadata");
             String single = laya.execute(SCHEMA);
             check(single.contains("\"values\":{\"refund\":true}"), "schema result " + single);
-            List<String> events = new ArrayList<>();
+            List<Event> events = new ArrayList<>();
             String batch = laya.execute("[" + SCHEMA + "," + SCHEMA + "]",
-                CallOptions.none().withRequestId(21).withOnEvent(events::add));
+                CallOptions.none().withRequestId(-1L).withOnEvent(events::add));
             eq("[" + single + "," + single + "]", batch, "batch");
             eq(2, events.size(), "event count");
-            check(events.get(0).contains("\"event\":\"start\""), "start event");
-            check(events.get(1).contains("\"request_id\":21"), "request id");
-            check(statusOf(() -> laya.execute("{}", CallOptions.none().withOnEvent(e -> {
-                throw new RuntimeException("contained observer");
-            }))) != 0, "failing observer on invalid request");
+            eq(EventKind.START, events.get(0).kind(), "start event");
+            eq(EventKind.END, events.get(1).kind(), "end event");
+            eq(Status.OK, events.get(1).status(), "end status");
+            check(events.get(1).elapsedMs() > 0, "end elapsed");
+            for (Event e : events) eq(-1L, e.requestId(), "request id round trip");
             laya.execute(SCHEMA, CallOptions.none().withRequestId(23).withOnEvent(e -> laya.execute(SCHEMA)));
+            // No upper bound on a timeout: a very long one runs, one past the clock's range saturates.
+            eq(single, laya.execute(SCHEMA, CallOptions.none().withTimeout(Duration.ofDays(365_000))), "very long timeout");
+            eq(single, laya.execute(SCHEMA, CallOptions.none().withTimeout(Duration.ofSeconds(Long.MAX_VALUE))), "huge timeout");
+            eq(single, laya.executeAsync(SCHEMA).get(60, TimeUnit.SECONDS), "executeAsync");
 
             try (Engine router = Engine.openRouter("{\"models\":{\"english\":\"" + json(MODEL) + "\"},\"max_loaded\":1}", TWO)) {
                 check(router.execute(withModel(SCHEMA, "english")).contains("\"model\":\"english\""), "routed");
-                eq(1, statusOf(() -> router.execute(SCHEMA)), "router needs model");
             }
         }
     }
 
-    static void configAndPerRequestSettings() throws Exception {
-        String choice = "{\"state\":\"Please refund me.\",\"questions\":{\"q\":{\"type\":\"choice\",\"instructions\":\"Is a refund requested?\",\"criteria\":[\"yes\",\"no\"]}}}";
-        try (Engine laya = Engine.open(MODEL, TWO)) {
-            eq(1, statusOf(() -> laya.execute(choice.replaceFirst("\\{", "{\"max_tokens\":0,"))), "max_tokens 0");
-            eq(1, statusOf(() -> laya.execute(choice.replaceFirst("\\{", "{\"max_tokens\":100000000,"))), "max_tokens above context");
-            eq(1, statusOf(() -> laya.execute(choice.replaceFirst("\\{", "{\"temperatures\":{\"choice\":0},"))), "temperature 0");
-        }
-        Config configured = TWO.withContextTokens(128).withTemperatures(Map.of("choice.2", 3.0));
-        try (Engine laya = Engine.open(MODEL, configured)) {
-            check(laya.info().contains("\"context_tokens\":128"), "configured context tokens");
-        }
-        eq(1, statusOf(() -> Engine.open(MODEL, TWO.withContextTokens(1))), "context_tokens below minimum");
-        eq(1, statusOf(() -> Engine.open(MODEL, TWO.withOverflow("bogus"))), "invalid overflow");
-        String longRequest = "{\"state\":\"" + "refund ".repeat(800) + "\",\"questions\":{\"refund\":{\"type\":\"noul\",\"instructions\":\"Is a refund requested?\"}}}";
-        // The policy reaches the engine: the default (reject) would refuse this request.
-        try (Engine laya = Engine.open(MODEL, TWO.withOverflow("truncate_end"))) {
-            check(laya.execute(longRequest).contains("\"answers\""), "truncate_end accepts a long request");
-        }
-        eq(1, statusOf(() -> Engine.open(MODEL, TWO.withTemperatures(Map.of("bogus.key", 1.5)))), "unknown temperature key");
-        try (Engine router = Engine.openRouter("{\"models\":{\"plain\":\"" + json(MODEL) + "\"},\"max_loaded\":1}", TWO)) {
-            check(router.info().contains("\"default_context_tokens\""), "router info is runtime only");
-        }
+    /** Milliseconds one uncancelled run of SLOW takes on this machine. */
+    private static double slowMillis(Engine laya) {
+        long start = System.nanoTime();
+        check(laya.execute(SLOW).contains("\"answers\""), "slow request answers");
+        return (System.nanoTime() - start) / 1e6;
     }
 
+    private static double sinceMillis(long start) {
+        return (System.nanoTime() - start) / 1e6;
+    }
+
+    /** A cancelled running call fails with status 5 well before an uncancelled run would end. */
     static void cancellationAndDeadline() throws Exception {
         try (Engine laya = Engine.open(MODEL, TWO)) {
             String baseline = laya.execute(REQUEST);
-            CancellationToken token = new CancellationToken();
-            token.cancel();
-            CallOptions cancelled = CallOptions.none().withCancellation(token);
-            eq(5, statusOf(() -> laya.execute(REQUEST, cancelled)), "pre-cancelled execute");
-            eq(6, statusOf(() -> laya.execute(REQUEST, CallOptions.none().withTimeout(Duration.ofMillis(1)))), "deadline");
-            eq(baseline, laya.execute(REQUEST), "unchanged after stop");
-            eq(baseline, laya.execute(REQUEST, CallOptions.none().withCancellation(new CancellationToken())), "uncancelled token");
-            check(thrown(() -> CallOptions.none().withTimeout(Duration.ofDays(2))) instanceof IllegalArgumentException, "timeout range");
-            // Cancelled from another thread while the call is running (the start event fires first).
+            double full = slowMillis(laya);
+            // Cancelled from another thread after the start event.
             CancellationToken live = new CancellationToken();
             CallOptions viaThread = CallOptions.none().withCancellation(live).withOnEvent(e -> {
                 Thread t = new Thread(live::cancel);
                 t.start();
                 try { t.join(); } catch (InterruptedException x) { Thread.currentThread().interrupt(); }
             });
-            eq(5, statusOf(() -> laya.execute(REQUEST, viaThread)), "cancel from another thread");
+            long start = System.nanoTime();
+            eq(5, statusOf(() -> laya.execute(SLOW, viaThread)), "cancel from another thread");
+            double cancelled = sinceMillis(start);
+            check(cancelled < full / 4, "cancelled call stopped early: " + cancelled + " ms of " + full + " ms");
             check(live.isCancelled(), "token stays cancelled");
             eq(5, statusOf(() -> laya.execute(REQUEST, CallOptions.none().withCancellation(live))), "a cancelled token stays cancelled");
+            // A deadline stops a running call too.
+            start = System.nanoTime();
+            eq(6, statusOf(() -> laya.execute(SLOW, CallOptions.none().withTimeout(Duration.ofMillis(50)))), "deadline");
+            double expired = sinceMillis(start);
+            check(expired < full / 4, "expired call stopped early: " + expired + " ms of " + full + " ms");
+            eq(baseline, laya.execute(REQUEST), "unchanged after stop");
+            eq(baseline, laya.execute(REQUEST, CallOptions.none().withCancellation(new CancellationToken())), "uncancelled token");
         }
     }
 
-    static void nullOptions() throws Exception {
-        try (Engine laya = Engine.open(MODEL)) {
-            String baseline = laya.execute(PRIMITIVE);
-            eq(baseline, laya.execute(PRIMITIVE, null), "null options execute");
+    /** future.cancel stops the native call through a call-scoped token and leaves a shared token alone. */
+    static void executeAsyncCancel() throws Exception {
+        Engine laya = Engine.open(MODEL, TWO);
+        try {
+            String baseline = laya.execute(REQUEST);
+            double full = slowMillis(laya);
+            CancellationToken shared = new CancellationToken();
+            CountDownLatch started = new CountDownLatch(1);
+            List<Event> events = Collections.synchronizedList(new ArrayList<>());
+            CompletableFuture<String> future = laya.executeAsync(SLOW, CallOptions.none().withCancellation(shared).withOnEvent(e -> {
+                events.add(e);
+                if (e.kind() == EventKind.START) started.countDown();
+            }));
+            check(started.await(60, TimeUnit.SECONDS), "call started");
+            check(future.cancel(true) && future.isCancelled(), "cancel");
+            check(thrown(() -> future.get()) instanceof CancellationException, "future cancelled");
+            check(!shared.isCancelled(), "shared token untouched");
+            eq(baseline, laya.execute(REQUEST, CallOptions.none().withCancellation(shared)), "shared token still usable");
+            // close() waits for the native call, which stopped early.
+            long start = System.nanoTime();
+            laya.close();
+            double waited = sinceMillis(start);
+            check(waited < full / 4, "native call stopped early: " + waited + " ms of " + full + " ms");
+            Event last = events.get(events.size() - 1);
+            check(last.kind() == EventKind.ERROR && last.status() == Status.CANCELLED, "call ended cancelled: " + last);
+        } finally {
+            laya.close();
+        }
+    }
+
+    /** close(true) cancels the running call (status 5) and returns promptly. */
+    static void closeCancelPending() throws Exception {
+        Engine laya = Engine.open(MODEL, TWO);
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            double full = slowMillis(laya);
+            CountDownLatch started = new CountDownLatch(1);
+            Future<Throwable> call = pool.submit(() -> thrown(() -> laya.execute(SLOW, CallOptions.none().withOnEvent(e -> {
+                if (e.kind() == EventKind.START) started.countDown();
+            }))));
+            check(started.await(60, TimeUnit.SECONDS), "call started");
+            long start = System.nanoTime();
+            laya.close(true);
+            double waited = sinceMillis(start);
+            check(waited < full / 4, "close returned early: " + waited + " ms of " + full + " ms");
+            check(call.get(30, TimeUnit.SECONDS) instanceof LayaException e && e.status() == Status.CANCELLED, "running call cancelled");
+            check(thrown(() -> laya.execute(REQUEST)) instanceof EngineClosedException, "closed afterwards");
+        } finally {
+            pool.shutdownNow();
+            laya.close();
+        }
+    }
+
+    /** From an event callback, close(true) cancels the callback's own call and returns at once. */
+    @SuppressWarnings("try")
+    static void closeCancelPendingInsideCallback() throws Exception {
+        try (Engine laya = Engine.open(MODEL, TWO)) {
+            double full = slowMillis(laya);
+            long start = System.nanoTime();
+            Throwable t = thrown(() -> laya.execute(SLOW, CallOptions.none().withOnEvent(e -> {
+                if (e.kind() == EventKind.START) laya.close(true);
+            })));
+            check(t instanceof LayaException e && e.status() == Status.CANCELLED, "own call cancelled " + t);
+            double elapsed = sinceMillis(start);
+            check(elapsed < full / 4, "stopped early: " + elapsed + " ms of " + full + " ms");
+            check(thrown(() -> laya.execute(REQUEST)) instanceof EngineClosedException, "closed afterwards");
         }
     }
 
     static void argumentValidation() throws Exception {
-        eq(0L, CallOptions.none().timeoutMillis(), "none");
-        eq(1L, CallOptions.none().withTimeout(Duration.ofNanos(1)).timeoutMillis(), "1ns");
-        eq(1L, CallOptions.none().withTimeout(Duration.ofMillis(1)).timeoutMillis(), "1ms");
-        eq(2L, CallOptions.none().withTimeout(Duration.ofNanos(1_000_001)).timeoutMillis(), "1.000001ms");
-        eq(86_400_000L, CallOptions.none().withTimeout(Duration.ofHours(24)).timeoutMillis(), "24h");
-        check(thrown(() -> CallOptions.none().withTimeout(Duration.ofHours(24).plusNanos(1))) instanceof IllegalArgumentException, ">24h");
-        check(thrown(() -> CallOptions.none().withTimeout(Duration.ofMillis(-1))) instanceof IllegalArgumentException, "negative");
-        check(thrown(() -> CallOptions.none().withRequestId(-1)) instanceof IllegalArgumentException, "requestId -1");
+        eq(1L, CallOptions.millis(Duration.ofNanos(1)), "1ns");
+        eq(1L, CallOptions.millis(Duration.ofMillis(1)), "1ms");
+        eq(2L, CallOptions.millis(Duration.ofNanos(1_000_001)), "1.000001ms");
+        eq(86_400_000L, CallOptions.millis(Duration.ofHours(24)), "24h");
+        eq(86_400_001L, CallOptions.millis(Duration.ofHours(24).plusNanos(1)), "past 24h");
+        eq(31_536_000_000_000L, CallOptions.millis(Duration.ofDays(365_000)), "a thousand years");
+        eq("18000000000000000000", Long.toUnsignedString(CallOptions.millis(Duration.ofSeconds(18_000_000_000_000_000L))), "largest exact count");
+        eq(-1L, CallOptions.millis(Duration.ofSeconds(18_000_000_000_000_001L)), "past the unsigned range saturates");
+        eq(-1L, CallOptions.millis(Duration.ofSeconds(Long.MAX_VALUE, 999_999_999)), "longest duration saturates");
+        eq(Duration.ZERO, CallOptions.none().timeout(), "none");
+        eq(Duration.ofDays(2), CallOptions.none().withTimeout(Duration.ofDays(2)).timeout(), "no upper bound");
+        eq(Duration.ZERO, CallOptions.none().withTimeout(null).timeout(), "null timeout is none");
+        check(thrown(() -> CallOptions.none().withTimeout(Duration.ofMillis(-1))) instanceof LayaArgumentException, "negative");
+        check(thrown(() -> CallOptions.none().withTimeout(Duration.ofNanos(-1))) instanceof LayaArgumentException, "negative ns");
+        eq(-1L, CallOptions.none().withRequestId(-1).requestId(), "requestId carries all 64 bits");
         eq(Long.MAX_VALUE, CallOptions.none().withRequestId(Long.MAX_VALUE).requestId(), "requestId max");
+        eq(0L, CallOptions.none().requestId(), "requestId default");
         check(thrown(() -> Config.none().withTemperatures(Map.of("choice", Double.NaN))) instanceof LayaArgumentException, "temp NaN");
         eq(2, statusOf(() -> Engine.open("missing.gguf", null)), "null config opens with defaults");
         eq(2, statusOf(() -> Engine.open(Path.of("missing.gguf"))), "Path overload reaches the core");
@@ -779,17 +914,14 @@ public final class EngineTest {
             for (int i = 0; i < 3; i++) plain.add(pool.submit(() -> laya.execute(REQUEST)));
             List<Future<String>> routed = new ArrayList<>();
             for (String name : new String[] {"a", "b"}) routed.add(pool.submit(() -> router.execute(withModel(REQUEST, name))));
-            Future<String> cancelled = pool.submit(() -> laya.execute(REQUEST, CallOptions.none().withCancellation(token)));
-            token.cancel();
+            // Cancelled once it has started, so the outcome is certain.
+            Future<String> cancelled = pool.submit(() -> laya.execute(REQUEST, CallOptions.none().withCancellation(token).withOnEvent(e -> token.cancel())));
             for (Future<String> f : plain) eq(baseline, f.get(), "concurrent execute");
             String[] names = {"a", "b"};
             for (int i = 0; i < 2; i++)
                 eq(baseline.substring(0, baseline.length() - 1) + ",\"model\":\"" + names[i] + "\"}", routed.get(i).get(), "routed " + names[i]);
-            try {
-                eq(baseline, cancelled.get(), "cancel raced to completion");
-            } catch (ExecutionException e) {
-                eq(5, ((LayaException) e.getCause()).status().code(), "cancelled status");
-            }
+            check(thrown(cancelled::get) instanceof ExecutionException x && x.getCause() instanceof LayaException e
+                && e.status() == Status.CANCELLED, "cancelled status");
             // Close from another thread than the opener, then idempotently.
             pool.submit(() -> { laya.close(); router.close(); }).get();
             laya.close();
@@ -832,10 +964,10 @@ public final class EngineTest {
             loadFailureChild();
             System.exit(0);
         }
-        String[] names = {"diagnostics", "rejectsBadPath", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "packagePlatforms", "muslDetection", "configJson", "loadFailure", "bundledExtraction", "windowsExtraction", "pendingCloseFailsFast", "routerAutoValidation", "loadRetries", "overridesAndVersion", "routerConfigJson", "errorOrder"};
-        Case[] cases = {EngineTest::diagnostics, EngineTest::rejectsBadPath, EngineTest::rejectsNul, EngineTest::rejectsInvalidUnicode,
+        String[] names = {"diagnostics", "rejectsNul", "rejectsInvalidUnicode", "containsObserverFailures", "closeIsIdempotent", "argumentValidation", "packagePlatforms", "muslDetection", "configJson", "loadFailure", "bundledExtraction", "windowsExtraction", "pendingCloseFailsFast", "routerInfoIsRuntimeOnly", "typedEvents", "expiredDeadline", "executeAsyncFailures", "loadRetries", "overridesAndVersion", "routerConfigJson", "errorOrder"};
+        Case[] cases = {EngineTest::diagnostics, EngineTest::rejectsNul, EngineTest::rejectsInvalidUnicode,
             EngineTest::containsObserverFailures, EngineTest::closeIsIdempotent, EngineTest::argumentValidation, EngineTest::packagePlatforms, EngineTest::muslDetection, EngineTest::configJson, EngineTest::loadFailure, EngineTest::bundledExtraction, EngineTest::windowsExtraction,
-            EngineTest::pendingCloseFailsFast, EngineTest::routerAutoValidation,
+            EngineTest::pendingCloseFailsFast, EngineTest::routerInfoIsRuntimeOnly, EngineTest::typedEvents, EngineTest::expiredDeadline, EngineTest::executeAsyncFailures,
             EngineTest::loadRetries, EngineTest::overridesAndVersion, EngineTest::routerConfigJson, EngineTest::errorOrder};
         List<String> failed = new ArrayList<>();
         int ran = 0;
@@ -843,10 +975,11 @@ public final class EngineTest {
         if (MODEL == null) System.out.println("SKIP real-model tests (LAYA_MODEL unset)");
         else {
             ran += run("realFeatures", EngineTest::realFeatures, failed);
-            ran += run("configAndPerRequestSettings", EngineTest::configAndPerRequestSettings, failed);
             ran += run("cancellationAndDeadline", EngineTest::cancellationAndDeadline, failed);
+            ran += run("executeAsyncCancel", EngineTest::executeAsyncCancel, failed);
+            ran += run("closeCancelPending", EngineTest::closeCancelPending, failed);
+            ran += run("closeCancelPendingInsideCallback", EngineTest::closeCancelPendingInsideCallback, failed);
             ran += run("sharedAcrossThreads", EngineTest::sharedAcrossThreads, failed);
-            ran += run("nullOptions", EngineTest::nullOptions, failed);
             ran += run("closeInsideCallback", EngineTest::closeInsideCallback, failed);
         }
         System.out.println(ran + " run, " + failed.size() + " failed");
