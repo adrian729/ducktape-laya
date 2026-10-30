@@ -7,9 +7,8 @@ Scheduled work in order, then work that is wanted but not scheduled, open resear
 In this order; each step is one batch, with its slow checks run once.
 
 1. [macOS on both architectures](#macos-on-both-architectures): an application (Big Brother, a universal macOS app) needs Laya on Apple silicon and Intel Macs.
-2. [API unification](#api-unification-before-10), phases 3 to 5 (calls, lifecycle, binding tests).
-3. [Native core](#native-core).
-4. The release items of [security hardening](#security-hardening), before the next release.
+2. [Native core](#native-core).
+3. The release items of [security hardening](#security-hardening), before the next release.
 
 Tooling items under [build, CI and packaging](#build-ci-and-packaging) join whichever batch already runs their checks.
 
@@ -25,15 +24,7 @@ macOS arm64 and x86-64 (Intel) become tier-2 release targets, like Linux arm64 a
 
 ### API unification before 1.0
 
-The highest-priority item: the eight bindings expose the same core with different names, defaults and semantics, which every user of more than one binding pays for, and before 1.0 it can change without compatibility constraints. Each phase is one batch: design it across all bindings first, then run every binding's suites, `tests/typescript`, the browser run, binding parity and the CI binding jobs once per phase (the real-model suites once per batch). The inventories came from two independent reviews of 0.3.0 (`main` at 1478334).
-
-3. **Calls, cancellation, deadlines and observers.**
-   - **Deadlines** are measured from call entry everywhere (JS counts from enqueue, Go from the context's deadline, the others from native setup) with one range rule (Go allows more than 24 h through a watcher, the others reject it); Rust takes a `Duration`.
-   - **Request id:** one type and default (a signed long in Java, a safe integer generated per instance in JavaScript, u64 defaulting to 0 elsewhere).
-   - **Payloads:** a typed `Event {event, request_id, status, elapsed_ms}` everywhere instead of parsed objects in JS and Python and JSON strings elsewhere; a raw-string result option in JS and Python, so every binding can return the core's exact text (`JSON.parse` rounds integers above 2^53).
-   - **Async:** Java `executeAsync` returning a `CompletableFuture` whose `cancel(true)` fires a call-scoped token; `info()` in Node and the browser exempt from `maxPending`, as `close` is.
-4. **Lifecycle.** An optional cancel-running flag on `close` in Python, Java, .NET and Go, matching JS `cancelPending` (or drop it from JS); Rust `Engine::close(self)` beside `Drop`; the Node worker `unref()`ed while idle so an unclosed engine does not keep the process alive; after a worker failure the browser's "Laya is closing or closed" message comes with `ERR_LAYA_WORKER_EXITED`, so reword it.
-5. **Binding tests.** Keep in each binding only what it owns (status propagation once, NUL and Unicode checks, local conversions, lifecycle, callbacks, loading) and delete the native-validation repeats (per-request `max_tokens` and temperatures, the unknown `metadata` key, bad overflow and context sizes, router `auto` validation, the missing model, open config reaching the model) that `tests/features.cpp`, `tests/control.cpp` and the parity open-config pass already own; move model-free checks out of real-model tests. Fix the tests that do not check what they claim: Python's `execute_async` cancellation (passes whether or not the native call stopped) and its cancel race, .NET's "cancelled while running" (passes when the run completes), Go's `time.Sleep` before `Close`, and bad-path asserts that accept any nonzero status.
+The eight bindings expose the same core with the same names, errors, configuration, call options, events and lifecycle ([API.md](API.md#interfaces)); the remaining differences are the deliberate ones API.md lists.
 
 - **Rust MSRV:** `rust-version = "1.98"` is the current stable; the crates probably build on a much older compiler, but this has not been verified with older toolchains.
 
