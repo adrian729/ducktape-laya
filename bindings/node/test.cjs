@@ -543,8 +543,12 @@ test('an expired deadline fails at once with status 6, no native call and no eve
     const controller = new AbortController();
     const running = engine.execute(longRequest, { signal: controller.signal });
     const events = [];
-    // This call's deadline passes while it waits behind the running one.
-    await assert.rejects(engine.execute(request, { timeoutMs: 1, onEvent: event => { events.push(event); } }), { status: Status.DEADLINE_EXCEEDED });
+    // This call's deadline passes while it waits behind the running one. The host timer can fire before the
+    // deadline (libuv's loop clock is cached), so the running call stops only once the deadline has passed.
+    const expiring = engine.execute(request, { timeoutMs: 1, onEvent: event => { events.push(event); } });
+    const passed = process.hrtime.bigint() + 1000000n;
+    await assert.rejects(expiring, { status: Status.DEADLINE_EXCEEDED });
+    while (process.hrtime.bigint() < passed) await new Promise(resolve => setImmediate(resolve));
     controller.abort();
     await assert.rejects(running, { status: Status.CANCELLED });
     await engine.close();

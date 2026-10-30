@@ -284,7 +284,8 @@ public final class Engine implements AutoCloseable {
         }
     }
 
-    private String run(String request, CallOptions options, long entry, CancellationToken scoped) {
+    // Package-private for the tests, which pass an entry in the past.
+    String run(String request, CallOptions options, long entry, CancellationToken scoped) {
         if (closing) throw new EngineClosedException();
         Objects.requireNonNull(request, "request");
         if (options == null) options = CallOptions.none();

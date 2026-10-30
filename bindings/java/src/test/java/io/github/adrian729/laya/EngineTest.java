@@ -262,9 +262,12 @@ public final class EngineTest {
         try (Engine router = Engine.openRouter("{\"models\":{\"x\":\"" + json(file.toString()) + "\"}}", ONE)) {
             List<Event> events = new ArrayList<>();
             CallOptions expired = CallOptions.none().withTimeout(Duration.ofNanos(1)).withOnEvent(events::add);
-            eq(6, statusOf(() -> router.execute("{}", expired)), "expired at entry");
+            // An entry a second ago, not a fresh one: a coarse clock may not tick within the call's first nanosecond.
+            eq(6, statusOf(() -> router.run("{}", expired, System.nanoTime() - 1_000_000_000L, null)), "expired at entry");
             eq(0, events.size(), "no events");
-            Throwable async = failure(router.executeAsync("{}", expired));
+            // The task starts once the clock has ticked past executeAsync's entry.
+            Executor ticked = task -> { long start = System.nanoTime(); while (System.nanoTime() == start) Thread.onSpinWait(); task.run(); };
+            Throwable async = failure(router.executeAsync("{}", expired, ticked));
             check(async instanceof LayaException e && e.status() == Status.DEADLINE_EXCEEDED, "async expired " + async);
             eq(0, events.size(), "no async events");
             // Not yet expired: the call reaches the native library (and fails there, status 1).
