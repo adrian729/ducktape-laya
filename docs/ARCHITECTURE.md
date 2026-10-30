@@ -28,7 +28,7 @@ Out of scope: text or chat generation, an HTTP or inference server, model traini
 | A request's state as its prompts carry it, prepared once per request and model | `src/request_state.hpp` |
 | Language detection for `"model": "auto"` | `src/language.cpp` |
 | Request bounds, open config, schema planning/projection, batch order, routing/cache and passive events | `src/laya.cpp` |
-| Cooperative stop state, deadlines and cancellable lock waits | `src/execution.hpp` |
+| Cooperative stop state, deadlines and cancellable lock waits; the engine lock, which waiters take in arrival order | `src/execution.hpp`, `src/fair_mutex.hpp` |
 | Runtime diagnostics, native CPU compatibility checks and the automatic thread count (CPU affinity, cgroup CPU quota) | `src/platform.cpp`, `src/threads.hpp` |
 | Ownership, type conversion, error translation and platform scheduling | Thin language bindings |
 | Source/artifact identity, packaging and dependency upgrade checks | CMake and maintainer scripts; no runtime dependency on Python |
