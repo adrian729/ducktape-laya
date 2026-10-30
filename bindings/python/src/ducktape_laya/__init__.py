@@ -7,7 +7,7 @@ JSON: a ``str`` is sent as is, any other value is serialized with ``json.dumps``
 
 Errors: native failures and invalid request text raise ``LayaError`` (its ``status`` is
 a ``Status``); calls after ``close()`` raise ``EngineClosedError``; conversions the
-binding checks itself (types, ``timeout``, ``request_id``, non-finite numbers) raise
+binding checks itself (types, ``timeout``, ``request_id``, ``raw``, non-finite numbers) raise
 ``TypeError``/``ValueError`` carrying ``status`` ``INVALID_ARGUMENT``; config values
 go to the native core unchecked; a missing, unloadable or incompatible library raises
 ``LayaLoadError`` (status ``UNSUPPORTED_PLATFORM``, also an ``OSError``). When several
@@ -16,16 +16,47 @@ already-cancelled token, then the native call.
 """
 import asyncio
 import ctypes
+import dataclasses
+import enum
 import json
 import math
 import os
 import threading
+import time
 
 from . import _native
 from ._errors import LayaError, LayaLoadError, Status, argument_error
 
-__all__ = ['CancellationToken', 'Engine', 'EngineClosedError', 'LayaError', 'LayaLoadError', 'Status', 'runtime_info']
+__all__ = ['CancellationToken', 'Engine', 'EngineClosedError', 'Event', 'EventKind', 'LayaError', 'LayaLoadError', 'Status',
+           'runtime_info']
 __version__ = '0.3.0'
+
+
+class EventKind(str, enum.Enum):
+    """What an ``Event`` reports; the values are the native event names."""
+    START = 'start'
+    END = 'end'
+    ERROR = 'error'
+
+
+@dataclasses.dataclass(frozen=True)
+class Event:
+    """A passive observer event: one call emits ``START`` and then ``END`` or ``ERROR``. ``status`` is
+    ``OK`` on ``START`` and ``END``; ``elapsed_ms`` is 0 on ``START``."""
+    kind: EventKind
+    request_id: int
+    status: Status
+    elapsed_ms: float
+
+
+def _parse_event(data):
+    """The typed event for the native event JSON, or ``None`` when it does not parse."""
+    try:
+        fields = json.loads(data.decode('utf-8', 'replace'))
+        return Event(EventKind(fields['event']), int(fields['request_id']), Status(fields['status']),
+                     float(fields['elapsed_ms']))
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 class EngineClosedError(LayaError):
@@ -188,6 +219,7 @@ class Engine:
     _handle: 'ctypes.c_void_p | None'
     _state: threading.Condition
     _active: int
+    _flags: dict
     _closing: bool
     _deferred: bool
     _local: threading.local
@@ -207,6 +239,7 @@ class Engine:
         engine._lib, engine._handle = lib, handle
         engine._state = threading.Condition()
         engine._active, engine._closing, engine._deferred = 0, False, False
+        engine._flags = {}  # the call-scoped native flag of every call that has entered and not returned
         engine._local = threading.local()
         return engine
 
@@ -248,18 +281,22 @@ class Engine:
         options = _open_config(threads, context_tokens, temperatures, overflow, max_windows_per_call)
         return cls._create(_library(), True, router, options)
 
-    def _enter(self):
+    def _enter(self, flag=None):
         with self._state:
             if self._closing:
                 raise EngineClosedError()
             self._active += 1
+            if flag is not None:
+                self._flags[id(flag)] = flag
             # Counted under the lock so no asynchronous exception can separate the two.
             self._local.depth = getattr(self._local, 'depth', 0) + 1
 
-    def _leave(self):
+    def _leave(self, flag=None):
         self._local.depth -= 1
         with self._state:
             self._active -= 1
+            if flag is not None:
+                del self._flags[id(flag)]
             if not self._active:
                 if self._deferred and self._handle is not None:
                     handle, self._handle = self._handle, None
@@ -274,34 +311,33 @@ class Engine:
         finally:
             self._leave()
 
-    def execute(self, request, *, on_event=None, request_id=0, timeout=None, cancel=None):
+    def execute(self, request, *, on_event=None, request_id=0, timeout=None, cancel=None, raw=False):
         """One primitive or structured request, or a list of up to 32 requests.
 
-        ``on_event(event)`` receives start/end/error events on the thread running
-        the call. ``timeout`` is in seconds (``None`` or 0 for no deadline; status 6 when
-        it expires). ``cancel`` is a ``CancellationToken``; cancelling it stops the call
-        at the next safe point with status 5.
+        ``on_event(event)`` receives an ``Event`` (start, then end or error) on the thread running
+        the call. ``request_id`` is an unsigned 64-bit integer reported in events (default 0).
+        ``timeout`` is in seconds, finite and not negative, measured from this call's entry
+        (``None`` or 0 for no deadline; status 6 when it expires). ``cancel`` is a
+        ``CancellationToken``; cancelling it stops the call at the next safe point with
+        status 5. ``raw=True`` returns the core's exact result text instead of the parsed JSON.
         """
-        return self._call(request, on_event, request_id, timeout, cancel)
+        return self._call(request, on_event, request_id, timeout, cancel, raw, time.monotonic())
 
-    async def execute_async(self, request, **options):
+    async def execute_async(self, request, *, on_event=None, request_id=0, timeout=None, cancel=None, raw=False):
         """``execute`` on a worker thread; cancelling the task cancels the native call.
 
-        ``on_event`` then runs on that worker thread, not the event loop's.
+        ``on_event`` then runs on that worker thread, not the event loop's, and the deadline counts
+        from this call, not from the thread's start.
         """
-        return await self._run_async(self.execute, request, options)
-
-    @staticmethod
-    async def _run_async(method, request, options):
+        entry = time.monotonic()
         task = CancellationToken()  # cancelling the task must not cancel a shared token
-        options['cancel'] = (options.get('cancel'), task)
         try:
-            return await asyncio.to_thread(method, request, **options)
+            return await asyncio.to_thread(self._call, request, on_event, request_id, timeout, cancel, raw, entry, task)
         except asyncio.CancelledError:
             task.cancel()
             raise
 
-    def _call(self, request, on_event, request_id, timeout, cancel):
+    def _call(self, request, on_event, request_id, timeout, cancel, raw, entry, extra=None):
         if self._closing:  # fast check; _enter below is the authoritative one
             raise EngineClosedError()
         text = request if isinstance(request, str) else _dumps(request, 'request', True)
@@ -310,51 +346,66 @@ class Engine:
             raise argument_error(TypeError, 'on_event must be callable')
         if isinstance(request_id, bool) or not isinstance(request_id, int) or not 0 <= request_id < 2 ** 64:
             raise argument_error(ValueError, 'request_id must be an unsigned 64-bit integer')
-        lib = self._lib
-        options = lib.dtl_default_call_options()
+        if not isinstance(raw, bool):
+            raise argument_error(TypeError, 'raw must be a bool')
         if timeout is not None:
-            if not math.isfinite(timeout) or not 0 <= timeout <= 86400:
-                raise argument_error(ValueError, 'timeout must be 0..86400 seconds (0 or None for no deadline)')
-            options.timeout_ms = math.ceil(timeout * 1000)  # 0 means no deadline
-        tokens = [token for token in (cancel if isinstance(cancel, tuple) else (cancel,)) if token is not None]
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+                raise argument_error(TypeError, 'timeout must be a number of seconds')
+            if timeout < 0 or isinstance(timeout, float) and not math.isfinite(timeout):
+                raise argument_error(ValueError, 'timeout must be finite and not negative (0 or None for no deadline)')
+        tokens = [token for token in (cancel, extra) if token is not None]
         if not all(isinstance(token, CancellationToken) for token in tokens):
             raise argument_error(TypeError, 'cancel must be a CancellationToken')
         if any(token.cancelled for token in tokens):  # fails at once: no native call, no events
             raise LayaError(Status.CANCELLED, 'The call was cancelled before it started')
+        lib = self._lib
+        options = lib.dtl_default_call_options()
+        # The call's own native flag, read by the library itself (backend worker threads poll it without
+        # taking the GIL). Tokens are linked to it, never passed as the flag, so cancelling one call
+        # never cancels a shared token; close(cancel_pending=True) reaches it through the engine.
         flag = ctypes.c_uint32(0)
-        if tokens:
-            # A native flag read by the library itself: backend worker threads
-            # poll it without taking the GIL.
-            options.should_cancel = ctypes.cast(lib.dtl_cancel_flag, _native.CANCEL_CALLBACK)
-            options.cancel_user_data = ctypes.addressof(flag)
+        options.should_cancel = ctypes.cast(lib.dtl_cancel_flag, _native.CANCEL_CALLBACK)
+        options.cancel_user_data = ctypes.addressof(flag)
         options.request_id = request_id
         if on_event is not None:
             def notify(event, _):
                 try:
-                    on_event(json.loads(event.decode('utf-8', 'replace')))
+                    typed = _parse_event(event)
+                    if typed is not None:
+                        on_event(typed)
                 except Exception:
                     pass  # Observer failures never change inference results.
             callback = _native.EVENT_CALLBACK(notify)  # kept alive until the call returns
             options.on_event = callback
         result, error = ctypes.c_void_p(), ctypes.c_void_p()
-        self._enter()
+        self._enter(flag)
         try:  # attach inside the try so a failure still leaves the count
             for token in tokens:
                 token._attach(flag)
+            if timeout > 1e15:  # past the native range (milliseconds in 64 bits): it never expires
+                options.timeout_ms = 2 ** 64 - 1
+            elif timeout:
+                remaining = timeout - (time.monotonic() - entry)
+                if remaining <= 0:  # expired before the native call: no native call, no events
+                    raise LayaError(Status.DEADLINE_EXCEEDED, 'The deadline passed before the call started')
+                options.timeout_ms = max(1, math.ceil(remaining * 1000))
             status = lib.dtl_execute(self._handle, payload, ctypes.byref(options),
                                      ctypes.byref(result), ctypes.byref(error))
         finally:
             for token in tokens:
                 token._detach(flag)
-            self._leave()
+            self._leave(flag)
         text = _take(lib, result)
         _check(lib, status, error)
         if text is None:
             raise LayaError(Status.INFERENCE_ERROR, 'Native result was null')
-        return json.loads(text)
+        return text if raw else json.loads(text)
 
-    def close(self):
+    def close(self, *, cancel_pending=False):
         """Wait for running calls, then release the model. Idempotent.
+
+        With ``cancel_pending=True`` every call that has entered and not returned is first cancelled
+        (it raises ``LayaError`` with status ``CANCELLED``).
 
         Called from inside one of this engine's own calls (an ``on_event``
         callback), it cannot wait for that call: it rejects new calls and
@@ -362,6 +413,9 @@ class Engine:
         """
         with self._state:
             self._closing = True
+            if cancel_pending:
+                for flag in self._flags.values():
+                    flag.value = Status.CANCELLED
             if getattr(self._local, 'depth', 0):
                 self._deferred = True
                 return

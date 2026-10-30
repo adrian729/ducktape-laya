@@ -28,7 +28,7 @@ with ducktape_laya.Engine.open("/path/to/Laya-Q8_0.gguf") as engine:
     print(result["answers"]["refund"]["noul"])
 ```
 
-Requests are JSON values or JSON strings (a string is sent as is); results are parsed JSON. `execute` accepts primitive and structured requests and lists of up to 32 requests. Optional per-request `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` are plain request keys. The request format is in the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).
+Requests are JSON values or JSON strings (a string is sent as is); results are parsed JSON, or with `raw=True` the core's exact result text (a `str`). `execute` accepts primitive and structured requests and lists of up to 32 requests. Optional per-request `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` are plain request keys. The request format is in the [API guide](https://github.com/adrian729/ducktape-laya/blob/main/docs/API.md).
 
 ## Configuration
 
@@ -48,18 +48,19 @@ Open options are keyword-only; `None` means unset (the library default) and any 
 
 Calls block and release the GIL. An engine is safe to share between threads; calls on one engine run one at a time, so open several engines for parallel inference. Per call:
 
-- `timeout` (seconds; `None` or 0 means none) sets a deadline (status 6).
+- `timeout` (seconds, finite and not negative; `None` or 0 means none) sets a deadline (status 6) with no upper bound. It is measured from the call's entry (for `execute_async`, from the `execute_async` call), so time spent before the native call counts; a deadline already passed fails at once with status 6, with no events.
 - `cancel` takes a `CancellationToken`; its `cancel()` stops the call from any thread (status 5). A call whose token is already cancelled fails at once with status 5, with no events.
-- `on_event` receives start/end/error events on the thread running the call.
-- `request_id` is reported in events.
+- `on_event` receives `Event` values on the thread running the call: a frozen dataclass with `kind` (an `EventKind`: `START`, `END` or `ERROR`, a `str` enum with the values `'start'`, `'end'` and `'error'`), `request_id`, `status` (a `Status`) and `elapsed_ms` (a `float`, 0 on start).
+- `request_id` is an unsigned 64-bit integer (default 0) reported in events.
+- `raw=True` returns the result text as the core produced it.
 
-`execute_async` runs the call on a worker thread (where `on_event` then runs), and cancelling the task cancels the native call. Cancellation is cooperative and returns no partial result. `close()` waits for running calls; called from an `on_event` callback, it returns at once and the model is released when the running call finishes. Unclosed engines are released when garbage collected, but close them (or use `with`) for prompt release.
+`execute_async` runs the call on a worker thread (where `on_event` then runs), and cancelling the task cancels the native call. Cancellation is cooperative and returns no partial result. `close()` waits for running calls; `close(cancel_pending=True)` first cancels every call that has entered and not returned, so each fails with status 5; called from an `on_event` callback, it returns at once (cancelling the running calls first with `cancel_pending=True`) and the model is released when the running call finishes. Unclosed engines are released when garbage collected, but close them (or use `with`) for prompt release.
 
 ## Errors
 
 - Native failures and invalid requests raise `LayaError`, whose `status` is a `ducktape_laya.Status` (the C ABI's codes).
 - Calls after `close()` raise `EngineClosedError`, a `LayaError`.
-- The binding checks only conversions, and raises `TypeError` or `ValueError` with `status` set to `INVALID_ARGUMENT` for them: a non-integer `threads`, `context_tokens` or `max_windows_per_call`, non-finite numbers or non-serializable configs, and bad `timeout` or `request_id` values. Every config value (ranges, `overflow` names, temperatures) goes to the library, which rejects bad ones with status 1; so does a NUL character or invalid Unicode in a path or config.
+- The binding checks only conversions, and raises `TypeError` or `ValueError` with `status` set to `INVALID_ARGUMENT` for them: a non-integer `threads`, `context_tokens` or `max_windows_per_call`, non-finite numbers or non-serializable configs, and bad `timeout`, `request_id` or `raw` values. Every config value (ranges, `overflow` names, temperatures) goes to the library, which rejects bad ones with status 1; so does a NUL character or invalid Unicode in a path or config.
 - When several checks fail, the first applies: closed engine, argument conversions, an already-cancelled token, then the native call. At open, arguments and config are checked before the library loads.
 - A missing, unloadable or incompatible native library raises `LayaLoadError` (a `LayaError` with status 7, `UNSUPPORTED_PLATFORM`, that is also an `OSError`) on every `Engine.open`, `Engine.open_router` or `runtime_info` call (loading is lazy, so the import itself succeeds; a failed load is retried on the next call). The loader also refuses a library whose `package_version` differs from the package's. A bundled library that exists but cannot be loaded is reported as found, with the operating system's reason (on Linux typically a glibc older than 2.38, on Windows a missing Visual C++ Redistributable).
 
