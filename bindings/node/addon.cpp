@@ -160,7 +160,7 @@ static napi_value execute(napi_env env, napi_callback_info info) {
             return static_cast<uint32_t>(__atomic_load_n(static_cast<int32_t *>(data), __ATOMIC_RELAXED));
         };
         double timeout; ok(napi_get_value_double(env, args[5], &timeout));
-        if (!std::isfinite(timeout) || timeout < 0 || timeout > 86400000 || std::floor(timeout) != timeout)
+        if (!std::isfinite(timeout) || timeout < 0 || timeout > 9007199254740991.0 || std::floor(timeout) != timeout)
             throw std::runtime_error("Invalid timeout");
         options.timeout_ms = static_cast<uint64_t>(timeout);
         auto s = dtl_execute(h->engine, request.c_str(), &options, &result, &error);

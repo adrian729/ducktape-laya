@@ -80,7 +80,7 @@ class Comparison(unittest.TestCase):
                   'library_sha256': 'test-library', 'model_sha256': 'test-model',
                   'fixture_hashes': {'case.json': 'test-fixture'}}
         browser = {'status': 'passed', 'backend': 'wasm', 'ticks': 1,
-                   'events': [{'event': 'start'}, {'event': 'end'}],
+                   'events': [{'kind': 'start'}, {'kind': 'end'}],
                    'results': {'case.json': copy.deepcopy(result)}, 'info': runtime,
                    'model_sha256': 'test-model', 'fixture_hashes': native['fixture_hashes']}
         browser['results']['case.json']['answers']['q'].update(

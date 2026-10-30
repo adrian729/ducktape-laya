@@ -88,7 +88,8 @@ test('close after worker failure resolves, is idempotent and terminates; errors 
   assert.equal(Status.INVALID_ARGUMENT, 1); assert.ok(Object.isFrozen(Status));
   const engine = await Engine.open('model.gguf');
   workers[0].onerror({ message: 'boom' });
-  await assert.rejects(engine.info(), { code: 'ERR_LAYA_WORKER_EXITED', status: 3 });
+  await assert.rejects(engine.info(), { code: 'ERR_LAYA_WORKER_EXITED', status: 3, message: /worker has exited.*open a new engine/ });
+  await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_WORKER_EXITED', status: 3, message: /worker has exited/ });
   const close = engine.close();
   assert.equal(engine.close(), close);
   await close;

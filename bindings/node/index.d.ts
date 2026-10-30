@@ -24,11 +24,13 @@ export class Engine {
   /** `router`: a RouterConfig object or its JSON text. */
   static openRouter(router: RouterConfig | string, options?: OpenOptions | null): Promise<Engine>;
   /** The only call: one request (object or JSON string) or an array of requests; arrays return arrays in order. */
-  execute(request: Request, options?: CallOptions | null): Promise<Result>;
-  execute(request: StructuredRequest, options?: CallOptions | null): Promise<StructuredResult>;
-  execute(request: (Request | StructuredRequest)[], options?: CallOptions | null): Promise<(Result | StructuredResult)[]>;
-  execute(request: string, options?: CallOptions | null): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
-  /** Required: the worker keeps the process alive until closed. Idempotent; resolves even if the worker already exited. */
+  /** With `raw: true`: the core's exact result text. */
+  execute(request: Request | StructuredRequest | (Request | StructuredRequest)[] | string, options: CallOptions & { raw: true }): Promise<string>;
+  execute(request: Request, options?: (CallOptions & { raw?: false }) | null): Promise<Result>;
+  execute(request: StructuredRequest, options?: (CallOptions & { raw?: false }) | null): Promise<StructuredResult>;
+  execute(request: (Request | StructuredRequest)[], options?: (CallOptions & { raw?: false }) | null): Promise<(Result | StructuredResult)[]>;
+  execute(request: string, options?: (CallOptions & { raw?: false }) | null): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
+  /** Call it when done: it releases the model. An idle engine does not keep the process alive. Idempotent; resolves even if the worker already exited. */
   close(options?: { cancelPending?: boolean } | null): Promise<void>;
 }
 
@@ -42,9 +44,13 @@ export interface DecisionSchema {
 }
 export interface StructuredRequest { state: Json; schema: DecisionSchema; boolean_threshold?: number; model?: string; lang?: string; max_tokens?: number; temperatures?: Record<string, number>; overflow?: Overflow; max_windows?: number }
 export interface StructuredResult extends Result { values: Record<string, string | number | boolean> }
-export interface ObserverEvent { event: 'start' | 'end' | 'error'; request_id: number; status: number; elapsed_ms: number }
-/** `requestId` (non-negative safe integer) is reported as `request_id` in events; defaults to a generated id. */
-export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; requestId?: number; onEvent?: (event: ObserverEvent) => void | Promise<void> }
+/** A passive observer event: `kind` is `start`, then `end` or `error`; `status` is the call's status (0 on start and end); `elapsedMs` is 0 on start. */
+export interface LayaEvent { kind: 'start' | 'end' | 'error'; requestId: number; status: StatusCode; elapsedMs: number }
+/**
+ * `timeoutMs`: 0 or absent for no deadline, otherwise a non-negative safe integer counted from the call (enqueue), with no upper bound.
+ * `requestId`: a non-negative safe integer reported in events (default 0). `raw`: resolve to the core's exact result text instead of the parsed value.
+ */
+export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; requestId?: number; raw?: boolean; onEvent?: (event: LayaEvent) => void | Promise<void> }
 /**
  * The native open config, with the native keys; the core validates every value (status 1).
  * `threads`: 0 for automatic (at most 4 and at most the CPUs the process may use) or 1..256. `context_tokens`: the prompt capacity

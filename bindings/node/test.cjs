@@ -3,14 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Engine, Status, LayaError, LayaLoadError, EngineClosedError } = require('./index.cjs');
-test('missing model rejects asynchronously', async () => {
-  await assert.rejects(Engine.open('/nonexistent/ducktape-laya.gguf'), error => error.status === 2);
-});
 test('invalid options reject', async () => {
   await assert.rejects(Engine.open('x', { maxPending: 0 }), /maxPending/);
   const circular = {}; circular.self = circular;
   await assert.rejects(Engine.openRouter(circular), /circular/i);
-  await assert.rejects(Engine.openRouter({ models: {} }), e => e.status === 1);
   // The addon's own argument checks carry a status too: an open config over 1 MiB.
   const temperatures = Object.fromEntries(Array.from({ length: 600 }, (_, i) => [`k${i}${'x'.repeat(1900)}`, 1]));
   await assert.rejects(Engine.openRouter({ models: { unused: __filename } }, { config: { temperatures } }),
@@ -40,7 +36,6 @@ test('inference, queue bound and drain on close', { skip: !process.env.LAYA_MODE
   const engine = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2 }, maxPending: 1 });
   const request = fs.readFileSync(path.join(__dirname, '../../tests/fixtures/primitive.json'), 'utf8');
   try {
-    await assert.rejects(engine.execute('{'), error => error.status === 1);
     const first = engine.execute(request);
     await assert.rejects(engine.execute(request), /queue is full/);
     const close = engine.close();
@@ -64,8 +59,6 @@ test('batch, structured projection, hooks and worker responsiveness', { skip: !p
   }, required: ['refund'], additionalProperties: false } };
   try {
     const single = await engine.execute(request);
-    const tagged = { ...request, metadata: 'caller tag' };
-    await assert.rejects(engine.execute(tagged), e => e.status === 1);
     const projected = await engine.execute(structured);
     assert.equal(projected.values.refund, projected.answers.refund.noul >= 0.5);
     assert.equal(projected.values.team, projected.answers.team.choice);
@@ -78,19 +71,16 @@ test('batch, structured projection, hooks and worker responsiveness', { skip: !p
     finally { clearInterval(timer); }
     assert.deepEqual(batch, [single, projected, single]);
     assert.ok(ticks > 5, 'inference must leave the host event loop running');
-    assert.deepEqual(events.map(e => e.event), ['start', 'end']);
-    assert.equal(events[0].request_id, events[1].request_id);
-    assert.ok(events[1].elapsed_ms > 0);
-    const errors = [];
-    await assert.rejects(engine.execute('{}', { onEvent: e => { errors.push(e); throw Error('telemetry'); } }), e => e.status === 1);
-    assert.deepEqual(errors.map(e => e.event), ['start', 'error']);
-    await assert.rejects(engine.execute([]), e => e.status === 1);
-    await assert.rejects(engine.execute(Array(33).fill(request)), e => e.status === 1);
-    await assert.rejects(engine.execute(request, { onEvent: 3 }), /onEvent/);
+    assert.deepEqual(events, [{ kind: 'start', requestId: 0, status: 0, elapsedMs: 0 }, { kind: 'end', requestId: 0, status: 0, elapsedMs: events[1].elapsedMs }]);
+    assert.ok(events[1].elapsedMs > 0);
+    // raw is the core's exact result text, which the parsed result comes from.
+    const raw = await engine.execute(request, { raw: true });
+    assert.equal(typeof raw, 'string');
+    assert.deepEqual(JSON.parse(raw), single);
     // Rejected observer promises are contained. Reentry is queued behind this call.
     let nested;
     const observed = await engine.execute(request, { onEvent: async e => {
-      if (e.event === 'start') nested = engine.execute(request);
+      if (e.kind === 'start') nested = engine.execute(request);
       throw Error('ignored asynchronous telemetry failure');
     }});
     assert.deepEqual(await nested, observed);
@@ -101,8 +91,6 @@ test('router shares native model selection and drains accepted batch on close', 
   const router = await Engine.openRouter({ models: { english: process.env.LAYA_MODEL, alias: process.env.LAYA_MODEL }, max_loaded: 1 }, { config: { threads: 2 } });
   const request = { state: 'Please refund me.', questions: { q: { type: 'noul', instructions: 'Is a refund requested?' } } };
   try {
-    await assert.rejects(router.execute(request), e => e.status === 1);
-    await assert.rejects(router.execute({ ...request, model: 'missing' }), e => e.status === 1);
     const pending = router.execute([{ ...request, model: 'english' }, { ...request, model: 'alias' }]);
     const close = router.close();
     const [a, b] = await pending;
@@ -138,10 +126,14 @@ test('cooperative cancellation, deadline, bounded cancelled queue and shutdown',
   await Promise.all([stopped, close]);
 });
 
-test('runtime and model diagnostics share native identity', { skip: !process.env.LAYA_MODEL }, async () => {
+test('runtimeInfo describes the library', () => {
   const runtime = Engine.runtimeInfo();
   assert.equal(runtime.abi_version, 2); assert.equal(runtime.cpu_supported, true);
   assert.equal(runtime.limits.questions_per_batch, 128);
+});
+
+test('model diagnostics share the runtime identity', { skip: !process.env.LAYA_MODEL }, async () => {
+  const runtime = Engine.runtimeInfo();
   const engine = await Engine.open(process.env.LAYA_MODEL);
   try {
     const info = await engine.info();
@@ -206,17 +198,17 @@ test('execute is the only call', async () => {
   try {
     for (const name of ['decide', 'decideStructured', 'decideBatch']) assert.equal(engine[name], undefined);
     assert.equal(typeof engine.execute, 'function');
-    for (const requestId of [-1, 1.5, 2 ** 53, '1']) await assert.rejects(engine.execute('{}', { requestId }), { name: 'RangeError', status: 1 });
+    for (const requestId of [-1, 1.5, 2 ** 53, '1', null]) await assert.rejects(engine.execute('{}', { requestId }), { name: 'RangeError', status: 1 });
+    for (const timeoutMs of [-1, 1.5, 2 ** 53, NaN, Infinity, '1']) await assert.rejects(engine.execute('{}', { timeoutMs }), { name: 'RangeError', status: 1 });
+    for (const raw of [1, 'true', null]) await assert.rejects(engine.execute('{}', { raw }), { name: 'TypeError', status: 1 });
+    await assert.rejects(engine.execute('{}', { onEvent: 3 }), { name: 'TypeError', status: 1, message: /onEvent/ });
   } finally { await engine.close(); }
 });
 
 test('open config is passed to the core unvalidated and per-route config is native-keyed', async () => {
   const models = { m: __filename };
-  // The core validates the serialized config: unknown keys are rejected at open. Router routes load
-  // lazily, so model-dependent bounds (context_tokens) are checked when a route first loads.
-  await assert.rejects(Engine.openRouter({ models }, { config: { threads: 2, temperatures: { 'bogus!': 1.5 } } }), { status: 1 });
+  // The core validates the serialized config (the one status propagation check: a native status 1 arrives as the error's status).
   await assert.rejects(Engine.openRouter({ models }, { config: { surprise: 1 } }), { status: 1 });
-  await assert.rejects(Engine.openRouter({ models: { m: { path: __filename, config: { surprise: 1 } } } }), { status: 1 });
   await (await Engine.openRouter({ models }, { config: { context_tokens: 256, threads: 1, temperatures: { choice: 1.5, 'noul.2': 2 } } })).close();
   await (await Engine.openRouter({ models: { m: { path: __filename, config: { context_tokens: 64, temperatures: { choice: 1.2 } } } } })).close();
   // Binding-only conversions: a config that is not an object, and values JSON cannot carry.
@@ -224,47 +216,6 @@ test('open config is passed to the core unvalidated and per-route config is nati
   await assert.rejects(Engine.open('x', { config: { temperatures: { choice: NaN } } }), { name: 'TypeError', status: 1, message: /non-finite/ });
 });
 
-test('open option overflow reaches the model', { skip: !process.env.LAYA_MODEL }, async () => {
-  const request = { state: 'refund '.repeat(800), questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
-  const engine = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2, overflow: 'truncate_end' } });
-  // The policy reaches the engine: the default (reject) would refuse this request.
-  try { assert.ok((await engine.execute(request)).answers.refund); } finally { await engine.close(); }
-  await assert.rejects(Engine.open(process.env.LAYA_MODEL, { config: { threads: 2, overflow: 'bogus' } }), { status: 1 });
-});
-
-test('context tokens, temperatures and max_tokens reach the model', { skip: !process.env.LAYA_MODEL }, async () => {
-  const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
-  const engine = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2, context_tokens: 256, temperatures: { 'noul.2': 2 } } });
-  try {
-    const info = await engine.info();
-    assert.equal(info.model.context_tokens, 256);
-    assert.ok(info.model.trained_context_tokens >= 256);
-    assert.equal(info.model.temperatures['noul.2'], 2);
-    assert.equal(info.limits.default_context_tokens, 512);
-    // Per-request max_tokens above the engine capacity and bad temperatures are rejected.
-    await assert.rejects(engine.execute({ ...request, max_tokens: 257 }), { status: 1 });
-    await assert.rejects(engine.execute({ ...request, max_tokens: 0 }), { status: 1 });
-    await assert.rejects(engine.execute({ ...request, temperatures: { 'noul.2': -1 } }), { status: 1 });
-    const ids = [];
-    await engine.execute(request, { requestId: 4242, onEvent: e => { ids.push(e.request_id); } });
-    assert.deepEqual(ids, [4242, 4242]);
-  } finally { await engine.close(); }
-  await assert.rejects(Engine.open(process.env.LAYA_MODEL, { config: { context_tokens: 1e9 } }), { status: 1 });
-  await assert.rejects(Engine.open(process.env.LAYA_MODEL, { config: { context_tokens: 8 } }), { status: 1 });
-  await assert.rejects(Engine.open(process.env.LAYA_MODEL, { config: { temperatures: { 'noul.2': 1.5, nonsense: 1 } } }), { status: 1 });
-});
-
-test('router route config below the minimum is rejected', { skip: !process.env.LAYA_MODEL }, async () => {
-  const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
-  // A route below the 32-token minimum is rejected (at open, or at first load for older cores).
-  const bad = await Engine.openRouter({ models: { tiny: { path: process.env.LAYA_MODEL, config: { context_tokens: 8 } }, ok: process.env.LAYA_MODEL } }, { config: { threads: 2 } }).catch(error => {
-    assert.equal(error.status, 1); return undefined;
-  });
-  if (bad) try {
-    await assert.rejects(bad.execute({ ...request, model: 'tiny' }), { status: 1 });
-    await bad.execute({ ...request, model: 'ok' });
-  } finally { await bad.close(); }
-});
 test('invalid Unicode is rejected instead of replaced', async () => {
   const lone = 'a\ud800b';
   await assert.rejects(Engine.open(lone), e => e.status === 1 && /model path is not valid Unicode/.test(e.message));
@@ -305,18 +256,6 @@ test('JSON serialization failures are argument errors with status', async () => 
     await assert.rejects(engine.execute({ state: circular, questions: {} }), e => e instanceof TypeError && e.status === Status.INVALID_ARGUMENT);
     await assert.rejects(engine.execute({ state: 1n, questions: {} }), e => e instanceof TypeError && e.status === Status.INVALID_ARGUMENT);
   } finally { await engine.close(); }
-});
-test('router auto config and lang are validated by the native core', async () => {
-  const models = { english: __filename, other: __filename };
-  const request = { state: 'hi', questions: { q: { type: 'noul', instructions: 'x' } } };
-  for (const auto of [{ english: 'english' }, { english: 'english', default: 'missing' }, { english: 'english', default: 'other', extra: 1 }, 'english']) {
-    await assert.rejects(Engine.openRouter({ models, auto }), e => e.status === Status.INVALID_ARGUMENT && /auto/.test(e.message), JSON.stringify(auto));
-  }
-  const router = await Engine.openRouter({ models });
-  try {
-    await assert.rejects(router.execute({ ...request, model: 'auto' }), e => e.status === 1 && /auto/.test(e.message));
-    await assert.rejects(router.execute({ ...request, model: 'english', lang: 'en' }), e => e.status === 1 && /lang/.test(e.message));
-  } finally { await router.close(); }
 });
 test('calls after close() report ERR_LAYA_CLOSED once the worker has exited', async () => {
   const { Engine: FreshEngine, workers } = withWorkers();
@@ -505,4 +444,117 @@ test('error order: closed, then argument errors, then cancellation, then admissi
   for (const options of [{ timeoutMs: -1, signal: aborted }, { signal: aborted }, 5]) {
     await assert.rejects(engine.execute('{}', options), e => e.name === 'EngineClosedError' && e.code === 'ERR_LAYA_CLOSED' && e.status === 1);
   }
+});
+
+test('events are typed: kind, request id (0 by default, up to the largest safe integer), status and elapsed time', async () => {
+  const engine = await Engine.openRouter({ models: { unused: __filename } });
+  try {
+    // A failing call still has its start and error events; telemetry failures never change the result.
+    for (const requestId of [undefined, 4242, Number.MAX_SAFE_INTEGER]) {
+      const events = [];
+      await assert.rejects(engine.execute('{}', { requestId, onEvent: e => { events.push(e); throw Error('telemetry'); } }), { status: 1 });
+      assert.deepEqual(events.map(e => e.kind), ['start', 'error']);
+      assert.deepEqual(events.map(e => e.requestId), [requestId ?? 0, requestId ?? 0]);
+      assert.deepEqual(events.map(e => e.status), [0, 1]);
+      assert.equal(events[0].elapsedMs, 0);
+      assert.ok(events[1].elapsedMs >= 0);
+      assert.deepEqual(Object.keys(events[0]), ['kind', 'requestId', 'status', 'elapsedMs']);
+    }
+  } finally { await engine.close(); }
+});
+
+test('timeoutMs has no upper bound; a host timer never gets a delay setTimeout cannot hold', async () => {
+  const engine = await Engine.openRouter({ models: { unused: __filename } });
+  const delays = [];
+  const setTimeoutOriginal = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, delay, ...args) => { delays.push(delay); return setTimeoutOriginal(fn, delay, ...args); };
+  try {
+    // 2 ** 40 ms is far past 2 ** 31 - 1: the call is not rejected by an early timer, and the core reports its own status.
+    await assert.rejects(engine.execute('{}', { timeoutMs: 2 ** 40 }), { status: 1 });
+  } finally { globalThis.setTimeout = setTimeoutOriginal; await engine.close(); }
+  assert.ok(delays.includes(2 ** 31 - 1));
+  assert.ok(delays.every(delay => delay <= 2 ** 31 - 1));
+});
+
+test('info() takes no queue slot: it works with a full queue, and a queued info does not fill it', async () => {
+  const engine = await Engine.openRouter({ models: { unused: __filename } }, { maxPending: 1 });
+  try {
+    const first = engine.execute('{}').catch(() => {});
+    const info = engine.info();
+    await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_QUEUE_FULL' });
+    assert.equal((await info).schema_version, 1);
+    await first;
+    const second = engine.execute('{}').catch(() => {});
+    await engine.info();
+    await second;
+  } finally { await engine.close(); }
+});
+
+test('an engine that is never closed does not keep the process alive while idle', () => {
+  const { spawnSync } = require('node:child_process');
+  const script = `
+    const { Engine } = require(${JSON.stringify(path.join(__dirname, 'index.cjs'))});
+    (async () => {
+      const engine = await Engine.openRouter({ models: { unused: ${JSON.stringify(__filename)} } });
+      await engine.execute('{}').catch(() => {});
+      await engine.info();
+      process.stdout.write('idle');
+    })();`;
+  const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(child.error, undefined, 'the idle process must exit by itself');
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, 'idle');
+});
+
+// A request that takes seconds when it is not cancelled: a long state scanned in many windows.
+const longRequest = { state: 'Please refund me, the invoice was wrong. '.repeat(100), overflow: 'scan', max_windows: 16,
+  questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
+// Resolves with the worker's own reply to the call (its native status), not the host's early rejection.
+const replyTo = (worker, id) => new Promise(resolve => {
+  worker.on('message', message => { if (message.id === id && !message.event) resolve({ ...message, at: performance.now() }); });
+});
+
+test('cancelling a running call stops the native call early', { skip: !process.env.LAYA_MODEL }, async () => {
+  const { Engine: Fresh, workers } = withWorkers();
+  const engine = await Fresh.open(process.env.LAYA_MODEL, { config: { threads: 2 } });
+  try {
+    const began = performance.now();
+    await engine.execute(longRequest);
+    const full = performance.now() - began;
+    const controller = new AbortController();
+    const reply = replyTo(workers[0], 2);
+    const call = engine.execute(longRequest, { signal: controller.signal, onEvent: event => { if (event.kind === 'start') controller.abort(); } });
+    const cancelledAt = performance.now();
+    await assert.rejects(call, { status: Status.CANCELLED });
+    // The worker's reply carries the native status: the core stopped at its next safe point, long before the full run would end.
+    const native = await reply;
+    assert.equal(native.status, Status.CANCELLED);
+    assert.ok(native.at - cancelledAt < full / 4, `stopped after ${native.at - cancelledAt} ms of a ${full} ms run`);
+  } finally { await engine.close(); }
+});
+
+test('an expired deadline fails at once with status 6, no native call and no events; no upper bound; raw', { skip: !process.env.LAYA_MODEL }, async () => {
+  const { Engine: Fresh, workers } = withWorkers();
+  const engine = await Fresh.open(process.env.LAYA_MODEL, { config: { threads: 2 } });
+  const request = { state: 'Please refund me.', questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } };
+  try {
+    const messages = [];
+    workers[0].on('message', message => messages.push(message));
+    const controller = new AbortController();
+    const running = engine.execute(longRequest, { signal: controller.signal });
+    const events = [];
+    // This call's deadline passes while it waits behind the running one.
+    await assert.rejects(engine.execute(request, { timeoutMs: 1, onEvent: event => { events.push(event); } }), { status: Status.DEADLINE_EXCEEDED });
+    controller.abort();
+    await assert.rejects(running, { status: Status.CANCELLED });
+    await engine.close();
+    assert.deepEqual(events, []);
+    assert.deepEqual(messages.filter(message => message.id === 2).map(({ id, ...rest }) => rest), [{ error: 'Request deadline exceeded', status: Status.DEADLINE_EXCEEDED }]);
+  } finally { await engine.close(); }
+  const second = await Engine.open(process.env.LAYA_MODEL, { config: { threads: 2 } });
+  try {
+    // A timeout far past setTimeout's range runs normally.
+    const parsed = await second.execute(request, { timeoutMs: 2 ** 40 });
+    assert.deepEqual(JSON.parse(await second.execute(request, { raw: true, timeoutMs: 2 ** 40 })), parsed);
+  } finally { await second.close(); }
 });

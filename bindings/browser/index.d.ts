@@ -1,5 +1,5 @@
 import type { Overflow, Request, StructuredRequest, Result, StructuredResult, CallOptions, RuntimeInfo } from './protocol.js';
-export type { Json, Question, Answer, Window, Overflow, Usage, Request, Result, Routing, Property, DecisionSchema, StructuredRequest, StructuredResult, ObserverEvent, CallOptions, RuntimeInfo, StatusCode, LayaErrorCode } from './protocol.js';
+export type { Json, Question, Answer, Window, Overflow, Usage, Request, Result, Routing, Property, DecisionSchema, StructuredRequest, StructuredResult, LayaEvent, CallOptions, RuntimeInfo, StatusCode, LayaErrorCode } from './protocol.js';
 export { Status, LayaError, LayaLoadError, EngineClosedError } from './protocol.js';
 
 /**
@@ -31,10 +31,12 @@ export class Engine {
   static open(model: Model, options?: OpenOptions | null): Promise<Engine>;
   static openRouter(router: RouterConfig, options?: OpenOptions | null): Promise<Engine>;
   /** The only call: one request (object or JSON string) or an array of requests; arrays return arrays in order. */
-  execute(request: Request, options?: CallOptions | null): Promise<Result>;
-  execute(request: StructuredRequest, options?: CallOptions | null): Promise<StructuredResult>;
-  execute(request: (Request | StructuredRequest)[], options?: CallOptions | null): Promise<(Result | StructuredResult)[]>;
-  execute(request: string, options?: CallOptions | null): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
+  /** With `raw: true`: the core's exact result text. */
+  execute(request: Request | StructuredRequest | (Request | StructuredRequest)[] | string, options: CallOptions & { raw: true }): Promise<string>;
+  execute(request: Request, options?: (CallOptions & { raw?: false }) | null): Promise<Result>;
+  execute(request: StructuredRequest, options?: (CallOptions & { raw?: false }) | null): Promise<StructuredResult>;
+  execute(request: (Request | StructuredRequest)[], options?: (CallOptions & { raw?: false }) | null): Promise<(Result | StructuredResult)[]>;
+  execute(request: string, options?: (CallOptions & { raw?: false }) | null): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
   /** Terminates the worker and frees the model; call it when done. Idempotent; resolves even if the worker already failed. */
   close(options?: { cancelPending?: boolean } | null): Promise<void>;
 }

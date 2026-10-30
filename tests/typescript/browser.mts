@@ -1,4 +1,4 @@
-import { Engine, Status, StatusCode, Request, StructuredRequest, Config, LayaError, LayaLoadError, EngineClosedError, Answer, Overflow, Routing, Usage, Window } from 'ducktape-laya-browser';
+import { Engine, LayaEvent, Status, StatusCode, Request, StructuredRequest, Config, LayaError, LayaLoadError, EngineClosedError, Answer, Overflow, Routing, Usage, Window } from 'ducktape-laya-browser';
 
 const request: Request = { state: 'Refund please', questions: {
   refund: { type: 'noul', instructions: 'Is a refund requested?' },
@@ -6,7 +6,9 @@ const request: Request = { state: 'Refund please', questions: {
 async function consumer() {
   const engine = await Engine.open('/model.gguf', { backend: 'auto', maxPending: 4,
     config: { threads: 1, context_tokens: 1024, max_windows_per_call: 64, temperatures: { choice: 1.5 } }, initializationTimeoutMs: 10000, signal: new AbortController().signal });
-  await engine.execute({ ...request, max_tokens: 128 }, { requestId: 3, onEvent: event => { const elapsed: number = event.elapsed_ms; void elapsed; } });
+  await engine.execute({ ...request, max_tokens: 128 }, { requestId: 3, onEvent: (event: LayaEvent) => { const elapsed: number = event.elapsedMs; void elapsed; } });
+  const text: string = await engine.execute(request, { raw: true, timeoutMs: 2 ** 40 });
+  void text;
   const backend: 'wasm' | 'webgpu' = engine.capabilities.backend;
   const structured: StructuredRequest = { state: 'Refund', schema: {
     type: 'object', properties: { refund: { type: 'boolean' } },

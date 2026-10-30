@@ -6,9 +6,9 @@ import vm from 'node:vm';
 
 const source = await readFile(new URL('./index.mjs', import.meta.url), 'utf8');
 const workerSource = await readFile(new URL('./worker.mjs', import.meta.url), 'utf8');
-async function harness({ silentInit = false } = {}) {
+async function harness({ silentInit = false, timers = { setTimeout, clearTimeout } } = {}) {
   const workers = [];
-  const context = vm.createContext({ URL, TextEncoder, DOMException, performance, setTimeout, clearTimeout,
+  const context = vm.createContext({ URL, TextEncoder, DOMException, performance, ...timers,
     location: { href: 'https://example.test/' },
     Worker: class {
       constructor() { this.sent = []; workers.push(this); }
@@ -95,11 +95,11 @@ test('no onEvent delivery after the call settled', async () => {
   const controller = new AbortController();
   const call = engine.execute({ state: {}, questions: {} }, { signal: controller.signal, onEvent: event => { events.push(event); } });
   const sent = workers[0].sent.find(message => message.kind === 'execute');
-  workers[0].onmessage({ data: { id: sent.id, event: { event: 'start' } } });
+  workers[0].onmessage({ data: { id: sent.id, event: { kind: 'start' } } });
   controller.abort();
   await assert.rejects(call, e => e.status === 5);
-  workers[0].onmessage({ data: { id: sent.id, event: { event: 'end' } } });
-  assert.deepEqual(events, [{ event: 'start' }]);
+  workers[0].onmessage({ data: { id: sent.id, event: { kind: 'end' } } });
+  assert.deepEqual(events, [{ kind: 'start' }]);
 });
 
 test('JSON serialization failures are argument errors with status', async () => {
@@ -128,6 +128,58 @@ test('page deadline is wall-clock so the worker realm can measure it', async () 
   assert.ok(sent.deadline >= before + 60000 && sent.deadline <= Date.now() + 60000);
   workers[0].onmessage({ data: { id: sent.id, result: '{}' } });
   await call;
+});
+
+test('execute defaults: request id 0, no deadline; raw returns the worker text; timeoutMs is any safe integer', async () => {
+  const { Engine, workers } = await harness();
+  const engine = await Engine.open('model.gguf');
+  const text = '{"answers":{},"big":12345678901234567890}';
+  const call = engine.execute('{}', { raw: true });
+  const sent = workers[0].sent.find(message => message.kind === 'execute');
+  assert.equal(sent.requestId, 0); assert.equal(sent.deadline, 0);
+  workers[0].onmessage({ data: { id: sent.id, result: text } });
+  assert.equal(await call, text);
+  for (const timeoutMs of [-1, 1.5, 2 ** 53, NaN, Infinity, '1']) await assert.rejects(engine.execute('{}', { timeoutMs }), { name: 'RangeError', status: 1 });
+  for (const raw of [1, 'true', null]) await assert.rejects(engine.execute('{}', { raw }), { name: 'TypeError', status: 1 });
+  const long = engine.execute('{}', { timeoutMs: 2 ** 40 });
+  const second = workers[0].sent.filter(message => message.kind === 'execute')[1];
+  assert.ok(second.deadline > Date.now() + 2 ** 39);
+  workers[0].onmessage({ data: { id: second.id, result: '{}' } });
+  assert.equal(JSON.stringify(await long), '{}');
+});
+
+test('a host timer never gets a delay above 2^31-1: a longer timeout is chained', async () => {
+  const delays = [], pending = [];
+  const timers = { setTimeout: (fn, delay) => { delays.push(delay); pending.push(fn); return pending.length; }, clearTimeout() {} };
+  const { Engine, workers } = await harness({ timers });
+  const engine = await Engine.open('model.gguf');
+  delays.length = pending.length = 0;  // the initialization timer
+  const call = engine.execute('{}', { timeoutMs: 2 ** 32 });
+  const sent = workers[0].sent.find(message => message.kind === 'execute');
+  assert.deepEqual(delays, [2 ** 31 - 1]);
+  pending.pop()();  // the first step fires: another one is armed, the call is still pending
+  assert.deepEqual(delays, [2 ** 31 - 1, 2 ** 31 - 1]);
+  pending.pop()();
+  assert.deepEqual(delays.slice(2), [2]);
+  pending.pop()();
+  await assert.rejects(call, { status: 6 });
+  assert.ok(sent.deadline > 0);
+});
+
+test('info() takes no queue slot', async () => {
+  const { Engine, workers } = await harness();
+  const engine = await Engine.open('model.gguf', { maxPending: 1 });
+  const first = engine.execute('{}');
+  const info = engine.info();
+  await assert.rejects(engine.execute('{}'), { code: 'ERR_LAYA_QUEUE_FULL' });
+  const [execute, infoMessage] = ['execute', 'info'].map(kind => workers[0].sent.find(message => message.kind === kind));
+  workers[0].onmessage({ data: { id: execute.id, result: '{}' } });
+  workers[0].onmessage({ data: { id: infoMessage.id, result: '{}' } });
+  await Promise.all([first, info]);
+  const second = engine.execute('{}');
+  const again = engine.info();
+  workers[0].sent.filter(message => message.id > infoMessage.id).forEach(message => workers[0].onmessage({ data: { id: message.id, result: '{}' } }));
+  await Promise.all([second, again]);
 });
 
 async function workerHarness(abi = 2, { create, fetch: fetchAsset, openStatus = 0, validateStatus = 0 } = {}) {
@@ -191,6 +243,18 @@ test('worker converts the absolute wall-clock deadline to remaining milliseconds
   await namespace.call('dtl_execute', '{}', { id: 1, observe: false, deadline: Date.now() + 5000 });
   const timeout = calls.find(call => call.name === 'dtl_execute').words[4];
   assert.ok(timeout > 3000 && timeout <= 5000, `remaining ${timeout}`);
+});
+
+test('worker reports the 64-bit remaining time, and fails an expired deadline without a native call', async () => {
+  const { calls, namespace } = await workerHarness();
+  await namespace.init(wasm);
+  await namespace.call('dtl_execute', '{}', { id: 1, observe: false, deadline: Date.now() + 2 ** 40 });
+  const [low, high] = calls.find(call => call.name === 'dtl_execute').words.slice(4, 6);
+  assert.ok(high === 255 || high === 256, `timeout high word ${high}`);
+  assert.ok(low >= 0);
+  const before = calls.length;
+  await assert.rejects(namespace.call('dtl_execute', '{}', { id: 2, observe: true, deadline: Date.now() - 1 }), { status: 6 });
+  assert.equal(calls.length, before, 'no native call');
 });
 
 test('an incompatible runtime ABI fails with status 7 and the unsupported code', async () => {

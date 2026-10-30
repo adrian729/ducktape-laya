@@ -80,10 +80,11 @@ async function call(name, request, job) {
       if (!text) throw fail('Out of WASM memory', 4);
       runtime.stringToUTF8(request, text, length);
       active = job;
-      const remaining = job.deadline ? Math.max(0, Math.ceil(job.deadline - Date.now())) : 0;
-      if (job.deadline && !remaining && !job.status) job.status = 6;
-      const requestId = job.requestId ?? job.id;
-      runtime.HEAPU32.set([CALL_OPTIONS_SIZE, 0, requestId >>> 0, Math.floor(requestId / 4294967296), remaining, 0,
+      const remaining = job.deadline ? Math.ceil(job.deadline - Date.now()) : 0;
+      // Already expired in the queue: fail at once, with no native call and no events.
+      if (job.deadline && remaining <= 0) throw fail('Request deadline exceeded', 6);
+      const requestId = job.requestId ?? 0;
+      runtime.HEAPU32.set([CALL_OPTIONS_SIZE, 0, requestId >>> 0, Math.floor(requestId / 4294967296), remaining >>> 0, Math.floor(remaining / 4294967296),
         job.observe ? observer : 0, 0, cancellation, 0], control >>> 2);
     }
     const status = await runtime.ccall(name, 'number', info ? ['number','number','number'] : ['number','number','number','number','number'],
@@ -136,8 +137,11 @@ async function init(options) {
     } finally { runtime._free(probe); }
   }
   observer = runtime.addFunction((text, user) => {
-    // Calls serialize, so the active job owns every event. Route by job id; the reported request_id may be caller-chosen.
-    try { const event = JSON.parse(runtime.UTF8ToString(text)); if (active) postMessage({ id: active.id, event }); } catch {}
+    // Calls serialize, so the active job owns every event. Route by job id; the reported request id is the caller's.
+    try {
+      const event = JSON.parse(runtime.UTF8ToString(text));
+      if (active) postMessage({ id: active.id, event: { kind: event.event, requestId: event.request_id, status: event.status, elapsedMs: event.elapsed_ms } });
+    } catch {}
   }, 'vii');
   cancellation = runtime.addFunction(() => active ? ((active.flag ? Atomics.load(active.flag, 0) : 0) || active.status || 0) : 0, 'ii');
   routed = options.routed;

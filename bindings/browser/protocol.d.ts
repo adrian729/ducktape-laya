@@ -26,9 +26,13 @@ export interface DecisionSchema {
 }
 export interface StructuredRequest { state: Json; schema: DecisionSchema; boolean_threshold?: number; model?: string; lang?: string; max_tokens?: number; temperatures?: Record<string, number>; overflow?: Overflow; max_windows?: number }
 export interface StructuredResult extends Result { values: Record<string, string | number | boolean> }
-export interface ObserverEvent { event: 'start' | 'end' | 'error'; request_id: number; status: number; elapsed_ms: number }
-/** `requestId` (non-negative safe integer) is reported as `request_id` in events; defaults to a generated id. */
-export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; requestId?: number; onEvent?: (event: ObserverEvent) => void | Promise<void> }
+/** A passive observer event: `kind` is `start`, then `end` or `error`; `status` is the call's status (0 on start and end); `elapsedMs` is 0 on start. */
+export interface LayaEvent { kind: 'start' | 'end' | 'error'; requestId: number; status: StatusCode; elapsedMs: number }
+/**
+ * `timeoutMs`: 0 or absent for no deadline, otherwise a non-negative safe integer counted from the call (enqueue), with no upper bound.
+ * `requestId`: a non-negative safe integer reported in events (default 0). `raw`: resolve to the core's exact result text instead of the parsed value.
+ */
+export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; requestId?: number; raw?: boolean; onEvent?: (event: LayaEvent) => void | Promise<void> }
 export interface RuntimeInfo {
   schema_version: 1; package_version: string; abi_version: number; llama_cpp_commit: string;
   runtime_patches: { path: string; sha256: string; purpose: string }[];

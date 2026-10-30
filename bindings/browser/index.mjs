@@ -1,4 +1,10 @@
 const internal = Symbol('Engine');
+// setTimeout fires at once for a delay above 2^31-1 ms, so a longer one is armed in steps. The timer only
+// rejects the promise promptly: the deadline itself is enforced by the core.
+const MAX_TIMER_MS = 2 ** 31 - 1;
+const armTimer = (timer, ms, fire) => {
+  timer.id = setTimeout(ms > MAX_TIMER_MS ? () => armTimer(timer, ms - MAX_TIMER_MS, fire) : fire, Math.min(ms, MAX_TIMER_MS));
+};
 const bytes = text => new TextEncoder().encode(text).byteLength;
 const absolute = url => new URL(url, globalThis.location?.href).href;
 /** Every error this package raises. `status` is a `Status` value; `code` is a stable string where there is one. */
@@ -23,6 +29,7 @@ EngineClosedError.prototype.name = 'EngineClosedError';
 // Every error this package raises carries a status: lifecycle and queue errors as the other bindings
 // report a closed engine (1, INVALID_ARGUMENT), a failed worker as an inference failure (3).
 const queueFullError = () => new LayaError('Laya queue is full', 1, 'ERR_LAYA_QUEUE_FULL');
+const WORKER_EXITED = 'Laya worker has exited; open a new engine';
 const exitedError = message => new LayaError(message, 3, 'ERR_LAYA_WORKER_EXITED');
 // Cancelled initialization, like a cancelled request: status 5.
 const abortedError = () => new LayaError('Initialization cancelled', 5);
@@ -63,7 +70,7 @@ const wellFormedJson = (value, what) => {
 };
 export const Status = Object.freeze({ OK: 0, INVALID_ARGUMENT: 1, MODEL_ERROR: 2, INFERENCE_ERROR: 3, OUT_OF_MEMORY: 4, CANCELLED: 5, DEADLINE_EXCEEDED: 6, UNSUPPORTED_PLATFORM: 7 });
 export class Engine {
-  #worker; #pending = new Map(); #next = 0; #closing = false; #dead = false; #failed = false; #limit; #close; #diagnostic;
+  #worker; #pending = new Map(); #next = 0; #closing = false; #dead = false; #failed = false; #slots = 0; #limit; #close; #diagnostic;
   capabilities;
   constructor(token, worker, limit, diagnostic) {
     if (token !== internal) throw new TypeError('Use Engine.open() or Engine.openRouter()');
@@ -74,7 +81,7 @@ export class Engine {
       const pending = this.#pending.get(data.id);
       if (!pending) return;
       if (data.event) { try { Promise.resolve(pending.onEvent?.(data.event)).catch(() => {}); } catch {} return; }
-      this.#pending.delete(data.id);
+      this.#release(data.id);
       pending.cleanup?.();
       if (data.error) {
         const error = nativeError(data.error, data.status);
@@ -89,7 +96,13 @@ export class Engine {
   #fail(error) {
     this.#dead = this.#failed = true;
     for (const entry of this.#pending.values()) { entry.cleanup?.(); entry.reject(error); }
-    this.#pending.clear(); this.#worker.terminate();
+    this.#pending.clear(); this.#slots = 0; this.#worker.terminate();
+  }
+  #release(id) {
+    const entry = this.#pending.get(id);
+    if (!entry) return;
+    this.#pending.delete(id);
+    if (entry.kind === 'execute') this.#slots--;
   }
   /** `model`: a URL or `{ url, sha256? }`. */
   static async open(model, options) {
@@ -155,19 +168,20 @@ export class Engine {
     }
     throw last;
   }
-  #send(kind, request, onEvent, options, { signal, timeoutMs = 0, requestId } = {}) {
+  #send(kind, request, onEvent, options, { signal, timeoutMs = 0, requestId = 0 } = {}) {
     // Order: closed, dead, an already-cancelled signal (no worker message), then admission.
     if (this.#closing && kind !== 'close') return Promise.reject(new EngineClosedError());
-    if (this.#dead) return Promise.reject(exitedError('Laya is closing or closed'));
+    if (this.#dead) return Promise.reject(exitedError(WORKER_EXITED));
     if (signal?.aborted) return Promise.reject(new LayaError('Request cancelled', 5));
-    if (kind !== 'close' && this.#pending.size >= this.#limit) return Promise.reject(queueFullError());
+    // Only calls take a queue slot: close, info and init are always admitted (they still wait behind the running call).
+    if (kind === 'execute' && this.#slots >= this.#limit) return Promise.reject(queueFullError());
     const id = ++this.#next;
     // Shared cancellation is optional: ordinary pages still run without isolation.
     const flag = globalThis.crossOriginIsolated && typeof SharedArrayBuffer === 'function' ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
     // Wall-clock milliseconds: the page and worker realms have different performance.now() origins.
     const deadline = timeoutMs ? Date.now() + timeoutMs : 0;
     return new Promise((resolve, reject) => {
-      let timer;
+      const timer = {};
       const stop = status => {
         if (flag) Atomics.compareExchange(flag, 0, 0, status);
         cleanup();
@@ -176,14 +190,15 @@ export class Engine {
         reject(new LayaError(status === 6 ? 'Request deadline exceeded' : 'Request cancelled', status));
       };
       const abort = () => stop(5);
-      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
+      const cleanup = () => { clearTimeout(timer.id); signal?.removeEventListener('abort', abort); };
       const entry = { resolve, reject, onEvent, cleanup, stop, kind };
       this.#pending.set(id, entry);
-      if (timeoutMs) timer = setTimeout(() => stop(6), timeoutMs);
+      if (kind === 'execute') this.#slots++;
+      if (timeoutMs) armTimer(timer, timeoutMs, () => stop(6));
       signal?.addEventListener('abort', abort, { once: true });
       try { this.#worker.postMessage({ id, requestId, kind, request, observe: !!onEvent, options, flag, deadline }); }
       catch (error) {
-        this.#pending.delete(id); cleanup();
+        this.#release(id); cleanup();
         // Only init sends options; a value the worker cannot receive (a function, for example) is an argument error.
         reject(kind === 'init' ? invalid(TypeError, `options cannot be sent to the worker: ${error?.message ?? error}`) : exitedError(`Laya worker unreachable: ${error?.message ?? error}`));
       }
@@ -192,16 +207,18 @@ export class Engine {
   async execute(request, options) {
     // Order: closed, then conversions, then an already-cancelled signal, then admission, then the worker.
     if (this.#closing) throw new EngineClosedError();
-    if (this.#dead) throw exitedError('Laya is closing or closed');
-    const { onEvent, signal, timeoutMs = 0, requestId } = optionsObject(options);
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw invalid(RangeError, 'timeoutMs must be 0..86400000');
-    if (requestId !== undefined && (!Number.isSafeInteger(requestId) || requestId < 0)) throw invalid(RangeError, 'requestId must be a non-negative safe integer');
+    if (this.#dead) throw exitedError(WORKER_EXITED);
+    const { onEvent, signal, timeoutMs = 0, requestId = 0, raw = false } = optionsObject(options);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) throw invalid(RangeError, 'timeoutMs must be a non-negative safe integer');
+    if (!Number.isSafeInteger(requestId) || requestId < 0) throw invalid(RangeError, 'requestId must be a non-negative safe integer');
+    if (typeof raw !== 'boolean') throw invalid(TypeError, 'raw must be a boolean');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
     if (onEvent !== undefined && typeof onEvent !== 'function') throw invalid(TypeError, 'onEvent must be a function');
     const text = typeof request === 'string' ? request : wellFormedJson(request, 'request');
     if (typeof text === 'string' && !text.isWellFormed()) throw invalid(TypeError, 'request is not valid Unicode');
     if (typeof text !== 'string' || bytes(text) > 1048576 || text.includes('\0')) throw invalid(TypeError, 'Invalid or oversized request');
-    return JSON.parse(await this.#send('execute', text, onEvent, undefined, { signal, timeoutMs, requestId }));
+    const result = await this.#send('execute', text, onEvent, undefined, { signal, timeoutMs, requestId });
+    return raw ? result : JSON.parse(result);
   }
   info() { return this.#send('info').then(JSON.parse); }
   /**

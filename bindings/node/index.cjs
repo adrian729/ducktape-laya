@@ -24,7 +24,7 @@ class EngineClosedError extends LayaError {
 EngineClosedError.prototype.name = 'EngineClosedError';
 class Engine {
   #worker; #pending = new Map(); #next = 0; #closing = false; #closePromise;
-  #maxPending; #dead = false;
+  #maxPending; #dead = false; #slots = 0;
   constructor(token, worker, maxPending) {
     if (token !== internal) throw new TypeError('Use Engine.open()');
     this.#worker = worker; this.#maxPending = maxPending;
@@ -34,6 +34,15 @@ class Engine {
     try { text = require(resolveAddon()).info(); }
     catch (error) { throw nativeError(addonLoadMessage(error), error.status ?? 7); }
     return JSON.parse(text);
+  }
+  // The worker keeps the process alive only while the engine has accepted work (a queued or running call, info or close).
+  #track() { if (this.#pending.size) this.#worker.ref(); else this.#worker.unref(); }
+  #release(id) {
+    const pending = this.#pending.get(id);
+    if (!pending) return;
+    this.#pending.delete(id);
+    if (pending.kind === 'execute') this.#slots--;
+    this.#track();
   }
   info() { return this.#send('info').then(JSON.parse); }
   /** `modelPath`: a string, a Buffer or Uint8Array of path bytes, or a `file:` URL. */
@@ -66,7 +75,7 @@ class Engine {
           reject(nativeError(message.startupError, message.status));
           return;
         }
-        if (message.ready) { ready = true; resolve(); return; }
+        if (message.ready) { ready = true; engine.#track(); resolve(); return; }
         const pending = engine.#pending.get(message.id);
         if (!pending) return;
         if (message.event) {
@@ -75,7 +84,7 @@ class Engine {
           try { Promise.resolve(pending.onEvent?.(message.event)).catch(() => {}); } catch {}
           return;
         }
-        engine.#pending.delete(message.id);
+        engine.#release(message.id);
         pending.cleanup?.();
         if (message.error !== undefined) pending.reject(nativeError(message.error, message.status));
         else pending.resolve(message.result);
@@ -84,14 +93,14 @@ class Engine {
         engine.#dead = true;
         if (!ready) reject(error);
         for (const pending of engine.#pending.values()) { pending.cleanup?.(); pending.reject(error); }
-        engine.#pending.clear();
+        engine.#pending.clear(); engine.#slots = 0;
       };
       worker.on('error', error => fail(exitedError(`Laya worker failed: ${error?.message ?? error}`)));
       worker.on('exit', (code) => fail(exitedError(`Laya worker exited (${code})`)));
     });
     return engine;
   }
-  #send(kind, request, onEvent, { signal, timeoutMs = 0, requestId } = {}) {
+  #send(kind, request, onEvent, { signal, timeoutMs = 0, requestId = 0 } = {}) {
     // A closed engine reports ERR_LAYA_CLOSED even after its worker has exited.
     if (this.#closing && kind !== 'close') return Promise.reject(new EngineClosedError());
     if (this.#dead) return Promise.reject(exitedError('Engine worker has exited'));
@@ -99,13 +108,14 @@ class Engine {
     // or close this engine, so the order is checked again here, at the enqueue boundary:
     // an already-cancelled call fails at once, before admission.
     if (signal?.aborted) return Promise.reject(new LayaError('Request cancelled', 5));
-    if (kind !== 'close' && this.#pending.size >= this.#maxPending) return Promise.reject(queueFullError());
+    // Only calls take a queue slot: close and info are always admitted (they still wait behind the running call).
+    if (kind === 'execute' && this.#slots >= this.#maxPending) return Promise.reject(queueFullError());
     const id = ++this.#next;
     const cancellation = new Int32Array(new SharedArrayBuffer(4));
     const deadline = timeoutMs ? process.hrtime.bigint() + BigInt(timeoutMs) * 1000000n : 0n;
     return new Promise((resolve, reject) => {
-      let timer;
-      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
+      const timer = {};
+      const cleanup = () => { clearTimeout(timer.id); signal?.removeEventListener('abort', abort); };
       const stop = status => {
         Atomics.compareExchange(cancellation, 0, 0, status);
         cleanup();
@@ -115,33 +125,37 @@ class Engine {
       const abort = () => stop(5);
       const entry = { resolve, reject, onEvent, cleanup, stop, kind };
       this.#pending.set(id, entry);
+      if (kind === 'execute') this.#slots++;
+      this.#track();
       signal?.addEventListener('abort', abort, { once: true });
-      if (timeoutMs) timer = setTimeout(() => stop(6), timeoutMs);
+      if (timeoutMs) armTimer(timer, timeoutMs, () => stop(6));
       // Keep cancelled entries counted until the worker acknowledges them: an
       // abort storm must not bypass the bounded queue or race native shutdown.
-      try { this.#worker.postMessage({ id, requestId: requestId ?? id, kind, request, observe: !!onEvent, cancellation, deadline }); }
-      catch (error) { cleanup(); this.#pending.delete(id); reject(exitedError(`Laya worker unreachable: ${error?.message ?? error}`)); }
+      try { this.#worker.postMessage({ id, requestId, kind, request, observe: !!onEvent, cancellation, deadline }); }
+      catch (error) { cleanup(); this.#release(id); reject(exitedError(`Laya worker unreachable: ${error?.message ?? error}`)); }
     });
   }
-  /** Runs one request object (or JSON string) or an array of requests. */
+  /** Runs one request object (or JSON string) or an array of requests; with `raw: true` the core's exact result text is returned instead of the parsed value. */
   async execute(request, options) {
     // Order: closed, then conversions, then an already-cancelled signal, then admission, then the native call.
     if (this.#closing) throw new EngineClosedError();
     if (this.#dead) throw exitedError('Engine worker has exited');
-    const { onEvent, signal, timeoutMs = 0, requestId } = optionsObject(options);
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw invalid(RangeError, 'timeoutMs must be 0..86400000');
-    if (requestId !== undefined && (!Number.isSafeInteger(requestId) || requestId < 0)) throw invalid(RangeError, 'requestId must be a non-negative safe integer');
+    const { onEvent, signal, timeoutMs = 0, requestId = 0, raw = false } = optionsObject(options);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) throw invalid(RangeError, 'timeoutMs must be a non-negative safe integer');
+    if (!Number.isSafeInteger(requestId) || requestId < 0) throw invalid(RangeError, 'requestId must be a non-negative safe integer');
+    if (typeof raw !== 'boolean') throw invalid(TypeError, 'raw must be a boolean');
     if (signal !== undefined && (typeof signal?.addEventListener !== 'function' || typeof signal?.removeEventListener !== 'function')) throw invalid(TypeError, 'signal must be an AbortSignal');
     if (onEvent !== undefined && typeof onEvent !== 'function') throw invalid(TypeError, 'onEvent must be a function');
     // A JSON string preserves the caller's literal key order, including numeric labels.
     const text = typeof request === 'string' ? request : wellFormedJson(request, 'request');
     if (typeof text === 'string' && !text.isWellFormed()) throw invalid(TypeError, 'request is not valid Unicode');
     if (typeof text !== 'string' || Buffer.byteLength(text) > 1048576 || text.includes('\0')) throw invalid(TypeError, 'Invalid or oversized request');
-    return JSON.parse(await this.#send('execute', text, onEvent, { signal, timeoutMs, requestId }));
+    const result = await this.#send('execute', text, onEvent, { signal, timeoutMs, requestId });
+    return raw ? result : JSON.parse(result);
   }
   /**
-   * Stops the worker thread and releases the model. Required: the worker keeps
-   * the Node.js process alive until close() is called. Idempotent, and resolves
+   * Stops the worker thread and releases the model. Call it when done: the worker
+   * only lets the process exit while the engine is idle. Idempotent, and resolves
    * even if the worker has already crashed or exited.
    */
   close(options) {
@@ -160,6 +174,12 @@ class Engine {
   }
 }
 const internal = Symbol('Engine');
+// setTimeout fires at once for a delay above 2^31-1 ms, so a longer one is armed in steps. The timer only
+// rejects the promise promptly: the deadline itself is enforced by the core.
+const MAX_TIMER_MS = 2 ** 31 - 1;
+const armTimer = (timer, ms, fire) => {
+  timer.id = setTimeout(ms > MAX_TIMER_MS ? () => armTimer(timer, ms - MAX_TIMER_MS, fire) : fire, Math.min(ms, MAX_TIMER_MS));
+};
 // Options default to {}; undefined and null mean the defaults, any other non-object is an argument error with status 1.
 const optionsObject = options => {
   if (options === undefined || options === null) return {};
