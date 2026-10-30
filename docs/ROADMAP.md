@@ -45,9 +45,6 @@ The highest-priority item: the eight bindings expose the same core with differen
 
 From the 0.3.0 reviews; each changes the library, so each batch needs the real-model tests and requalification.
 
-- **Tokenizer stop checks across pieces.** `tokenizer-stop-check.patch` resets its work counter whenever the hook is installed, which happens per piece, so a question of up to 255 short options can tokenize its whole head without a stop check, against API.md's "counted over the whole call". Reset it only when going from no hook to a hook (or install it once per `prepare()`), and call `control->check()` between pieces. Needs `check-upgrade.py --configure-only` and `tokenizer-scaling`.
-- **Memory per call.** Scan windows are materialized with full copies of the head and state slice (about 130 to 160 MiB at 8,192 context tokens before the window cap rejects a request); each question copies all cached state tokens (up to about 8 MB for a 2 MiB state); the request JSON is held three times (`dtl_execute`'s body, `requests`, and `plan` taking each request by value); the first tokenization buffer of `text.size() + 2` is too small for mmBERT's per-line `▁` (about 1.5 tokens per byte), which then tokenizes again; and the previous request's state (up to about 10 MiB) stays cached after the call, which matters to multi-tenant hosts.
-- **Waiting for the engine lock** polls `try_lock` every millisecond whenever a timeout or cancel callback is set, with no fairness between waiters.
 - **A threadpool per engine.** Each `llama_encode` creates and joins a disposable ggml threadpool (upstream's default without an attached pool); attaching one could help short prompts. Measured 2026-10-28 (English model, 4 threads): a 32-token pass took 0.19 s, no more than the per-token rate of longer passes predicts, so the pool's cost is not visible; low priority.
 
 ### GPU backends

@@ -103,7 +103,7 @@ struct router_state {
     // single-option choices is checked and answered without loading (or evicting) a model.
     std::map<std::string, size_t> capacities;
     size_t max_loaded = 1;
-    std::mutex mutex;
+    dtl::fair_mutex mutex;
     model_engine &load(const route &r) {
         auto it = loaded.find(r.cache_key);
         if (it == loaded.end()) {
@@ -201,7 +201,7 @@ dtl_status dtl_info(dtl_engine *engine, char **result, char **error) {
         auto info = dtl::runtime_info();
         if (engine) info["max_windows_per_call"] = engine->max_windows;
         if (engine && engine->single) {
-            std::lock_guard<std::mutex> lock(engine->single->mutex);
+            std::lock_guard<dtl::fair_mutex> lock(engine->single->mutex);
             info["model"] = engine->single->runtime.info();
         }
         // Model metadata strings are not guaranteed to be UTF-8.
@@ -219,8 +219,8 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
         dtl::execution control(options); control.check();
         require(engine, "engine is required");
         auto body = read_json(request);
-        const bool routed = engine->router != nullptr;
-        auto work = plans(body, routed);
+        const bool batch = body.is_array(), routed = engine->router != nullptr;
+        auto work = plans(std::move(body), routed);
         json results = json::array();
         if (!routed) {
             auto &single = *engine->single;
@@ -288,7 +288,7 @@ dtl_status dtl_execute(dtl_engine *engine, const char *request, const dtl_call_o
                 results.push_back(std::move(answer));
             }
         }
-        return body.is_array() ? results : results[0];
+        return batch ? results : results[0];
     });
 }
 void dtl_close(dtl_engine *engine) { delete engine; }

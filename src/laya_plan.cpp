@@ -116,14 +116,17 @@ planned plan(json body, bool routed) {
     out.body = std::move(body);
     return out;
 }
-std::vector<planned> plans(const json &body, bool routed) {
-    const auto requests = body.is_array() ? body : json::array({body});
+std::vector<planned> plans(json body, bool routed) {
+    // The request text is moved, never copied: into the batch array, and from it into each plan.
+    json requests = json::array();
+    if (body.is_array()) requests = std::move(body);
+    else requests.push_back(std::move(body));
     require(!requests.empty() && requests.size() <= max_batch_requests,
             "Batch must contain 1.." + std::to_string(max_batch_requests) + " requests");
     std::vector<planned> result;
     size_t count = 0;
     for (auto &request : requests) {
-        result.push_back(plan(request, routed));
+        result.push_back(plan(std::move(request), routed));
         count += result.back().questions.size();
         require(count <= max_batch_questions, "Batch exceeds " + std::to_string(max_batch_questions) + " questions");
     }
