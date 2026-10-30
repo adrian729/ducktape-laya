@@ -498,9 +498,17 @@ impl Engine {
     pub fn execute_with(
         &self,
         request_json: &str,
+        options: CallOptions<'_>,
+    ) -> Result<String, Error> {
+        self.execute_from(Instant::now(), request_json, options)
+    }
+    /// `execute_with` for a call that entered at `entry`.
+    fn execute_from(
+        &self,
+        entry: Instant,
+        request_json: &str,
         mut options: CallOptions<'_>,
     ) -> Result<String, Error> {
-        let entry = Instant::now();
         struct Hook<'a> {
             callback: &'a mut dyn FnMut(&Event),
         }
@@ -729,12 +737,15 @@ mod tests {
         let router = unloaded_router();
         let mut events = Vec::new();
         let mut on_event = |e: &Event| events.push(*e);
-        // The request would fail the core's validation, but the deadline comes first.
+        // A call that entered a second ago with a 1 ms deadline, so the test does not depend on the
+        // clock's resolution. The request would fail the core's validation, but the deadline comes first.
+        let entry = Instant::now() - Duration::from_secs(1);
         let error = router
-            .execute_with(
+            .execute_from(
+                entry,
                 "{}",
                 CallOptions::default()
-                    .timeout(Duration::from_nanos(1))
+                    .timeout(Duration::from_millis(1))
                     .on_event(&mut on_event),
             )
             .unwrap_err();
@@ -744,10 +755,11 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel();
         let error = router
-            .execute_with(
+            .execute_from(
+                entry,
                 "{}",
                 CallOptions::default()
-                    .timeout(Duration::from_nanos(1))
+                    .timeout(Duration::from_millis(1))
                     .cancellation_token(&token),
             )
             .unwrap_err();
