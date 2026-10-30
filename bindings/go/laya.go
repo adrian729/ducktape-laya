@@ -70,8 +70,6 @@ const (
 	StatusUnsupportedPlatform Status = 7
 )
 
-const maxTimeoutMs = 86400000
-
 // Error is a failed operation: a native failure, or an argument or lifecycle
 // error the binding reports with the status the core would use.
 type Error struct {
@@ -168,15 +166,48 @@ func RuntimeInfo() (string, error) { return readInfo(nil) }
 
 // CallOptions controls one call. The zero value (or nil) means defaults.
 type CallOptions struct {
-	// RequestID is reported in events.
+	// RequestID is reported in events. Default 0.
 	RequestID uint64
 	// OnEvent receives passive events synchronously on the calling
 	// goroutine's thread, outside native locks. Panics are contained. It may
 	// reenter the engine, but must not wait for a call that waits on this one.
-	// Close called from inside it, on the same goroutine, does not wait for
-	// the running call: the engine is closed at once and released when the
-	// call returns.
-	OnEvent func(eventJSON string)
+	// Close or CloseCancelPending called from inside it, on the same
+	// goroutine, does not wait for the running call: the engine is closed at
+	// once and released when the call returns.
+	OnEvent func(Event)
+}
+
+// EventKind is the phase an Event reports.
+type EventKind string
+
+const (
+	EventStart EventKind = "start"
+	EventEnd   EventKind = "end"
+	EventError EventKind = "error"
+)
+
+// Event is one passive observation of a call: a start, then an end or an
+// error. It carries no state, prompts, answers or paths.
+type Event struct {
+	Kind      EventKind
+	RequestID uint64
+	Status    Status
+	// ElapsedMs is 0 on start.
+	ElapsedMs float64
+}
+
+// parseEvent decodes the native event JSON; ok is false when it is malformed.
+func parseEvent(text string) (Event, bool) {
+	var body struct {
+		Event     string  `json:"event"`
+		RequestID uint64  `json:"request_id"`
+		Status    int32   `json:"status"`
+		ElapsedMs float64 `json:"elapsed_ms"`
+	}
+	if json.Unmarshal([]byte(text), &body) != nil {
+		return Event{}, false
+	}
+	return Event{EventKind(body.Event), body.RequestID, Status(body.Status), body.ElapsedMs}, true
 }
 
 // Engine owns a native model engine or router. It is safe for concurrent use;
@@ -199,8 +230,11 @@ type engineCore struct {
 	// callbacks counts, per goroutine id, the calls whose OnEvent may run on
 	// that goroutine; Close from such a goroutine must not wait.
 	callbacks map[uint64]int
-	handle    unsafe.Pointer
-	done      chan struct{} // closed once the handle has been released
+	// flags holds the call-scoped native cancel flag of every call that has
+	// entered and not yet returned; CloseCancelPending sets them all.
+	flags  map[*C.uint32_t]struct{}
+	handle unsafe.Pointer
+	done   chan struct{} // closed once the handle has been released
 }
 
 func newEngine(handle unsafe.Pointer) *Engine {
@@ -458,15 +492,26 @@ func (e *engineCore) release() {
 // callback's goroutine, Close would wait for its own call. There it does not
 // wait: it closes the engine at once and returns nil, and the running call
 // releases the handle when it returns.
-func (e *Engine) Close() error {
+func (e *Engine) Close() error { return e.close(false) }
+
+// CloseCancelPending is Close, except that every call that has entered and not
+// yet returned (running, or waiting for the native lock) is cancelled first,
+// so it fails with StatusCancelled. Called from an OnEvent callback it cancels
+// every running call, the callback's own included, and returns at once.
+func (e *Engine) CloseCancelPending() error { return e.close(true) }
+
+func (e *Engine) close(cancelPending bool) error {
 	c := e.c
 	if c.inCallback() {
-		c.closeDeferred()
+		c.closeDeferred(cancelPending)
 		runtime.KeepAlive(e)
 		return nil
 	}
 	c.mu.Lock()
 	c.closed = true
+	if cancelPending {
+		c.cancelCalls()
+	}
 	for c.active > 0 {
 		c.idle.Wait()
 	}
@@ -479,15 +524,46 @@ func (e *Engine) Close() error {
 
 // closeDeferred marks the engine closed so new calls fail and returns without
 // waiting. The last running call releases the handle (at once if none runs).
-func (c *engineCore) closeDeferred() {
+func (c *engineCore) closeDeferred(cancelPending bool) {
 	c.mu.Lock()
 	c.closed = true
 	c.deferred = true
+	if cancelPending {
+		c.cancelCalls()
+	}
 	idle := c.active == 0
 	c.mu.Unlock()
 	if idle {
 		c.release()
 	}
+}
+
+// cancelCalls stops every registered call through its native flag. The caller
+// holds mu, which also keeps the flags allocated.
+func (c *engineCore) cancelCalls() {
+	for flag := range c.flags {
+		C.set_flag(flag, C.DTL_CANCELLED)
+	}
+}
+
+// addFlag allocates the call-scoped native cancel flag and registers it where
+// CloseCancelPending can reach it. removeFlag unregisters and frees it.
+func (c *engineCore) addFlag() *C.uint32_t {
+	flag := (*C.uint32_t)(C.calloc(1, C.size_t(unsafe.Sizeof(C.uint32_t(0)))))
+	c.mu.Lock()
+	if c.flags == nil {
+		c.flags = map[*C.uint32_t]struct{}{}
+	}
+	c.flags[flag] = struct{}{}
+	c.mu.Unlock()
+	return flag
+}
+
+func (c *engineCore) removeFlag(flag *C.uint32_t) {
+	c.mu.Lock()
+	delete(c.flags, flag)
+	c.mu.Unlock()
+	C.free(unsafe.Pointer(flag))
 }
 
 // goroutineID reads the current goroutine's id from the stack header
@@ -573,9 +649,11 @@ func (e *Engine) Execute(request string) (string, error) {
 // ExecuteContext is Execute with cooperative cancellation and deadline. A
 // cancelled ctx yields an *Error with StatusCancelled (errors.Is
 // context.Canceled), an expired deadline StatusDeadlineExceeded (errors.Is
-// context.DeadlineExceeded). Errors are reported in this order: closed engine,
-// argument conversions (NUL), an already-done ctx (no native call, no events),
-// then the native call. No partial result is returned.
+// context.DeadlineExceeded). The native timeout is the time left until the
+// ctx deadline, rounded up to whole milliseconds, with no upper bound. Errors
+// are reported in this order: closed engine, argument conversions (NUL), an
+// already-done or expired ctx (no native call, no events), then the native
+// call. No partial result is returned.
 func (e *Engine) ExecuteContext(ctx context.Context, request string, opts *CallOptions) (string, error) {
 	defer runtime.KeepAlive(e)
 	return e.c.call(ctx, request, opts)
@@ -612,7 +690,11 @@ func (e *engineCore) call(ctx context.Context, request string, opts *CallOptions
 		requestID = opts.RequestID
 		if onEvent := opts.OnEvent; onEvent != nil {
 			defer e.enterCallbacks()()
-			handle := cgo.NewHandle(onEvent)
+			handle := cgo.NewHandle(func(text string) {
+				if event, ok := parseEvent(text); ok {
+					onEvent(event)
+				}
+			})
 			defer handle.Delete()
 			slot := (*C.uintptr_t)(C.malloc(C.size_t(unsafe.Sizeof(C.uintptr_t(0)))))
 			*slot = C.uintptr_t(handle)
@@ -620,38 +702,37 @@ func (e *engineCore) call(ctx context.Context, request string, opts *CallOptions
 			observer = unsafe.Pointer(slot)
 		}
 	}
-	var timeout uint64
-	if deadline, ok := ctx.Deadline(); ok {
-		ms := time.Until(deadline).Milliseconds() + 1
-		if ms <= maxTimeoutMs {
-			timeout = uint64(max(ms, 1))
-		} // beyond the native maximum: no native timeout; the watcher enforces it
-	}
-	var flag *C.uint32_t
+	// The native flag belongs to this call alone: a context is linked to it by
+	// the watcher below, never passed as the flag, and CloseCancelPending
+	// reaches it through the engine.
+	flag := e.addFlag()
+	defer e.removeFlag(flag)
 	if ctx.Done() != nil {
-		flag = (*C.uint32_t)(C.calloc(1, C.size_t(unsafe.Sizeof(C.uint32_t(0)))))
-		stop := func() {
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				C.set_flag(flag, C.DTL_DEADLINE_EXCEEDED)
-			} else {
-				C.set_flag(flag, C.DTL_CANCELLED)
-			}
-		}
 		done := make(chan struct{})
 		stopped := make(chan struct{})
 		go func() {
 			defer close(stopped)
 			select {
 			case <-ctx.Done():
-				stop()
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					C.set_flag(flag, C.DTL_DEADLINE_EXCEEDED)
+				} else {
+					C.set_flag(flag, C.DTL_CANCELLED)
+				}
 			case <-done:
 			}
 		}()
 		defer func() {
 			close(done)
 			<-stopped
-			C.free(unsafe.Pointer(flag))
 		}()
+	}
+	var timeout uint64
+	if deadline, ok := ctx.Deadline(); ok {
+		var expired bool
+		if timeout, expired = remainingMs(time.Until(deadline)); expired {
+			return "", ctxError(context.DeadlineExceeded)
+		}
 	}
 	var result, msg *C.char
 	status := C.run(e.handle, req, C.uint64_t(requestID), observer, C.uint64_t(timeout), flag, &result, &msg)
@@ -665,4 +746,17 @@ func (e *engineCore) call(ctx context.Context, request string, opts *CallOptions
 		return "", &Error{Status: StatusInferenceError, Message: "Native result was null"}
 	}
 	return C.GoString(result), nil
+}
+
+// remainingMs converts the time left to the native timeout: whole
+// milliseconds rounded up, at least 1. expired is true when nothing is left.
+func remainingMs(left time.Duration) (ms uint64, expired bool) {
+	if left <= 0 {
+		return 0, true
+	}
+	ms = uint64(left / time.Millisecond)
+	if left%time.Millisecond != 0 {
+		ms++
+	}
+	return ms, false
 }

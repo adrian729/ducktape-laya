@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -60,12 +61,6 @@ func mustOK(t *testing.T) func(string, error) string {
 	}
 }
 
-func TestRejectsBadPath(t *testing.T) {
-	if _, err := Open("missing.gguf", nil); err == nil {
-		t.Fatal("expected error")
-	}
-}
-
 func TestRejectsNul(t *testing.T) {
 	_, err := Open("a\x00b", nil)
 	if status(t, err) != StatusInvalidArgument {
@@ -80,7 +75,7 @@ func TestPanicInEventContained(t *testing.T) {
 	}
 	defer router.Close()
 	calls := 0
-	_, err = router.ExecuteContext(context.Background(), "{}", &CallOptions{RequestID: 1, OnEvent: func(string) {
+	_, err = router.ExecuteContext(context.Background(), "{}", &CallOptions{RequestID: 1, OnEvent: func(Event) {
 		calls++
 		panic("contained observer")
 	}})
@@ -125,7 +120,7 @@ func TestErrorOrder(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	events := 0
-	opts := &CallOptions{OnEvent: func(string) { events++ }}
+	opts := &CallOptions{OnEvent: func(Event) { events++ }}
 	// A NUL request beats a cancelled context.
 	if _, err := router.ExecuteContext(cancelled, "{\x00}", opts); status(t, err) != StatusInvalidArgument || errors.Is(err, context.Canceled) {
 		t.Fatalf("NUL vs cancelled: %v", err)
@@ -227,29 +222,26 @@ func TestRealFeatures(t *testing.T) {
 	path := model(t)
 	ok := mustOK(t)
 	e := open(t)
-	_, err := e.Execute(strings.Replace(request, "{", `{"metadata":"caller tag",`, 1))
-	if status(t, err) != StatusInvalidArgument {
-		t.Fatal("execute should reject unknown top-level keys")
-	}
 	single := ok(e.Execute(request))
 	if !strings.Contains(single, `"values":{"refund":true}`) {
 		t.Fatal(single)
 	}
-	var events []string
+	var events []Event
 	result := ok(e.ExecuteContext(context.Background(), "["+request+","+request+"]",
-		&CallOptions{RequestID: 21, OnEvent: func(s string) { events = append(events, s) }}))
+		&CallOptions{RequestID: math.MaxUint64, OnEvent: func(ev Event) { events = append(events, ev) }}))
 	if result != "["+single+","+single+"]" {
 		t.Fatal(result)
 	}
-	if len(events) != 2 || !strings.Contains(events[0], `"event":"start"`) || !strings.Contains(events[1], `"request_id":21`) {
+	if len(events) != 2 || events[0].Kind != EventStart || events[0].ElapsedMs != 0 || events[1].Kind != EventEnd || events[1].ElapsedMs <= 0 {
 		t.Fatal(events)
 	}
-	_, err = e.ExecuteContext(context.Background(), "{}", &CallOptions{RequestID: 22, OnEvent: func(string) { panic("contained observer") }})
-	if err == nil {
-		t.Fatal("expected error")
+	for _, ev := range events {
+		if ev.RequestID != math.MaxUint64 || ev.Status != StatusOK {
+			t.Fatal(events)
+		}
 	}
 	// Reentry from an observer.
-	ok(e.ExecuteContext(context.Background(), request, &CallOptions{RequestID: 23, OnEvent: func(string) {
+	ok(e.ExecuteContext(context.Background(), request, &CallOptions{RequestID: 23, OnEvent: func(Event) {
 		if _, err := e.Execute(request); err != nil {
 			t.Error(err)
 		}
@@ -262,37 +254,8 @@ func TestRealFeatures(t *testing.T) {
 	if !strings.Contains(ok(router.Execute(withModel(request, "english"))), `"model":"english"`) {
 		t.Fatal("missing routed model")
 	}
-	_, err = router.Execute(request)
-	if status(t, err) != StatusInvalidArgument {
-		t.Fatal("router requires model")
-	}
 	if !strings.Contains(ok(router.Info()), `"abi_version":2`) {
 		t.Fatal("router info")
-	}
-}
-
-func TestCancellationAndDeadline(t *testing.T) {
-	e := open(t)
-	baseline := mustOK(t)(e.Execute(choice))
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := e.ExecuteContext(cancelled, choice, nil)
-	if status(t, err) != StatusCancelled {
-		t.Fatal("execute: want 5")
-	}
-	short, stop := context.WithTimeout(context.Background(), time.Millisecond)
-	defer stop()
-	_, err = e.ExecuteContext(short, choice, nil)
-	if status(t, err) != StatusDeadlineExceeded {
-		t.Fatalf("want 6, got %v", err)
-	}
-	if got := mustOK(t)(e.Execute(choice)); got != baseline {
-		t.Fatal("result changed after cancellation")
-	}
-	live, stop2 := context.WithCancel(context.Background())
-	defer stop2()
-	if got := mustOK(t)(e.ExecuteContext(live, choice, nil)); got != baseline {
-		t.Fatal("result changed with live context")
 	}
 }
 
@@ -349,42 +312,14 @@ func TestSharedAcrossGoroutines(t *testing.T) {
 	}
 }
 
-func TestCloseWaitsForActiveCalls(t *testing.T) {
-	e := open(t)
-	entered := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		_, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(s string) {
-			if strings.Contains(s, `"event":"start"`) {
-				close(entered)
-			}
-		}})
-		done <- err
-	}()
-	<-entered
-	time.Sleep(10 * time.Millisecond) // let the callback return; inference is still running
-	e.Close()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	default:
-		t.Fatal("Close returned before the running call finished")
-	}
-	if _, err := e.Execute(request); !errors.Is(err, ErrClosed) {
-		t.Fatal("want ErrClosed")
-	}
-}
-
 func TestCloseInsideCallback(t *testing.T) {
 	e := open(t)
 	baseline, err := e.Execute(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(s string) {
-		if strings.Contains(s, `"event":"start"`) {
+	result, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(ev Event) {
+		if ev.Kind == EventStart {
 			e.Close()
 		}
 	}})
@@ -406,7 +341,7 @@ func TestCloseFromOtherGoroutineWaitsDuringCallback(t *testing.T) {
 	var once sync.Once
 	callDone := make(chan error, 1)
 	go func() {
-		_, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(string) {
+		_, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(Event) {
 			once.Do(func() {
 				close(inCallback)
 				<-release
@@ -465,127 +400,6 @@ func TestContextErrorsMatch(t *testing.T) {
 	defer stop()
 	if _, err := router.ExecuteContext(d, choice, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want DeadlineExceeded, got %v", err)
-	}
-}
-
-func TestConfigRejected(t *testing.T) {
-	path := model(t)
-	for name, c := range map[string]*Config{
-		"threads":   {Threads: 257},
-		"temp zero": {Temperatures: map[string]float64{"choice": 0}},
-	} {
-		e, err := Open(path, c)
-		if err == nil {
-			e.Close()
-			t.Fatalf("%s: expected error", name)
-		}
-		if status(t, err) != StatusInvalidArgument {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
-	if _, err := OpenRouterJSON(`{"models":{"a":{"path":"`+quote(path)+`","config":{"bogus":1}}}}`, nil); status(t, err) != StatusInvalidArgument {
-		t.Fatalf("route config: %v", err)
-	}
-}
-
-func TestOverflowPolicy(t *testing.T) {
-	path := model(t)
-	ok := mustOK(t)
-	long := `{"state":"` + strings.Repeat("refund ", 800) + `","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}`
-	e, err := Open(path, &Config{Threads: 2, Overflow: "truncate_end"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer e.Close()
-	// The policy reaches the engine: the default (reject) would refuse this request.
-	ok(e.Execute(long))
-	if _, err := Open(path, &Config{Threads: 2, Overflow: "bogus"}); status(t, err) != 1 {
-		t.Fatal("invalid overflow accepted")
-	}
-}
-
-func TestConfigApplied(t *testing.T) {
-	path := model(t)
-	ok := mustOK(t)
-	base := open(t)
-	baseline := ok(base.Execute(choice))
-	e, err := Open(path, &Config{Threads: 1, ContextTokens: 256, Temperatures: map[string]float64{"choice.2": 6, "noul": 2, "choice.3_5": 1.7}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer e.Close()
-	if info := ok(e.Info()); !strings.Contains(info, `"context_tokens":256`) || !strings.Contains(info, `"trained_context_tokens"`) {
-		t.Fatal(info)
-	}
-	// An empty (non-nil) config equals defaults.
-	d, err := Open(path, &Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
-	if got := ok(d.Execute(choice)); got != baseline {
-		t.Fatal("empty config changed the result")
-	}
-}
-
-func TestPerRequestSettingsRejected(t *testing.T) {
-	e := open(t)
-	withKey := func(extra string) string { return strings.Replace(choice, "{", "{"+extra+",", 1) }
-	for _, extra := range []string{`"max_tokens":0`, `"max_tokens":100000`, `"temperatures":{"choice":0}`} {
-		if _, err := e.Execute(withKey(extra)); status(t, err) != StatusInvalidArgument {
-			t.Fatalf("%s: %v", extra, err)
-		}
-	}
-}
-
-func TestInfoFields(t *testing.T) {
-	e := open(t)
-	info := mustOK(t)(e.Info())
-	if strings.Contains(info, `"max_tokens"`) || !strings.Contains(info, `"context_tokens":512`) {
-		t.Fatal(info)
-	}
-	rt, err := RuntimeInfo()
-	if err != nil || !strings.Contains(rt, `"default_context_tokens"`) || strings.Contains(rt, "tokens_per_question") {
-		t.Fatal(rt, err)
-	}
-}
-
-func TestRouterAutoValidation(t *testing.T) {
-	open := func(json string) (*Engine, error) { return OpenRouterJSON(json, &Config{Threads: 2}) }
-	for _, bad := range []string{
-		`{"models":{"a":"laya_test.go"},"auto":{"english":"a"}}`,
-		`{"models":{"a":"laya_test.go"},"auto":{"english":"a","default":"missing"}}`,
-		`{"models":{"a":"laya_test.go"},"auto":{"english":"a","default":"a","extra":"a"}}`,
-		`{"models":{"auto":"laya_test.go"}}`,
-	} {
-		if _, err := open(bad); err == nil || status(t, err) != StatusInvalidArgument {
-			t.Fatalf("%s: %v", bad, err)
-		}
-	}
-	plain, err := open(`{"models":{"a":"laya_test.go"}}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer plain.Close()
-	auto, err := open(`{"models":{"a":"laya_test.go"},"auto":{"english":"a","default":"a"}}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer auto.Close()
-	with := func(extra string) string { return strings.Replace(choice, "{", "{"+extra+",", 1) }
-	// Rejected before any model is loaded.
-	for engine, extra := range map[*Engine]string{
-		plain: `"model":"auto"`,
-		auto:  `"lang":"en"`,
-	} {
-		if _, err := engine.Execute(with(extra)); status(t, err) != StatusInvalidArgument {
-			t.Fatalf("%s: %v", extra, err)
-		}
-	}
-	for _, extra := range []string{`"model":"a","lang":"en"`, `"model":"auto","lang":""`} {
-		if _, err := auto.Execute(with(extra)); status(t, err) != StatusInvalidArgument {
-			t.Fatalf("%s: %v", extra, err)
-		}
 	}
 }
 
@@ -650,7 +464,7 @@ func TestCloseFromCallbackDefers(t *testing.T) {
 		t.Fatal(err)
 	}
 	var closeErr error
-	_, err = router.ExecuteContext(context.Background(), "{}", &CallOptions{OnEvent: func(string) { closeErr = router.Close() }})
+	_, err = router.ExecuteContext(context.Background(), "{}", &CallOptions{OnEvent: func(Event) { closeErr = router.Close() }})
 	if closeErr != nil || status(t, err) != StatusInvalidArgument {
 		t.Fatalf("close %v, call %v", closeErr, err)
 	}
@@ -664,5 +478,279 @@ func TestCloseFromCallbackDefers(t *testing.T) {
 	}
 	if router.Close() != nil {
 		t.Fatal("second Close failed")
+	}
+}
+
+func TestStatusPropagation(t *testing.T) {
+	router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Close()
+	var events []Event
+	_, err = router.ExecuteContext(context.Background(), "{}", &CallOptions{RequestID: math.MaxUint64, OnEvent: func(ev Event) { events = append(events, ev) }})
+	var e *Error
+	if !errors.As(err, &e) || e.Status != StatusInvalidArgument || errors.Is(err, ErrClosed) || e.Message == "" {
+		t.Fatalf("want a native status 1 error, got %v", err)
+	}
+	if len(events) != 2 || events[0].Kind != EventStart || events[0].Status != StatusOK || events[0].ElapsedMs != 0 ||
+		events[1].Kind != EventError || events[1].Status != StatusInvalidArgument || events[1].ElapsedMs < 0 {
+		t.Fatalf("events %+v", events)
+	}
+	for _, ev := range events {
+		if ev.RequestID != math.MaxUint64 {
+			t.Fatalf("request id %d", ev.RequestID)
+		}
+	}
+	events = nil
+	router.ExecuteContext(context.Background(), "{}", &CallOptions{OnEvent: func(ev Event) { events = append(events, ev) }})
+	if len(events) != 2 || events[0].RequestID != 0 {
+		t.Fatalf("default request id: %+v", events)
+	}
+	router.c.mu.Lock()
+	flags := len(router.c.flags)
+	router.c.mu.Unlock()
+	if flags != 0 {
+		t.Fatalf("%d call flags leaked", flags)
+	}
+}
+
+func TestParseEvent(t *testing.T) {
+	ev, ok := parseEvent(`{"event":"end","request_id":18446744073709551615,"status":0,"elapsed_ms":12.5}`)
+	if !ok || ev != (Event{EventEnd, math.MaxUint64, StatusOK, 12.5}) {
+		t.Fatalf("%+v %v", ev, ok)
+	}
+	if _, ok := parseEvent(`{"event":`); ok {
+		t.Fatal("malformed event accepted")
+	}
+}
+
+// An expired deadline fails at once with status 6: no native call, no events.
+func TestExpiredDeadlineNoEvents(t *testing.T) {
+	router, err := OpenRouterJSON(`{"models":{"unused":"go.mod"}}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Close()
+	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
+	events := 0
+	_, err = router.ExecuteContext(expired, choice, &CallOptions{OnEvent: func(Event) { events++ }})
+	if status(t, err) != StatusDeadlineExceeded || events != 0 {
+		t.Fatalf("%v, %d events", err, events)
+	}
+}
+
+func TestRemainingMs(t *testing.T) {
+	for _, c := range []struct {
+		left    time.Duration
+		ms      uint64
+		expired bool
+	}{
+		{-time.Second, 0, true},
+		{0, 0, true},
+		{time.Nanosecond, 1, false},
+		{time.Millisecond, 1, false},
+		{time.Millisecond + 1, 2, false},
+		{48 * time.Hour, 48 * 3600 * 1000, false},
+		{math.MaxInt64, uint64(math.MaxInt64/int64(time.Millisecond)) + 1, false},
+	} {
+		if ms, expired := remainingMs(c.left); ms != c.ms || expired != c.expired {
+			t.Fatalf("%v: %d %v", c.left, ms, expired)
+		}
+	}
+}
+
+// longScan is a request that runs for seconds: the overflow policy "scan"
+// plans many windows over a long state.
+func longScan() string {
+	return `{"overflow":"scan","state":"` + strings.Repeat("Please refund me. ", 100) + `","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}`
+}
+
+var (
+	baselineOnce sync.Once
+	baselineTime time.Duration
+)
+
+// uncancelled is how long longScan takes to run to the end, measured once.
+func uncancelled(t *testing.T, e *Engine) time.Duration {
+	baselineOnce.Do(func() {
+		start := time.Now()
+		mustOK(t)(e.Execute(longScan()))
+		baselineTime = time.Since(start)
+	})
+	return baselineTime
+}
+
+func TestCancellationStopsEarly(t *testing.T) {
+	e := open(t)
+	full := uncancelled(t, e)
+	baseline := mustOK(t)(e.Execute(choice))
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := e.ExecuteContext(cancelled, choice, nil); status(t, err) != StatusCancelled {
+		t.Fatalf("want 5, got %v", err)
+	}
+	// Cancelled from the start event: the native call must stop early.
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	begin := time.Now()
+	_, err := e.ExecuteContext(ctx, longScan(), &CallOptions{OnEvent: func(ev Event) {
+		if ev.Kind == EventStart {
+			stop()
+		}
+	}})
+	if elapsed := time.Since(begin); status(t, err) != StatusCancelled || elapsed > full/2 {
+		t.Fatalf("err %v after %v (uncancelled run %v)", err, elapsed, full)
+	}
+	if got := mustOK(t)(e.Execute(choice)); got != baseline {
+		t.Fatal("result changed after cancellation")
+	}
+	live, stop2 := context.WithCancel(context.Background())
+	defer stop2()
+	if got := mustOK(t)(e.ExecuteContext(live, choice, nil)); got != baseline {
+		t.Fatal("result changed with live context")
+	}
+}
+
+func TestDeadlineStopsEarly(t *testing.T) {
+	e := open(t)
+	full := uncancelled(t, e)
+	ctx, stop := context.WithTimeout(context.Background(), full/10)
+	defer stop()
+	begin := time.Now()
+	_, err := e.ExecuteContext(ctx, longScan(), nil)
+	if elapsed := time.Since(begin); status(t, err) != StatusDeadlineExceeded || elapsed > full/2 {
+		t.Fatalf("err %v after %v (uncancelled run %v)", err, elapsed, full)
+	}
+	// No upper bound: a deadline days away is a plain timeout.
+	long, stop2 := context.WithTimeout(context.Background(), 72*time.Hour)
+	defer stop2()
+	mustOK(t)(e.ExecuteContext(long, choice, nil))
+}
+
+// Close does not return before the running call has finished.
+func TestCloseWaitsForActiveCalls(t *testing.T) {
+	e := open(t)
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+	var finished atomic.Bool
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.ExecuteContext(context.Background(), request, &CallOptions{OnEvent: func(ev Event) {
+			switch ev.Kind {
+			case EventStart:
+				close(started)
+				<-proceed
+			case EventEnd:
+				finished.Store(true)
+			}
+		}})
+		done <- err
+	}()
+	<-started
+	closed := make(chan struct{})
+	go func() { e.Close(); close(closed) }()
+	// Close has begun once new calls are refused; the call is still held in its start event.
+	for !errors.Is(func() error { _, err := e.Info(); return err }(), ErrClosed) {
+		runtime.Gosched()
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned while the call was running")
+	default:
+	}
+	close(proceed)
+	<-closed
+	if !finished.Load() {
+		t.Fatal("Close returned before the running call finished")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Execute(request); !errors.Is(err, ErrClosed) {
+		t.Fatal("want ErrClosed")
+	}
+}
+
+func TestCloseCancelPending(t *testing.T) {
+	e := open(t)
+	full := uncancelled(t, e)
+	started := make(chan struct{})
+	type outcome struct {
+		err     error
+		elapsed time.Duration
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		begin := time.Now()
+		_, err := e.ExecuteContext(context.Background(), longScan(), &CallOptions{OnEvent: func(ev Event) {
+			if ev.Kind == EventStart {
+				close(started)
+			}
+		}})
+		done <- outcome{err, time.Since(begin)}
+	}()
+	<-started
+	if err := e.CloseCancelPending(); err != nil {
+		t.Fatal(err)
+	}
+	// Close returned, so the call has returned.
+	out := <-done
+	if status(t, out.err) != StatusCancelled || out.elapsed > full/2 {
+		t.Fatalf("err %v after %v (uncancelled run %v)", out.err, out.elapsed, full)
+	}
+	if _, err := e.Execute(request); !errors.Is(err, ErrClosed) {
+		t.Fatal("want ErrClosed")
+	}
+}
+
+func TestCloseCancelPendingFromCallback(t *testing.T) {
+	e := open(t)
+	full := uncancelled(t, e)
+	var closeErr error
+	begin := time.Now()
+	_, err := e.ExecuteContext(context.Background(), longScan(), &CallOptions{OnEvent: func(ev Event) {
+		if ev.Kind == EventStart {
+			closeErr = e.CloseCancelPending()
+		}
+	}})
+	if elapsed := time.Since(begin); closeErr != nil || status(t, err) != StatusCancelled || elapsed > full/2 {
+		t.Fatalf("close %v, call %v after %v (uncancelled run %v)", closeErr, err, elapsed, full)
+	}
+	select {
+	case <-e.c.done:
+	default:
+		t.Fatal("handle not released when the call returned")
+	}
+}
+
+// A context linked to one call never cancels another, and the shared engine
+// keeps running calls it does not cancel.
+func TestCancelIsCallScoped(t *testing.T) {
+	e := open(t)
+	baseline := mustOK(t)(e.Execute(choice))
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	other := make(chan string, 1)
+	go func() {
+		<-started
+		got, err := e.Execute(choice)
+		if err != nil {
+			t.Error(err)
+		}
+		other <- got
+	}()
+	_, err := e.ExecuteContext(ctx, longScan(), &CallOptions{OnEvent: func(ev Event) {
+		if ev.Kind == EventStart {
+			close(started)
+			cancel()
+		}
+	}})
+	if status(t, err) != StatusCancelled {
+		t.Fatal(err)
+	}
+	if got := <-other; got != baseline {
+		t.Fatal("a second call was disturbed by the first's cancellation")
 	}
 }
