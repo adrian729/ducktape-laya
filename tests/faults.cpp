@@ -348,86 +348,6 @@ static void runtime_faults(const std::string &model) {
 #endif
 }
 
-#ifndef DTL_SANITIZED
-// The engine caches the last state's tokens with its text; the two must always match. A call
-// whose state (B) differs from the cached one (A) fails each of its C++ allocations in turn,
-// including the copies that replace the cache. A has fewer bytes but more tokens than B. The
-// swept requests set max_tokens one below their own window, so they end with status 1 right
-// after the cache update, before inference: with A's tokens A's request is rejected, while B's
-// tokens left under A's text would fit and answer (status 0) over the wrong state. The sweep
-// runs on one engine; the last points, where the cache is replaced, run again on a new engine
-// each, whose cached text has never been longer than A, so copying B's text must allocate.
-static void state_cache_sweep(const std::string &model) {
-    const std::string question = R"("questions":{"q":{"type":"noul","instructions":"Is it a refund?"}})";
-    std::string a_state, b_state;
-    uint32_t seed = 7;
-    for (int i = 0; i < 60; ++i) { seed = seed * 1103515245u + 12345u; a_state += char('a' + (seed >> 16) % 26); a_state += ' '; }
-    for (int i = 0; i < 40; ++i) b_state += "refund ";
-    expect(a_state.size() < b_state.size(), "state A must be shorter than B in bytes");
-    auto request = [&](const std::string &state, const std::string &extra) { return R"({"state":")" + state + "\"," + extra + question + "}"; };
-    dtl_engine *engine = nullptr; char *result = nullptr, *error = nullptr;
-    const char *options = "{\"threads\":2}";
-    expect(dtl_open(model.c_str(), options, &engine, &error) == DTL_OK, "open");
-    auto window = [](const std::string &result) {
-        const auto at = result.find("\"input_tokens\":");
-        expect(at != std::string::npos, "no input_tokens in " + result);
-        return std::stoul(result.substr(at + 15));
-    };
-    const std::string b_request = request(b_state, "");
-    const auto a_expected = execute_ok(engine, request(a_state, ""), "state A"), b_expected = execute_ok(engine, b_request, "state B");
-    const auto a_tokens = window(a_expected), b_tokens = window(b_expected);
-    expect(a_tokens > b_tokens, "state A must have more tokens than B: " + std::to_string(a_tokens) + " vs " + std::to_string(b_tokens));
-    const std::string a_rejected = request(a_state, "\"max_tokens\":" + std::to_string(a_tokens - 1) + ","),
-                      b_rejected = request(b_state, "\"max_tokens\":" + std::to_string(b_tokens - 1) + ",");
-    // Fails the call's allocation `fail` (-1: none); false when the call ran out of memory.
-    auto rejected = [&](const std::string &body, const std::string &what, long fail = -1) {
-        fail_after = fail; failed = 0;
-        const auto status = dtl_execute(engine, body.c_str(), nullptr, &result, &error);
-        fail_after = -1;
-        const std::string message = error ? error : "";
-        dtl_free(result); dtl_free(error); result = error = nullptr;
-        if (status == DTL_OUT_OF_MEMORY) return false;
-        // A failed copy of the error message leaves it out.
-        expect(status == DTL_INVALID_ARGUMENT && (message.find("prompt exceeds") != std::string::npos || (message.empty() && failed)),
-               what + ": status " + std::to_string(status) + " " + message + " (answered over cached tokens of another state)");
-        return true;
-    };
-    auto cache_a = [&](const std::string &when) { expect(rejected(a_rejected, "state A " + when), "state A " + when + ": out of memory"); };
-    cache_a("before counting");
-    fail_after = 1l << 40;
-    const auto counted = dtl_execute(engine, b_rejected.c_str(), nullptr, &result, &error);
-    const long count = (1l << 40) - fail_after.load();
-    fail_after = -1;
-    dtl_free(result); dtl_free(error); result = error = nullptr;
-    expect(counted == DTL_INVALID_ARGUMENT, "counting: status " + std::to_string(counted));
-    long injected = 0;
-    for (long n = 0; n <= count; ++n) {
-        cache_a("before point " + std::to_string(n));
-        const bool completed = rejected(b_rejected, "state B with allocation failure " + std::to_string(n), n);
-        expect(completed || failed, "state B reported out of memory without a failed allocation");
-        injected += !completed;
-        cache_a("after B with allocation failure " + std::to_string(n));
-    }
-    expect(injected > 0, "no allocation failure in a call with a new state");
-    dtl_engine *const shared = engine;
-    // The last points on new engines (each opens the model): 8 spread over the last 64.
-    const long tail = std::min(count, 64l), samples = std::min(tail, 8l), spacing = samples ? tail / samples : 1;
-    for (long i = 0; i < samples; ++i) {
-        const long n = count - 1 - i * spacing;
-        expect(dtl_open(model.c_str(), options, &engine, &error) == DTL_OK, "open");
-        cache_a("on a new engine");
-        rejected(b_rejected, "state B with allocation failure " + std::to_string(n) + " on a new engine", n);
-        cache_a("after B with allocation failure " + std::to_string(n) + " on a new engine");
-        dtl_close(engine);
-    }
-    engine = shared;
-    expect(execute_ok(engine, b_request, "state B after the sweep") == b_expected, "state B result changed");
-    expect(execute_ok(engine, request(a_state, ""), "state A after the sweep") == a_expected, "state A result changed");
-    dtl_close(engine);
-    std::cerr << "state cache: " << count << " allocations of a call with a new state, " << injected << " failed it; cache always consistent\n";
-}
-#endif
-
 int main(int argc, char **argv) {
     // --c-allocations runs only the C allocation sweep and --runtime-faults only the
     // forward-pass failures (each registered as its own test).
@@ -512,7 +432,6 @@ int main(int argc, char **argv) {
             expect(opened > 32, "too few injected open allocation failures");
             std::cerr << "open allocation failures: " << opened << " rejected\n";
         }
-        state_cache_sweep(model);
 
 #else
         if (argc == 3) { std::cerr << "C allocation injection requires an uninstrumented build\n"; return 1; }

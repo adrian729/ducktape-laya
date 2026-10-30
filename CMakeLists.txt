@@ -388,6 +388,13 @@ if(DUCKTAPE_BUILD_TESTS)
   target_include_directories(laya-language-tests PRIVATE src ${DTL_VENDOR_INCLUDE})
   dtl_add_test(NAME language-routing COMMAND laya-language-tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/original-reference/routing
     TIER generic CATEGORY native)
+  # The engine lock's arrival order, handoff and stopped waiters (src/fair_mutex.hpp).
+  add_executable(laya-fair-mutex-tests tests/fair-mutex.cpp)
+  target_include_directories(laya-fair-mutex-tests PRIVATE src)
+  set(THREADS_PREFER_PTHREAD_FLAG ON)
+  find_package(Threads REQUIRED)
+  target_link_libraries(laya-fair-mutex-tests PRIVATE Threads::Threads)
+  dtl_add_test(NAME fair-mutex COMMAND laya-fair-mutex-tests TIER generic CATEGORY native)
   # The late-growth rules of the stress run on synthetic series (tests/stress_rule.hpp).
   add_executable(laya-stress-rule-tests tests/stress-rule.cpp)
   dtl_add_test(NAME stress-rule COMMAND laya-stress-rule-tests TIER generic CATEGORY native)
@@ -408,12 +415,17 @@ if(DUCKTAPE_BUILD_TESTS)
   dtl_add_test(NAME tokenizer-scaling COMMAND laya-tokenizer-tests --timing-only --time gpt-neox --time llama-spm ${DTL_TOKENIZER_GOLDEN}
     ${UPSTREAM}/models/ggml-vocab-gpt-neox.gguf ${UPSTREAM}/models/ggml-vocab-llama-spm.gguf
     TIER specialized CATEGORY native LABELS timing SERIAL)
+  # The tokenizer's stop-check work counter (tokenizer-stop-check.patch) across short pieces and nested checks.
+  add_executable(laya-tokenizer-stop-tests tests/tokenizer-stop.cpp)
+  target_link_libraries(laya-tokenizer-stop-tests PRIVATE llama)
+  dtl_add_test(NAME tokenizer-stop-check COMMAND laya-tokenizer-stop-tests ${UPSTREAM}/models/ggml-vocab-gpt-neox.gguf
+    TIER generic CATEGORY native)
   # Selected decision head (laya-selected-decision-head.patch): bit-identical to the full graph.
   add_executable(laya-decision-head-tests tests/decision-head.cpp)
   target_link_libraries(laya-decision-head-tests PRIVATE llama)
   list(APPEND DTL_TEST_PROGRAMS laya-conformance-c laya-cpu-guard-probe laya-conformance-cpp laya-control-tests
     laya-control-tokenize-tests laya-tests laya-feature-tests laya-decision-tests laya-language-tests laya-stress-rule-tests
-    laya-tokenizer-tests laya-decision-head-tests)
+    laya-tokenizer-tests laya-decision-head-tests laya-fair-mutex-tests laya-tokenizer-stop-tests)
   # Fault injection uses Linux process controls (prctl, rlimits); its tests are Linux-only.
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(laya-fault-tests tests/faults.cpp)

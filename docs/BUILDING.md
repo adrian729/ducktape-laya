@@ -125,7 +125,7 @@ dtl_add_test(NAME n COMMAND ... TIER generic|specialized|release CATEGORY native
 
 | Tier | Holds | Runs |
 |---|---|---|
-| `generic` | Model-free and fast: `abi-errors`, `control-errors`, `decision-rules`, `feature-errors`, `language-routing`, `stress-rule`, `tokenizer-partition`, and on Linux `ggml-faults` | After every change (`ctest --preset dev`), in every `generic-*` CI job and every `validate.py` run |
+| `generic` | Model-free and fast: `abi-errors`, `control-errors`, `decision-rules`, `fair-mutex`, `feature-errors`, `language-routing`, `stress-rule`, `tokenizer-partition`, `tokenizer-stop-check`, and on Linux `ggml-faults` | After every change (`ctest --preset dev`), in every `generic-*` CI job and every `validate.py` run |
 | `specialized` | Needs the real model, a platform tool (QEMU) or a quiet machine: the `real-*` tests, `cpu-guard`, and the timing checks `tokenizer-scaling` and `request-parse-scaling` | `ctest --preset dev-real`, `validate.py --model` (the `cat-real_model` tests; `--checks ctest` and `--full` run every test), the real-model CI shards |
 | `release` | Release evidence only | None registered yet |
 

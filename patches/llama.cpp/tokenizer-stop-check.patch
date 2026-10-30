@@ -1,13 +1,13 @@
 --- a/src/llama-vocab.cpp
 +++ b/src/llama-vocab.cpp
-@@ -22,6 +22,42 @@
+@@ -22,6 +22,45 @@
  #include <set>
  #include <unordered_map>
  
 +// DTL: a stop check the caller may set around llama_tokenize on its thread. Tokenization
 +// counts its work (words, bigram insertions, merges, special-token passes and matches, and
 +// the text the special-token search scans) in one counter per thread, which setting a check
-+// resets, and calls the check once per 1024 units. When it reports a stop, tokenization throws
++// where there was none resets, and calls the check once per 1024 units. When it reports a stop, tokenization throws
 +// dtl_tokenize_stopped, which llama_vocab::tokenize turns into a return value before the C API
 +// (llama_tokenize returns DTL_LLAMA_TOKENIZE_STOPPED); no tokenizer state outlives the call.
 +struct dtl_tokenize_stopped {};
@@ -15,12 +15,15 @@
 +static thread_local void * dtl_tokenize_stop_data = nullptr;
 +static thread_local uint32_t dtl_tokenize_work = 0;
 +// Swaps this thread's check with *stop/*data (null: none), so the caller can restore the
-+// previous one, and resets the work counter.
++// previous one. Setting a check where there was none restarts the work count; replacing one
++// check with another (a nested call's, and the restore after it) keeps counting.
 +extern "C" void dtl_llama_tokenize_swap_stop(bool (**stop)(void *), void ** data);
 +extern "C" void dtl_llama_tokenize_swap_stop(bool (**stop)(void *), void ** data) {
++    if (!dtl_tokenize_stop && *stop) {
++        dtl_tokenize_work = 0;
++    }
 +    std::swap(dtl_tokenize_stop, *stop);
 +    std::swap(dtl_tokenize_stop_data, *data);
-+    dtl_tokenize_work = 0;
 +}
 +// llama_tokenize results that are not -n_tokens: a stop, a failed allocation and any other
 +// exception (the most negative -n_tokens is INT32_MIN + 5; INT32_MIN reports an overflow).
@@ -43,7 +46,7 @@
  //
  // helpers
  //
-@@ -659,6 +695,7 @@
+@@ -659,6 +698,7 @@
          }
  
          for (const auto & word : word_collection) {
@@ -51,7 +54,7 @@
              work_queue = llm_bigram_bpe::queue();
              symbols.clear();
  
-@@ -690,11 +727,13 @@
+@@ -690,11 +730,13 @@
                  symbols.emplace_back(sym);
              }
              for (int i = 1; i < (int) symbols.size(); ++i) {
@@ -65,7 +68,7 @@
                  auto bigram = work_queue.pop_move();
  
                  auto & left_symbol = symbols[bigram.left];
-@@ -3385,6 +3424,7 @@
+@@ -3385,6 +3427,7 @@
  void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const {
      // for each special token
      for (const llama_token special_id : cache_special_tokens) {
@@ -73,7 +76,7 @@
          const auto & data = vocab.get_token_data(special_id);
          const auto & text = data.text;
  
-@@ -3418,6 +3458,8 @@
+@@ -3418,6 +3461,8 @@
                      //  are still relative to the source full raw_text
                      //  string_view begins at pos 0 for the same reason
                      auto match = std::string_view(raw_text.data(), raw_text_base_offset + raw_text_base_length).find(text, raw_text_base_offset);
@@ -82,7 +85,7 @@
  
                      // no occurrences found, stop processing this fragment for a given special token
                      if (match == std::string::npos) break;
-@@ -4371,8 +4413,20 @@
+@@ -4371,8 +4416,20 @@
                       int32_t   n_tokens_max,
                          bool   add_special,
                          bool   parse_special) const {

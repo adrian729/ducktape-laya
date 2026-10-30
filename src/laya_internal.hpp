@@ -44,7 +44,7 @@ struct planned {
 };
 struct model_engine {
     dtl::backend runtime;
-    std::mutex mutex;
+    dtl::fair_mutex mutex;
     explicit model_engine(const char *path, const dtl::engine_config &config) : runtime(path, config) {}
     // default_overflow applies to questions whose request names no policy; it comes from
     // the engine's or the route's config, so routes sharing a loaded model keep their own.
@@ -55,7 +55,7 @@ struct model_engine {
 };
 // A question whose answer needs no model: a choice with one option.
 inline bool answered_without_model(const question &q) { return q.options.size() == 1; }
-std::vector<planned> plans(const json &body, bool routed);
+std::vector<planned> plans(json body, bool routed);
 void count_windows(size_t &total, const question &q, size_t limit);
 std::unique_ptr<model_engine> load_model(const std::string &path, const dtl::engine_config &config);
 // engine is null only when every question is answered without a model.

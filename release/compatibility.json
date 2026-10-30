@@ -59,7 +59,7 @@
       },
       {
         "path": "patches/llama.cpp/tokenizer-stop-check.patch",
-        "sha256": "92c83e47b1cd2f0c766955e28cabcbf229b3648a57572f04fa0666b091f4bf65",
+        "sha256": "d878f12cde35ce379c4ec666dafc57d7bfe26e8df464c432381289bbaf9685cb",
         "purpose": "Tokenization counts its work over the whole call and calls a thread-local stop check the library swaps in and out (not exported) once per 1024 units; a stop, a failed allocation or another exception returns a distinct value from llama_tokenize instead of throwing through the C API; identical tokens when not stopped, no arithmetic changes"
       },
       {

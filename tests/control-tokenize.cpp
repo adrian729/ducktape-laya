@@ -1,5 +1,6 @@
 // Deadlines and cancellation during tokenization (tokenizer-stop-check.patch) of plain words and of
-// text that special tokens split into short pieces, and a cancellation callback that calls into the library.
+// text that special tokens split into short pieces and of a question head of many short options, and a
+// cancellation callback that calls into the library.
 // Usage: laya-control-tokenize-tests MODEL [MULTILINGUAL_MODEL...]
 //
 // The English and typed-decisions vocabularies make runs of 2 to 24 spaces special tokens, and
@@ -45,8 +46,7 @@ dtl_status status_of(const std::function<void()> &call) {
     try { call(); return DTL_OK; } catch (const ducktape::error &e) { return e.status; }
 }
 
-// Full tokenization time (the faster of two calls with different states, so neither reuses the
-// other's cached tokens), then a deadline and a cancellation at a tenth of it: each must end the
+// Full tokenization time (the faster of two calls), then a deadline and a cancellation at a tenth of it: each must end the
 // call with its own status within half of it, and the engine must stay exact afterwards.
 void stops_promptly(ducktape::engine &engine, const std::string &baseline, const std::string &label, const pieces &unit) {
     auto timed = [&](const std::string &body, const ducktape::call_options &options, double &seconds) {
@@ -117,6 +117,39 @@ void reentrant_callback(ducktape::engine &engine, ducktape::engine &other, const
            "; its stop check was lost");
     std::cerr << "reentrant callback at poll " << s.reenter_at << ": cancelled at the next poll\n";
 }
+
+// A question of 255 short options: its head is tokenized as 256 pieces between mask tokens,
+// each far below the 1,024 units between the tokenizer's checks. The library checks between
+// pieces and counts the tokenizer's work over all of them (when it installed the check per piece,
+// the count restarted each time and the whole head ran without one). A max_tokens below the
+// head's size ends the call with status 1 right after preparing the question, before any
+// inference, so every poll but the first (on entry) comes from tokenization. A cancellation at
+// a poll in the middle of them must end the call there.
+void head_pieces(ducktape::engine &engine) {
+    std::string criteria;
+    for (int i = 1; i <= 255; ++i) criteria += (i > 1 ? ",\"o" : "\"o") + std::to_string(i) + "\"";
+    const std::string body = R"({"state":"Please refund me.","overflow":"truncate_end","max_tokens":32,)"
+                             R"("questions":{"route":{"type":"choice","instructions":"Which queue?","criteria":[)" + criteria + "]}}}";
+    struct counter { unsigned polls = 0, cancel_at = 0; };
+    const auto run = [&](counter &c) {
+        ducktape::call_options options;
+        options.cancel_user_data = &c;
+        options.should_cancel = [](void *p) -> uint32_t {
+            auto &x = *static_cast<counter *>(p);
+            return ++x.polls == x.cancel_at ? 1 : 0;
+        };
+        return status_of([&] { engine.execute(body, options); });
+    };
+    counter all;
+    expect(run(all) == DTL_INVALID_ARGUMENT, "the 255-option head fits 32 tokens");
+    std::cerr << "255 short options: " << all.polls << " polls while preparing the question\n";
+    expect(all.polls > 256, "the 255-option head was polled " + std::to_string(all.polls) + " times; each piece needs a check");
+    counter half;
+    half.cancel_at = all.polls / 2;
+    const auto status = run(half);
+    expect(status == DTL_CANCELLED && half.polls == half.cancel_at,
+           "a cancellation inside the head returned status " + std::to_string(status) + " after " + std::to_string(half.polls) + " polls");
+}
 }
 
 int main(int argc, char **argv) {
@@ -150,6 +183,7 @@ int main(int argc, char **argv) {
             stops_promptly(engine, baseline, "double-spaced English", double_spaced);
             stops_promptly(engine, baseline, "double-spaced long words", long_words);
             stops_promptly(engine, baseline, "single-spaced long words", plain_words);
+            head_pieces(engine);
             auto other = ducktape::engine::open(argv[1], R"({"threads":2})");
             reentrant_callback(engine, other, long_words);
             expect(engine.execute(small) == baseline, "result changed after the reentrant callback");

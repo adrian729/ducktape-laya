@@ -1,10 +1,13 @@
 #include "ducktape_laya.hpp"
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <thread>
 #include <vector>
 #ifdef __linux__
@@ -75,6 +78,60 @@ int main(int argc, char **argv) {
                                    R"({"max_windows_per_call":0})", R"({"max_windows_per_call":4097})", R"({"max_windows_per_call":"8"})"})
             CHECK(status([&] { ducktape::engine::open(self("SELF"), config); }) == DTL_INVALID_ARGUMENT);
         CHECK(status([&] { ducktape::engine::open(self("SELF"), R"({"overflow":"scan","context_tokens":256})"); }) == DTL_MODEL_ERROR);
+        {
+            // A call waiting for the engine's lock leaves the queue when cancelled, while the holder
+            // still holds the lock. The holder is a router call: its second poll (after the one on
+            // entry) is the check right after taking the lock, where it waits until the waiter has
+            // returned (60 s at most, so a waiter that never leaves fails instead of hanging). The
+            // waiter's second poll runs as it joins the queue, after which it is cancelled.
+            auto locked = ducktape::engine::open_router(self(R"({"models":{"a":"SELF"}})"));
+            const std::string body = R"({"model":"a","state":"x","questions":{"q":{"type":"noul","instructions":"Is it urgent?"}}})";
+            struct gate {
+                std::mutex m;
+                std::condition_variable changed;
+                bool holding = false, waiting = false, cancel = false, waiter_returned = false;
+                bool held_until_waiter_returned = false;
+                unsigned holder_polls = 0, waiter_polls = 0;
+                bool wait(const std::function<bool()> &done) {
+                    std::unique_lock<std::mutex> g(m);
+                    return changed.wait_for(g, std::chrono::seconds(60), done);
+                }
+                void set(bool &flag) { std::lock_guard<std::mutex> g(m); flag = true; changed.notify_all(); }
+            } g;
+            dtl_status holder_status = DTL_OK, waiter_status = DTL_OK;
+            std::thread holder([&] {
+                ducktape::call_options options;
+                options.cancel_user_data = &g;
+                options.should_cancel = [](void *p) -> uint32_t {
+                    auto &x = *static_cast<gate *>(p);
+                    if (++x.holder_polls == 2) { x.set(x.holding); x.held_until_waiter_returned = x.wait([&] { return x.waiter_returned; }); }
+                    return 0;
+                };
+                holder_status = status([&] { locked.execute(body, options); });
+            });
+            const bool held = g.wait([&] { return g.holding; });
+            std::thread waiter;
+            if (held) waiter = std::thread([&] {
+                ducktape::call_options options;
+                options.cancel_user_data = &g;
+                options.should_cancel = [](void *p) -> uint32_t {
+                    auto &x = *static_cast<gate *>(p);
+                    if (++x.waiter_polls == 2) x.set(x.waiting);
+                    std::lock_guard<std::mutex> guard(x.m);
+                    return x.cancel ? 1 : 0;
+                };
+                waiter_status = status([&] { locked.execute(body, options); });
+                g.set(g.waiter_returned);
+            });
+            const bool queued = held && g.wait([&] { return g.waiting; });
+            g.set(g.cancel);
+            const bool left = queued && g.wait([&] { return g.waiter_returned; });
+            if (!left) g.set(g.waiter_returned); // releases the holder
+            holder.join();
+            if (waiter.joinable()) waiter.join();
+            CHECK(held && queued && left && g.held_until_waiter_returned && waiter_status == DTL_CANCELLED);
+            CHECK(holder_status == DTL_MODEL_ERROR); // the holder went on to load the route's (non-GGUF) model
+        }
         // Runtime info advertises the features and limits the core enforces.
         const auto info = ducktape::info();
         for (const char *needle : {"\"language_routing\"", "\"overflow_policies\":[\"reject\",\"truncate_end\",\"truncate_start\",\"scan\"]",
@@ -122,8 +179,8 @@ int main(int argc, char **argv) {
     // tokenization (tokenizer-stop-check.patch) and, through ggml's abort callback, after every
     // node of the forward pass's graph; once a stop is latched it polls no more. The polls of a
     // call are counted, not assumed: a state needing several windows under "scan" is tokenized
-    // exactly like the one-window request (the state's tokens are cached; max_tokens does not
-    // change the prompt), so the difference between the two counts is the polls of the extra
+    // exactly like the one-window request (each call tokenizes the same state and head; max_tokens
+    // does not change the prompt), so the difference between the two counts is the polls of the extra
     // windows, and the last polls of the one-window call are its forward pass. A stop at a
     // chosen poll among those lands in the graph, which ggml then abandons (llama_encode
     // returns 2), and the same context must then give unchanged results.
@@ -157,7 +214,7 @@ int main(int argc, char **argv) {
                R"(,"questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}})";
     };
     const std::string single = graph_request(512), scanned = graph_request(48);
-    const std::string single_result = engine.execute(single); // also caches the state's tokens
+    const std::string single_result = engine.execute(single);
     std::string out;
     counter c1, c2, cw;
     const unsigned polls = count_polls(single, out, c1);
@@ -292,7 +349,7 @@ int main(int argc, char **argv) {
         static long (*count_tasks)() = dtl_test::live_threads;
         // Returns -100 when the call does not match the layout measured above.
         const auto workers = [&](ducktape::engine &target) -> long {
-            if (target.execute(single) != single_result) return -100; // the poll layout above holds once the state is cached
+            if (target.execute(single) != single_result) return -100;
             census s;
             s.at = mid_graph_poll;
             ducktape::call_options call;

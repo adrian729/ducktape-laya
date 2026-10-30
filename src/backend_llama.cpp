@@ -64,16 +64,26 @@ std::string meta(const llama_model *m, const std::string &key) {
     return std::move(*value);
 }
 }
-struct prepared_window {
+// A request's state and its tokens, shared by every question prepared from it. The backend keeps
+// only a weak reference, so they are freed with the call's last question that reads them.
+struct tokenized_state {
+    std::string text;
     std::vector<llama_token> tokens;
-    std::vector<size_t> markers;
+};
+// A window's prompt is the question's head, a span of the state tokens and a separator; it is
+// put together for its forward pass, so scanned windows do not each copy the head and the span.
+struct prepared_window {
     size_t state_start = 0, state_end = 0; // span of the state tokens this window reads
 };
 struct prepared_question {
     int column = 0;
+    std::vector<llama_token> head;          // [CLS] question [SEP] ([MASK] option)* [SEP]
+    std::vector<size_t> markers;            // the options' mask tokens in the head
+    std::shared_ptr<const tokenized_state> state;
     std::vector<prepared_window> windows;
     size_t state_tokens = 0, state_dropped = 0;
     bool head_shortened = false;
+    size_t window_tokens(const prepared_window &w) const { return head.size() + (w.state_end - w.state_start) + 1; }
 };
 question::question(std::string id_, std::string type_, json instructions_, json options_)
     : id(std::move(id_)), type(std::move(type_)), instructions(std::move(instructions_)),
@@ -83,7 +93,7 @@ question::question(question &&) noexcept = default;
 question &question::operator=(question &&) noexcept = default;
 size_t question::token_count() const {
     size_t n = 0;
-    if (prepared) for (const auto &w : prepared->windows) n += w.tokens.size();
+    if (prepared) for (const auto &w : prepared->windows) n += prepared->window_tokens(w);
     return n;
 }
 void check_max_tokens(const question &q, size_t capacity) {
@@ -183,41 +193,46 @@ struct backend::impl {
         ctx.reset(llama_init_from_model(model.get(), cp));
         if (!ctx) throw failure(DTL_MODEL_ERROR, "Could not create the inference context");
     }
-    // The last state tokenized, reused while consecutive questions share it.
-    std::string cached_state_text;
-    std::vector<llama_token> cached_state_tokens;
-    void tokenize_into(std::vector<llama_token> &out, std::string_view text, const execution *control) const {
-        // Cancellation and deadlines stop the BPE merges and the special-token split; the
-        // regex pre-split and symbol setup of a word are not checked. The hook is always
-        // installed (none without controls) and restores the previous one, so a callback
-        // that calls into the library again leaves this call's check in place.
-        struct stop_hook {
-            bool (*stop)(void *) = nullptr;
-            void *data = nullptr;
-            explicit stop_hook(const execution *control) {
-                if (control && control->enabled()) {
-                    stop = [](void *p) { return static_cast<const execution *>(p)->stopped(); };
-                    data = const_cast<execution *>(control);
-                }
-                dtl_llama_tokenize_swap_stop(&stop, &data); // now holds the previous hook
+    // The last state tokenized, reused while consecutive questions share it and released with the
+    // call's questions (see tokenized_state).
+    std::weak_ptr<const tokenized_state> cached_state;
+    // Installs this thread's tokenization stop check for the lifetime of the object and then
+    // restores the previous one, so a cancellation callback that calls into the library again
+    // leaves this call's check in place. None without controls.
+    struct stop_hook {
+        bool (*stop)(void *) = nullptr;
+        void *data = nullptr;
+        explicit stop_hook(const execution *control) {
+            if (control && control->enabled()) {
+                stop = [](void *p) { return static_cast<const execution *>(p)->stopped(); };
+                data = const_cast<execution *>(control);
             }
-            ~stop_hook() { dtl_llama_tokenize_swap_stop(&stop, &data); }
-            stop_hook(const stop_hook &) = delete;
-            stop_hook &operator=(const stop_hook &) = delete;
-        } hook{control};
-        // Each llama_tokenize call does the full work, so tokenize once into a buffer of
-        // text.size() + 2 tokens (common_tokenize's estimate) and only retry with the exact
-        // count when that was too small. Texts are at most 2 MiB, well within int32_t.
-        const size_t at = out.size();
-        const auto length = static_cast<int32_t>(text.size());
-        out.resize(at + text.size() + 2);
-        int32_t n = llama_tokenize(vocab, text.data(), length, out.data() + at, static_cast<int32_t>(text.size() + 2), false, true);
-        if (n < 0 && n > tokenize_failed) {
-            out.resize(at + static_cast<size_t>(-static_cast<int64_t>(n)));
-            n = llama_tokenize(vocab, text.data(), length, out.data() + at, -n, false, true);
+            dtl_llama_tokenize_swap_stop(&stop, &data); // now holds the previous hook
         }
-        if (n >= 0) { out.resize(at + static_cast<size_t>(n)); return; }
-        out.resize(at);
+        ~stop_hook() { dtl_llama_tokenize_swap_stop(&stop, &data); }
+        stop_hook(const stop_hook &) = delete;
+        stop_hook &operator=(const stop_hook &) = delete;
+    };
+    // Appends the tokens of text. Cancellation and deadlines stop the BPE merges and the
+    // special-token split (the stop_hook installed by prepare); the regex pre-split and symbol
+    // setup of a word are not checked.
+    void tokenize_into(std::vector<llama_token> &out, std::string_view text, const execution *control) const {
+        // Each llama_tokenize call does the full work, so the first buffer must hold the result: 2
+        // tokens per byte and 2 more. The Laya vocabularies give at most 1.5 per byte (mmBERT's
+        // "\t\n" lines: a word-start token, the tab and the newline), where common_tokenize's
+        // text.size() + 2 made such text tokenize twice. The buffer is not initialized, so memory
+        // the tokens do not reach is never touched; a larger result is retried at its exact size.
+        // Texts are at most 2 MiB, well within int32_t.
+        const auto length = static_cast<int32_t>(text.size());
+        int32_t room = 2 * length + 2;
+        std::unique_ptr<llama_token[]> buffer(new llama_token[static_cast<size_t>(room)]);
+        int32_t n = llama_tokenize(vocab, text.data(), length, buffer.get(), room, false, true);
+        if (n < 0 && n > tokenize_failed) {
+            room = -n;
+            buffer.reset(new llama_token[static_cast<size_t>(room)]);
+            n = llama_tokenize(vocab, text.data(), length, buffer.get(), room, false, true);
+        }
+        if (n >= 0) { out.insert(out.end(), buffer.get(), buffer.get() + n); return; }
         if (n == tokenize_no_memory) throw std::bad_alloc();
         if (n == tokenize_stopped && control) control->check(); // the latched cancellation or deadline
         throw failure(DTL_INFERENCE_ERROR, "Tokenization failed");
@@ -228,6 +243,9 @@ struct backend::impl {
         q.prepared = std::make_unique<prepared_question>();
         auto &prepared = *q.prepared;
         prepared.column = q.type == "score" ? 1 : q.type == "noul" ? 2 : 0;
+        // One stop check for all of this question's tokenization, the head's pieces and the state,
+        // so its work is counted across the pieces (a question of 255 short options is still checked).
+        stop_hook hook{control};
         // Structured values are serialized here, as the original Laya does, so the
         // template takes its string path; null descriptions stay null (no description).
         auto as_text = [](json &value) { if (!value.is_string() && !value.is_null()) value = python_json(value); };
@@ -258,6 +276,7 @@ struct backend::impl {
         std::vector<llama_token> tokens;
         auto append = [&](std::string_view text) { tokenize_into(tokens, text, control); };
         for (size_t at = 0;;) {
+            if (control) control->check();
             const size_t next = rendered.find(marker_text, at);
             append(std::string_view(rendered).substr(at, next == std::string::npos ? std::string::npos : next - at));
             if (next == std::string::npos) break;
@@ -298,27 +317,27 @@ struct backend::impl {
             throw failure(DTL_INVALID_ARGUMENT, q.id + ": option text exceeds the model's head budget");
         if (reject && kept_question != question_tokens)
             throw failure(DTL_INVALID_ARGUMENT, q.id + ": instructions exceed the model's head budget");
-        std::vector<llama_token> head{tokens[0]};
+        auto &head = prepared.head;
+        head.push_back(tokens[0]);
         head.insert(head.end(), tokens.begin() + 1, tokens.begin() + 1 + kept_question);
         head.push_back(sep);
-        std::vector<size_t> head_markers;
-        for (const auto &o : options) { head_markers.push_back(head.size()); head.insert(head.end(), o.begin(), o.end()); }
+        for (const auto &o : options) { prepared.markers.push_back(head.size()); head.insert(head.end(), o.begin(), o.end()); }
         head.push_back(sep);
         // With the state rendered empty, the options' separator is followed only by the final
         // one; anything else (a separator inside the last option) is rejected here.
         require(opts_end + 2 == tokens.size(), "Invalid decision prompt layout");
-        if (state_text != cached_state_text) {
-            // Replace the cache only once tokenization and both copies succeeded, so text and
-            // tokens always match. The tokens are copied to their exact size: the buffer
-            // tokenize_into fills has room for text.size() + 2.
-            std::vector<llama_token> fresh;
-            tokenize_into(fresh, state_text, control);
-            std::vector<llama_token> tokens(fresh.begin(), fresh.end());
-            std::string text(state_text);
-            cached_state_tokens.swap(tokens);
-            cached_state_text.swap(text);
+        auto state = cached_state.lock();
+        if (!state || state->text != state_text) {
+            // Cached only once complete, so text and tokens always match.
+            if (control) control->check();
+            auto fresh = std::make_shared<tokenized_state>();
+            fresh->text = state_text;
+            tokenize_into(fresh->tokens, state_text, control);
+            state = std::move(fresh);
+            cached_state = state;
         }
-        const std::vector<llama_token> &state_tokens = cached_state_tokens;
+        prepared.state = state;
+        const std::vector<llama_token> &state_tokens = state->tokens;
         prepared.state_tokens = state_tokens.size();
         prepared.head_shortened = head_cut;
         // The question, options and final separator must fit on their own, even with an
@@ -330,12 +349,7 @@ struct backend::impl {
         if (reject) require(state_tokens.size() <= room, q.id + ": prompt exceeds the " + std::to_string(limit) + "-token limit");
         require(room > 0 || state_tokens.empty(),
                 q.id + ": the question and options leave no room for the state within " + std::to_string(limit) + " tokens");
-        auto add = [&](size_t start, size_t end) {
-            prepared_window w{head, head_markers, start, end};
-            w.tokens.insert(w.tokens.end(), state_tokens.begin() + start, state_tokens.begin() + end);
-            w.tokens.push_back(sep);
-            prepared.windows.push_back(std::move(w));
-        };
+        auto add = [&](size_t start, size_t end) { prepared.windows.push_back({start, end}); };
         if (state_tokens.size() <= room) {
             add(0, state_tokens.size());
         } else if (q.overflow == "truncate_end") {
@@ -354,7 +368,8 @@ struct backend::impl {
         }
     }
     // One forward pass over one window; the question type's column at each marker.
-    std::vector<float> encode(const prepared_window &w, int column, const execution *control) {
+    std::vector<float> encode(const prepared_question &p, const prepared_window &w, const execution *control) {
+        const int column = p.column;
         if (control) control->check();
 #ifndef DTL_BROWSER_WEBGPU
         struct reset_abort {
@@ -368,8 +383,12 @@ struct backend::impl {
 #endif
         if (auto memory = llama_get_memory(ctx.get())) llama_memory_clear(memory, true);
         // Own the batch arrays: llama_batch_init does not check its malloc results.
-        const auto n = w.tokens.size();
-        std::vector<llama_token> tokens(w.tokens.begin(), w.tokens.end());
+        const auto n = p.window_tokens(w);
+        std::vector<llama_token> tokens;
+        tokens.reserve(n);
+        tokens.insert(tokens.end(), p.head.begin(), p.head.end());
+        tokens.insert(tokens.end(), p.state->tokens.begin() + w.state_start, p.state->tokens.begin() + w.state_end);
+        tokens.push_back(sep);
         std::vector<llama_pos> positions(n);
         std::vector<int32_t> seq_counts(n, 1);
         llama_seq_id sequence = 0;
@@ -389,7 +408,7 @@ struct backend::impl {
         if (status == -2) throw std::bad_alloc(); // llama_encode: allocation failed
         if (status != 0) throw failure(DTL_INFERENCE_ERROR, "Laya forward pass failed: " + std::to_string(status));
         std::vector<float> scores;
-        for (size_t index : w.markers) {
+        for (size_t index : p.markers) {
             const float *v = llama_get_embeddings_ith(ctx.get(), static_cast<int32_t>(index));
             if (!v || !std::isfinite(v[column])) throw failure(DTL_INFERENCE_ERROR, "Missing/nonfinite decision output");
             scores.push_back(v[column]);
@@ -406,13 +425,13 @@ struct backend::impl {
         if (control) control->check();
         if (q.options.size() == 1) return single_option_answer(q.options);
         const auto &prepared = *q.prepared;
-        if (prepared.windows.size() == 1) return answer(q, encode(prepared.windows[0], prepared.column, control));
+        if (prepared.windows.size() == 1) return answer(q, encode(prepared, prepared.windows[0], control));
         // Scanned windows: noul takes the maximum (or, with aggregate "all", the
         // minimum) over windows; choice and score take the most confident window.
         json best;
         size_t best_index = 0;
         for (size_t i = 0; i < prepared.windows.size(); ++i) {
-            auto a = answer(q, encode(prepared.windows[i], prepared.column, control));
+            auto a = answer(q, encode(prepared, prepared.windows[i], control));
             bool better = i == 0;
             if (!better && q.type == "noul") better = q.aggregate_all ? a["noul"] < best["noul"] : a["noul"] > best["noul"];
             else if (!better) better = a["answer_confidence"] > best["answer_confidence"];

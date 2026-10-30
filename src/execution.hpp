@@ -1,9 +1,9 @@
 #pragma once
 #include "errors.hpp"
+#include "fair_mutex.hpp"
 #include <atomic>
 #include <chrono>
 #include <mutex>
-#include <thread>
 namespace dtl {
 // Borrowed per-call control. No global cancellation state or handle-wide races.
 class execution {
@@ -48,10 +48,17 @@ public:
         if (status == DTL_CANCELLED) throw failure(status, "Request cancelled");
         if (status == DTL_DEADLINE_EXCEEDED) throw failure(status, "Request deadline exceeded");
     }
-    std::unique_lock<std::mutex> lock(std::mutex &mutex) const {
-        std::unique_lock<std::mutex> held(mutex, std::defer_lock);
-        if (!options_.should_cancel && !options_.timeout_ms) held.lock();
-        else while (!held.try_lock()) { check(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    // Waits for an engine's lock in arrival order, leaving the queue on a stop. The deadline wakes the
+    // waiter when it expires; a host's cancellation flag notifies nothing, so with a callback the
+    // waiter also polls it every 10 ms: less than a running call can go between two checks (up to
+    // 61 ms with a 1 MiB state: parsing, rendering, unchecked tokenization), at 100 wake-ups a second.
+    // unlock() hands the lock over at once.
+    std::unique_lock<fair_mutex> lock(fair_mutex &mutex) const {
+        const auto period = options_.should_cancel ? std::chrono::steady_clock::duration(std::chrono::milliseconds(10))
+                                                   : std::chrono::steady_clock::duration::max();
+        const auto until = options_.timeout_ms ? deadline_ : std::chrono::steady_clock::time_point::max();
+        if (!mutex.lock([this] { return stopped(); }, until, period)) check();
+        std::unique_lock<fair_mutex> held(mutex, std::adopt_lock);
         check();
         return held;
     }
