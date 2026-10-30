@@ -45,7 +45,7 @@ The highest-priority item: the eight bindings expose the same core with differen
 
 From the 0.3.0 reviews; each changes the library, so each batch needs the real-model tests and requalification.
 
-- **A threadpool per engine.** Each `llama_encode` creates and joins a disposable ggml threadpool (upstream's default without an attached pool); attaching one could help short prompts. Measured 2026-10-28 (English model, 4 threads): a 32-token pass took 0.19 s, no more than the per-token rate of longer passes predicts, so the pool's cost is not visible; low priority.
+- **A threadpool per engine.** Each `llama_encode` creates and joins a disposable ggml threadpool (upstream's default without an attached pool). Measured 2026-10-30 as an experiment, a persistent pool per context (`ggml_threadpool_new` and `llama_attach_threadpool` at open, `ggml_threadpool_pause` after each pass so its workers sleep between calls), was no faster: English model, 4 threads, the two builds alternated in fresh processes for 6 rounds of 40 calls each on an otherwise idle machine (1-minute load below 2 when each process started), the median of the rounds' medians was 273.3 ms without and 271.6 ms with the pool for a 35-token prompt and 733.2 and 737.9 ms for an 81-token one, differences well inside the spread between rounds (215 to 282 ms for the 35-token prompt without the pool); outputs were identical. The pool also keeps `threads - 1` idle threads per engine between calls (3 here), which `real-control`'s thread census would see, and its workers do not exist in a child after `fork()` ([patches](../patches/README.md#ggml-thread-creation-failurepatch)). Not adopted; revisit only if a profile shows the per-pass thread start.
 
 ### GPU backends
 

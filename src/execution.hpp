@@ -50,8 +50,9 @@ public:
     }
     // Waits for an engine's lock in arrival order, leaving the queue on a stop. The deadline wakes the
     // waiter when it expires; a host's cancellation flag notifies nothing, so with a callback the
-    // waiter also polls it every 10 ms (a waiting call stops within about the time a running one
-    // takes to reach its next check in tokenization), and unlock() hands the lock over at once.
+    // waiter also polls it every 10 ms: less than a running call can go between two checks (up to
+    // 61 ms with a 1 MiB state: parsing, rendering, unchecked tokenization), at 100 wake-ups a second.
+    // unlock() hands the lock over at once.
     std::unique_lock<fair_mutex> lock(fair_mutex &mutex) const {
         const auto period = options_.should_cancel ? std::chrono::steady_clock::duration(std::chrono::milliseconds(10))
                                                    : std::chrono::steady_clock::duration::max();
