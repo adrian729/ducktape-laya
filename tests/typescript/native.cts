@@ -1,4 +1,4 @@
-import { Engine, LayaEvent, Status, StatusCode, Request, StructuredRequest, Result, Config, LayaError, LayaLoadError, EngineClosedError, Answer, Overflow, Routing } from 'ducktape-laya';
+import { Engine, LayaEvent, Status, StatusCode, Request, StructuredRequest, Result, StructuredResult, Config, LayaError, LayaLoadError, EngineClosedError, Answer, Overflow, Routing } from 'ducktape-laya';
 
 const request: Request = { state: 'Refund please', questions: {
   refund: { type: 'noul', instructions: 'Is a refund requested?' },
@@ -12,7 +12,9 @@ async function consumer() {
   await engine.execute([request, structured], { timeoutMs: 100, signal: new AbortController().signal,
     onEvent: (event: LayaEvent) => { const kind: 'start' | 'end' | 'error' = event.kind; const id: number = event.requestId; void [kind, id, event.status satisfies StatusCode, event.elapsedMs]; } });
   const text: string = await engine.execute(request, { raw: true });
-  void text;
+  const flag: boolean = text.length > 0;
+  const either: string | Result | StructuredResult | (Result | StructuredResult)[] = await engine.execute(request, { raw: flag });
+  void [text, either];
   const values: Record<string, string | number | boolean> = (await engine.execute(structured)).values;
   const runtime: string = (await engine.info()).llama_cpp_commit;
   const profile: { id: string; cross_profile_equivalence: false } = (await engine.info()).numerical_profile;

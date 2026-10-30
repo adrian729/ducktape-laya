@@ -37,6 +37,8 @@ export class Engine {
   execute(request: StructuredRequest, options?: (CallOptions & { raw?: false }) | null): Promise<StructuredResult>;
   execute(request: (Request | StructuredRequest)[], options?: (CallOptions & { raw?: false }) | null): Promise<(Result | StructuredResult)[]>;
   execute(request: string, options?: (CallOptions & { raw?: false }) | null): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
+  /** `raw` known only at run time: the text or the parsed value. */
+  execute(request: Request | StructuredRequest | (Request | StructuredRequest)[] | string, options?: CallOptions | null): Promise<string | Result | StructuredResult | (Result | StructuredResult)[]>;
   /** Terminates the worker and frees the model; call it when done. Idempotent; resolves even if the worker already failed. */
   close(options?: { cancelPending?: boolean } | null): Promise<void>;
 }

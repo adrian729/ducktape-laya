@@ -30,6 +30,8 @@ export class Engine {
   execute(request: StructuredRequest, options?: (CallOptions & { raw?: false }) | null): Promise<StructuredResult>;
   execute(request: (Request | StructuredRequest)[], options?: (CallOptions & { raw?: false }) | null): Promise<(Result | StructuredResult)[]>;
   execute(request: string, options?: (CallOptions & { raw?: false }) | null): Promise<Result | StructuredResult | (Result | StructuredResult)[]>;
+  /** `raw` known only at run time: the text or the parsed value. */
+  execute(request: Request | StructuredRequest | (Request | StructuredRequest)[] | string, options?: CallOptions | null): Promise<string | Result | StructuredResult | (Result | StructuredResult)[]>;
   /** Call it when done: it releases the model. An idle engine does not keep the process alive. Idempotent; resolves even if the worker already exited. */
   close(options?: { cancelPending?: boolean } | null): Promise<void>;
 }
