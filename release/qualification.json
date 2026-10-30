@@ -208,7 +208,8 @@
     },
     "stress": {
       "implementation": [
-        "src/execution.hpp"
+        "src/execution.hpp",
+        "src/fair_mutex.hpp"
       ],
       "checks": [
         "tests/stress.cpp",
@@ -420,7 +421,8 @@
     },
     "short_stress": {
       "implementation": [
-        "src/execution.hpp"
+        "src/execution.hpp",
+        "src/fair_mutex.hpp"
       ],
       "checks": [
         "tests/stress.cpp",
