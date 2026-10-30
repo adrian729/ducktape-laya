@@ -99,7 +99,7 @@ window.startControls = async (backend = 'webgpu') => {
     const events = [];
     const result = await engine.execute([{ ...request, model: 'a' }, { ...request, model: 'b' }], { onEvent: e => events.push(e) });
     if (JSON.stringify(result[0].answers) !== JSON.stringify(result[1].answers) || result[0].model !== 'a' || result[1].model !== 'b') throw new Error('Alias router result changed');
-    if (events.filter(e => e.event === 'end').length !== 1) throw new Error('Missing observer end');
+    if (events.filter(e => e.kind === 'end').length !== 1) throw new Error('Missing observer end');
     check('routing and asset deduplication');
     const first = engine.close(); if (first !== engine.close()) throw new Error('close not idempotent'); await first;
     check('idempotent shutdown');
@@ -307,7 +307,7 @@ window.startRunningCancellation = async (backend = 'wasm', fixtures, context = {
     let started;
     const startedPromise = new Promise(resolve => { started = resolve; });
     const before = observed.replies.length;
-    const running = engine.execute(long, { signal: abort.signal, onEvent: event => { if (event.event === 'start') started(); } });
+    const running = engine.execute(long, { signal: abort.signal, onEvent: event => { if (event.kind === 'start') started(); } });
     running.catch(() => {}); // settled below
     const ended = running.then(() => { throw new Error('The long request ended before it was cancelled'); },
       error => { throw new Error(`The long request failed before it was cancelled: ${error.message}`); });

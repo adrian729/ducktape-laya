@@ -38,7 +38,7 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
 
 From an ES module, `import { Engine } from 'ducktape-laya';` works too, and top-level `await` is then allowed.
 
-`close()` is required: the worker keeps the process alive until it is closed.
+Call `close()` when done to release the model. The worker keeps the process alive only while the engine has accepted work (a queued or running call, `info()` or `close()`), so an engine that is never closed does not keep an idle process from exiting.
 
 ## Opening
 
@@ -75,14 +75,15 @@ To use a build of the addon of your own, set `DUCKTAPE_LAYA_LIBRARY` to the addo
 
 ## Executing
 
-`engine.execute(request, options)` takes one request (object or JSON string) or an array of up to 32, and resolves to parsed results in the same shape. Requests are strict; besides `state` and `questions` or `schema`, they may set `max_tokens`, `temperatures`, `overflow`, `max_windows`, `boolean_threshold` (with `schema`), and on a router `model` and `lang`. Request objects are serialized with `JSON.stringify`, so integer-like keys are reordered and a number such as `149.0` is written as `149`; both can change the prompt and the results compared with the same request as a raw JSON string (or from Python). Pass a JSON string when the literal text matters.
+`engine.execute(request, options)` takes one request (object or JSON string) or an array of up to 32, and resolves to parsed results in the same shape (or to the result text with `raw: true`). Requests are strict; besides `state` and `questions` or `schema`, they may set `max_tokens`, `temperatures`, `overflow`, `max_windows`, `boolean_threshold` (with `schema`), and on a router `model` and `lang`. Request objects are serialized with `JSON.stringify`, so integer-like keys are reordered and a number such as `149.0` is written as `149`; both can change the prompt and the results compared with the same request as a raw JSON string (or from Python). Pass a JSON string when the literal text matters.
 
 | Call option | Meaning |
 |---|---|
 | `signal` | An `AbortSignal`; aborting rejects with `status` 5 |
-| `timeoutMs` | 0 (none) or 1–86400000, counted from enqueue; expiry rejects with `status` 6 |
-| `onEvent` | Receives `start`, then `end` or `error` events on the host thread |
-| `requestId` | Non-negative safe integer reported as `request_id` in events; generated when omitted |
+| `timeoutMs` | 0 (none, the default) or any positive safe integer, with no upper bound, counted from enqueue; expiry rejects with `status` 6 |
+| `onEvent` | Receives a `LayaEvent` `{ kind, requestId, status, elapsedMs }` for `start`, then `end` or `error`, on the host thread |
+| `requestId` | Non-negative safe integer reported as `requestId` in events; default 0 |
+| `raw` | `true` resolves to the core's exact result text (a string) instead of the parsed value; `JSON.parse` rounds integers above 2^53 |
 
 Cancellation is cooperative; a rejected call returns no partial result. After an abort or deadline settles a call, its `onEvent` receives no more events.
 
@@ -90,7 +91,7 @@ Cancellation is cooperative; a rejected call returns no partial result. After an
 
 ## Errors and closing
 
-Errors the package raises are `LayaError` objects (exported, with `LayaLoadError` and `EngineClosedError`) carrying `status`, one of the C ABI statuses also exported as `Status`, and sometimes a `code`. Argument errors (types, units, NUL, strings that are not well-formed Unicode, non-finite numbers, binding options) are `TypeError` or `RangeError` objects that also carry `status` 1. Lifecycle failures carry `code`: `ERR_LAYA_QUEUE_FULL` (status 1), `ERR_LAYA_WORKER_EXITED` (status 3) and, as `EngineClosedError`, `ERR_LAYA_CLOSED` (status 1). A missing, unloadable or wrong-ABI addon (including a glibc addon on a musl system), or an addon whose library is not the one it was built with, fails with a `LayaLoadError`: status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`, as does every other status-7 error, such as a CPU without the required features; an addon that exists but cannot be loaded is reported as found, with the loader's reason. After `close()`, every call (including `info()`) rejects with `EngineClosedError`. A call is checked in this order: closed, then its arguments, then an already-cancelled `signal` (rejects with status 5 at once, without reaching the worker), then the queue limit, then the model. A `null` options argument means the defaults; any other non-object (including for `close()`) is a status-1 `TypeError`. On Linux the addon loads the library next to it even when another `libducktape_laya.so.1` is on `LD_LIBRARY_PATH`.
+Errors the package raises are `LayaError` objects (exported, with `LayaLoadError` and `EngineClosedError`) carrying `status`, one of the C ABI statuses also exported as `Status`, and sometimes a `code`. Argument errors (types, units, NUL, strings that are not well-formed Unicode, non-finite numbers, binding options) are `TypeError` or `RangeError` objects that also carry `status` 1. Lifecycle failures carry `code`: `ERR_LAYA_QUEUE_FULL` (status 1), `ERR_LAYA_WORKER_EXITED` (status 3) and, as `EngineClosedError`, `ERR_LAYA_CLOSED` (status 1). A missing, unloadable or wrong-ABI addon (including a glibc addon on a musl system), or an addon whose library is not the one it was built with, fails with a `LayaLoadError`: status 7 (`Status.UNSUPPORTED_PLATFORM`) and code `ERR_LAYA_UNSUPPORTED`, as does every other status-7 error, such as a CPU without the required features; an addon that exists but cannot be loaded is reported as found, with the loader's reason. After `close()`, every call (including `info()`) rejects with `EngineClosedError`. `info()` never fails with `ERR_LAYA_QUEUE_FULL` and takes no queue slot, as `close()`; it still waits behind running work. A call is checked in this order: closed, then its arguments, then an already-cancelled `signal` (rejects with status 5 at once, without reaching the worker), then the queue limit, then the model. A `null` options argument means the defaults; any other non-object (including for `close()`) is a status-1 `TypeError`. On Linux the addon loads the library next to it even when another `libducktape_laya.so.1` is on `LD_LIBRARY_PATH`.
 
 `close()` stops admission and drains accepted calls; `close({ cancelPending: true })` cancels them first. Repeated calls return the same promise, and closing succeeds even if the worker already exited.
 

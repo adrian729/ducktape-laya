@@ -1,4 +1,4 @@
-import { Engine, Status, StatusCode, Request, StructuredRequest, Result, Config, LayaError, LayaLoadError, EngineClosedError, Answer, Overflow, Routing } from 'ducktape-laya';
+import { Engine, LayaEvent, Status, StatusCode, Request, StructuredRequest, Result, Config, LayaError, LayaLoadError, EngineClosedError, Answer, Overflow, Routing } from 'ducktape-laya';
 
 const request: Request = { state: 'Refund please', questions: {
   refund: { type: 'noul', instructions: 'Is a refund requested?' },
@@ -10,7 +10,9 @@ async function consumer() {
   const engine = await Engine.open('/model.gguf', { maxPending: 4, config: { threads: 2, context_tokens: 1024, max_windows_per_call: 64, temperatures: { choice: 1.5, 'noul.2': 2 } } });
   const answer: Result = await engine.execute({ ...request, max_tokens: 256, temperatures: { noul: 1.2 } }, { requestId: 7 });
   await engine.execute([request, structured], { timeoutMs: 100, signal: new AbortController().signal,
-    onEvent: event => { const status: number = event.status; void status; } });
+    onEvent: (event: LayaEvent) => { const kind: 'start' | 'end' | 'error' = event.kind; const id: number = event.requestId; void [kind, id, event.status satisfies StatusCode, event.elapsedMs]; } });
+  const text: string = await engine.execute(request, { raw: true });
+  void text;
   const values: Record<string, string | number | boolean> = (await engine.execute(structured)).values;
   const runtime: string = (await engine.info()).llama_cpp_commit;
   const profile: { id: string; cross_profile_equivalence: false } = (await engine.info()).numerical_profile;

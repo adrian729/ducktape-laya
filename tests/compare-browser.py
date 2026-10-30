@@ -28,7 +28,7 @@ for identity in ['llama_cpp_commit', 'runtime_patches']:
 for runtime in [native['runtime'], report['info']]:
     require(runtime['numerical_profile']['cross_profile_equivalence'] is False, 'Unexpected profile policy')
 require(report['ticks'] > 0, 'No main-thread heartbeat during worker execution')
-require([event['event'] for event in report['events']] == ['start', 'end'] * len(reference),
+require([event['kind'] for event in report['events']] == ['start', 'end'] * len(reference),
         'Unexpected lifecycle events')
 require(set(reference) == set(report['results']), 'Fixture set changed')
 # Fixture enumeration is not result-object ordering. Permit changed predictions
