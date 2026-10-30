@@ -60,6 +60,7 @@ User-facing changes per release. Each section lists breaking changes first; "Rel
 
 - A `binding-abi` policy check keeps each binding's status codes and call-options layout equal to `include/ducktape_laya.h`.
 - The PyPI publish job compares PyPI's files with the hashes of the wheels it verified against their attestations, not with a downloaded `SHA256SUMS`, which is not attested itself.
+- The release gates require every model-free native test to be registered on every target, now including `fair-mutex`, `stress-rule` and `tokenizer-stop-check`; a check in `tests/validate.py` keeps the list equal to the tests `CMakeLists.txt` registers.
 
 ## 0.3.0 (2026-10-26)
 

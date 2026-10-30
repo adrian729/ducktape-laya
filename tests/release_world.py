@@ -148,7 +148,8 @@ class World:
         item = self.targets[platform]
         linux = item['os'] == 'linux'
         tests = ['abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing', 'tokenizer-partition', 'tokenizer-scaling', 'request-parse-scaling',
-                 'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head', 'stress-rule']
+                 'real-model', 'real-features', 'real-control', 'real-control-tokenize', 'real-tokenizer', 'real-decision-head', 'stress-rule',
+                 'fair-mutex', 'tokenizer-stop-check']
         tests += ['real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults'] + (['cpu-guard'] if platform == 'linux-x64' else []) if linux else []
         skipped = {} if linux else {name: 'Linux only' for name in ('real-faults', 'real-c-faults', 'real-runtime-faults', 'real-api-faults', 'ggml-faults', 'cpu-guard')}
         ci = profile != 'host-full'

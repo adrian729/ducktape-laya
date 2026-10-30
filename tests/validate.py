@@ -8,7 +8,7 @@ dtl_add_test labels), parity, the reference comparisons, the packages and script
 reports. tests/merge-validation.py runs its shards through it too.
 
 Covered: the generic selection from tier and category labels (and the refusal of a build without tier labels);
-check selection and its refusals; the --full refusal before configuring (full_refusal.missing) and after a failed
+the required native tests against CMakeLists.txt; check selection and its refusals; the --full refusal before configuring (full_refusal.missing) and after a failed
 check; a complete --full run whose report scripts/release_targets.require_complete_validation accepts as host-full;
 policy.json folded into runs and policy:<label> skips; every check not run listed as not selected; the report fields
 (phase, selection, host, build_options with the dev options, launcher guard, ccache configuration); the build phase
@@ -19,6 +19,7 @@ import io
 import importlib.util
 import json
 import pathlib
+import re
 import shutil
 import sys
 import tempfile
@@ -30,6 +31,7 @@ spec = importlib.util.spec_from_file_location('validate_script', ROOT / 'scripts
 validate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(validate)
 from release_support import LIBRARY, read_json  # noqa: E402
+import release_targets  # noqa: E402
 from release_targets import HOST_FULL_RUNS, Mismatch, POLICY_LABELS, require_complete_validation  # noqa: E402
 
 RECORD = read_json(ROOT / 'release/compatibility.json')
@@ -41,7 +43,8 @@ def registration(linux=True, model=True, tiers=True, x86=True):
     """`ctest --show-only=json-v1` of a build: the tests and labels CMakeLists.txt registers with dtl_add_test."""
     tests = [('abi-errors', 'generic', 'native'), ('feature-errors', 'generic', 'native'), ('control-errors', 'generic', 'native'),
              ('decision-rules', 'generic', 'native'), ('language-routing', 'generic', 'native'), ('tokenizer-partition', 'generic', 'native'),
-             ('tokenizer-scaling', 'specialized', 'native'), ('request-parse-scaling', 'specialized', 'native'), ('stress-rule', 'generic', 'native')]
+             ('tokenizer-scaling', 'specialized', 'native'), ('request-parse-scaling', 'specialized', 'native'), ('stress-rule', 'generic', 'native'),
+             ('fair-mutex', 'generic', 'native'), ('tokenizer-stop-check', 'generic', 'native')]
     if linux:
         tests.append(('ggml-faults', 'generic', 'faults'))
     if model:
@@ -265,13 +268,23 @@ class Validate(unittest.TestCase):
         names, regex = validate.select_tests(registration(model=False), False)
         self.assertEqual(regex, '^tier-generic$')
         self.assertEqual(sorted(names), sorted(['abi-errors', 'feature-errors', 'control-errors', 'decision-rules', 'language-routing',
-                                                'tokenizer-partition', 'stress-rule', 'ggml-faults']))
+                                                'tokenizer-partition', 'stress-rule', 'fair-mutex', 'tokenizer-stop-check', 'ggml-faults']))
         # Labels are matched whole: a tier-generic-extra label is not tier-generic.
         show = registration(model=False)
         show['tests'][0]['properties'][0]['value'] = ['tier-generic-extra', 'cat-native']
         self.assertNotIn(show['tests'][0]['name'], validate.select_tests(show, False)[0])
         with self.assertRaisesRegex(validate.Refused, 'no tier-'):
             validate.select_tests(registration(tiers=False), True)
+
+    def test_required_tests_are_every_native_test(self):
+        # Every CATEGORY native test CMakeLists.txt registers is required, in both copies of the list and in the fixture,
+        # so a new test cannot be left out of the release gates or silently stop being registered on one platform.
+        cmake = (ROOT / 'CMakeLists.txt').read_text()
+        native = {match[0] for match in re.findall(r'^\s*dtl_add_test\(NAME (\S+)((?:[^()]|\([^()]*\))*)\)', cmake, re.M)
+                  if re.search(r'\bCATEGORY native\b', match[1])}
+        self.assertEqual(validate.MODEL_FREE_TESTS, native)
+        self.assertEqual(release_targets.MODEL_FREE_TESTS, native)
+        self.assertEqual({test['name'] for test in registration(linux=False, model=False)['tests']}, native)
 
     def test_check_selection(self):
         system = FakeSystem(self.directory)
