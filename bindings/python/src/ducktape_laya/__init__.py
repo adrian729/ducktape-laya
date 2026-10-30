@@ -382,9 +382,9 @@ class Engine:
         try:  # attach inside the try so a failure still leaves the count
             for token in tokens:
                 token._attach(flag)
-            if timeout > 1e15:  # past the native range (milliseconds in 64 bits): it never expires
+            if timeout and timeout > 1e15:  # past the native range (milliseconds in 64 bits): it never expires
                 options.timeout_ms = 2 ** 64 - 1
-            elif timeout:
+            elif timeout:  # 0 and None: no deadline
                 remaining = timeout - (time.monotonic() - entry)
                 if remaining <= 0:  # expired before the native call: no native call, no events
                     raise LayaError(Status.DEADLINE_EXCEEDED, 'The deadline passed before the call started')
