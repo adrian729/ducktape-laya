@@ -14,7 +14,7 @@ Ready-made requests and small programs. The request files are plain JSON in the 
 | [presets/prompt-guard.json](presets/prompt-guard.json) | Text sent to an LLM: prompt injection, data exfiltration and overall risk |
 | [presets/moderation.json](presets/moderation.json) | User content: harassment, threats and severity |
 
-The presets are starting points, not tuned policies: replace the `state` with your text, adapt the questions and options, and choose your own thresholds on `answer_confidence`.
+The presets are starting points, not tuned policies, and none has been measured on real data: replace the `state` with your text, adapt the questions and options, and choose your own thresholds on `answer_confidence` with labelled examples ([using Laya](../docs/USAGE.md)). The prompt-guard preset is a rough filter, not a safety control: the models react to which words a text contains, so rephrasing evades it.
 
 ## Running a request
 

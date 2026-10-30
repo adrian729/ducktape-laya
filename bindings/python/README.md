@@ -21,7 +21,8 @@ with ducktape_laya.Engine.open("/path/to/Laya-Q8_0.gguf") as engine:
     result = engine.execute({
         "state": "Please refund the duplicate charge.",
         "questions": {
-            "refund": {"type": "noul", "instructions": "Does the customer request a refund?"},
+            "refund": {"type": "noul", "instructions": "Does the customer request a refund?",
+                       "criteria": {"false": "no money back is asked for", "true": "the customer asks for money back"}},
         },
     })
     print(result["answers"]["refund"]["noul"])

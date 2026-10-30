@@ -20,7 +20,7 @@ let engine = Engine::open("Laya-Q8_0.gguf")?;
 let config = Config::default().threads(2).context_tokens(1024).overflow("reject")
     .temperatures([("choice", 1.5)]).max_windows_per_call(64);
 let engine = Engine::open_with("Laya-Q8_0.gguf", &config)?;
-let request = r#"{"state":"Refund me","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}"#;
+let request = r#"{"state":"Refund me","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?","criteria":{"false":"no money back is asked for","true":"the customer asks for money back"}}}}"#;
 let result_json = engine.execute(request)?;
 
 // Request id, deadline, cooperative cancellation and events. A token is cloneable and can be

@@ -1,8 +1,16 @@
 {
   "state": "You people are idiots and I will find out where you live.",
   "questions": {
-    "harassment": {"type": "noul", "instructions": "The text insults, demeans or harasses a person or group."},
-    "threat": {"type": "noul", "instructions": "The text threatens violence or harm."},
+    "harassment": {
+      "type": "noul",
+      "instructions": "The text insults, demeans or harasses a person or group.",
+      "criteria": {"false": "neutral or polite text, or criticism of ideas rather than people", "true": "insults, slurs or demeaning remarks aimed at a person or group"}
+    },
+    "threat": {
+      "type": "noul",
+      "instructions": "The text threatens violence or harm.",
+      "criteria": {"false": "no threat of harm", "true": "a threat to hurt, attack or harm someone"}
+    },
     "severity": {
       "type": "score",
       "instructions": "How severe is the content?",

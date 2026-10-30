@@ -407,7 +407,10 @@ def main(argv=None):
         parser.error(f'unknown control: {", ".join(sorted(controls - {"order", "shuffle"}))}')
     examples, questions = _examples(args.examples), _load(args.questions)
     from ducktape_laya import Engine
-    with Engine.open(args.model, threads=args.threads, context_tokens=args.context_tokens, overflow=args.overflow) as engine:
+    # Only the options given: 0.3.0 rejects None for them.
+    config = {name: value for name, value in (('threads', args.threads), ('context_tokens', args.context_tokens),
+                                              ('overflow', args.overflow)) if value is not None}
+    with Engine.open(args.model, **config) as engine:
         report = evaluate(engine, examples, questions, controls=controls, precision=args.precision, progress=True)
     if args.json_path:
         with open(args.json_path, 'w', encoding='utf-8') as f:

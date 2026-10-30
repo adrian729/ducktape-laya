@@ -16,8 +16,16 @@
         "other": "anything else"
       }
     },
-    "needs_reply": {"type": "noul", "instructions": "The sender expects a reply or an action."},
-    "phishing": {"type": "noul", "instructions": "The email tries to trick the reader into giving credentials, money or access."},
+    "needs_reply": {
+      "type": "noul",
+      "instructions": "The sender expects a reply or an action.",
+      "criteria": {"false": "a notice, receipt or announcement that needs nothing back", "true": "the sender asks a question, requests something or waits for an answer"}
+    },
+    "phishing": {
+      "type": "noul",
+      "instructions": "The email tries to trick the reader into giving credentials, money or access.",
+      "criteria": {"false": "an ordinary message that asks for no credentials, payment or access", "true": "it pushes the reader to log in, pay or share credentials or access, often urgently or through a link"}
+    },
     "urgency": {
       "type": "score",
       "instructions": "How urgent is this email?",

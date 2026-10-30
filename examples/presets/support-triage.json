@@ -17,7 +17,15 @@
       "instructions": "How urgent is this request?",
       "criteria": ["can wait", "should be handled today", "needs attention now"]
     },
-    "frustrated": {"type": "noul", "instructions": "The customer is frustrated or angry."},
-    "churn_risk": {"type": "noul", "instructions": "The customer threatens to cancel or leave."}
+    "frustrated": {
+      "type": "noul",
+      "instructions": "The customer is frustrated or angry.",
+      "criteria": {"false": "a calm or neutral tone", "true": "anger, complaints about repeated failures, or ultimatums"}
+    },
+    "churn_risk": {
+      "type": "noul",
+      "instructions": "The customer threatens to cancel or leave.",
+      "criteria": {"false": "no mention of leaving", "true": "a threat or plan to cancel, leave or switch provider"}
+    }
   }
 }

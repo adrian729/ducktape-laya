@@ -13,7 +13,8 @@
       },
       "refund_requested": {
         "type": "noul",
-        "instructions": "Does the customer request a refund?"
+        "instructions": "Does the customer request a refund?",
+        "criteria": {"false": "no money back is asked for", "true": "the customer asks for money back"}
       },
       "urgency": {
         "type": "score",

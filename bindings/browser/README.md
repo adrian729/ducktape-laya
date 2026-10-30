@@ -26,7 +26,9 @@ const engine = await Engine.open({
 try {
   const result = await engine.execute({
     state: 'Please refund the duplicate charge.',
-    questions: { refund: { type: 'noul', instructions: 'Does the customer request a refund?' } }
+    questions: {
+      refund: { type: 'noul', instructions: 'Does the customer request a refund?', criteria: { false: 'no money back is asked for', true: 'the customer asks for money back' } }
+    }
   }, { timeoutMs: 10000 });
   console.log(result.answers.refund.noul);
 } finally {

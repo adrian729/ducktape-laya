@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-ducktape-laya runs [Laya](https://github.com/NandhaKishorM/laya) decision models inside your application. You pass a text (or a JSON value) and a few named questions; it answers each one with probabilities, on the CPU, in-process. It needs no server, network access or separate runtime (no Python for the C, Node, Rust, Go, Java or .NET bindings), and it does not generate text.
+ducktape-laya runs [Laya](https://github.com/NandhaKishorM/laya) decision models inside your application. You pass a text (or a JSON value) and a few named questions; it answers each one with probabilities, on the CPU, in-process. Treat the answers as a ranking, not a verdict: the models react to which words a text contains more than to what it means, and their probabilities are not calibrated, so use them to sort or roughly filter texts, with a threshold chosen on your own labelled examples ([using Laya](docs/USAGE.md)). It needs no server, network access or separate runtime (no Python for the C, Node, Rust, Go, Java or .NET bindings), and it does not generate text.
 
 One native library does the work; thin bindings expose it to C/C++, Rust, Node.js and Electron, Python, Go, Java/Kotlin and .NET, plus an experimental browser build (WebAssembly, optional WebGPU).
 
@@ -65,7 +65,13 @@ const engine = await Engine.open('/path/to/Laya-Q8_0.gguf');
 try {
   const result = await engine.execute({
     state: 'Please refund the duplicate charge.',
-    questions: { refund: { type: 'noul', instructions: 'Does the customer request a refund?' } },
+    questions: {
+      refund: {
+        type: 'noul',
+        instructions: 'Does the customer request a refund?',
+        criteria: { false: 'no money back is asked for', true: 'the customer asks for money back' },
+      },
+    },
   });
   console.log(result.answers.refund.noul); // probability that the answer is "true"
 } finally {
@@ -81,7 +87,11 @@ import ducktape_laya
 with ducktape_laya.Engine.open("/path/to/Laya-Q8_0.gguf") as engine:
     result = engine.execute({
         "state": "Please refund the duplicate charge.",
-        "questions": {"refund": {"type": "noul", "instructions": "Does the customer request a refund?"}},
+        "questions": {"refund": {
+            "type": "noul",
+            "instructions": "Does the customer request a refund?",
+            "criteria": {"false": "no money back is asked for", "true": "the customer asks for money back"},
+        }},
     })
     print(result["answers"]["refund"]["noul"])
 ```
@@ -94,7 +104,8 @@ use ducktape_laya::Engine;
 let engine = Engine::open("/path/to/Laya-Q8_0.gguf")?;
 let result_json = engine.execute(
     r#"{"state":"Please refund the duplicate charge.",
-        "questions":{"refund":{"type":"noul","instructions":"Does the customer request a refund?"}}}"#,
+        "questions":{"refund":{"type":"noul","instructions":"Does the customer request a refund?",
+            "criteria":{"false":"no money back is asked for","true":"the customer asks for money back"}}}}"#,
 )?;
 ```
 

@@ -25,7 +25,7 @@ async function main() {
     const result = await engine.execute({
       state: 'Please refund the duplicate charge.',
       questions: {
-        refund: { type: 'noul', instructions: 'Does the customer request a refund?' }
+        refund: { type: 'noul', instructions: 'Does the customer request a refund?', criteria: { false: 'no money back is asked for', true: 'the customer asks for money back' } }
       }
     });
     console.log(result.answers.refund.noul, result.answers.refund.answer_confidence);
