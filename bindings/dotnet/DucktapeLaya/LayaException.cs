@@ -28,7 +28,7 @@ public class LayaArgumentException : ArgumentException
     public LayaArgumentException(string message) : base(message) { }
 }
 
-/// <summary>A call was made after <see cref="Engine.Dispose"/>. Its status is <see cref="Status.InvalidArgument"/>.</summary>
+/// <summary>A call was made after <see cref="Engine.Close"/>. Its status is <see cref="Status.InvalidArgument"/>.</summary>
 public sealed class EngineClosedException : ObjectDisposedException
 {
     public Status Status => Status.InvalidArgument;

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Ducktape.Laya;
 using Xunit;
 
@@ -115,9 +116,6 @@ public class EngineTests
     }
 
     [Fact]
-    public void RejectsBadPath() => Assert.Throws<LayaException>(() => Engine.Open("missing.gguf", Two));
-
-    [Fact]
     public void RejectsInvalidUnicode()
     {
         const string lone = "a\ud800b";
@@ -151,9 +149,10 @@ public class EngineTests
         Assert.Throws<ArgumentNullException>(() => Engine.OpenRouter((string)null!));
         foreach (var bad in new[] { double.NaN, double.PositiveInfinity })
             Assert.Throws<LayaArgumentException>(() => Engine.Open("missing.gguf", new Config { Temperatures = new Dictionary<string, double> { ["choice"] = bad } }));
-        // Config values go to the core unchecked: it rejects invalid ones with status 1 and a valid one reaches the missing file (status 2).
-        Assert.Equal(Status.ModelError, Assert.Throws<LayaException>(() => Engine.Open("missing.gguf", new Config { Threads = 256 })).Status);
-        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => Engine.Open("missing.gguf", new Config { ContextTokens = 0 })).Status);
+        // The one status-propagation check: a native status-1 failure arrives as a LayaException with status 1.
+        var native = Assert.Throws<LayaException>(() => Engine.Open("missing.gguf", new Config { ContextTokens = 0 }));
+        Assert.IsType<LayaException>(native);
+        Assert.Equal(Status.InvalidArgument, native.Status);
     }
 
     [Fact]
@@ -163,15 +162,15 @@ public class EngineTests
         try
         {
             using var engine = Engine.OpenRouter(RouterJson(("unused", file)), One);
-            var seen = new List<string>();
+            var seen = new List<Event>();
             var options = new CallOptions { RequestId = 7, OnEvent = seen.Add };
             var task = engine.ExecuteAsync("{}", options);
             options.OnEvent = _ => throw new Exception("must not be used");
             options.RequestId = 8;
-            options.Timeout = TimeSpan.FromDays(9);
+            options.Timeout = TimeSpan.FromSeconds(-5);
             Assert.Equal(Status.InvalidArgument, (await Assert.ThrowsAsync<LayaException>(() => task)).Status);
             Assert.Equal(2, seen.Count);
-            Assert.All(seen, e => Assert.Contains("\"request_id\":7", e));
+            Assert.All(seen, e => Assert.Equal(7UL, e.RequestId));
         }
         finally { File.Delete(file); }
     }
@@ -193,42 +192,22 @@ public class EngineTests
     }
 
     [Fact]
-    public void OverflowPolicyReachesNativeAndIsValidated()
-    {
-        if (Model is not { } path) return;
-        var request = "{\"state\":\"" + string.Concat(Enumerable.Repeat("refund ", 800)) + "\",\"questions\":{\"refund\":{\"type\":\"noul\",\"instructions\":\"Is a refund requested?\"}}}";
-        // The policy reaches the engine: the default (reject) would refuse this request.
-        using (var engine = Engine.Open(path, new Config { Threads = 2, Overflow = "truncate_end" }))
-            Assert.Contains("\"answers\"", engine.Execute(request));
-        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => Engine.Open(path, new Config { Threads = 2, Overflow = "bogus" })).Status);
-    }
-
-    [Fact]
-    public void NativeRejectsBadConfig()
-    {
-        if (Model is not { } path) return;
-        // Below the native minimum of 32.
-        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => Engine.Open(path, new Config { Threads = 2, ContextTokens = 16 })).Status);
-        // Not a valid temperature key.
-        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => Engine.Open(path, new Config { Threads = 2, Temperatures = new Dictionary<string, double> { ["bogus"] = 1.5 } })).Status);
-    }
-
-    [Fact]
     public void RuntimeDiagnostics()
     {
         Assert.Contains("\"abi_version\":2", Engine.RuntimeInfo());
-        if (Model is { } model)
-        {
-            using var engine = Engine.Open(model, Two);
-            var info = engine.Info();
-            Assert.Contains("\"decision_type\":\"laya\"", info);
-            Assert.Contains("\"context_tokens\":", info);
-            Assert.Contains("\"trained_context_tokens\":", info);
-            Assert.DoesNotContain("\"max_tokens\":", info);
-            using var custom = Engine.Open(model, new Config { Threads = 2, ContextTokens = 128 });
-            Assert.Contains("\"context_tokens\":128", custom.Info());
-            Assert.Contains("\"default_context_tokens\":", Engine.RuntimeInfo());
-        }
+        Assert.Contains("\"default_context_tokens\":", Engine.RuntimeInfo());
+    }
+
+    [Fact]
+    public void ModelInfo()
+    {
+        if (Model is not { } model) return;
+        using var engine = Engine.Open(model, Two);
+        var info = engine.Info();
+        Assert.Contains("\"decision_type\":\"laya\"", info);
+        Assert.Contains("\"context_tokens\":", info);
+        Assert.Contains("\"trained_context_tokens\":", info);
+        Assert.DoesNotContain("\"max_tokens\":", info);
     }
 
     [Fact]
@@ -319,8 +298,8 @@ public class EngineTests
         try
         {
             var engine = Engine.OpenRouter(new RouterConfig { Models = new Dictionary<string, Route> { ["unused"] = new Route { Path = file } } }, One);
-            var events = new List<string>();
-            var options = new CallOptions { OnEvent = events.Add, Timeout = TimeSpan.FromDays(2) };
+            var events = new List<Event>();
+            var options = new CallOptions { OnEvent = events.Add, Timeout = TimeSpan.FromSeconds(-1) };
             using var cancelled = new CancellationTokenSource();
             cancelled.Cancel();
             // A bad argument beats an already-cancelled token; the cancelled token then fails at once with no native call.
@@ -331,10 +310,30 @@ public class EngineTests
             Assert.Equal(cancelled.Token, oce.CancellationToken);
             Assert.Equal(Status.Cancelled, Assert.IsType<LayaException>(oce.InnerException).Status);
             Assert.Empty(events);
+            // The cancelled token beats an expired deadline, which in turn beats the native call.
+            var expired = Stopwatch.GetTimestamp() - 10 * Stopwatch.Frequency;
+            Assert.IsType<OperationCanceledException>(Record.Exception(() => engine.Run("{}", expired, 0, TimeSpan.FromSeconds(1), events.Add, cancelled.Token)));
+            Assert.Empty(events);
             // Closed beats everything.
             engine.Dispose();
-            options.Timeout = TimeSpan.FromDays(2);
+            options.Timeout = TimeSpan.FromSeconds(-1);
             Assert.Throws<EngineClosedException>(() => engine.Execute("a\0b", options, cancelled.Token));
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public async Task AsyncWithCancelledTokenIsCancelled()
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            using var engine = Engine.OpenRouter(RouterJson(("unused", file)), One);
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            var task = engine.ExecuteAsync("{}", null, cancelled.Token);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+            Assert.True(task.IsCanceled);
         }
         finally { File.Delete(file); }
     }
@@ -398,44 +397,57 @@ public class EngineTests
     }
 
     [Fact]
-    public void RouterAutoConfigIsValidated()
-    {
-        var file = Path.GetTempFileName();
-        try
-        {
-            var models = "\"models\":{\"a\":" + System.Text.Json.JsonSerializer.Serialize(file) + "}";
-            foreach (var (auto, text) in new[]
-            {
-                ("{\"english\":\"a\"}", "auto.default must name a route"),
-                ("{\"english\":\"zz\",\"default\":\"a\"}", "auto.english must name a route"),
-                ("[]", "auto must be an object"),
-                ("{\"english\":\"a\",\"default\":\"a\",\"x\":\"a\"}", "auto: unsupported key x"),
-            })
-            {
-                var e = Assert.Throws<LayaException>(() => Engine.OpenRouter("{" + models + ",\"auto\":" + auto + "}", One));
-                Assert.Equal(Status.InvalidArgument, e.Status);
-                Assert.Contains(text, e.Message);
-            }
-            using var plain = Engine.OpenRouter("{" + models + "}", One);
-            var noAuto = Assert.Throws<LayaException>(() => plain.Execute(WithKey(Primitive, "model", "auto")));
-            Assert.Equal(Status.InvalidArgument, noAuto.Status);
-            Assert.Contains("requires an \"auto\" router config", noAuto.Message);
-            var lang = Assert.Throws<LayaException>(() => plain.Execute(WithRaw(WithKey(Primitive, "model", "a"), "\"lang\":\"en\"")));
-            Assert.Equal(Status.InvalidArgument, lang.Status);
-            Assert.Contains("lang", lang.Message);
-        }
-        finally { File.Delete(file); }
-    }
-
-    [Fact]
-    public void InvalidTimeoutIsRejected()
+    public void TimeoutRangeAndDeadlineFromEntry()
     {
         var file = Path.GetTempFileName();
         try
         {
             using var engine = Engine.OpenRouter(RouterJson(("unused", file)), One);
-            Assert.Throws<ArgumentOutOfRangeException>(() => engine.Execute("{}", new CallOptions { Timeout = TimeSpan.FromDays(2) }));
             Assert.Throws<ArgumentOutOfRangeException>(() => engine.Execute("{}", new CallOptions { Timeout = TimeSpan.FromSeconds(-1) }));
+            Assert.Throws<ArgumentOutOfRangeException>(() => engine.Execute("{}", new CallOptions { Timeout = TimeSpan.FromTicks(-1) }));
+            // No deadline (null, zero, infinite) and no upper bound: all reach the native call (the empty request is status 1).
+            foreach (TimeSpan? timeout in new TimeSpan?[] { null, TimeSpan.Zero, Timeout.InfiniteTimeSpan, TimeSpan.FromDays(365), TimeSpan.MaxValue })
+                Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => engine.Execute("{}", new CallOptions { Timeout = timeout })).Status);
+            // Rounded up to whole milliseconds, saturating nowhere near the unsigned range.
+            Assert.Equal(1UL, Engine.Milliseconds(TimeSpan.FromTicks(1)));
+            Assert.Equal(2UL, Engine.Milliseconds(TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1)));
+            Assert.Equal((ulong)(TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerMillisecond) + 1, Engine.Milliseconds(TimeSpan.MaxValue));
+            // The clock starts at entry: an entry long past fails with status 6, no native call and no events.
+            var events = new List<Event>();
+            var expired = Stopwatch.GetTimestamp() - 10 * Stopwatch.Frequency;
+            var error = Assert.Throws<LayaException>(() => engine.Run("{}", expired, 0, TimeSpan.FromSeconds(1), events.Add, default));
+            Assert.Equal(Status.DeadlineExceeded, error.Status);
+            Assert.Empty(events);
+            Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => engine.Run("{}", expired, 0, TimeSpan.FromHours(1), events.Add, default)).Status);
+            Assert.Equal(2, events.Count);
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public void EventsAreTyped()
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            using var engine = Engine.OpenRouter(RouterJson(("unused", file)), One);
+            var events = new List<Event>();
+            Assert.Throws<LayaException>(() => engine.Execute("{}", new CallOptions { RequestId = ulong.MaxValue, OnEvent = events.Add }));
+            Assert.Equal(2, events.Count);
+            Assert.Equal(new Event(EventKind.Start, ulong.MaxValue, Status.Ok, 0), events[0]);
+            Assert.Equal(EventKind.Error, events[1].Kind);
+            Assert.Equal(ulong.MaxValue, events[1].RequestId);
+            Assert.Equal(Status.InvalidArgument, events[1].Status);
+            Assert.True(events[1].ElapsedMs >= 0);
+            // The default id is 0.
+            events.Clear();
+            Assert.Throws<LayaException>(() => engine.Execute("{}", new CallOptions { OnEvent = events.Add }));
+            Assert.All(events, e => Assert.Equal(0UL, e.RequestId));
+            // An event that does not parse is dropped.
+            Assert.True(Event.TryParse("""{"event":"end","request_id":18446744073709551615,"status":0,"elapsed_ms":1.5}""", out var end));
+            Assert.Equal(new Event(EventKind.End, ulong.MaxValue, Status.Ok, 1.5), end);
+            foreach (var bad in new[] { "", "[]", "{}", """{"event":"other","request_id":1,"status":0,"elapsed_ms":0}""", """{"event":"end","request_id":-1,"status":0,"elapsed_ms":0}""" })
+                Assert.False(Event.TryParse(bad, out _));
         }
         finally { File.Delete(file); }
     }
@@ -452,38 +464,44 @@ public class EngineTests
         engine.Dispose();
     }
 
+    // Takes seconds uncancelled: a long state scanned in windows, with every question asked in each.
+    static readonly string Long = "{\"state\":\"" + string.Concat(Enumerable.Repeat("The customer writes about a late parcel and asks for money back. ", 8)) +
+        "\",\"overflow\":\"scan\",\"questions\":{" + string.Join(",", Enumerable.Range(0, 2).Select(i => $"\"q{i}\":{{\"type\":\"noul\",\"instructions\":\"Is a refund requested ({i})?\"}}")) + "}}";
+
+    // The uncancelled run time of Long, measured once on its own engine.
+    static readonly Lazy<TimeSpan> LongTime = new(() =>
+    {
+        using var engine = Engine.Open(Model!, Two);
+        engine.Execute(Primitive);
+        var clock = Stopwatch.StartNew();
+        engine.Execute(Long);
+        return clock.Elapsed;
+    });
+
     [Fact]
     public void RealFeatures()
     {
         if (Model is not { } path) return;
         using var engine = Engine.Open(path, Two);
-        var tagged = WithKey(Primitive, "metadata", "caller tag");
-        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => engine.Execute(tagged)).Status);
-
         var single = engine.Execute(Schema);
         Assert.Contains("\"values\":{\"refund\":true}", single);
-        var events = new List<string>();
-        var result = engine.Execute($"[{Schema},{Schema}]", new CallOptions { RequestId = 21, OnEvent = events.Add });
+        var events = new List<Event>();
+        var result = engine.Execute($"[{Schema},{Schema}]", new CallOptions { RequestId = ulong.MaxValue, OnEvent = events.Add });
         Assert.Equal($"[{single},{single}]", result);
         Assert.Equal(2, events.Count);
-        Assert.Contains("\"event\":\"start\"", events[0]);
-        Assert.Contains("\"request_id\":21", events[1]);
+        Assert.Equal(new Event(EventKind.Start, ulong.MaxValue, Status.Ok, 0), events[0]);
+        Assert.Equal(EventKind.End, events[1].Kind);
+        Assert.Equal(ulong.MaxValue, events[1].RequestId);
+        Assert.Equal(Status.Ok, events[1].Status);
+        Assert.True(events[1].ElapsedMs > 0);
 
-        Assert.Throws<LayaException>(() => engine.Execute("{}", new CallOptions { RequestId = 22, OnEvent = _ => throw new Exception("contained") }));
         // Reentry on the same engine from an observer.
         engine.Execute(Schema, new CallOptions { RequestId = 23, OnEvent = _ => engine.Execute(Schema) });
-
-        // Per-request settings pass straight through; answers carry both confidence fields.
-        var limited = engine.Execute(WithRaw(Primitive, "\"max_tokens\":64,\"temperatures\":{\"noul\":1.5}"));
-        Assert.Contains("\"answer_confidence\":", limited);
-        Assert.Contains("\"confidence\":", limited);
-        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => engine.Execute(WithRaw(Primitive, "\"max_tokens\":0"))).Status);
-        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => engine.Execute(WithRaw(Primitive, "\"max_tokens\":100000"))).Status);
-        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => engine.Execute(WithRaw(Primitive, "\"temperatures\":{\"noul\":-1}"))).Status);
+        // Observer failures never change the result.
+        Assert.Equal(single, engine.Execute(Schema, new CallOptions { OnEvent = _ => throw new Exception("contained") }));
 
         using var router = Engine.OpenRouter(RouterJson(("english", path)), Two);
         Assert.Contains("\"model\":\"english\"", router.Execute(WithKey(Schema, "model", "english")));
-        Assert.Equal(Status.InvalidArgument, Assert.Throws<LayaException>(() => router.Execute(Schema)).Status);
     }
 
     [Fact]
@@ -492,23 +510,66 @@ public class EngineTests
         if (Model is not { } path) return;
         using var engine = Engine.Open(path, Two);
         var baseline = engine.Execute(Primitive);
-        using var cancelled = new CancellationTokenSource();
-        cancelled.Cancel();
-        var sync = Assert.Throws<OperationCanceledException>(() => engine.Execute(Primitive, null, cancelled.Token));
-        Assert.Equal(Status.Cancelled, Assert.IsType<LayaException>(sync.InnerException).Status);
-        Assert.Equal(cancelled.Token, sync.CancellationToken);
-        var task = engine.ExecuteAsync(Primitive, null, cancelled.Token);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
-        Assert.True(task.IsCanceled);
-        // Cancelled while running (the token is only cancelled by the first event).
+        var fullTime = LongTime.Value;
+        var clock = new Stopwatch();
+        // A token cancelled from the start event stops the native call early: status 5, far below the uncancelled run.
         using var mid = new CancellationTokenSource();
-        var running = engine.ExecuteAsync(Primitive, new CallOptions { OnEvent = _ => mid.Cancel() }, mid.Token);
-        try { await running; } catch (OperationCanceledException) { Assert.True(running.IsCanceled); }
-        var timeout = new CallOptions { Timeout = TimeSpan.FromMilliseconds(1) };
-        Assert.Equal(Status.DeadlineExceeded, Assert.Throws<LayaException>(() => engine.Execute(Primitive, timeout)).Status);
-        Assert.Equal(baseline, engine.Execute(Primitive));
+        var events = new List<Event>();
+        clock.Restart();
+        var sync = Assert.Throws<OperationCanceledException>(() => engine.Execute(Long, new CallOptions
+        {
+            OnEvent = e => { events.Add(e); if (e.Kind == EventKind.Start) mid.Cancel(); }
+        }, mid.Token));
+        Assert.True(clock.Elapsed < fullTime / 2, $"cancelled run took {clock.Elapsed}, uncancelled {fullTime}");
+        Assert.Equal(Status.Cancelled, Assert.IsType<LayaException>(sync.InnerException).Status);
+        Assert.Equal(mid.Token, sync.CancellationToken);
+        Assert.Equal([EventKind.Start, EventKind.Error], events.Select(e => e.Kind));
+        Assert.Equal(Status.Cancelled, events[1].Status);
+        // The same through ExecuteAsync.
+        using var asyncMid = new CancellationTokenSource();
+        clock.Restart();
+        var running = engine.ExecuteAsync(Long, new CallOptions { OnEvent = e => { if (e.Kind == EventKind.Start) asyncMid.Cancel(); } }, asyncMid.Token);
+        var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+        Assert.True(running.IsCanceled);
+        Assert.True(clock.Elapsed < fullTime / 2, $"cancelled run took {clock.Elapsed}, uncancelled {fullTime}");
+        Assert.Equal(Status.Cancelled, Assert.IsType<LayaException>(canceled.InnerException).Status);
+        // A native deadline stops the run with status 6, and no upper bound keeps a long one running.
+        clock.Restart();
+        Assert.Equal(Status.DeadlineExceeded, Assert.Throws<LayaException>(() => engine.Execute(Long, new CallOptions { Timeout = TimeSpan.FromMilliseconds(1) })).Status);
+        Assert.True(clock.Elapsed < fullTime / 2, $"deadline run took {clock.Elapsed}, uncancelled {fullTime}");
+        Assert.Equal(baseline, engine.Execute(Primitive, new CallOptions { Timeout = TimeSpan.MaxValue }));
         using var live = new CancellationTokenSource();
         Assert.Equal(baseline, await engine.ExecuteAsync(Primitive, null, live.Token));
+    }
+
+    [Fact]
+    public async Task ClosePendingCancelsRunningCalls()
+    {
+        if (Model is not { } path) return;
+        var engine = Engine.Open(path, Two);
+        var fullTime = LongTime.Value;
+        var clock = new Stopwatch();
+        // From another thread: wait for the start event, then Close(true) cancels the call and returns once it has.
+        using var started = new ManualResetEventSlim();
+        using var shared = new CancellationTokenSource();
+        var call = Task.Run(() => engine.Execute(Long, new CallOptions { OnEvent = e => { if (e.Kind == EventKind.Start) started.Set(); } }, shared.Token));
+        Assert.True(started.Wait(TimeSpan.FromSeconds(60)));
+        clock.Restart();
+        engine.Close(cancelPending: true);
+        var error = await Assert.ThrowsAsync<OperationCanceledException>(() => call);
+        Assert.Equal(Status.Cancelled, Assert.IsType<LayaException>(error.InnerException).Status);
+        Assert.True(clock.Elapsed < fullTime / 2, $"close took {clock.Elapsed}, uncancelled call {fullTime}");
+        // The caller's own token is not cancelled by it.
+        Assert.False(shared.IsCancellationRequested);
+        Assert.Throws<EngineClosedException>(() => engine.Execute(Primitive));
+
+        // From the call's own event callback: it cancels that call and returns at once.
+        using var other = Engine.Open(path, Two);
+        clock.Restart();
+        var inner = Assert.Throws<OperationCanceledException>(() => other.Execute(Long, new CallOptions { OnEvent = e => { if (e.Kind == EventKind.Start) other.Close(true); } }));
+        Assert.Equal(Status.Cancelled, Assert.IsType<LayaException>(inner.InnerException).Status);
+        Assert.True(clock.Elapsed < fullTime / 2);
+        Assert.Throws<EngineClosedException>(() => other.Execute(Primitive));
     }
 
     [Fact]

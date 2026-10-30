@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -11,11 +13,14 @@ namespace Ducktape.Laya;
 public sealed unsafe class Engine : IDisposable
 {
     readonly void* _handle;
-    // Calls hold the read lock; Dispose takes the write lock and so waits for in-flight calls.
+    // Calls hold the read lock; Close takes the write lock and so waits for in-flight calls.
     // Recursion is supported so observers may reenter.
     readonly ReaderWriterLockSlim _lock = new(LockRecursionPolicy.SupportsRecursion);
     volatile bool _closing;
     int _released;
+    // Call-scoped native cancel flags of the calls that have entered and not returned, guarded by itself.
+    readonly HashSet<nint> _flags = [];
+    bool _cancelAll;
 
     Engine(void* handle) { _handle = handle; }
 
@@ -70,37 +75,55 @@ public sealed unsafe class Engine : IDisposable
     }
 
     /// <summary>Executes one request or a bounded JSON array of requests.</summary>
-    public string Execute(string request) => Run(request, 0, null, null, default);
+    public string Execute(string request) => Run(request, Stopwatch.GetTimestamp(), 0, null, null, default);
     /// <inheritdoc cref="Execute(string)"/>
-    /// <exception cref="OperationCanceledException">The token was cancelled (native status 5): a token already cancelled fails at once, with no native call and no events; one cancelled during the call ends it, with a <see cref="LayaException"/> as the inner exception. An exceeded <c>Timeout</c> is a <see cref="LayaException"/> with status 6.</exception>
-    /// <exception cref="ArgumentOutOfRangeException"><c>Timeout</c> is negative or over 24 hours.</exception>
-    public string Execute(string request, CallOptions? options, CancellationToken cancellationToken = default) =>
-        options is null ? Run(request, 0, null, null, cancellationToken) : Run(request, options.RequestId, options.Timeout, options.OnEvent, cancellationToken);
+    /// <exception cref="OperationCanceledException">The token was cancelled or <see cref="Close"/> cancelled the call (native status 5): a token already cancelled fails at once, with no native call and no events; one cancelled during the call ends it, with a <see cref="LayaException"/> as the inner exception. An exceeded <c>Timeout</c> is a <see cref="LayaException"/> with status 6; the deadline counts from the call's entry, and one already past fails at once, with no native call and no events.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><c>Timeout</c> is negative and not <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>.</exception>
+    public string Execute(string request, CallOptions? options, CancellationToken cancellationToken = default)
+    {
+        var entry = Stopwatch.GetTimestamp();
+        return options is null ? Run(request, entry, 0, null, null, cancellationToken) : Run(request, entry, options.RequestId, options.Timeout, options.OnEvent, cancellationToken);
+    }
 
     /// <summary>Runs <see cref="Execute(string, CallOptions?, CancellationToken)"/> on a thread-pool thread, which the call occupies for the whole inference;
-    /// <c>OnEvent</c> runs on that thread. The options are snapshotted when called, so the object may be reused or changed afterwards.
+    /// <c>OnEvent</c> runs on that thread. The options are snapshotted when called, so the object may be reused or changed afterwards, and the deadline counts from this call.
     /// Cancellation through the token yields a canceled task (<see cref="OperationCanceledException"/> wrapping the status-5 <see cref="LayaException"/>).</summary>
     public Task<string> ExecuteAsync(string request, CallOptions? options = null, CancellationToken cancellationToken = default)
     {
+        var entry = Stopwatch.GetTimestamp();
         var (id, timeout, onEvent) = Snapshot(options);
-        return Task.Run(() => Run(request, id, timeout, onEvent, cancellationToken), cancellationToken);
+        return Task.Run(() => Run(request, entry, id, timeout, onEvent, cancellationToken), cancellationToken);
     }
 
-    static (ulong, TimeSpan?, Action<string>?) Snapshot(CallOptions? o) => o is null ? (0, null, null) : (o.RequestId, o.Timeout, o.OnEvent);
+    static (ulong, TimeSpan?, Action<Event>?) Snapshot(CallOptions? o) => o is null ? (0, null, null) : (o.RequestId, o.Timeout, o.OnEvent);
 
     /// <summary>Releases the native handle if <see cref="Dispose"/> was never called. Dispose is still required for prompt release.</summary>
     ~Engine() => CloseNative();
 
+    /// <summary>Same as <c>Close(false)</c>.</summary>
+    public void Dispose() => Close();
+
     /// <summary>Idempotent; waits for in-flight calls. Later calls throw <see cref="EngineClosedException"/> (an <see cref="ObjectDisposedException"/> with a <c>Status</c>).
+    /// With <paramref name="cancelPending"/>, every call that has entered and not yet returned is cancelled first: it fails as a cancellation through its own token would (<see cref="OperationCanceledException"/> with an inner status-5 <see cref="LayaException"/>).
     /// Called from inside one of this engine's own event callbacks, it cannot wait for that call: it
     /// rejects new calls and returns, and the last running call releases the engine when it finishes.</summary>
-    public void Dispose()
+    public void Close(bool cancelPending = false)
     {
         _closing = true;
+        if (cancelPending) CancelCalls();
         GC.SuppressFinalize(this);
         if (_lock.IsReadLockHeld) return;
         _lock.EnterWriteLock();
         Release();
+    }
+
+    void CancelCalls()
+    {
+        lock (_flags)
+        {
+            _cancelAll = true;
+            foreach (var flag in _flags) Volatile.Write(ref *(int*)flag, 1);
+        }
     }
 
     // Called with the write lock held; exits it.
@@ -113,7 +136,7 @@ public sealed unsafe class Engine : IDisposable
         finally { _lock.ExitWriteLock(); }
     }
 
-    // Exactly once, from Dispose or the finalizer.
+    // Exactly once, from Close or the finalizer.
     void CloseNative()
     {
         if (Interlocked.Exchange(ref _released, 1) != 0) return;
@@ -122,7 +145,7 @@ public sealed unsafe class Engine : IDisposable
 
     void EnterRead()
     {
-        // Fail fast once Dispose is pending rather than queueing behind the writer, which would block
+        // Fail fast once Close is pending rather than queueing behind the writer, which would block
         // (or deadlock a callback waiting on another thread's call); re-checked under the lock.
         if (_closing) throw new EngineClosedException();
         _lock.EnterReadLock();
@@ -134,13 +157,14 @@ public sealed unsafe class Engine : IDisposable
     void ExitRead()
     {
         _lock.ExitReadLock();
-        // A Dispose deferred from inside a callback is completed by whichever call exits last.
+        // A Close deferred from inside a callback is completed by whichever call exits last.
         if (_closing && !_lock.IsReadLockHeld && _lock.TryEnterWriteLock(0)) Release();
     }
 
     sealed class FlagBox(int* flag) { public void Set() => Volatile.Write(ref *flag, 1); }
 
-    sealed class Hook { public Action<string> Callback = null!; }
+
+    sealed class Hook { public Action<Event> Callback = null!; }
 
     [UnmanagedCallersOnly]
     static void Notify(byte* text, void* user)
@@ -148,78 +172,95 @@ public sealed unsafe class Engine : IDisposable
         try
         {
             var hook = (Hook)GCHandle.FromIntPtr((IntPtr)user).Target!;
-            hook.Callback(Marshal.PtrToStringUTF8((IntPtr)text) ?? "");
+            if (Event.TryParse(Marshal.PtrToStringUTF8((IntPtr)text) ?? "", out var e)) hook.Callback(e);
         }
         catch { }
     }
 
-    string Run(string request, ulong requestId, TimeSpan? timeout, Action<string>? onEvent, CancellationToken token)
+    internal string Run(string request, long entry, ulong requestId, TimeSpan? timeout, Action<Event>? onEvent, CancellationToken token)
     {
-        // Order: closed, argument conversions, an already-cancelled token, then the native call.
+        // Order: closed, argument conversions, an already-cancelled token, an expired deadline, then the native call.
         if (_closing) throw new EngineClosedException();
         var bytes = Encode(request, "request");
-        var timeoutMs = TimeoutMs(timeout);
+        var limit = Limit(timeout);
         // The same shape as a cancellation during the call: the inner LayaException carries the status.
         if (token.IsCancellationRequested)
             throw new OperationCanceledException("The call was cancelled", new LayaException(Status.Cancelled, "The call was cancelled"), token);
         var native = Native.dtl_default_call_options();
         native.RequestId = requestId;
-        native.TimeoutMs = timeoutMs;
-        int* flag = null;
+        // Native memory read by dtl_cancel_flag on backend worker threads, which never enter managed code.
+        // One per call, so cancelling a call (by token or by Close) never cancels another.
+        var flag = (int*)NativeMemory.AllocZeroed((nuint)sizeof(int));
         CancellationTokenRegistration registration = default;
         GCHandle hook = default;
-        EnterRead();
+        var registered = false;
         try
         {
-            if (onEvent is not null)
-            {
-                hook = GCHandle.Alloc(new Hook { Callback = onEvent });
-                native.OnEvent = &Notify;
-                native.EventUserData = (void*)GCHandle.ToIntPtr(hook);
-            }
-            if (token.CanBeCanceled)
-            {
-                // Native memory read by dtl_cancel_flag on backend worker threads, which never enter managed code.
-                flag = (int*)NativeMemory.AllocZeroed((nuint)sizeof(int));
-                native.ShouldCancel = Native.CancelFlag;
-                native.CancelUserData = flag;
-                registration = token.UnsafeRegister(static state => ((FlagBox)state!).Set(), new FlagBox(flag));
-            }
-            byte* result = null, error = null;
-            int status;
-            fixed (byte* p = bytes)
-            {
-                status = Native.dtl_execute(_handle, p, &native, &result, &error);
-            }
+            EnterRead();
             try
             {
-                try { Check(status, error); }
-                catch (LayaException ex) when (ex.Status == Status.Cancelled && token.IsCancellationRequested)
+                lock (_flags)
                 {
-                    throw new OperationCanceledException(ex.Message, ex, token);
+                    _flags.Add((nint)flag);
+                    registered = true;
+                    if (_cancelAll) Volatile.Write(ref *flag, 1);
                 }
-                if (result == null) throw new LayaException(Status.InferenceError, "Native result was null");
-                return Marshal.PtrToStringUTF8((IntPtr)result) ?? "";
+                if (onEvent is not null)
+                {
+                    hook = GCHandle.Alloc(new Hook { Callback = onEvent });
+                    native.OnEvent = &Notify;
+                    native.EventUserData = (void*)GCHandle.ToIntPtr(hook);
+                }
+                native.ShouldCancel = Native.CancelFlag;
+                native.CancelUserData = flag;
+                if (token.CanBeCanceled)
+                    registration = token.UnsafeRegister(static state => ((FlagBox)state!).Set(), new FlagBox(flag));
+                if (limit is { } total)
+                {
+                    var remaining = total - Stopwatch.GetElapsedTime(entry);
+                    if (remaining <= TimeSpan.Zero) throw new LayaException(Status.DeadlineExceeded, "The call's deadline had already passed");
+                    native.TimeoutMs = Milliseconds(remaining);
+                }
+                byte* result = null, error = null;
+                int status;
+                fixed (byte* p = bytes)
+                {
+                    status = Native.dtl_execute(_handle, p, &native, &result, &error);
+                }
+                try
+                {
+                    try { Check(status, error); }
+                    catch (LayaException ex) when (ex.Status == Status.Cancelled)
+                    {
+                        throw new OperationCanceledException(ex.Message, ex, token);
+                    }
+                    if (result == null) throw new LayaException(Status.InferenceError, "Native result was null");
+                    return Marshal.PtrToStringUTF8((IntPtr)result) ?? "";
+                }
+                finally { Native.dtl_free(result); }
             }
-            finally { Native.dtl_free(result); }
+            finally
+            {
+                GC.KeepAlive(this);
+                registration.Dispose();
+                if (registered) lock (_flags) _flags.Remove((nint)flag);
+                ExitRead();
+                if (hook.IsAllocated) hook.Free();
+            }
         }
-        finally
-        {
-            GC.KeepAlive(this);
-            ExitRead();
-            registration.Dispose();
-            if (flag != null) NativeMemory.Free(flag);
-            if (hook.IsAllocated) hook.Free();
-        }
+        finally { NativeMemory.Free(flag); }
     }
 
-    static ulong TimeoutMs(TimeSpan? timeout)
+    // The deadline as a length: null for none (null, zero or Timeout.InfiniteTimeSpan); a negative one is an argument error.
+    static TimeSpan? Limit(TimeSpan? timeout)
     {
-        if (timeout is not { } t || t == TimeSpan.Zero) return 0;
-        var ms = Math.Ceiling(t.TotalMilliseconds);
-        if (ms < 1 || ms > 86_400_000) throw new ArgumentOutOfRangeException(nameof(CallOptions.Timeout), t, "Timeout must be between 1 ms and 24 hours");
-        return (ulong)ms;
+        if (timeout is not { } t || t == TimeSpan.Zero || t == System.Threading.Timeout.InfiniteTimeSpan) return null;
+        if (t < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(CallOptions.Timeout), t, "Timeout must not be negative");
+        return t;
     }
+
+    // Whole milliseconds, rounded up (at least 1). TimeSpan's range always fits.
+    internal static ulong Milliseconds(TimeSpan t) => (ulong)(t.Ticks / TimeSpan.TicksPerMillisecond + (t.Ticks % TimeSpan.TicksPerMillisecond > 0 ? 1 : 0));
 
     // Strict: lone surrogates would otherwise be silently replaced with U+FFFD.
     static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
