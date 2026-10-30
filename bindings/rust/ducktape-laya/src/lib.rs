@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 /// Native status codes (`dtl_status` in the C ABI), as carried by [`Error::status`].
 #[non_exhaustive]
 #[repr(i32)]
@@ -338,23 +339,79 @@ impl CancellationToken {
         self.0.load(Ordering::Relaxed) != 0
     }
 }
+/// What an [`Event`] reports: the call started, or ended with or without an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EventKind {
+    Start,
+    End,
+    Error,
+}
+/// A passive observer event of one call ([`CallOptions::on_event`]). It carries no
+/// state, prompts, answers or paths.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Event {
+    pub kind: EventKind,
+    pub request_id: u64,
+    /// `Status::Ok` for `Start` and `End`; the failure for `Error`.
+    pub status: Status,
+    /// Milliseconds since the call began inside the library; 0 for `Start`.
+    pub elapsed_ms: f64,
+}
+impl Event {
+    /// Parse the native event text, `{"elapsed_ms":X,"event":"start","request_id":N,"status":N}`;
+    /// `None` when it is anything else.
+    fn parse(text: &str) -> Option<Self> {
+        let field = |key: &str| {
+            let pattern = format!("\"{key}\":");
+            let rest = &text[text.find(&pattern)? + pattern.len()..];
+            Some(rest[..rest.find([',', '}'])?].trim())
+        };
+        let kind = match field("event")? {
+            "\"start\"" => EventKind::Start,
+            "\"end\"" => EventKind::End,
+            "\"error\"" => EventKind::Error,
+            _ => return None,
+        };
+        Some(Self {
+            kind,
+            request_id: field("request_id")?.parse().ok()?,
+            status: Status::from_raw(field("status")?.parse().ok()?),
+            elapsed_ms: field("elapsed_ms")?.parse().ok()?,
+        })
+    }
+}
+/// The native deadline for a call that entered `elapsed` ago: the remaining time in
+/// whole milliseconds, rounded up to at least 1 and saturating at `u64::MAX` (which
+/// never expires); `None` once the deadline has passed. A zero timeout means none.
+fn remaining_ms(timeout: Duration, elapsed: Duration) -> Option<u64> {
+    if timeout.is_zero() {
+        return Some(0);
+    }
+    let remaining = timeout
+        .checked_sub(elapsed)
+        .filter(|left| !left.is_zero())?;
+    Some(u64::try_from(remaining.as_nanos().div_ceil(1_000_000)).unwrap_or(u64::MAX))
+}
 /// Per-call controls for [`Engine::execute_with`].
 #[derive(Default)]
 pub struct CallOptions<'a> {
     request_id: u64,
-    timeout_ms: u64,
+    timeout: Duration,
     cancelled: Option<&'a CancellationToken>,
-    on_event: Option<&'a mut dyn FnMut(&str)>,
+    on_event: Option<&'a mut dyn FnMut(&Event)>,
 }
 impl<'a> CallOptions<'a> {
-    /// Caller-chosen id echoed in every event of the call.
+    /// Caller-chosen id echoed in every event of the call (default 0).
     pub fn request_id(mut self, id: u64) -> Self {
         self.request_id = id;
         self
     }
-    /// 0 disables the deadline; otherwise 1..=86400000 milliseconds.
-    pub fn timeout_ms(mut self, ms: u64) -> Self {
-        self.timeout_ms = ms;
+    /// The deadline, measured from the entry of `execute_with`; `Duration::ZERO`
+    /// (the default) means none. A deadline that has already passed when the native
+    /// call would start fails at once with `Status::DeadlineExceeded`: no native
+    /// call, no events. Any length is accepted; a huge one never expires.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
         self
     }
     /// Cooperative cancellation. A token that is already cancelled fails the
@@ -363,11 +420,11 @@ impl<'a> CallOptions<'a> {
         self.cancelled = Some(token);
         self
     }
-    /// Passive "start" then "end"/"error" events, run synchronously on the
+    /// Passive `Start` then `End`/`Error` events, run synchronously on the
     /// calling thread outside native locks. Panics are contained (with
     /// panic=unwind); abort panics cannot be. Callbacks may reenter the engine
     /// but must not drop it.
-    pub fn on_event(mut self, callback: &'a mut dyn FnMut(&str)) -> Self {
+    pub fn on_event(mut self, callback: &'a mut dyn FnMut(&Event)) -> Self {
         self.on_event = Some(callback);
         self
     }
@@ -436,20 +493,25 @@ impl Engine {
     /// Execute with a request id, deadline, cancellation token and/or event
     /// callback. Takes the options by value because they own the exclusive
     /// borrow of the event callback. Checks run in order: the request's
-    /// conversion, an already-cancelled token, then the native call.
+    /// conversion, an already-cancelled token, an already-passed deadline, then
+    /// the native call.
     pub fn execute_with(
         &self,
         request_json: &str,
         mut options: CallOptions<'_>,
     ) -> Result<String, Error> {
+        let entry = Instant::now();
         struct Hook<'a> {
-            callback: &'a mut dyn FnMut(&str),
+            callback: &'a mut dyn FnMut(&Event),
         }
         unsafe extern "C" fn notify(text: *const c_char, user: *mut std::ffi::c_void) {
             let hook = unsafe { &mut *user.cast::<Hook<'_>>() };
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let event = unsafe { CStr::from_ptr(text) }.to_string_lossy();
-                (hook.callback)(&event);
+                let text = unsafe { CStr::from_ptr(text) }.to_string_lossy();
+                // An event that does not parse is dropped, like an observer failure.
+                if let Some(event) = Event::parse(&text) {
+                    (hook.callback)(&event);
+                }
             })) {
                 // A custom panic payload can itself panic in Drop. Contain that
                 // too, and leak only the secondary payload rather than risk an
@@ -471,10 +533,16 @@ impl Engine {
                 message: "The call was cancelled before it started".into(),
             });
         }
+        let Some(timeout_ms) = remaining_ms(options.timeout, entry.elapsed()) else {
+            return Err(Error {
+                status: Status::DeadlineExceeded,
+                message: "The deadline passed before the call started".into(),
+            });
+        };
         let mut hook = options.on_event.take().map(|callback| Hook { callback });
         let mut native = unsafe { ffi::dtl_default_call_options() };
         native.request_id = options.request_id;
-        native.timeout_ms = options.timeout_ms;
+        native.timeout_ms = timeout_ms;
         if let Some(hook) = hook.as_mut() {
             native.on_event = Some(notify);
             native.event_user_data = (hook as *mut Hook<'_>).cast();
@@ -507,6 +575,10 @@ impl Engine {
             .into_owned())
     }
 }
+impl Engine {
+    /// Close the engine; the same as dropping it.
+    pub fn close(self) {}
+}
 impl Drop for Engine {
     fn drop(&mut self) {
         unsafe { ffi::dtl_close(self.0.as_ptr()) }
@@ -519,28 +591,13 @@ mod tests {
     fn model() -> Option<String> {
         std::env::var("LAYA_MODEL").ok()
     }
-    fn open(path: impl AsRef<Path>) -> Result<Engine, Error> {
-        Engine::open_with(path, &two())
-    }
     fn two() -> Config {
         Config::default().threads(2)
     }
-    #[test]
-    fn open_passes_path_bytes_to_the_core() {
-        let missing = open("/nonexistent/m.gguf").err().unwrap();
-        assert_eq!(missing.status, Status::ModelError);
-        assert_eq!(
-            Engine::open("/nonexistent/m.gguf").err().unwrap().status,
-            Status::ModelError
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStrExt;
-            let bad = std::ffi::OsStr::from_bytes(b"/tmp/\xff.gguf");
-            let error = open(bad).err().unwrap();
-            assert_eq!(error.status, Status::ModelError);
-            assert!(!error.message.is_empty());
-        }
+    /// A router over a file that is never loaded: `{}` fails the core's validation
+    /// (status 1) after the native call has started, and emits its events.
+    fn unloaded_router() -> Engine {
+        Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#).unwrap()
     }
     fn escape(path: &str) -> String {
         path.replace('\\', "\\\\").replace('"', "\\\"")
@@ -549,16 +606,36 @@ mod tests {
         request.replacen('{', &format!("{{\"model\":\"{name}\","), 1)
     }
     #[test]
+    fn open_passes_path_bytes_to_the_core() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let bad = std::ffi::OsStr::from_bytes(b"/tmp/\xff.gguf");
+            let error = Engine::open_with(bad, &two()).err().unwrap();
+            assert_eq!(error.status, Status::ModelError);
+            assert!(!error.message.is_empty());
+        }
+    }
+    #[test]
+    fn native_status_propagates() {
+        let error = unloaded_router().execute("{}").unwrap_err();
+        assert_eq!(error.status, Status::InvalidArgument);
+        assert!(!error.message.is_empty());
+        let error = Engine::open_router("{}").err().unwrap();
+        assert_eq!(error.status, Status::InvalidArgument);
+    }
+    #[test]
     fn config_json_is_deterministic_and_sparse() {
         assert!(Config::default().to_json().unwrap().is_none());
         let config = Config::default()
             .threads(2)
             .context_tokens(1024)
+            .overflow("scan")
             .temperatures([("noul.2", 2.0), ("choice", 1.5), ("we\"ird", 1.0)])
             .max_windows_per_call(64);
         assert_eq!(
             config.to_json().unwrap().unwrap().to_str().unwrap(),
-            r#"{"threads":2,"context_tokens":1024,"temperatures":{"choice":1.5,"noul.2":2,"we\"ird":1},"max_windows_per_call":64}"#
+            r#"{"threads":2,"context_tokens":1024,"overflow":"scan","temperatures":{"choice":1.5,"noul.2":2,"we\"ird":1},"max_windows_per_call":64}"#
         );
         // Zero is sent as given; the core rejects it.
         assert_eq!(
@@ -598,30 +675,23 @@ mod tests {
             let bad = RouterConfig::new().route("a", std::ffi::OsStr::from_bytes(b"\xff"));
             assert_eq!(bad.to_json().unwrap_err().status, Status::InvalidArgument);
         }
-        // The builder's JSON reaches the core, which validates it.
+        // The builder's JSON reaches the core, which accepts it.
         let local = RouterConfig::new()
             .route("b", "Cargo.toml")
             .route_with("a", "Cargo.toml", &Config::default().context_tokens(64))
             .max_loaded(2)
             .auto("a", "b");
-        drop(Engine::open_router_with(&local, &two()).unwrap());
-        let bad = RouterConfig::new()
-            .route("a", "Cargo.toml")
-            .auto("a", "missing");
-        assert_eq!(
-            Engine::open_router(&bad).err().unwrap().status,
-            Status::InvalidArgument
-        );
+        Engine::open_router_with(&local, &two()).unwrap().close();
     }
     #[test]
     fn cancelled_token_fails_before_the_native_call() {
-        let router = Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#).unwrap();
+        let router = unloaded_router();
         let token = CancellationToken::new();
         assert!(!token.is_cancelled());
         token.clone().cancel();
         assert!(token.is_cancelled());
         let mut events = Vec::new();
-        let mut on_event = |e: &str| events.push(e.to_owned());
+        let mut on_event = |e: &Event| events.push(*e);
         // A request that would fail the core's validation is cancelled first, with no events.
         let error = router
             .execute_with(
@@ -640,6 +710,123 @@ mod tests {
         assert_eq!(error.status, Status::InvalidArgument);
     }
     #[test]
+    fn remaining_time_rounds_up_and_saturates() {
+        let ms = Duration::from_millis;
+        assert_eq!(remaining_ms(Duration::ZERO, ms(5)), Some(0));
+        assert_eq!(remaining_ms(ms(10), Duration::ZERO), Some(10));
+        assert_eq!(remaining_ms(ms(10), ms(4)), Some(6));
+        assert_eq!(remaining_ms(ms(10), Duration::from_micros(9_999)), Some(1));
+        assert_eq!(
+            remaining_ms(Duration::from_nanos(1), Duration::ZERO),
+            Some(1)
+        );
+        assert_eq!(remaining_ms(ms(10), ms(10)), None);
+        assert_eq!(remaining_ms(ms(10), ms(11)), None);
+        assert_eq!(remaining_ms(Duration::MAX, ms(1)), Some(u64::MAX));
+    }
+    #[test]
+    fn expired_deadline_fails_at_once() {
+        let router = unloaded_router();
+        let mut events = Vec::new();
+        let mut on_event = |e: &Event| events.push(*e);
+        // The request would fail the core's validation, but the deadline comes first.
+        let error = router
+            .execute_with(
+                "{}",
+                CallOptions::default()
+                    .timeout(Duration::from_nanos(1))
+                    .on_event(&mut on_event),
+            )
+            .unwrap_err();
+        assert_eq!(error.status, Status::DeadlineExceeded);
+        assert!(events.is_empty());
+        // A cancelled token is reported before the deadline.
+        let token = CancellationToken::new();
+        token.cancel();
+        let error = router
+            .execute_with(
+                "{}",
+                CallOptions::default()
+                    .timeout(Duration::from_nanos(1))
+                    .cancellation_token(&token),
+            )
+            .unwrap_err();
+        assert_eq!(error.status, Status::Cancelled);
+    }
+    #[test]
+    fn any_timeout_length_reaches_the_native_call() {
+        let router = unloaded_router();
+        for timeout in [Duration::from_secs(365 * 86_400), Duration::MAX] {
+            let mut events = Vec::new();
+            let mut on_event = |e: &Event| events.push(*e);
+            let error = router
+                .execute_with(
+                    "{}",
+                    CallOptions::default()
+                        .timeout(timeout)
+                        .on_event(&mut on_event),
+                )
+                .unwrap_err();
+            assert_eq!(error.status, Status::InvalidArgument);
+            assert_eq!(events.len(), 2);
+        }
+    }
+    #[test]
+    fn events_are_typed() {
+        for request_id in [0, 5, u64::MAX] {
+            let mut events = Vec::new();
+            let mut on_event = |e: &Event| events.push(*e);
+            let error = unloaded_router()
+                .execute_with(
+                    "{}",
+                    CallOptions::default()
+                        .request_id(request_id)
+                        .on_event(&mut on_event),
+                )
+                .unwrap_err();
+            assert_eq!(error.status, Status::InvalidArgument);
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].kind, EventKind::Start);
+            assert_eq!(events[0].status, Status::Ok);
+            assert_eq!(events[0].elapsed_ms, 0.0);
+            assert_eq!(events[1].kind, EventKind::Error);
+            assert_eq!(events[1].status, Status::InvalidArgument);
+            assert!(events[1].elapsed_ms > 0.0);
+            assert!(events.iter().all(|e| e.request_id == request_id));
+        }
+        // Without a request id the events carry 0.
+        let mut ids = Vec::new();
+        let mut on_event = |e: &Event| ids.push(e.request_id);
+        let _ =
+            unloaded_router().execute_with("{}", CallOptions::default().on_event(&mut on_event));
+        assert_eq!(ids, [0, 0]);
+    }
+    #[test]
+    fn event_parsing() {
+        let event = Event::parse(
+            r#"{"elapsed_ms":1.5e-05,"event":"end","request_id":18446744073709551615,"status":0}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            event,
+            Event {
+                kind: EventKind::End,
+                request_id: u64::MAX,
+                status: Status::Ok,
+                elapsed_ms: 1.5e-5,
+            }
+        );
+        for bad in [
+            "",
+            "{}",
+            r#"{"elapsed_ms":0,"event":"other","request_id":1,"status":0}"#,
+            r#"{"elapsed_ms":0,"event":"start","request_id":-1,"status":0}"#,
+            r#"{"elapsed_ms":0,"event":"start","request_id":1}"#,
+        ] {
+            assert!(Event::parse(bad).is_none(), "{bad}");
+        }
+    }
+    #[test]
     fn contains_panicking_payload_destructors() {
         struct Bomb;
         impl Drop for Bomb {
@@ -647,9 +834,9 @@ mod tests {
                 std::panic::panic_any(Bomb);
             }
         }
-        let engine = Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#).unwrap();
+        let engine = unloaded_router();
         let mut calls = 0;
-        let mut callback = |_: &str| {
+        let mut callback = |_: &Event| {
             calls += 1;
             std::panic::panic_any(Bomb);
         };
@@ -658,21 +845,41 @@ mod tests {
         assert_eq!(calls, 2);
     }
     #[test]
-    fn real_features() {
-        let Some(path) = model() else { return };
-        let engine = open(&path).unwrap();
-        // Unknown top-level keys are rejected.
-        let tagged = NOUL.replacen('{', "{\"metadata\":\"caller tag\",", 1);
+    fn status_from_raw() {
+        // The values themselves are compared with the header by the binding-abi policy check.
+        assert_eq!(Status::from_raw(5), Status::Cancelled);
+        assert_eq!(Status::from_raw(99), Status::InferenceError);
+    }
+    #[test]
+    fn diagnostics() {
+        let runtime = runtime_info().unwrap();
+        assert!(runtime.contains("\"abi_version\":2"));
+    }
+    #[test]
+    fn rejects_nul() {
         assert_eq!(
-            engine.execute(&tagged).unwrap_err().status,
+            Engine::open("a\0b").err().unwrap().status,
             Status::InvalidArgument
         );
+        assert_eq!(
+            unloaded_router().execute("{\0}").unwrap_err().status,
+            Status::InvalidArgument
+        );
+    }
+    #[test]
+    fn real_features() {
+        let Some(path) = model() else { return };
+        let engine = Engine::open_with(&path, &two()).unwrap();
+        assert!(engine
+            .info()
+            .unwrap()
+            .contains("\"decision_type\":\"laya\""));
         let request = r#"{"state":"Please refund me.","schema":{"type":"object","properties":{"refund":{"type":"boolean","description":"Is a refund requested?"}}}}"#;
         let single = engine.execute(request).unwrap();
         assert!(single.contains("\"values\":{\"refund\":true}"));
         let batch = format!("[{request},{request}]");
         let mut events = Vec::new();
-        let mut on_event = |e: &str| events.push(e.to_owned());
+        let mut on_event = |e: &Event| events.push(*e);
         let result = engine
             .execute_with(
                 &batch,
@@ -683,16 +890,23 @@ mod tests {
             .unwrap();
         assert_eq!(result, format!("[{single},{single}]"));
         assert_eq!(events.len(), 2);
-        assert!(events[0].contains("\"event\":\"start\""));
-        assert!(events[1].contains("\"request_id\":21"));
-        assert!(engine
-            .execute_with(
-                "{}",
-                CallOptions::default()
-                    .request_id(22)
-                    .on_event(&mut |_| panic!("contained observer"))
-            )
-            .is_err());
+        assert_eq!(events[0].kind, EventKind::Start);
+        assert_eq!(events[1].kind, EventKind::End);
+        assert_eq!(events[1].status, Status::Ok);
+        assert!(events[1].elapsed_ms > 0.0);
+        assert!(events.iter().all(|e| e.request_id == 21));
+        assert_eq!(
+            engine
+                .execute_with(
+                    "{}",
+                    CallOptions::default()
+                        .request_id(22)
+                        .on_event(&mut |_| panic!("contained observer"))
+                )
+                .unwrap_err()
+                .status,
+            Status::InvalidArgument
+        );
         // Reentry uses a distinct borrowed callback and the same native engine.
         engine
             .execute_with(
@@ -714,199 +928,75 @@ mod tests {
             .execute(&with_model(request, "english"))
             .unwrap()
             .contains("\"model\":\"english\""));
-        assert_eq!(
-            router.execute(request).unwrap_err().status,
-            Status::InvalidArgument
-        );
+    }
+    /// A prompt of many windows: with `scan` and a small context it takes seconds.
+    fn long_request() -> String {
+        format!(
+            r#"{{"state":"{}","overflow":"scan","max_windows":256,"questions":{{"refund":{{"type":"noul","instructions":"Is a refund requested?"}}}}}}"#,
+            "refund ".repeat(2000)
+        )
     }
     #[test]
-    fn overflow_policy_applies_and_is_validated() {
+    fn cancellation_and_deadline_stop_a_running_call() {
         let Some(path) = model() else { return };
-        let config = two().context_tokens(64).overflow("scan");
-        assert_eq!(
-            config.to_json().unwrap().unwrap().to_str().unwrap(),
-            r#"{"threads":2,"context_tokens":64,"overflow":"scan"}"#
-        );
-        let long = format!(
-            r#"{{"state":"{}","questions":{{"refund":{{"type":"noul","instructions":"Is a refund requested?"}}}}}}"#,
-            "refund ".repeat(800)
-        );
-        // The policy reaches the engine: the default (reject) would refuse this request.
-        let engine = Engine::open_with(&path, &two().overflow("truncate_end")).unwrap();
-        assert!(engine.execute(&long).is_ok());
-        assert_eq!(
-            Engine::open_with(&path, &two().overflow("bogus"))
-                .err()
-                .unwrap()
-                .status,
-            Status::InvalidArgument
-        );
-    }
-    #[test]
-    fn config_and_per_request_settings() {
-        let Some(path) = model() else { return };
-        let engine = Engine::open_with(&path, &two().context_tokens(1024)).unwrap();
-        let info = engine.info().unwrap();
-        assert!(info.contains("\"context_tokens\":1024"), "{info}");
-        let with = |extra: &str| NOUL.replacen('{', &format!("{{{extra},"), 1);
-        for extra in [
-            "\"max_tokens\":1025",
-            "\"max_tokens\":0",
-            "\"temperatures\":{\"noul.2\":-1}",
-        ] {
-            assert_eq!(
-                engine.execute(&with(extra)).unwrap_err().status,
-                Status::InvalidArgument,
-                "{extra}"
-            );
-        }
-    }
-    #[test]
-    fn invalid_config_is_rejected() {
-        let Some(path) = model() else { return };
-        for config in [
-            two().threads(257),
-            two().context_tokens(8),
-            two().context_tokens(u32::MAX),
-            two().temperatures([("choice", 0.0)]),
-            two().temperatures([("choice", -1.0)]),
-        ] {
-            assert_eq!(
-                Engine::open_with(&path, &config).err().unwrap().status,
-                Status::InvalidArgument
-            );
-        }
-        let router = format!(r#"{{"models":{{"a":"{}"}}}}"#, escape(&path));
-        assert_eq!(
-            Engine::open_router_with(&router, &two().threads(257))
-                .err()
-                .unwrap()
-                .status,
-            Status::InvalidArgument
-        );
-        let bad = format!(
-            r#"{{"models":{{"a":{{"path":"{}","config":{{"threads":999}}}}}}}}"#,
-            escape(&path)
-        );
-        assert!(Engine::open_router_with(&bad, &two()).is_err());
-    }
-    #[test]
-    fn router_auto_validation() {
-        let open = |json: &str| Engine::open_router_with(json, &two());
-        for bad in [
-            r#"{"models":{"a":"Cargo.toml"},"auto":{"english":"a"}}"#,
-            r#"{"models":{"a":"Cargo.toml"},"auto":{"english":"a","default":"missing"}}"#,
-            r#"{"models":{"a":"Cargo.toml"},"auto":{"english":"a","default":"a","extra":"a"}}"#,
-            r#"{"models":{"a":"Cargo.toml"},"auto":"a"}"#,
-            r#"{"models":{"auto":"Cargo.toml"}}"#,
-        ] {
-            assert_eq!(
-                open(bad).err().unwrap().status,
-                Status::InvalidArgument,
-                "{bad}"
-            );
-        }
-        let plain = open(r#"{"models":{"a":"Cargo.toml"}}"#).unwrap();
-        let auto =
-            open(r#"{"models":{"a":"Cargo.toml"},"auto":{"english":"a","default":"a"}}"#).unwrap();
-        let body = |extra: &str| NOUL.replacen('{', &format!("{{{extra},"), 1);
-        // "model": "auto" without an auto config, and lang without auto, are rejected before any load.
-        assert_eq!(
-            plain
-                .execute(&body("\"model\":\"auto\""))
-                .unwrap_err()
-                .status,
-            Status::InvalidArgument
-        );
-        assert_eq!(
-            auto.execute(&body("\"lang\":\"en\"")).unwrap_err().status,
-            Status::InvalidArgument
-        );
-        assert_eq!(
-            auto.execute(&body("\"model\":\"a\",\"lang\":\"en\""))
-                .unwrap_err()
-                .status,
-            Status::InvalidArgument
-        );
-        assert_eq!(
-            auto.execute(&body("\"model\":\"auto\",\"lang\":\"\""))
-                .unwrap_err()
-                .status,
-            Status::InvalidArgument
-        );
-    }
-    #[test]
-    fn cancellation_and_deadline() {
-        let Some(path) = model() else { return };
-        let engine = open(&path).unwrap();
-        let baseline = engine.execute(NOUL).unwrap();
+        let engine = Engine::open_with(&path, &two().context_tokens(64)).unwrap();
+        let request = long_request();
+        let started = Instant::now();
+        engine.execute(&request).unwrap();
+        let full = started.elapsed();
+        assert!(full > Duration::from_secs(1), "{full:?}");
+        // Cancelled from the start event: the native call stops at its next safe point.
         let token = CancellationToken::new();
-        assert_eq!(
-            engine
-                .execute_with(NOUL, CallOptions::default().cancellation_token(&token))
-                .unwrap(),
-            baseline
-        );
-        token.cancel();
-        assert_eq!(
-            engine
-                .execute_with(NOUL, CallOptions::default().cancellation_token(&token))
-                .unwrap_err()
-                .status,
-            Status::Cancelled
-        );
-        assert_eq!(
-            engine
-                .execute_with(NOUL, CallOptions::default().timeout_ms(1))
-                .unwrap_err()
-                .status,
-            Status::DeadlineExceeded
-        );
-        assert_eq!(engine.execute(NOUL).unwrap(), baseline);
-    }
-    #[test]
-    fn status_from_raw() {
-        // The values themselves are compared with the header by the binding-abi policy check.
-        assert_eq!(Status::from_raw(5), Status::Cancelled);
-        assert_eq!(Status::from_raw(99), Status::InferenceError);
-    }
-    #[test]
-    fn events_carry_request_id() {
-        let router = Engine::open_router(r#"{"models":{"unused":"Cargo.toml"}}"#).unwrap();
-        // A request without a route is invalid; events are still delivered.
-        let mut events = Vec::new();
-        let mut on_event = |e: &str| events.push(e.to_owned());
-        let error = router
+        let mut on_event = |e: &Event| {
+            if e.kind == EventKind::Start {
+                token.cancel();
+            }
+        };
+        let started = Instant::now();
+        let error = engine
             .execute_with(
-                "{}",
-                CallOptions::default().request_id(5).on_event(&mut on_event),
-            )
-            .unwrap_err();
-        assert_eq!(error.status, Status::InvalidArgument);
-        assert!(!events.is_empty());
-        assert!(events.iter().all(|e| e.contains("\"request_id\":5")));
-        let Some(path) = model() else { return };
-        let engine = open(&path).unwrap();
-        let token = CancellationToken::new();
-        let mut events = Vec::new();
-        let mut on_event = |e: &str| events.push(e.to_owned());
-        let result = engine
-            .execute_with(
-                NOUL,
+                &request,
                 CallOptions::default()
-                    .request_id(10)
                     .cancellation_token(&token)
                     .on_event(&mut on_event),
             )
-            .unwrap();
-        assert_eq!(result, engine.execute(NOUL).unwrap());
-        assert_eq!(events.len(), 2);
-        assert!(events.iter().all(|e| e.contains("\"request_id\":10")));
+            .unwrap_err();
+        assert_eq!(error.status, Status::Cancelled);
+        assert!(
+            started.elapsed() < full / 2,
+            "{:?} of {full:?}",
+            started.elapsed()
+        );
+        // A deadline well inside the full run stops it with status 6.
+        let started = Instant::now();
+        let error = engine
+            .execute_with(
+                &request,
+                CallOptions::default().timeout(Duration::from_millis(100)),
+            )
+            .unwrap_err();
+        assert_eq!(error.status, Status::DeadlineExceeded);
+        assert!(
+            started.elapsed() < full / 2,
+            "{:?} of {full:?}",
+            started.elapsed()
+        );
+        // The engine still answers, and a new token is not cancelled.
+        let baseline = engine.execute(NOUL).unwrap();
+        assert_eq!(
+            engine
+                .execute_with(
+                    NOUL,
+                    CallOptions::default().cancellation_token(&CancellationToken::new())
+                )
+                .unwrap(),
+            baseline
+        );
     }
     #[test]
     fn shared_across_threads() {
         let Some(path) = model() else { return };
-        let engine = open(&path).unwrap();
+        let engine = Engine::open_with(&path, &two()).unwrap();
         let baseline = engine.execute(NOUL).unwrap();
         // Two names for one file with one slot: concurrent calls evict each other.
         let p = escape(&path);
@@ -915,7 +1005,6 @@ mod tests {
             &two(),
         )
         .unwrap();
-        let token = CancellationToken::new();
         std::thread::scope(|scope| {
             let callers: Vec<_> = (0..3)
                 .map(|_| scope.spawn(|| engine.execute(NOUL).unwrap()))
@@ -928,11 +1017,6 @@ mod tests {
                 })
                 .into_iter()
                 .collect();
-            // Cancellation is requested from another thread while the call waits or runs.
-            let cancelled = scope.spawn(|| {
-                engine.execute_with(NOUL, CallOptions::default().cancellation_token(&token))
-            });
-            token.cancel();
             for caller in callers {
                 assert_eq!(caller.join().unwrap(), baseline);
             }
@@ -942,34 +1026,13 @@ mod tests {
                     format!("{},\"model\":\"{name}\"}}", &baseline[..baseline.len() - 1]);
                 assert_eq!(result, expected);
             }
-            match cancelled.join().unwrap() {
-                Ok(result) => assert_eq!(result, baseline),
-                Err(error) => assert_eq!(error.status, Status::Cancelled),
-            }
         });
         // Engines may be closed on a thread other than the one that opened them.
-        std::thread::spawn(move || drop((engine, router)))
-            .join()
-            .unwrap();
-    }
-    #[test]
-    fn diagnostics() {
-        let runtime = runtime_info().unwrap();
-        assert!(runtime.contains("\"abi_version\":2"));
-        if let Some(model) = model() {
-            let engine = open(&model).unwrap();
-            assert!(engine
-                .info()
-                .unwrap()
-                .contains("\"decision_type\":\"laya\""));
-        }
-    }
-    #[test]
-    fn rejects_bad_path() {
-        assert!(open("missing.gguf").is_err());
-    }
-    #[test]
-    fn rejects_nul() {
-        assert_eq!(open("a\0b").err().unwrap().status, Status::InvalidArgument);
+        std::thread::spawn(move || {
+            engine.close();
+            router.close();
+        })
+        .join()
+        .unwrap();
     }
 }

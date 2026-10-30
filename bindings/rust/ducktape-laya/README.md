@@ -13,7 +13,8 @@ The crate links the native library, which comes from the release archive: [v0.3.
 ## Usage
 
 ```rust
-use ducktape_laya::{CallOptions, CancellationToken, Config, Engine, RouterConfig, Status};
+use ducktape_laya::{CallOptions, CancellationToken, Config, Engine, Event, RouterConfig, Status};
+use std::time::Duration;
 
 let engine = Engine::open("Laya-Q8_0.gguf")?;
 // Or with open options. Unset values keep the defaults; set values, 0 included, go to the library, which validates them.
@@ -25,12 +26,13 @@ let result_json = engine.execute(request)?;
 
 // Request id, deadline, cooperative cancellation and events. A token is cloneable and can be
 // cancelled from any thread; a call given an already-cancelled token fails at once with `Status::Cancelled`.
+// The deadline counts from the call's entry; one that has passed fails at once with `Status::DeadlineExceeded`.
 let stop = CancellationToken::new();
 let mut events = Vec::new();
-let mut on_event = |event: &str| events.push(event.to_owned());
+let mut on_event = |event: &Event| events.push(*event);
 let options = CallOptions::default()
     .request_id(7)
-    .timeout_ms(5000)
+    .timeout(Duration::from_secs(5))
     .cancellation_token(&stop)
     .on_event(&mut on_event);
 match engine.execute_with(request, options) {
@@ -43,6 +45,7 @@ match engine.execute_with(request, options) {
 let router = RouterConfig::new().route("en", "Laya-Q8_0.gguf").route("ml", "laya-multilingual-f16.gguf")
     .max_loaded(1).auto("en", "ml");
 let engine = Engine::open_router_with(&router, &config)?;
+engine.close(); // The same as dropping it.
 # Ok::<(), ducktape_laya::Error>(())
 ```
 
@@ -51,6 +54,7 @@ let engine = Engine::open_router_with(&router, &config)?;
 - `Engine::open_router` opens a lazy multi-model registry from router JSON (`&str`, `String`) or a `&RouterConfig`; requests on a router must name a route in `model`, or send `"model": "auto"` when the router has `.auto("en", "ml")` (`"auto": {"english": "en", "default": "ml"}` in JSON), to choose by the state's language (`"auto"` cannot be a route ID). The same `execute` and `execute_with` calls serve both. A route may carry its own config (`route_with`).
 - Requests are plain JSON; per-request `max_tokens`, `temperatures`, `overflow`, `max_windows` and (with `"model": "auto"`) `lang` need no extra API.
 - 0.2 and 0.3 crates need a native library of C ABI 2 (0.2.0 or later): the program links against `libducktape_laya.so.1` and its `DUCKTAPE_LAYA_2` symbols, so with only the 0.1.0 library (`libducktape_laya.so.0`) it fails to start. Opening also checks `dtl_abi_version()` and fails with `Status::UnsupportedPlatform` for any ABI but 2.
+- `CallOptions::timeout(Duration)` is the deadline, measured from the entry of `execute_with`; `Duration::ZERO` (the default) means none, and any length is accepted (a huge one never expires). `request_id` is a `u64` (default 0), used only in events. `on_event` receives an `&Event` with `kind` (`EventKind::Start`, `End` or `Error`), `request_id`, `status` and `elapsed_ms`.
 - Calls are blocking and the engine is `Send + Sync`; use your runtime's blocking pool from async code.
 - Errors are `Error { status, message }`, with `status` a `ducktape_laya::Status` (`InvalidArgument`, `ModelError`, `Cancelled`, `DeadlineExceeded`, ...). When several checks fail, the first applies: the arguments' conversion (the request, config and paths, before the library is touched), an already-cancelled token, then the native call.
 
