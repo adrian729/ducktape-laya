@@ -86,13 +86,14 @@ int main(int argc, char **argv) {
     auto engine = ducktape::engine::open(argv[1], R"({"threads":2})");
     const auto baseline = engine.execute(request);
     {
-        // Nonzero reserved or an out-of-range timeout is rejected on a live engine too; nothing runs.
+        // Nonzero reserved is rejected on a live engine too; nothing runs.
         dtl_engine *raw = nullptr; char *e = nullptr, *r = nullptr;
         CHECK(dtl_open(argv[1], "{\"threads\":2}", &raw, &e) == DTL_OK);
         auto bad = dtl_default_call_options(); bad.reserved = 1;
         CHECK(dtl_execute(raw, request.c_str(), &bad, &r, &e) == DTL_INVALID_ARGUMENT && !r); dtl_free(e);
-        bad = dtl_default_call_options(); bad.timeout_ms = 86400001;
-        CHECK(dtl_execute(raw, request.c_str(), &bad, &r, &e) == DTL_INVALID_ARGUMENT && !r); dtl_free(e);
+        // Any timeout is accepted; one past the clock's range never expires instead of overflowing.
+        auto longest = dtl_default_call_options(); longest.timeout_ms = UINT64_MAX;
+        CHECK(dtl_execute(raw, request.c_str(), &longest, &r, &e) == DTL_OK && r && baseline == r); dtl_free(r); dtl_free(e);
         dtl_close(raw);
     }
     // The ready-made flag callback cancels like a host callback.

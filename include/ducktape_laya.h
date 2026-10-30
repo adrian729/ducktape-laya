@@ -73,7 +73,7 @@ typedef uint32_t (*dtl_cancel_callback)(void *user_data);
  *     the calling thread outside inference locks; event_json is borrowed for the
  *     callback. Reentry is allowed; do not close the active handle. C callbacks
  *     must not unwind; C++ exceptions are contained. Never changes results.
- *   timeout_ms: 0 (none) or 1..86400000, measured from execution setup.
+ *   timeout_ms: 0 (none) or any number of milliseconds, measured from execution setup.
  *   should_cancel: nonblocking, thread-safe, may run on backend worker threads,
  *     must not reenter the handle. Return 0 to continue, DTL_DEADLINE_EXCEEDED for
  *     a host deadline, anything else to cancel. The first stop is latched.

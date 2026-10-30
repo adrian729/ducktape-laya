@@ -15,9 +15,15 @@ public:
         if (options) {
             require(options->struct_size == sizeof(dtl_call_options), "Incompatible call options size");
             options_ = *options;
-            require(options_.reserved == 0 && options_.timeout_ms <= 86400000, "Invalid call options");
+            require(options_.reserved == 0, "Invalid call options");
         }
-        if (options_.timeout_ms) deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(options_.timeout_ms);
+        if (options_.timeout_ms) {
+            // Any length: a deadline beyond the clock's range (about 292 years) never expires.
+            auto now = std::chrono::steady_clock::now();
+            auto left = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::time_point::max() - now).count();
+            deadline_ = options_.timeout_ms >= static_cast<uint64_t>(left) ? std::chrono::steady_clock::time_point::max()
+                                                                           : now + std::chrono::milliseconds(options_.timeout_ms);
+        }
     }
     bool enabled() const noexcept { return options_.should_cancel || options_.timeout_ms; }
     dtl_status stop_status() const noexcept {
