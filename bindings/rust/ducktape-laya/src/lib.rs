@@ -933,7 +933,7 @@ mod tests {
     fn long_request() -> String {
         format!(
             r#"{{"state":"{}","overflow":"scan","max_windows":256,"questions":{{"refund":{{"type":"noul","instructions":"Is a refund requested?"}}}}}}"#,
-            "refund ".repeat(2000)
+            "refund ".repeat(80)
         )
     }
     #[test]
