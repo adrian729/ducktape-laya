@@ -75,16 +75,17 @@ JOB_BUDGETS = {
     'cache-prune': 30,                                     # 12 s (gh api list and delete)
     # mode=experiment, two clang-cl builds of the library and then the benchmark step (~1,050 s of the 1,259 s of run 40243819478):
     'bench-windows-x64': 1320,  # the p90 of the runs with the benchmark step (1,320 s run 40219296140, 1,259 s run 40243819478); 169 s in run 40203151892 had builds only
-    # macOS, from verify run 40572053784 (warm compiler and toolchain caches; one run each, so refresh from the p90 once there
-    # are ten). Cold caches (run 40566157580, the first) took far longer: generic 111 s and 264 s, binding-macos-x64 431 s.
-    'generic-macos-arm64': 60, 'generic-macos-x64': 110,     # 44 s and 91 s
-    'binding-macos-arm64': 120, 'binding-macos-x64': 160,    # 107 s and 142 s, the six model-free suites in one job
-    'packages-macos-arm64': 110, 'packages-macos-x64': 230,  # 94 s and 207 s (x64: 64 s of packaging, the rest toolchain setup)
-    'assembled-macos-arm64': 70, 'assembled-macos-x64': 150,  # 58 s and 135 s
+    # macOS: the p90 of the last ten successful runs up to nightly 41193405916 (2026-10-31), rounded up to 5 s. They replace
+    # the one-run figures of verify run 40572053784, which sat at the median or below for x64 (Intel runners vary up to 2x
+    # with no change, and a run after a merge restores a compiler cache older than the merged sources). Ten runs each:
+    'generic-macos-arm64': 90, 'generic-macos-x64': 205,     # 44 to 152 s (p90 89 s) and 62 to 216 s (p90 203 s)
+    'binding-macos-arm64': 175, 'binding-macos-x64': 235,    # 90 to 258 s (p90 171 s) and 132 to 278 s (p90 235 s)
+    'packages-macos-arm64': 140, 'packages-macos-x64': 210,  # 83 to 170 s (p90 140 s) and 134 to 273 s (p90 209 s)
+    'assembled-macos-arm64': 75, 'assembled-macos-x64': 125,  # 49 to 83 s (p90 74 s) and 65 to 154 s (p90 124 s)
     # Shards: their checks dominate, not setup. native: the upstream reference alone took 127 s and 116 s.
     'native-macos-arm64': 310, 'native-macos-x64': 450,      # 285 s and 415 s
-    'parity-a-macos-arm64': 350, 'parity-b-macos-arm64': 300,  # 317 s and 270 s
-    'parity-a-macos-x64': 350, 'parity-b-macos-x64': 390,      # 323 s and 356 s
+    'parity-a-macos-arm64': 330, 'parity-b-macos-arm64': 315,  # ten runs: 295 to 340 s (p90 326 s) and 270 to 315 s (p90 313 s)
+    'parity-a-macos-x64': 440, 'parity-b-macos-x64': 490,      # ten runs: 241 to 527 s (p90 438 s) and 330 to 490 s (p90 486 s)
     # bindings-real-macos-x64: the six real-model suites run in parallel on 4 cores (165 to 363 s each). Halves would add a
     # job to a run already waiting up to 245 s for a macOS runner, without less runner time: kept whole.
     'bindings-real-macos-x64': 600,                          # 557 s (arm64: 193 s, inside the shard budget)
